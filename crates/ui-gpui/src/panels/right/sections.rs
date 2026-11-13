@@ -8,7 +8,7 @@
 //! 所有写回都通过 `Cmd` 通道（`sync_panel` 统一 `execute`），与 egui 的 `app.run/set_props` 同构。
 //! 动态列表的输入框由父模块的**编辑器池**提供（retained tree 不能每帧新建 `Entity`）。
 
-use super::data::{LocalStyleRow, PaintRow, PanelData, ViewData};
+use super::data::{EffectRow, LocalStyleRow, PaintRow, PanelData, ViewData};
 use crate::canvas::geom::Color32;
 use crate::motion::{Act, Queue};
 use crate::panels::{Cmd, ROW_EDITORS, RightFields, RowEditCtx, visibility};
@@ -936,6 +936,27 @@ fn add_effect_menu(f: &RightFields) -> IconButton {
     b
 }
 
+/// 效果行的方框：点开弹出「效果设置」小窗（egui `effect_settings` 的设置项搬进浮层），
+/// 不再是「弹出菜单切换效果类型」。类型切换在小窗顶部的下拉里，且用
+/// `Effect::of_type` 生成干净对象 —— 见 `WindowState::effect_settings` 的说明。
+fn effect_settings_button(f: &RightFields, row: &EffectRow, col: f32) -> Dropdown {
+    let popups = f.popups();
+    let cmds = f.cmds.clone();
+    let effect = row.effect.clone();
+    let label = SharedString::from(row.label.clone());
+    let index = row.index;
+    Dropdown::new(label.clone(), col, None).fill().on_click(move |bounds, _window, cx: &mut App| {
+        popups.request(crate::popovers::WindowState::effect_settings(
+            cmds.clone(),
+            cx,
+            bounds.origin,
+            index,
+            label.clone(),
+            effect.clone(),
+        ));
+    })
+}
+
 pub(crate) fn effects(
     f: &RightFields,
     d: &PanelData,
@@ -980,17 +1001,10 @@ pub(crate) fn effects(
         sec = sec.child(r);
     }
     for row in rows.iter().rev() {
-        let types: Vec<(String, &'static str, Value)> = figcraft_doc::Effect::TYPES
-            .iter()
-            .map(|(label, ty)| {
-                let mut e = row.effect.clone();
-                if let Some(o) = e.as_object_mut() {
-                    o.insert("type".into(), json!(ty));
-                }
-                (label.to_string(), "effect.set", json!({ "index": row.index, "effect": e }))
-            })
-            .collect();
-        let dd = pick_dropdown(f, row.label.clone(), col, types);
+        // 点效果行的方框 → 效果设置小窗；原先这里点开的是「切换效果类型」菜单。
+        // 原切换实现 clone 旧 JSON 只改 `type`，残留旧类型字段会被引擎
+        // `refuse_ignored_effect_keys` 整条拒收，表现为「点了没反应、画布里没效果」。
+        let dd = effect_settings_button(f, row, col);
         let mut e2 = row.effect.clone();
         if let Some(o) = e2.as_object_mut() {
             o.insert("visible".into(), json!(!row.visible));
@@ -2759,8 +2773,8 @@ fn local_style_row(f: &RightFields, _d: &PanelData, s: &LocalStyleRow, depth: us
     field_row_full(div().w_full().h_full().rounded(pt(5.0)).hover(|s| s.bg(rgba(t.hover))).child(body))
 }
 
-/// 空选区时的右栏（egui `right.rs::page_section`）：**三个独立小节**，各自一个 40 pt 标题：
-/// ① Page（背景色 / Color profile）② Local variables ③ Local styles。
+/// 空选区时的右栏：**两个独立小节**，各自一个 40 pt 标题：
+/// ① Page（背景色 / Color profile）② Local styles。
 ///
 /// 之前这三块被塞进同一个 `PanelSection::new(tr("Page"))` 里，「Local variables」和「Local styles」
 /// 只是 `sublabel_row2` 的两个小字，样式列表更是压根没画——所以 Local styles 看着「没出现在
