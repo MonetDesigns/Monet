@@ -539,6 +539,12 @@ pub struct CanvasView {
     /// 仍是 Design，不该冒出 Draw 专属的宽度设置栏。
     draw_mode: bool,
 
+    /// The illustrated Brush nib's own colour. Pen / Pencil read `pen_style` / `pencil_style`,
+    /// but the engine has no Brush slot (it is the pencil with a brush preset), so the Brush
+    /// colour lives here and is set from the Draw colour picker while the Brush nib is selected.
+    /// `None` falls back to the pencil's colour until the user picks one.
+    draw_brush_ink: Option<[u8; 3]>,
+
     /// 画板的 Design 面板是否展开（`ui-egui` 的 `app.ui.board_panel`）。画板没有原型、也没有
 
     /// Dev Mode，右栏默认收起，工具栏最右的按钮 / `view.design` 是它的开关。
@@ -808,6 +814,8 @@ impl CanvasView {
             vector_more: false,
 
             draw_mode: false,
+
+            draw_brush_ink: None,
 
             board_panel: false,
 
@@ -2862,17 +2870,33 @@ impl CanvasView {
 
             toolbar::Intent::DrawColor => {
                 let tool = self.app.session.tool.tool;
-                let current = self
+                // The Brush nib owns its own colour; Pen / Pencil read their draw_style.
+                let brush_nib = tool == figcraft_engine::ToolId::Pencil
+                    && self.app.session.tool.pencil_brush.is_some();
+                let style_color = self
                     .app
                     .session
                     .tool
                     .draw_style(tool)
                     .map(|s| crate::widgets::swatch::color32(s.color()))
                     .unwrap_or_else(|| Color32::from_rgb(0, 0, 0));
+                let current = if brush_nib {
+                    self.draw_brush_ink
+                        .map(|[r, g, b]| Color32::from_rgba_unmultiplied(r, g, b, 255))
+                        .unwrap_or(style_color)
+                } else {
+                    style_color
+                };
                 let me = cx.entity();
                 let on_pick: std::rc::Rc<dyn Fn(Color32, &mut Window, &mut App)> = std::rc::Rc::new(move |c, _w, cx| {
                     me.update(cx, |cv, cx| {
-                        cv.run_command("tool.drawStyle", serde_json::json!({ "color": c.to_hex() }), cx);
+                        if brush_nib {
+                            // Do not write pencil_style: that would retint the Pencil nib too.
+                            cv.draw_brush_ink = Some([c.0[0], c.0[1], c.0[2]]);
+                            cx.notify();
+                        } else {
+                            cv.run_command("tool.drawStyle", serde_json::json!({ "color": c.to_hex() }), cx);
+                        }
                     });
                 });
                 self.open_color(window.mouse_position(), current, on_pick, cx);
@@ -2899,6 +2923,13 @@ impl CanvasView {
                 // pencil with its ink brush preset — the same path the Draw toolbar's presets use.
                 self.run_command("tool.set", serde_json::json!({ "tool": "pencil" }), cx);
                 self.run_command("tool.drawStyle", serde_json::json!({ "preset": "ink" }), cx);
+            }
+
+            toolbar::Intent::DrawPencil => {
+                // Plain pencil: clear the brush preset too. Without this, `pencil_brush` stays
+                // set, the Brush nib keeps its active plate and the Pencil nib never lifts.
+                self.run_command("tool.set", serde_json::json!({ "tool": "pencil" }), cx);
+                self.run_command("tool.drawStyle", serde_json::json!({ "preset": serde_json::Value::Null }), cx);
             }
 
             toolbar::Intent::Mode(i) => {
@@ -5502,6 +5533,27 @@ impl Render for CanvasView {
             cb
         };
 
+        // Each nib is tinted with **its own** tool's `tool.drawStyle.color`, not one shared
+        // colour: Pen uses `pen_style`; Brush and Pencil use `pencil_style` (this engine has no
+        // `ToolId::Brush`). The blue/red/yellow in the Figma SVGs are just placeholders.
+        let nib_inks = {
+            let ts = &self.app.session.tool;
+            let rgb = |tool: figcraft_engine::ToolId| {
+                let c = ts
+                    .draw_style(tool)
+                    .map(|s| s.color())
+                    .unwrap_or_else(|| figcraft_engine::tools::DrawStyle::default().color());
+                let q = crate::widgets::swatch::color32(c);
+                [q.0[0], q.0[1], q.0[2]]
+            };
+            let pencil = rgb(figcraft_engine::ToolId::Pencil);
+            [
+                rgb(figcraft_engine::ToolId::Pen),
+                self.draw_brush_ink.unwrap_or(pencil),
+                pencil,
+            ]
+        };
+
         let bar = toolbar::bar(
             self.app.session.tool.tool,
             &self.tool_last,
@@ -5516,7 +5568,11 @@ impl Render for CanvasView {
             board,
             self.board_panel,
             self.draw_mode,
-            self.app.session.tool.pencil_brush.is_some(),
+            // Brush is only active when the Pencil tool is actually selected. `pencil_brush`
+            // persists after switching away, so testing it alone kept the middle nib lifted.
+            self.app.session.tool.tool == figcraft_engine::ToolId::Pencil
+                && self.app.session.tool.pencil_brush.is_some(),
+            nib_inks,
         );
 
         // Vector edit keeps the main pill and puts its own toolbar 8 pt above it, laid out like
@@ -5540,7 +5596,12 @@ impl Render for CanvasView {
             if matches!(t, figcraft_engine::ToolId::Pencil | figcraft_engine::ToolId::Pen) {
                 self.app.session.tool.draw_style(t).map(|style| {
                     let brush = self.app.session.tool.pencil_brush.as_ref().map(|b| b.preset.to_string());
-                    toolbar::drawing_bar(t, style, brush.as_deref(), canvas_x, canvas_w, on_intent.clone())
+                    let swatch_ink = if t == figcraft_engine::ToolId::Pencil && brush.is_some() {
+                        self.draw_brush_ink
+                    } else {
+                        None
+                    };
+                    toolbar::drawing_bar(t, style, brush.as_deref(), swatch_ink, canvas_x, canvas_w, on_intent.clone())
                 })
             } else {
                 None
@@ -6002,7 +6063,7 @@ impl Render for CanvasView {
 
                     let pill_left = canvas_left + (canvas_w - bar_w) / 2.0;
 
-                    let caret = toolbar::caret_left(toolbar::groups(board), *key).unwrap_or(0.0);
+                    let caret = toolbar::caret_left(toolbar::groups(board), *key, board, self.draw_mode).unwrap_or(0.0);
 
                     let left = pill_left + caret;
 
@@ -6055,7 +6116,7 @@ impl Render for CanvasView {
 
                         let pill_left = canvas_left + (canvas_w - bar_w) / 2.0;
 
-                        let caret = toolbar::caret_left(toolbar::groups(board), key).unwrap_or(0.0);
+                        let caret = toolbar::caret_left(toolbar::groups(board), key, board, self.draw_mode).unwrap_or(0.0);
 
                         let x = (pill_left + caret).max(m);
 

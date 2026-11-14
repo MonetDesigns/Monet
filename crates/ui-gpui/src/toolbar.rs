@@ -172,6 +172,8 @@ pub(crate) enum Intent {
     VectorMore,
     /// Draw mode's illustrated Brush nib: pencil + its ink brush preset.
     DrawBrush,
+    /// Draw mode's illustrated Pencil nib: plain pencil, clearing any brush preset.
+    DrawPencil,
     /// Draw toolbar: open the stroke colour picker.
     DrawColor,
     /// Draw toolbar: `tool.drawStyle` weight / lineStyle / brush preset.
@@ -188,34 +190,77 @@ pub(crate) enum Intent {
 const DRAW_NIB_CELL: f32 = 54.0;
 const DRAW_SECTION_W: f32 = 182.0;
 
-/// The three nib illustrations, decoded once into GPUI `RenderImage`s. They are embedded with
-/// `include_bytes!`, so no runtime file path is needed (the icon AssetSource is frozen).
-fn draw_art() -> &'static [std::sync::Arc<gpui::RenderImage>; 3] {
-    static ART: std::sync::OnceLock<[std::sync::Arc<gpui::RenderImage>; 3]> = std::sync::OnceLock::new();
-    ART.get_or_init(|| {
-        let files: [&[u8]; 3] = [
-            include_bytes!("../assets/draw/draw-pen.png"),
-            include_bytes!("../assets/draw/draw-brush.png"),
-            include_bytes!("../assets/draw/draw-pencil.png"),
-        ];
-        std::array::from_fn(|i| {
-            let rgba = image::load_from_memory(files[i]).expect("draw nib PNG").to_rgba8();
-            let (w, h) = rgba.dimensions();
-            crate::canvas::render_worker::wrap_rgba(w, h, rgba.into_raw())
-        })
-    })
+/// The three nib illustrations (Pen / Brush / Pencil), each split into a static base and a white
+/// "ink" mask. The accent colour in the Figma SVGs is **not** a fixed colour: it shows the current
+/// `tool.drawStyle.color`. At paint time the white ink mask is multiplied by that colour (its
+/// inner shadow and highlight survive as a brightness modulation) and composited over the base.
+/// Cached per colour, so changing the stroke colour only re-composites once.
+const NIB_BASE: [&[u8]; 3] = [
+    include_bytes!("../assets/draw/draw-pen-base.png"),
+    include_bytes!("../assets/draw/draw-brush-base.png"),
+    include_bytes!("../assets/draw/draw-pencil-base.png"),
+];
+const NIB_INK: [&[u8]; 3] = [
+    include_bytes!("../assets/draw/draw-pen-ink.png"),
+    include_bytes!("../assets/draw/draw-brush-ink.png"),
+    include_bytes!("../assets/draw/draw-pencil-ink.png"),
+];
+
+type NibArt = [std::sync::Arc<gpui::RenderImage>; 3];
+
+thread_local! {
+    static NIB_CACHE: std::cell::RefCell<std::collections::HashMap<[[u8; 3]; 3], NibArt>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// One colour per nib: Pen uses `pen_style`, Brush and Pencil use `pencil_style` (this crate
+/// has no `ToolId::Brush` — Brush is the pencil with a brush preset).
+fn draw_art(inks: [[u8; 3]; 3]) -> NibArt {
+    if let Some(hit) = NIB_CACHE.with(|c| c.borrow().get(&inks).cloned()) {
+        return hit;
+    }
+    let art: NibArt = std::array::from_fn(|i| {
+        let ink = inks[i];
+        let base = image::load_from_memory(NIB_BASE[i]).expect("draw nib base PNG").to_rgba8();
+        let mask = image::load_from_memory(NIB_INK[i]).expect("draw nib ink PNG").to_rgba8();
+        let (w, h) = base.dimensions();
+        debug_assert_eq!((w, h), mask.dimensions());
+        let mut out = Vec::with_capacity((w * h * 4) as usize);
+        for (b, m) in base.pixels().zip(mask.pixels()) {
+            let ia = m.0[3] as f32 / 255.0;
+            let ba = b.0[3] as f32 / 255.0;
+            let oa = ia + ba * (1.0 - ia);
+            if oa <= 0.0 {
+                out.extend_from_slice(&[0, 0, 0, 0]);
+                continue;
+            }
+            let mut rgb = [0u8; 3];
+            for k in 0..3 {
+                let src = ink[k] as f32 * (m.0[k] as f32 / 255.0);
+                let v = (src * ia + b.0[k] as f32 * ba * (1.0 - ia)) / oa;
+                rgb[k] = v.round().clamp(0.0, 255.0) as u8;
+            }
+            out.extend_from_slice(&[
+                rgb[0], rgb[1], rgb[2],
+                (oa * 255.0).round().clamp(0.0, 255.0) as u8,
+            ]);
+        }
+        crate::canvas::render_worker::wrap_rgba(w, h, out)
+    });
+    NIB_CACHE.with(|c| c.borrow_mut().insert(inks, art.clone()));
+    art
 }
 
 /// The Draw-only part of the main pill: Pen / Brush / Pencil as illustrated nibs. This crate has
 /// no `ToolId::Brush`, so Brush activates the pencil with its ink brush preset (the same
 /// `pencil_brush` / `tool.drawStyle` path the Draw toolbar already uses).
-fn draw_section(tool: ToolId, brush: bool, on: &OnIntent) -> Div {
+fn draw_section(tool: ToolId, brush: bool, inks: [[u8; 3]; 3], on: &OnIntent) -> Div {
     let t = tokens();
-    let art = draw_art();
+    let art = draw_art(inks);
     let entries: [(&str, bool, Intent); 3] = [
         ("pen", tool == ToolId::Pen, Intent::Tool("pen")),
         ("brush", brush, Intent::DrawBrush),
-        ("pencil", tool == ToolId::Pencil && !brush, Intent::Tool("pencil")),
+        ("pencil", tool == ToolId::Pencil && !brush, Intent::DrawPencil),
     ];
     let mut row = div().flex_none().w(pt(DRAW_SECTION_W)).h(pt(PILL_H)).flex().flex_row().items_center().justify_between().px(pt(8.0)).child(divider());
     for (i, (id, active, intent)) in entries.into_iter().enumerate() {
@@ -224,17 +269,23 @@ fn draw_section(tool: ToolId, brush: bool, on: &OnIntent) -> Div {
         let w = 60.0 * iw / ih;
         let on_click = on.clone();
         let label: SharedString = tr(match id { "pen" => "Pen", "brush" => "Brush", _ => "Pencil" }).into();
+        // A per-cell group makes the whole 54 pt cell (not just the narrow art) drive the lift.
+        let group: SharedString = SharedString::from(format!("draw-nib-{i}"));
+        let lift_group = group.clone();
         let cell = div()
             .id(("draw-nib", i as u64))
+            .group(group)
             .relative()
             .flex_none()
             .w(pt(DRAW_NIB_CELL))
             .h(pt(PILL_H))
+            // The nib SVG is taller than the pill; everything below the pill's bottom edge is cut.
+            .overflow_hidden()
             .flex()
-            .items_center()
+            .items_start()
             .justify_center()
             .cursor_pointer()
-            // The selected nib sits on a raised 5 pt rounded plate, with its art lifted 8 pt.
+            // The selected nib sits on a raised 5 pt rounded plate.
             .when(active, |d| {
                 d.child(div().absolute().left(pt(4.0)).top(pt(4.0)).w(pt(46.0)).h(pt(40.0)).rounded(pt(5.0)).bg(rgba(t.pressed)))
             })
@@ -244,7 +295,10 @@ fn draw_section(tool: ToolId, brush: bool, on: &OnIntent) -> Div {
             .child(
                 div()
                     .relative()
-                    .top(px(if active { -8.0 } else { 0.0 }))
+                    // At rest the nib's head is 8 pt below the pill's top edge; on hover or when
+                    // selected it rises to 0 (flush with the top).
+                    .top(px(if active { 0.0 } else { 8.0 }))
+                    .when(!active, |d| d.group_hover(lift_group, |s| s.top(px(0.0))))
                     .w(px(w))
                     .h(px(60.0))
                     .child(img(ImageSource::Render(tex)).w(px(w)).h(px(60.0))),
@@ -294,12 +348,38 @@ pub(crate) fn group_left(groups: &[Group], key: &str) -> Option<f32> {
 /// The flyout caret's left edge **inside the pill**: the tool cell plus the point between them.
 /// The flyout card is aligned to this, not to the cell (`用户 2026-11-06`：菜单左边和那 16pt 的
 /// 点击按钮左边对齐). `None` for a single-tool group, which has no caret.
-pub(crate) fn caret_left(groups: &[Group], key: &str) -> Option<f32> {
+pub(crate) fn caret_left(
+    groups: &[Group],
+    key: &str,
+    board: bool,
+    draw_mode: bool,
+) -> Option<f32> {
     let g = groups.iter().find(|g| g.key == key)?;
     if !g.has_flyout() {
         return None;
     }
-    Some(group_left(groups, key)? + CELL + CARET_GAP)
+    if draw_mode && !board {
+        // Draw mode drops the Pen group and inserts the 182 pt nib strip right after Move,
+        // so simulate `bar`'s children: groups before Pen gain the whole strip, groups after
+        // Pen gain `DRAW_SECTION_W - pen_group_w`. Using `group_left` here would leave the
+        // flyout card anchored to the Design-mode position.
+        let mut x = PAD;
+        for gr in groups {
+            if gr.key == "pen" {
+                continue;
+            }
+            if gr.key == key {
+                return Some(x + CELL + CARET_GAP);
+            }
+            x += group_w(gr) + GAP;
+            if gr.key == "move" {
+                x += DRAW_SECTION_W + GAP;
+            }
+        }
+        None
+    } else {
+        Some(group_left(groups, key)? + CELL + CARET_GAP)
+    }
 }
 
 /// A cell's top inside the 48 pt pill: the cells are centred, so 8 pt of the pill is above them.
@@ -382,6 +462,8 @@ pub(crate) fn bar(
     draw_mode: bool,
     // 铅笔已挂上笔刷预设（`pencil_brush`）：本仓没有 `ToolId::Brush`，用它点亮 Brush 笔尖。
     draw_brush: bool,
+    // 每个笔尖各自的 `tool.drawStyle.color`：Pen / Brush / Pencil 依次。
+    nib_inks: [[u8; 3]; 3],
 ) -> Div {
     let t = tokens();
     let groups = groups(board);
@@ -466,7 +548,7 @@ pub(crate) fn bar(
         }
         pill = pill.child(group);
         if draw_mode && !board && g.key == "move" {
-            pill = pill.child(draw_section(tool, draw_brush, &on));
+            pill = pill.child(draw_section(tool, draw_brush, nib_inks, &on));
         }
     }
 
@@ -583,6 +665,8 @@ pub(crate) fn drawing_bar(
     tool: ToolId,
     style: &DrawStyle,
     brush: Option<&str>,
+    // Brush nib's own colour; `None` for Pen / Pencil (their swatch reads `draw_style`).
+    swatch_ink: Option<[u8; 3]>,
     canvas_left: f32,
     canvas_w: f32,
     on: OnIntent,
@@ -607,9 +691,12 @@ pub(crate) fn drawing_bar(
         }])
         .occlude();
 
-    // Stroke colour → the shared colour picker, writing back with `tool.drawStyle`.
+    // Stroke colour → the shared colour picker. The Brush nib has its own colour slot, so its
+    // swatch and the picker must both show that instead of the pencil's `draw_style` colour.
     let on_color = on.clone();
-    let c = crate::widgets::swatch::color32(style.color());
+    let c = swatch_ink
+        .map(|[r, g, b]| crate::canvas::geom::Color32::from_rgba_unmultiplied(r, g, b, 255))
+        .unwrap_or_else(|| crate::widgets::swatch::color32(style.color()));
     row = row.child(
         div()
             .flex_none()
@@ -1014,13 +1101,20 @@ mod tests {
     #[test]
     fn the_flyout_hangs_off_the_caret() {
         // move is the first group: 8 pt of padding, then the 32 pt cell, then the 1 pt gap.
-        assert_eq!(caret_left(GROUPS, "move"), Some(PAD + CELL + CARET_GAP));
+        assert_eq!(caret_left(GROUPS, "move", false, false), Some(PAD + CELL + CARET_GAP));
         assert_eq!(group_left(GROUPS, "move"), Some(PAD));
         // frame sits one group further right (its width, the gap, then its own cell).
-        assert_eq!(caret_left(GROUPS, "frame"), Some(PAD + group_w(&GROUPS[0]) + GAP + CELL + CARET_GAP));
+        assert_eq!(caret_left(GROUPS, "frame", false, false), Some(PAD + group_w(&GROUPS[0]) + GAP + CELL + CARET_GAP));
         // `comment` is a single-tool group: no caret, no flyout.
-        assert_eq!(caret_left(GROUPS, "comment"), None);
-        assert_eq!(caret_left(GROUPS, "nope"), None);
+        assert_eq!(caret_left(GROUPS, "comment", false, false), None);
+        assert_eq!(caret_left(GROUPS, "nope", false, false), None);
+        // In Draw mode the nib strip is mounted right after Move, so Move keeps its anchor but
+        // every later group moves right by the strip and its gap.
+        assert_eq!(caret_left(GROUPS, "move", false, true), Some(PAD + CELL + CARET_GAP));
+        assert_eq!(
+            caret_left(GROUPS, "frame", false, true),
+            Some(PAD + group_w(&GROUPS[0]) + GAP + DRAW_SECTION_W + GAP + CELL + CARET_GAP)
+        );
         // The cells are centred in the 48 pt pill, so 8 pt of it is above a button's top edge; the
         // card's bottom edge sits 4 pt above that.
         assert_eq!(CELL_TOP, 8.0);
@@ -1095,10 +1189,13 @@ mod tests {
     /// first frame, so a broken embedded PNG would panic the app instead of showing the strip.
     #[test]
     fn draw_nib_art_decodes() {
-        let art = draw_art();
-        for (i, (w, h)) in [(159u32, 324u32), (148, 319), (215, 340)].into_iter().enumerate() {
-            assert_eq!(art[i].size(0).width.0, w as i32, "nib {i} width");
-            assert_eq!(art[i].size(0).height.0, h as i32, "nib {i} height");
+        let art = draw_art([[0, 0, 0]; 3]);
+        for i in 0..3 {
+            assert_eq!(art[i].size(0).width.0, 96, "nib {i} width");
+            assert_eq!(art[i].size(0).height.0, 256, "nib {i} height");
         }
+        // A different stroke colour must produce a different tinted image (cache is per colour).
+        let red = draw_art([[255, 0, 0]; 3]);
+        assert!(!std::sync::Arc::ptr_eq(&art[0], &red[0]));
     }
 }
