@@ -81,6 +81,26 @@ impl InlineInput {
         });
     }
 
+    /// 当前是否持有键盘（Local styles 用它判断改名是否结束）。
+    /// 写成关联函数，调用点不必先 `read(cx)` 再借 `cx` 给 `is_active`。
+    pub fn is_active(entity: &Entity<Self>, window: &Window, cx: &App) -> bool {
+        entity.read(cx).edit.read(cx).is_active(window)
+    }
+
+    /// 打开一次就地编辑：先收掉上一次编辑（`TextEdit::set_value` 在编辑态不会改 buffer，
+    /// 直接复用会留下旧草稿），再预填新值并聚焦。关联函数形式避开 `read` / `update`
+    /// 对 `cx` 的借用冲突。
+    pub fn begin_edit(entity: &Entity<Self>, value: impl Into<String>, window: &mut Window, cx: &mut App) {
+        entity.update(cx, |this, cx| {
+            this.edit.update(cx, |te, tcx| {
+                te.finish_edit(window, tcx);
+                te.set_value(value);
+                te.focus_editor(window);
+            });
+            this.was_active = false;
+        });
+    }
+
     /// 每帧在渲染前调用：申请焦点、判断是否已经结束。
     pub fn poll_active(&mut self, window: &mut Window, cx: &mut Context<Self>) -> EditState {
         // 只在「还没激活过」时抢焦点：一旦激活过，失焦就代表用户点了别处。未改动的重命名

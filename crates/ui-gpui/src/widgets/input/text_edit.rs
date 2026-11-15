@@ -436,6 +436,7 @@ impl Render for TextEdit {
         let focus = self.focus.clone();
         let cursor = self.editing.then_some(CursorStyle::IBeam);
         let mut el = div()
+            .relative()
             .w_full()
             .h_full()
             .flex()
@@ -501,7 +502,14 @@ impl Render for TextEdit {
                         });
                     },
                 )
-                .size_full(),
+                // 绝对定位：这块 canvas 只是用来挂 window 级 move/up 监听的，
+                // 绝不能成为 flex 的第二个 item —— 否则一按下「%」输入框就被挤走，
+                // 右对齐的数字会「跑到前面」，松手又弹回来（用户 2026-11-15）。
+                .absolute()
+                .top_0()
+                .left_0()
+                .w_full()
+                .h_full(),
             );
         }
 
