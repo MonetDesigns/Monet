@@ -408,11 +408,19 @@ impl Session {
             }
             Gesture::Pencil { points, pressure } => {
                 let (mut pts, mut pressure) = (points.clone(), pressure.clone());
-                if pts.last().is_none_or(|l| (*l - ev.p()).hypot() > 0.5 / ev.zoom.max(1e-6)) {
+                // Drop duplicate (sub-pixel) samples and sudden jumps: a stray pointer position
+                // would otherwise put a spike in the fitted curve ("the circle flies off").
+                let zoom = ev.zoom.max(1e-6);
+                let step = pts.last().map_or(0.0, |l| (*l - ev.p()).hypot());
+                if step > 0.5 / zoom && step < 800.0 / zoom {
                     pts.push(ev.p());
                     pressure.push(ev.pressure);
                 }
-                self.tool.overlay.pen = pts.iter().map(|p| [p.x, p.y]).collect();
+                // The preview shows the stroke being drawn, so it is smoothed the way the finished
+                // stroke is: painting the raw samples showed the hand's tremor until the button
+                // came up, and the stroke looked like it was jumping around.
+                let preview = figcraft_geom::smooth_points(&pts, 3.0);
+                self.tool.overlay.pen = preview.iter().map(|p| [p.x, p.y]).collect();
                 self.tool.gesture = Gesture::Pencil { points: pts, pressure };
                 if let Ok(ds) = self.ds_mut() {
                     ds.revision += 1;
