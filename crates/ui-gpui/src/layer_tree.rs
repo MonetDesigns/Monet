@@ -265,7 +265,15 @@ impl CanvasView {
             // Rule between the Pages section and the Layers section.
             .child(div().flex_none().w_full().h(pt(1.0)).bg(rgba(t.border)))
             .child(SectionHeader::new(tr("Layers")).variant(SectionHeaderVariant::Normal))
-            .child(self.render_layer_tree(cx))
+            .child({
+                let me_layers = cx.entity();
+                div().flex_1().min_h(px(0.0)).relative()
+                    // 图层列表的空白处（行下面那一层）点一下取消选中。
+                    .child(div().absolute().size_full().on_mouse_down(MouseButton::Left, move |_e, _, cx| {
+                        me_layers.update(cx, |cv, cx| cv.run_command("select.none", serde_json::json!({}), cx));
+                    }))
+                    .child(self.render_layer_tree(cx))
+            })
     }
 
     /// Write the document name into the header field: only when the tab changed (new uid) or the
@@ -396,7 +404,14 @@ impl CanvasView {
         // lizard `pages()`: `resp.double_clicked()` starts an inline rename of that page row.
         let renaming_page = self.inline_rename.as_ref().filter(|r| r.target == crate::InlineRenameTarget::Page).and_then(|r| r.ids.first().copied());
         let rename_editor = self.inline_rename_field.clone();
-        let mut list = div().id("pages-list").w_full().flex().flex_col().gap(pt(8.0)).pb(pt(8.0)).max_h(px(220.0)).overflow_y_scroll();
+        let mut list = div().id("pages-list").relative().w_full().flex().flex_col().gap(pt(8.0)).pb(pt(8.0)).max_h(px(220.0)).overflow_y_scroll();
+        // 列表空白处（含行间 8 pt 缝）点一下取消选中；行在它上面，点行不会落到底层。
+        {
+            let me_blank = me.clone();
+            list = list.child(div().absolute().size_full().on_mouse_down(MouseButton::Left, move |_e, _, cx| {
+                me_blank.update(cx, |cv, cx| cv.run_command("select.none", serde_json::json!({}), cx));
+            }));
+        }
         for (id, name, divider) in pages {
             if !filter.is_empty() && (divider || !name.to_lowercase().contains(&filter)) {
                 continue;

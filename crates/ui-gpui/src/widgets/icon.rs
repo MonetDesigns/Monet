@@ -511,11 +511,16 @@ pub fn paint_tool(icon: Icon, color: impl Into<gpui::Rgba>) -> impl IntoElement 
 /// Figma 的四个 24×24 描边图标（用户 2026-11-15）：加号 / 减号 / 叉号 / 下拉小箭头。
 /// **网格和路径坐标保持原样**，只有显示尺寸会等比缩放；`__STROKE__` 由
 /// [`ICON_STROKE`] 按缩放比反算注入，缩放后视觉线宽恒为 1 pt。
-const FIGMA_UI_ICONS: [(Icon, &str); 4] = [
+const FIGMA_UI_ICONS: [(Icon, &str); 7] = [
     (Icon::Plus, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M12 6.5V12M12 12V17.5M12 12H6.5M12 12H17.5" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/></svg>"#),
     (Icon::Minus, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M6.5 12H17.5" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/></svg>"#),
     (Icon::Close, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M6.5 6.5L12 12M12 12L17.5 17.5M12 12L6.50003 17.5M12 12L13.6109 10.3891L17.5 6.50006" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/></svg>"#),
     (Icon::ChevronDown, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M8.99994 11L12 14L14.9999 11" stroke="black" stroke-width="__STROKE__" stroke-linecap="round" stroke-linejoin="round"/></svg>"#),
+    // 其余三个方向都是同一个小箭头**旋转**出来的（用户 2026-11-15）：
+    // 向下箭头顺时针 90° = 向左；逆时针 90° = 向右；180° = 向上。路径坐标不动。
+    (Icon::ChevronLeft, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><g transform="rotate(90 12 12)"><path d="M8.99994 11L12 14L14.9999 11" stroke="black" stroke-width="__STROKE__" stroke-linecap="round" stroke-linejoin="round"/></g></svg>"#),
+    (Icon::ChevronRight, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><g transform="rotate(-90 12 12)"><path d="M8.99994 11L12 14L14.9999 11" stroke="black" stroke-width="__STROKE__" stroke-linecap="round" stroke-linejoin="round"/></g></svg>"#),
+    (Icon::ChevronUp, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><g transform="rotate(180 12 12)"><path d="M8.99994 11L12 14L14.9999 11" stroke="black" stroke-width="__STROKE__" stroke-linecap="round" stroke-linejoin="round"/></g></svg>"#),
 ];
 
 /// `size` 是最终显示的点数：24 网格等比缩到 `size` 时把描边反向放大 `24/size`，

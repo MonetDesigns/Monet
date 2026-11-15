@@ -23,8 +23,6 @@ use gpui::{App, Context, Entity, IntoElement, MouseButton, Render, SharedString,
 
 /// 11pt 与三处被替换的静态标签一致（egui `regular(11.0)` / GPUI `text_size(px(11.0))`）。
 const FONT: f32 = 11.0;
-/// 参考串：用它量出「基准行盒」，与具体输入内容无关。
-const REFERENCE: &str = "Mg";
 
 /// Pages / Layers 行高 32，egui 的重命名框是行内缩 4pt → 24pt。
 pub const ROW_H: f32 = 24.0;
@@ -95,7 +93,8 @@ impl InlineInput {
             this.edit.update(cx, |te, tcx| {
                 te.finish_edit(window, tcx);
                 te.set_value(value);
-                te.focus_editor(window);
+                // 双击进入时全选文字；再单击一次就落成单光标输入（用户 2026-11-15）。
+                te.focus_editor_select_all(window);
             });
             this.was_active = false;
         });
@@ -116,16 +115,6 @@ impl InlineInput {
         if !active && self.was_active { EditState::Ended } else { EditState::Editing }
     }
 
-    /// `TextInput::display` 的等价串（本组件不用 secret / suffix / placeholder 文本）。
-    fn shown_text(&self, cx: &App) -> String {
-        let te = self.edit.read(cx);
-        let c = te.input.buffer.composed();
-        if c.composing || !te.input.buffer.is_empty() {
-            c.text.replace(['\n', '\r'], " ")
-        } else {
-            " ".to_string()
-        }
-    }
 }
 
 /// 行盒补偿量（pt）：把「随内容变化的基线」拉回参考基线。
@@ -156,24 +145,17 @@ pub fn label_rename_fallback(x: f32, y: f32, text_w: f32, origin_x: f32, origin_
 }
 
 impl Render for InlineInput {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let shown = self.shown_text(cx);
-        let line = window.text_system().shape_line(SharedString::from(shown.clone()), px(FONT), &[window.text_style().to_run(shown.len())], None);
-        let reference =
-            window.text_system().shape_line(SharedString::from(REFERENCE), px(FONT), &[window.text_style().to_run(REFERENCE.len())], None);
-        let drift = stable_top_offset(
-            f32::from(line.ascent),
-            f32::from(line.descent),
-            f32::from(reference.ascent),
-            f32::from(reference.descent),
-        );
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        // 静态名字按行盒（ascent + descent）在 24 pt 里居中；编辑态也用同一个行盒，
+        // 不再按「当前文字」的度量做基线补偿 —— 补偿的目标是参考串，内容一变就会差一点点，
+        // 表现就是进入/退出输入时文字上下跳（用户 2026-11-15）。
         div()
             .relative()
             .w_full()
             .h(px(self.height))
             // 点输入框自己不能冒泡到根视图的「点别处就提交」。
             .on_mouse_down(MouseButton::Left, |_e, _w, cx| cx.stop_propagation())
-            .child(div().relative().w_full().h_full().top(px(drift)).child(self.edit.clone()))
+            .child(div().relative().w_full().h_full().child(self.edit.clone()))
     }
 }
 

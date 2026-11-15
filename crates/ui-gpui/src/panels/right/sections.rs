@@ -2835,7 +2835,17 @@ fn local_styles_block(f: &RightFields, d: &PanelData, window: &mut Window, cx: &
 
     // `track_focus` 把整张列表放进 Tab 顺序；方向键 / Enter / Delete / Ctrl+D 由根视图
     // 的键盘链转发到 `RightFields::local_style_key`（GPUI 元素级按键只在命中元素内触发）。
-    let mut root = div().relative().w_full().flex().flex_col().track_focus(&f.local_style_focus).children(rows);
+    let mut root = div().relative().w_full().flex().flex_col().track_focus(&f.local_style_focus);
+    // 列表空白处点一下取消选中（行在它上面，点行不会落到底层）。
+    {
+        let ui_blank = ui.clone();
+        let wake_blank = wake.clone();
+        root = root.child(div().absolute().size_full().on_mouse_down(MouseButton::Left, move |_e, _, _cx| {
+            ui_blank.borrow_mut().sel = None;
+            wake_blank.wake();
+        }));
+    }
+    root = root.children(rows);
     // 容器在窗口里的原点：prepaint 写入，下一帧的事件把指针换算成相对坐标。
     let ui_o = ui.clone();
     root = root.child(
@@ -2915,8 +2925,8 @@ fn local_styles_block(f: &RightFields, d: &PanelData, window: &mut Window, cx: &
                     .top(pt(r.y0))
                     .h(pt(LS_ROW_H))
                     .rounded(pt(5.0))
-                    .border_1()
-                    .border_color(rgba(t.accent)),
+                    // 与左栏图层行一致：选中是一块带颜色的高亮块，不是描边。
+                    .bg(rgba(t.selected_row)),
             );
         }
         if let Some(drag) = st.drag.as_ref().filter(|d| d.armed) {
@@ -3480,7 +3490,7 @@ fn local_style_row(
         // 名字从 `x + 24`；`indent` 只有 0 / 12（文件夹内）。band 左内缩 8，故 pl = x - 8。
         // lizard `x = r.min.x + PAD + indent + 1`；行尾给 24×24 设置按钮留 40 pt。
         .pl(pt(LS_PAD - LS_INSET + 1.0 + if depth == 0 { 0.0 } else { 12.0 }))
-        .pr(pt(40.0))
+        .pr(pt(4.0))
         .cursor_pointer()
         // 左键：① 选中这一行（单击）；② 记拖动起点，越过死区才改成排序拖动；
         // ③ 400ms 内在同一行再按 = 双击改名。**不再**弹设置页——那是前面 / 行尾两个图标的事。
@@ -3607,21 +3617,21 @@ fn local_style_row(
     let row_group = SharedString::from(format!("ls-style-row-{}-{}", ty, s.id));
     div()
         .group(row_group.clone())
-        .relative()
         .w_full()
         .h(pt(LS_ROW_H))
         .px(pt(LS_INSET))
+        .flex()
+        .flex_row()
+        .items_center()
         // 用户 2026-11-15：hover / 选中块满高 24 pt（原来上下各缩 2 → 20 pt）。
-        .child(div().w_full().h_full().rounded(pt(5.0)).hover(|s| s.bg(rgba(t.hover))).child(body))
-        // 行尾靠右的设置按钮：只在**悬停或选中这一行**时显示（用户 2026-11-15）。
+        .child(div().flex_1().min_w(px(0.0)).h_full().rounded(pt(5.0)).hover(|s| s.bg(rgba(t.hover))).child(body))
+        // 设置按钮留在行内（flow），贴着这一行的右端；只在悬停或选中这一行时显示。
         .child({
             let open = open_editor.clone();
             let group = row_group.clone();
             div()
-                .absolute()
-                .right(pt(0.0))
-                .top_0()
-                .h(pt(LS_ROW_H))
+                .flex_none()
+                .h_full()
                 .flex()
                 .items_center()
                 .when(!selected, move |d| d.opacity(0.0).group_hover(group, |s| s.opacity(1.0)))

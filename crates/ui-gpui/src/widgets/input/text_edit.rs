@@ -263,6 +263,11 @@ impl TextEdit {
     pub fn focus_editor(&mut self, window: &mut Window) {
         self.begin_edit(window, false);
     }
+
+    /// 双击重命名：进入编辑的同时全选文字；再单击一次就落成单光标输入。
+    pub fn focus_editor_select_all(&mut self, window: &mut Window) {
+        self.begin_edit(window, true);
+    }
     /// The lead's press: arm a scrub from the current value (`Sense::drag` on the grip).
     pub fn start_scrub(&mut self) {
         self.scrub = Some((self.value.parse::<f64>().unwrap_or(0.0), 0.0));
