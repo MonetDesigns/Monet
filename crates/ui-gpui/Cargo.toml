@@ -48,6 +48,9 @@ log = "0.4"
 serde_json = "1"
 # 变量面板的 Import/Export 文件对话框（workspace 的 apps/figcraft 已在用同一版本）。
 rfd = "0.17"
+# A23：引擎的 `file.export` / `file.exportLayers` 在没有 `path` 时把内容以 base64 `data`
+# 返回，UI 侧解码后写盘（与 workspace 里 apps/figcraft 同一版本）。
+base64 = "0.22"
 # 控制通道的唤醒：`smol::channel` 跨线程 `try_send`，前台任务 `recv().await` 后 notify。
 # smol 已经在 gpui 的依赖图里，这里只是直接引用。
 smol = "2"

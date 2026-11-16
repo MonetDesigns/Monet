@@ -55,6 +55,12 @@ pub(crate) enum Kind {
     /// A menu-input command: `text.link` needs the URL before it can run
     /// (`lizard menus.rs::invoke` → `MenuInput::Link`).
     Link,
+    /// A17 — `vector.offset` needs the distance before it can run
+    /// (`MenuInput::Offset`).
+    OffsetPath,
+    /// A17 — `object.moveToPage` needs the page: one row per other page
+    /// (`MenuInput::MoveToPage`).
+    MoveToPage,
     /// A10 — colour profile.
     ColorProfile,
     /// A13 — missing fonts.
@@ -78,7 +84,7 @@ pub(crate) enum Kind {
 impl Kind {
     /// The one list of dialogs. `parity_contract`'s capability audit and this module's own
     /// shape test both read it, so a new dialog cannot be added without being audited.
-    pub(crate) const ALL: [Kind; 16] = [
+    pub(crate) const ALL: [Kind; 18] = [
         Kind::Export,
         Kind::Preferences,
         Kind::About,
@@ -86,6 +92,8 @@ impl Kind {
         Kind::Unsaved,
         Kind::Rename,
         Kind::Link,
+        Kind::OffsetPath,
+        Kind::MoveToPage,
         Kind::ColorProfile,
         Kind::MissingFonts,
         Kind::ImportReport,
@@ -142,9 +150,10 @@ pub(crate) enum Field {
         title: &'static str,
     },
     /// A clickable preset row (`row_tip` in the egui Export dialog): clicking runs one engine
-    /// command with its params and closes the dialog, exactly like the original.
+    /// command with its params and closes the dialog, exactly like the original. `SharedString`
+    /// because A17's Move to page lists one row per page, named by the document.
     Action {
-        label: &'static str,
+        label: SharedString,
         id: &'static str,
         params: Value,
     },
@@ -502,11 +511,92 @@ pub(crate) fn menu_action(cmd: &str) -> Option<Kind> {
         "file.export" | "file.exportFramesPdf" | "file.exportSvg" => Some(Kind::Export),
         // `text.link` needs a URL; the Text header's Create link button opens the same dialog.
         "text.link" => Some(Kind::Link),
+        // A17: `vector.offset` needs the distance, `object.moveToPage` the page; running either
+        // with `{}` would fail on the missing parameter (the engine requires it).
+        "vector.offset" => Some(Kind::OffsetPath),
+        "object.moveToPage" => Some(Kind::MoveToPage),
         // egui's `Object > Batch rename...` opens the dialog; executing the command with `{}`
         // would silently rename with defaults. It is not an inline edit (R4/R5/R6 are).
         "object.batchRename" => Some(Kind::Rename),
         _ => None,
     }
+}
+
+/// A12：导入报告最多列出的警告条数 / 单条字符数（`ui-egui/src/dialogs/import_report.rs`
+/// 的 `MAX_NOTES` / `MAX_NOTE_CHARS`）：损坏的输入可能产生极多或极长的提示。
+pub(crate) const MAX_IMPORT_NOTES: usize = 500;
+pub(crate) const MAX_IMPORT_NOTE_CHARS: usize = 2_000;
+
+/// A12：从一条成功命令的结果生成 Import report 的数据，判定规则 1:1 照
+/// `ui-egui/src/dialogs/import_report.rs::Report::from_result`：
+///
+/// * 只有 `file.open` / `file.openRecent` / `file.import` / `edit.pasteDesignLayers` 才有报告；
+/// * 结果里必须有 `warnings` **数组**；粘贴没有警告、或 `file.import` 放到当前页且没有警告时
+///   不弹（原生格式的 `repairs` 由引擎自己的消息显示，不算报告）；
+/// * `file.open*` 打开没有警告的 SVG 不弹。
+///
+/// 返回 `{"message": …, "warnings": …}`，正好是 `Kind::ImportReport` 的两个字段。
+/// 放在这里（而不是 UI 状态里）是为了让规则可以被单测直接覆盖。
+pub(crate) fn import_report_data(command: &str, params: &Value, result: &Value) -> Option<Value> {
+    if !matches!(command, "file.open" | "file.openRecent" | "file.import" | "edit.pasteDesignLayers") {
+        return None;
+    }
+    let warnings = result.get("warnings").and_then(Value::as_array)?;
+    let pasted = command == "edit.pasteDesignLayers";
+    if pasted && warnings.is_empty() {
+        return None;
+    }
+    let file_name =
+        params.get("path").and_then(Value::as_str).and_then(|p| std::path::Path::new(p).file_name()).and_then(|n| n.to_str());
+    if command != "file.import" && warnings.is_empty() && file_name.is_some_and(|n| n.to_ascii_lowercase().ends_with(".svg")) {
+        return None;
+    }
+    // `file.import` 的 SVG 是放到当前页的一个框架（结果里没有 `pages`）：有警告才报告。
+    let appended = command == "file.import" && result.get("pages").is_some();
+    if command == "file.import" && !appended && warnings.is_empty() {
+        return None;
+    }
+    let summary = result.get("summary");
+    let count = |key: &str| summary.and_then(|s| s.get(key)).and_then(Value::as_u64);
+    let name = summary
+        .and_then(|s| s.get("name"))
+        .and_then(Value::as_str)
+        .or(file_name)
+        .or_else(|| params.get("name").and_then(Value::as_str))
+        .unwrap_or(if pasted { tr("Pasted design layers") } else { tr("Imported document") });
+    let placed = (command == "file.import" && !appended) || pasted;
+    let mut lines = vec![name.to_string()];
+    lines.push(
+        if appended {
+            tr("Pages added to the document")
+        } else if placed {
+            tr("Placed on the current page")
+        } else {
+            tr("Opened as a new document")
+        }
+        .to_string(),
+    );
+    let counts: Vec<String> = [(tr("Pages"), count("pages")), (tr("Layers"), count("layers")), (tr("Images"), count("images"))]
+        .into_iter()
+        .filter_map(|(label, n)| n.map(|n| format!("{label}: {n}")))
+        .collect();
+    if !counts.is_empty() {
+        lines.push(counts.join(" · "));
+    }
+    let notes: Vec<String> = warnings
+        .iter()
+        .filter_map(Value::as_str)
+        .take(MAX_IMPORT_NOTES)
+        .map(|note| {
+            let mut text: String = note.chars().take(MAX_IMPORT_NOTE_CHARS).collect();
+            if note.chars().nth(MAX_IMPORT_NOTE_CHARS).is_some() {
+                text.push('…');
+            }
+            text
+        })
+        .collect();
+    let warnings_text = if notes.is_empty() { tr("No compatibility warnings reported").to_string() } else { notes.join("\n") };
+    Some(json!({ "message": lines.join("\n"), "warnings": warnings_text }))
 }
 
 /// Build the dialog's data. One arm per dialog; no per-dialog rendering code anywhere else.
@@ -516,15 +606,15 @@ pub(crate) fn spec(kind: Kind, data: &Value) -> Spec {
         Kind::Export => {
             // 1:1 with `ui-egui/src/dialogs/export.rs`: caption + divider + eight preset rows,
             // PDF print options and the whole-file row. It is NOT an invented format/scale form.
-            let preset = |label, format: &str, scale| Field::Action {
-                label,
+            let preset = |label: &'static str, format: &str, scale| Field::Action {
+                label: SharedString::from(label),
                 id: "file.export",
                 params: json!({"format": format, "scale": scale}),
             };
             Spec::new(tr("Export"))
                 .width(320.0)
                 .field(Field::Section { title: tr("With the layers' export settings") })
-                .field(Field::Action { label: tr("Export layers"), id: "file.exportLayers", params: json!({}) })
+                .field(Field::Action { label: SharedString::from(tr("Export layers")), id: "file.exportLayers", params: json!({}) })
                 .field(Field::Section { title: tr("The selection as one file") })
                 .field(preset("PNG @1x", "png", 1.0))
                 .field(preset("PNG @2x", "png", 2.0))
@@ -537,7 +627,7 @@ pub(crate) fn spec(kind: Kind, data: &Value) -> Spec {
                 .field(Field::Section { title: tr("PDF print options") })
                 .field(Field::Preview { label: tr("Nothing to preview: select a layer first.") })
                 .field(Field::Section { title: tr("The whole file") })
-                .field(Field::Action { label: tr(".fig (experimental)"), id: "file.export", params: json!({"format": "fig"}) })
+                .field(Field::Action { label: SharedString::from(tr(".fig (experimental)")), id: "file.export", params: json!({"format": "fig"}) })
                 .field(Field::Note { text: tr("Other apps may not open every .fig file exported here.").to_string() })
                 .with_cancel()
         }
@@ -661,6 +751,36 @@ pub(crate) fn spec(kind: Kind, data: &Value) -> Spec {
             .field(Field::Text { key: "url", label: tr("URL"), value: str_field("url", data, "https://") })
             .button(Button::primary(tr("Create link"), "text.link", json!({})))
             .with_cancel(),
+        // A17：1:1 照 `ui-egui/src/dialogs/menu_input.rs::MenuInput::Offset` —— 一个数字框，
+        // 提交时把字段值并进 `vector.offset`（`{ids?, offset}`，ids 缺省走选区）。
+        Kind::OffsetPath => Spec::new(tr("Offset path"))
+            .width(320.0)
+            .field(Field::Number {
+                key: "offset",
+                label: tr("Offset"),
+                value: data.get("offset").and_then(Value::as_f64).unwrap_or(0.0),
+            })
+            .button(Button::primary(tr("Offset"), "vector.offset", json!({})))
+            .with_cancel(),
+        // A17：`MenuInput::MoveToPage` —— 除当前页与分隔线外，每页一行；点行即
+        // `object.moveToPage {page}`（ids 走选区）。没有其他页时显示 "No other pages"。
+        Kind::MoveToPage => {
+            let pages = data.get("pages").and_then(Value::as_array).cloned().unwrap_or_default();
+            let mut spec = Spec::new(tr("Move to page")).width(320.0);
+            if pages.is_empty() {
+                spec = spec.field(Field::Note { text: tr("No other pages").to_string() });
+            }
+            for p in &pages {
+                let id = p.get("id").and_then(Value::as_u64).unwrap_or_default();
+                let name = p.get("name").and_then(Value::as_str).unwrap_or_default();
+                spec = spec.field(Field::Action {
+                    label: SharedString::from(name.to_string()),
+                    id: "object.moveToPage",
+                    params: json!({ "page": id }),
+                });
+            }
+            spec.with_cancel()
+        }
         Kind::ColorProfile => {
             // 1:1 with `ui-egui/src/dialogs/color_profile.rs`: the sRGB / Display P3 radio, then
             // "Keep appearance" / "Keep values" run `file.colorProfile {profile, convert}`. The
@@ -766,7 +886,7 @@ pub(crate) fn spec(kind: Kind, data: &Value) -> Spec {
                 if !desc.is_empty() {
                     spec = spec.field(Field::Note { text: desc });
                 }
-                spec = spec.field(Field::Action { label: tr("Remove"), id: "plugin.remove", params: json!({ "id": id }) });
+                spec = spec.field(Field::Action { label: SharedString::from(tr("Remove")), id: "plugin.remove", params: json!({ "id": id }) });
             }
             spec.button(Button::run(tr("Import plugin from manifest…"), "plugin.import")).button(Button::close(tr("Close")))
         }
@@ -793,8 +913,8 @@ pub(crate) fn spec(kind: Kind, data: &Value) -> Spec {
                     let label = if state == "active" || state.is_empty() { name.clone() } else { format!("{name}  ({state})") };
                     spec = spec
                         .field(Field::Note { text: label })
-                        .field(Field::Action { label: tr("Open"), id: "branch.open", params: json!({ "id": id }) })
-                        .field(Field::Action { label: tr("Archive"), id: "branch.archive", params: json!({ "id": id }) });
+                        .field(Field::Action { label: SharedString::from(tr("Open")), id: "branch.open", params: json!({ "id": id }) })
+                        .field(Field::Action { label: SharedString::from(tr("Archive")), id: "branch.archive", params: json!({ "id": id }) });
                 }
             }
             spec.with_cancel()
@@ -1045,10 +1165,13 @@ impl DialogState {
                     continue;
                 }
             }
-            let label_text = match &r.field {
-                Field::Text { label, .. } | Field::Number { label, .. } | Field::Choice { label, .. } => *label,
-                Field::Preview { label } | Field::Section { title: label } | Field::Action { label, .. } => *label,
-                Field::Note { .. } | Field::Color { .. } | Field::Toggle { .. } | Field::InsertCodes { .. } | Field::RenamePreview { .. } => "",
+            let label_text: SharedString = match &r.field {
+                Field::Text { label, .. } | Field::Number { label, .. } | Field::Choice { label, .. } => SharedString::from(*label),
+                Field::Preview { label } | Field::Section { title: label } => SharedString::from(*label),
+                Field::Action { label, .. } => label.clone(),
+                Field::Note { .. } | Field::Color { .. } | Field::Toggle { .. } | Field::InsertCodes { .. } | Field::RenamePreview { .. } => {
+                    SharedString::from("")
+                }
             };
             let label = || {
                 div()
@@ -1057,7 +1180,7 @@ impl DialogState {
                     .items_center()
                     .text_size(pt(9.0))
                     .text_color(rgba(t.text_secondary))
-                    .child(SharedString::from(label_text))
+                    .child(label_text.clone())
                     .into_any_element()
             };
             let row = match &r.field {
@@ -1133,7 +1256,7 @@ impl DialogState {
                                 *flag.borrow_mut() = true;
                                 cmds.wake();
                             })
-                            .child(*label),
+                            .child(label.clone()),
                     )
                 }
                 Field::Preview { label } => {
@@ -1431,8 +1554,95 @@ mod tests {
         assert_eq!(menu_action("file.export"), Some(Kind::Export));
         assert_eq!(menu_action("edit.findReplace"), Some(Kind::Find));
         assert_eq!(menu_action("text.link"), Some(Kind::Link), "Create link needs a URL first");
+        assert_eq!(menu_action("vector.offset"), Some(Kind::OffsetPath), "Offset path needs the distance first");
+        assert_eq!(menu_action("object.moveToPage"), Some(Kind::MoveToPage), "Move to page needs the page first");
         assert_eq!(menu_action("app.preferences"), None, "the engine raises the request itself");
         assert_eq!(menu_action("view.toggleUi"), None);
+    }
+
+    /// A12：导入报告的判定规则 1:1 照 egui（`Report::from_result`）。
+    #[test]
+    fn import_report_follows_the_egui_rules() {
+        let open = json!({"path": "/tmp/a.fig"});
+        let result = json!({
+            "pages": 3,
+            "summary": {"name": "Design", "pages": 3, "layers": 42, "images": 2},
+            "warnings": ["Gradient fills were flattened.", "A font was substituted."],
+        });
+        let data = import_report_data("file.open", &open, &result).expect("warnings make a report");
+        let message = data["message"].as_str().unwrap_or_default();
+        assert!(message.contains("Design"), "{message}");
+        assert!(message.contains("Pages: 3"), "{message}");
+        let warnings = data["warnings"].as_str().unwrap_or_default();
+        assert_eq!(warnings, "Gradient fills were flattened.\nA font was substituted.");
+
+        // 打开没有警告的 SVG：不弹（原生格式的 repairs 由引擎消息显示）。
+        assert_eq!(import_report_data("file.open", &json!({"path": "/tmp/a.svg"}), &json!({"warnings": []})), None);
+        // 放到当前页的 SVG import 且无警告：不弹；有警告才弹，且说明是放置。
+        assert_eq!(
+            import_report_data("file.import", &json!({"path": "/tmp/a.svg"}), &json!({"warnings": []})),
+            None
+        );
+        let placed = import_report_data(
+            "file.import",
+            &json!({"path": "/tmp/a.svg"}),
+            &json!({"warnings": ["Treatment not supported."]}),
+        )
+        .expect("a placed SVG with warnings reports");
+        assert!(placed["message"].as_str().unwrap_or_default().contains("Placed on the current page"), "{placed}");
+        // 追加页面的 import（有 pages）即使无警告也报告，并说明页面已加入。
+        let appended = import_report_data("file.import", &json!({"path": "/tmp/a.fig"}), &json!({"pages": 2, "warnings": []}))
+            .expect("appended pages report");
+        assert!(appended["message"].as_str().unwrap_or_default().contains("Pages added to the document"), "{appended}");
+        // openRecent 与粘贴设计图层走同一条规则；粘贴无警告不弹。
+        assert!(import_report_data("file.openRecent", &open, &result).is_some());
+        assert_eq!(import_report_data("edit.pasteDesignLayers", &json!({}), &json!({"warnings": []})), None);
+        let pasted =
+            import_report_data("edit.pasteDesignLayers", &json!({}), &json!({"warnings": ["An effect was dropped."]}))
+                .expect("a paste with warnings reports");
+        assert!(pasted["warnings"].as_str().unwrap_or_default().contains("An effect was dropped."));
+        // 其它命令永远不弹。
+        assert_eq!(import_report_data("shape.rectangle", &open, &result), None);
+    }
+
+    /// A17：Move to page 一页一行（点行 = `object.moveToPage {page}`）；没有其他页时提示。
+    #[test]
+    fn move_to_page_lists_one_row_per_page() {
+        let empty = spec(Kind::MoveToPage, &json!({ "pages": [] }));
+        assert!(empty.fields.iter().any(|f| matches!(f, Field::Note { .. })), "no other pages shows a note");
+        let s = spec(Kind::MoveToPage, &json!({ "pages": [{"id": 7, "name": "Page 2"}, {"id": 9, "name": "Page 3"}] }));
+        let rows: Vec<(String, Value)> = s
+            .fields
+            .iter()
+            .filter_map(|f| match f {
+                Field::Action { label, params, .. } => Some((label.to_string(), params.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(rows.len(), 2, "one row per page");
+        assert_eq!(rows[0], ("Page 2".to_string(), json!({ "page": 7 })));
+        assert_eq!(rows[1], ("Page 3".to_string(), json!({ "page": 9 })));
+        // Offset path：一个数字框 + 提交 `vector.offset`（offset 由字段合并进来）。
+        let offset = spec(Kind::OffsetPath, &json!({}));
+        assert!(offset.fields.iter().any(|f| matches!(f, Field::Number { key: "offset", .. })));
+        assert!(offset.buttons.iter().any(|b| matches!(&b.action, Action::Submit { id: "vector.offset", .. })));
+    }
+
+    /// A12：损坏的输入产生极多 / 极长的提示时，报告仍受上限约束（egui 的 MAX_NOTES / MAX_NOTE_CHARS）。
+    #[test]
+    fn import_report_is_capped() {
+        let many: Vec<Value> = (0..MAX_IMPORT_NOTES + 50).map(|i| json!(format!("warning {i}"))).collect();
+        let data = import_report_data("file.open", &json!({"path": "/tmp/a.fig"}), &json!({"warnings": many}))
+            .expect("many warnings still report");
+        let notes = data["warnings"].as_str().unwrap_or_default();
+        assert_eq!(notes.lines().count(), MAX_IMPORT_NOTES, "at most MAX_NOTES notes");
+
+        let long = "x".repeat(MAX_IMPORT_NOTE_CHARS + 10);
+        let data = import_report_data("file.open", &json!({"path": "/tmp/a.fig"}), &json!({"warnings": [long]}))
+            .expect("one long note still reports");
+        let note = data["warnings"].as_str().unwrap_or_default();
+        assert_eq!(note.chars().count(), MAX_IMPORT_NOTE_CHARS + 1, "truncated plus an ellipsis");
+        assert!(note.ends_with('…'));
     }
 
     #[test]
@@ -1446,6 +1656,8 @@ mod tests {
             Kind::Unsaved,
             Kind::Rename,
             Kind::Link,
+            Kind::OffsetPath,
+            Kind::MoveToPage,
             Kind::ColorProfile,
             Kind::MissingFonts,
             Kind::ImportReport,
@@ -1469,15 +1681,18 @@ mod tests {
         let export = spec(Kind::Export, &json!({}));
         // 1:1 with the egui Export dialog: caption sections + eight clickable presets.
         assert!(export.fields.iter().any(|f| matches!(f, Field::Section { .. })));
-        let presets: Vec<&str> = export
+        let presets: Vec<String> = export
             .fields
             .iter()
             .filter_map(|f| match f {
-                Field::Action { label, .. } => Some(*label),
+                Field::Action { label, .. } => Some(label.to_string()),
                 _ => None,
             })
             .collect();
-        assert!(presets.contains(&"PNG @2x") && presets.contains(&".fig (experimental)"), "{presets:?}");
+        assert!(
+            presets.iter().any(|p| p == "PNG @2x") && presets.iter().any(|p| p == ".fig (experimental)"),
+            "{presets:?}"
+        );
         assert!(presets.len() >= 8, "all the original presets are listed");
         let prefs = spec(Kind::Preferences, &json!({}));
         assert!(prefs.buttons.iter().any(|b| matches!(&b.action, Action::SubmitFields { id: "pref.nudge", .. })));

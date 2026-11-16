@@ -36,18 +36,18 @@
 | A9 | **分支 UI Branch** | `dialogs/branch_ui.rs` | ✅ `dialogs.rs::Kind::Branch`：列表（Open/Archive）+ 创建 | 并排 review 窗口未做 | P2 | 中 |
 | A10 | **色彩配置 Color profile** | `dialogs/color_profile.rs` | ✅ 2026-11-13 1:1：sRGB / Display P3 单选 + Keep appearance / Keep values → `file.colorProfile` | 无 | P2 | 小 |
 | A11 | **Credits / 贡献者** | `dialogs/credits.rs` | 🔄 `Kind::About` 只有版本 / 许可提示 | egui 670 行贡献者表未搬 | P3 | 小 |
-| A12 | **导入报告 Import report** | `dialogs/import_report.rs` | 🔄 `Kind::ImportReport` 已映射（`dialog.importReport` / `dialog.import`），但引擎不发该请求 | 需在导入命令执行路径捕获 `warnings` | P2 | 小 |
+| A12 | **导入报告 Import report** | `dialogs/import_report.rs` | ✅ 2026-11-16：`dialogs::import_report_data` 1:1 照 `Report::from_result`（open/openRecent/import/pasteDesignLayers；必须是 `warnings` 数组；无警告的 SVG 不弹；放置型 import 无警告不弹；`MAX_NOTES` 500 / 每条 2000 字符），四条命令路径（系统选择器 / 拖放 / 右栏命令队列 / 菜单）都在成功后捕获 → `Kind::ImportReport` | 无（原生格式的 `repairs` 仍由引擎消息显示，与原文一致） | P2 | 小 |
 | A13 | **缺失字体提示 Missing fonts** | `dialogs/missing_fonts.rs` | ✅ **2026-11-11 自检更正**：已落地 `dialogs.rs::Kind::MissingFonts`（`dialog.missingFonts` → Spec + 形状测试），原「0 处引用」是**判断失误** | ~~打开缺字体文件无提示/替换入口~~ 已可做替换（仍是居中对话框） | P2 | 小 |
 | A14 | **更新对话框 Updates** | `dialogs/updates_ui.rs` + craft-update | 0 处引用 | 无法检查/安装更新（依赖 C2 升版） | P1 | 中 |
-| A15 | **取色器 Eyedropper / Sampled color** | `dialogs/sampled_color.rs` | 🔄 `Kind::SampledColor` 已存在（提示窗） | egui 的 Style / Variable + 集合 + Create 未搬（需给 `Action` 加按字段选命令的变体） | P2 | 小 |
+| A15 | **取色器 Eyedropper / Sampled color** | `dialogs/sampled_color.rs` | ✅ 2026-11-16 核对：引擎 `dialog.createFromColor` → `Kind::SampledColor`；Style / Variable 切换 + 名称 + 集合下拉（含 New collection）+ Create 由 `resolve_derived` 解析成 `style.create` / `variable.create` / `command.batch`（单步撤销），3 条测试覆盖 | 无（`resolve_derived` 的 `Action::Derived` 正是原文按字段选命令的等价物） | P2 | 小 |
 | A16 | **多窗口**（File ▸ New window / Open in new window / 标签拖出成窗口） | `windows.rs` | `open_window` 是弹层 `popovers::WindowState`，非 OS 多窗口 | 只能单窗口 | P2 | 大 |
-| A17 | **菜单项取值对话框**（Create link / Offset path / Move to page 等） | `dialogs/menu_input.rs` | 🔄 `Kind::Link` 已 1:1（URL 输入 → `text.link`） | Offset path / Move to page 两类未搬 | P2 | 小 |
+| A17 | **菜单项取值对话框**（Create link / Offset path / Move to page 等） | `dialogs/menu_input.rs` | ✅ 2026-11-16：`Kind::Link`（URL → `text.link`）、`Kind::OffsetPath`（数字框 → `vector.offset`）、`Kind::MoveToPage`（除当前页/分隔线外每页一行 → `object.moveToPage {page}`）三类齐全；拦截点移进 `run_command`，菜单 / Actions 面板 / 右栏按钮所有入口都先开对话框，只有带真实参数（对话框提交）才执行 | 无（`Field::Action` 的 label 改成 `SharedString` 以承载页面名） | P2 | 小 |
 | A18 | **标签关闭未保存询问**（Don't Save / Cancel / Save；Alt+close 直接丢弃） | `windows.rs:392,422,542`（引擎请求 `dialog.unsaved`，**原文写的 `app.rs` #2032 不是对话框所在处**） | ✅ 已落地：`tabs_view.rs:388,392` 的 `force: e.modifiers.alt`、`lib.rs:1400` 消费 `dialog.unsaved`、`dialogs.rs:285-295` 三问 | Save 后不会自动再关闭；拖出成窗口（A16）仍缺（见 I 节） | P1 | 小 |
-| **A19** | **通用对话框框架**（数据驱动：标题 / 说明 / 字段 / 按钮 / 确认取消 / Escape / 遮罩） | `dialogs.rs`（579 行，`renderers()` 统一 About·Preferences·Shortcuts·Find·Rename·Variables·Export） | ✅ **2026-11-11 自检更正**：已落地 `dialogs.rs`（`Kind::ALL` 16 种 + `Spec` + `parity_contract` 双向比对）；原两处是 2026-11-10 扫描快照，现已过时 | **A6/A7/A8/A10/A11/A12/A13/A15/A17/A18 十个对话框的共同前置** | **P0** | 中 |
+| **A19** | **通用对话框框架**（数据驱动：标题 / 说明 / 字段 / 按钮 / 确认取消 / Escape / 遮罩） | `dialogs.rs`（579 行，`renderers()` 统一 About·Preferences·Shortcuts·Find·Rename·Variables·Export） | ✅ **2026-11-11 自检更正**：已落地 `dialogs.rs`（`Kind::ALL` 现 18 种 + `Spec` + `parity_contract` 双向比对）；原两处是 2026-11-10 扫描快照，现已过时 | **A6/A7/A8/A10/A11/A12/A13/A15/A17/A18 十个对话框的共同前置** | **P0** | 中 |
 | **A20** | **查找替换 Find and replace** | `dialogs.rs:368-404`（`edit.findReplace`） | ✅ **2026-11-11 自检更正**：已落地 `Kind::Find`（`edit.findReplace` / `dialog.find` → Spec + Find / Replace all 按钮 + 3 条测试），原「全 0 命中」是**判断失误** | ~~无法批量查找替换~~ 已可用（仍是居中对话框，非 EGUI 内联） | P1 | 小 |
-| **A21** | **无障碍 a11y**（AccessKit 树、F6/Shift+F6 区域切换、Tab 焦点环、方向键导航） | `a11y.rs`（1071 行，`focus.region` 请求） | `AccessKit` / `accesskit` / `focus_ring` / `Key::F6` 全 0；`tabs_view.rs:13` 自认「a11y（AccessKit，P4）」 | 键盘/读屏用户不可用 | P2 | 大 |
+| **A21** | **无障碍 a11y**（AccessKit 树、F6/Shift+F6 区域切换、Tab 焦点环、方向键导航） | `a11y.rs`（1071 行，`focus.region` 请求） | 🔄 2026-11-16：**区域级导航已落地** `ui-gpui/src/a11y.rs` —— 消费引擎 `focus.region`，`F6`/`Shift+F6` 在工具条→左栏→画布→右栏间循环（根节点兜底派发，输入框有焦点也收得到）、活动区域画强调色焦点环、`Escape` 回画布、方向键走 `select.previous/next`、指针在画布按下即回指针模式，2 条单测 | **AccessKit 树与控件级 Tab 遍历做不了**：GPUI 0.2 不暴露 AccessKit，也不像 egui 能取回上一帧每个控件矩形；读屏/控件级 Tab 需等框架或另建控件注册表 | P2 | 大 |
 | **A22** | **双向文字 + 界面缩放**（UAX#9 名称、阿拉伯连字、括号镜像；`pref.uiScale`） | `bidi.rs`（127 行）、`ui_scale.rs`（117 行） | 🔄 2026-11-16：`bidi.rs` 已落地（AC 节）——名称按实测宽度截断、省略号落在视觉末端；UAX#9 重排 / 阿拉伯连字 / 括号镜像由 GPUI 的平台塑形器（DirectWrite / Core Text / cosmic-text）完成，无需重写。**uiScale 未做**：GPUI 0.2 没有 zoom factor / `set_scale_factor` / 元素整体缩放接口，界面全用 `pt()`/`px()` 常量 | RTL 名称截断已正确；界面大小仍不可调（需框架支持或全量 UI 度量重构） | P2 | 中 |
-| **A23** | **平台服务层**（原生文件对话框 / 剪贴板 / `OPEN_EXTENSIONS` / 拖放进度卡片 / IME） | `services.rs`、`open.rs`、`pending_open.rs`、`app/ime.rs`、`app/clipboard.rs` | `pick_open` / `OPEN_EXTENSIONS` / `pending_open` 全 0；`context_menu.rs:44` 自认「clipboard and file dialogs — which this front-end does not have yet」 | 打开/另存/复制粘贴走不通原生路径 | P2 | 中 |
+| **A23** | **平台服务层**（原生文件对话框 / 剪贴板 / `OPEN_EXTENSIONS` / 拖放进度卡片 / IME） | `services.rs`、`open.rs`、`pending_open.rs`、`app/ime.rs`、`app/clipboard.rs` | 🔄 2026-11-16 核对：原生文件对话框 ✅（`rfd`：打开 / 导入 / 放置图片 / 画笔导入 / 导出保存 / 导出图层选文件夹 / zip 保存）、`OPEN_EXTENSIONS` 等扩展名表 ✅（`open.rs`，含单测）、文本剪贴板 ✅（GPUI `write_to_clipboard` / `read_from_clipboard`）、IME ✅（GPUI 输入框 + canvas `EntityInputHandler` 原生 IME）。**本日新增**：`file.export` / `file.exportLayers` 无路径时引擎回 base64，UI 解 base64 后按结果形状走保存对话框或文件夹 | 图像剪贴板（Copy as PNG）与 `pending_open` 拖放进度卡片未做（GPUI 0.2 剪贴板只有文本；拖放同步执行） | P2 | 中 |
 | **A24** | **字段通用行为**（数字框 `+10/*2/50%` 相对运算、字体预览、实时文本提示、`menus/select_layer.rs`） | `widgets/field_math.rs`、`widgets/font_preview.rs`、`canvas/live_text.rs`、`menus/select_layer.rs` | 🔄 2026-11-16：`field_math` 已 1:1 移植（AD 节）——算术表达式 / 括号 / 单位 / 十进制逗号 / `%` 相对编辑 / 箭头步进的浮点去尘全部接通；百分比字段按后缀把 `%` 当单位 | 仍缺：字体预览（`font_preview`）、右键「Select layer」子菜单、实时文本提示（属 A28 Live） | P3 | 中 |
 | **A25** | **插件 widget 悬浮栏** | `canvas/widget_bar.rs`（113 行，`widget.menu`） | ✅ `widget_bar.rs` 已移植（同一套 HEIGHT/CELL/SWATCH/GAP/PAD 与 `widget.menu` 载荷），`lib.rs:4750` 接入 | 无 | P2 | 小 |
 | **A26** | **原型画布连线**（noodles、「+」拖拽手柄、overlay ghost） | `canvas/proto_canvas.rs`（341 行）+ `canvas/proto_canvas/overlay_ghost.rs` | ✅ 2026-11-16 已落地 `canvas/proto_canvas.rs`（Z 节）：连线曲线 / 命中 / 「+」手柄 / ghost 拖动全接 | 无（缩略图铺底走 accent 填充分支） | P2 | 中 |
@@ -979,11 +979,11 @@ R 节（17:0x 审计）把 R1/R2 标成「✅ 已实施」，但回源码核对�
 | A15 取色器 | 「0 命中」 | `Kind::SampledColor` 已存在（提示窗）；egui 的 Style/Variable+集合+Create 未搬（需为 `Action` 加「按字段选命令」变体） |
 | A17 菜单取值 | 「无对应实现」 | `Kind::Link` 已 1:1（URL 输入 → `text.link`）；egui 的 Offset/移动到页两类未搬 |
 | B8 Present | 「约 1/6」 | `present.rs` 存在，规模仍远小于 egui 的 10 个子模块 |
-| 模块存在性 | — | `present.rs / comments.rs / icons_panel.rs / board_bar.rs / board_picker.rs / palette.rs` 均已存在；`plugins.rs / a11y.rs / bidi.rs / services.rs / proto_canvas.rs / live.rs / field_math.rs` 仍不存在 |
+| 模块存在性 | — | `present.rs / comments.rs / icons_panel.rs / board_bar.rs / board_picker.rs / palette.rs / a11y.rs / bidi.rs / field_math.rs` 均已存在；`plugins.rs / services.rs / proto_canvas.rs / live.rs` 仍不存在（services 的能力已分散在 `lib.rs` + `open.rs`） |
 
 ### X.1 第 3 批真实剩余（按代码实况）
 
-- **A19 对话框深化**（已存在但需 1:1）：ColorProfile ✅本日；SampledColor ✅本日（框架扩展）；**Rename 批量 ✅本日（Y 节，Match/正则/预览全部 1:1）**；ImportReport（引擎捕获）、MissingFonts（引擎缺命令，保持提示）、Link 的 Offset/移动到页仍待做。
+- **A19 对话框深化**（已存在但需 1:1）：ColorProfile ✅本日；SampledColor ✅本日（框架扩展）；**Rename 批量 ✅本日（Y 节，Match/正则/预览全部 1:1）**；**ImportReport ✅本日（A12：四条命令路径捕获 `warnings`，上限 500/2000 与原文一致）**；**Link / Offset path / Move to page ✅本日（A17，拦截点收进 `run_command`）**；MissingFonts（引擎缺命令，保持提示）。
 - **A4 插件面板**：Browse 联网拉取（后台任务，未接）。
 - **A27 画板协作**：board.timer/board.vote/addConnected/connected_place/BoardTimer 仍 0 命中（board_bar/board_picker 只做了工具组）。
 - **A26 原型连线**：`proto_canvas` 模块完全缺失。
@@ -994,9 +994,9 @@ R 节（17:0x 审计）把 R1/R2 标成「✅ 已实施」，但回源码核对�
 | 条目 | 规模（egui） | 现状 | 处置 |
 |---|---|---|---|
 | B8 Present 子模块 | ~2731 行 / 10 子模块 | `present.rs` ~488 行 | 逐项补全多页/链接/响应式/退出 |
-| A21 a11y | 1071 行 | 不存在 | 移植 AccessKit/F6/焦点环/方向键 |
+| A21 a11y | 1071 行 | 区域级导航已落地（F6/Shift+F6 + 焦点环 + Escape + 方向键）；AccessKit 树/控件级 Tab 无框架接口 | 剩余读屏树与控件级 Tab 需 GPUI 暴露 AccessKit 或自建控件注册表 |
 | A22 bidi/ui_scale | ~244 行 | `bidi.rs` 已落地；`ui_scale` 无对应框架接口 | bidi 已按实测宽度截断（AC 节）；uiScale 等 GPUI 提供整体缩放或全量 UI 度量重构 |
-| A23 services | — | 不存在 | 原生文件对话框/剪贴板/OPEN_EXTENSIONS/IME |
+| A23 services | — | 原生对话框 / 扩展名表 / 文本剪贴板 / IME 已具备；本日补导出落盘 | 图像剪贴板与拖放进度卡片未做 |
 | A24 field_math | — | `field_math.rs` 已落地并接入 `TextEdit`（AD 节） | 仍缺字体预览 / Select layer 子菜单 / 实时文本提示 |
 | A16 多窗口 | — | 弹层非 OS 多窗口 | 需重构 `Session` 所有权共享（J 节已记） |
 | A14 更新器 | 依赖 craft-update 升版 | 提示窗 | 等 C2 升版 |
