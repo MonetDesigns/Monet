@@ -24,7 +24,7 @@ use figcraft_doc::NodeId;
 use figcraft_doc::anim::motion::AnimProperty;
 use gpui::{App, Bounds, Div, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, SharedString, Window, div, prelude::*, px, size};
 use serde_json::{Value, json};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 // ───────────────────────────────────────────────────────────────────────────────────────────────
@@ -326,6 +326,8 @@ pub(crate) fn bindable(
             let queue = f.queue();
             let list: Vec<String> = vars.to_vec();
             let cmds = f.cmds.clone();
+            let hit = Rc::new(Cell::new(None));
+            let hit_click = hit.clone();
             let mut chip = div()
                 .w_full()
                 .h(pt(crate::widgets::FIELD_H))
@@ -347,11 +349,13 @@ pub(crate) fn bindable(
                         .iter()
                         .map(|v| (v.clone(), "variable.bind", json!({ "field": field, "variable": v })))
                         .collect::<Vec<(String, &'static str, Value)>>();
-                    open_list_window(
+                    let top = crate::popovers::button_top(&hit_click, window);
+                    open_list_window_at(
                         popups.clone(),
                         queue.clone(),
                         cx,
                         window.mouse_position(),
+                        Some(top),
                         ListWindow::Variables,
                         SharedString::from(tr("Variables")),
                         rows,
@@ -376,7 +380,7 @@ pub(crate) fn bindable(
                         .child(crate::widgets::icon::paint(Icon::Detach, rgba(t.text_secondary), 12.0)),
                 );
             }
-            chip.into_any_element()
+            crate::popovers::with_button_bounds(chip, hit)
         }
         // ── 未绑定：字段本身 + 悬停才出现的「应用变量」按钮 ────────────────────────────
         None => {
@@ -385,7 +389,9 @@ pub(crate) fn bindable(
                 let popups = f.popups();
                 let queue = f.queue();
                 let list: Vec<String> = vars.to_vec();
-                cell = cell.child(
+                let hit = Rc::new(Cell::new(None));
+                let hit_click = hit.clone();
+                cell = cell.child(crate::popovers::with_button_bounds(
                     div()
                         .absolute()
                         .right(px(0.0))
@@ -402,18 +408,21 @@ pub(crate) fn bindable(
                                 .iter()
                                 .map(|v| (v.clone(), "variable.bind", json!({ "field": field, "variable": v })))
                                 .collect::<Vec<(String, &'static str, Value)>>();
-                            open_list_window(
+                            let top = crate::popovers::button_top(&hit_click, window);
+                            open_list_window_at(
                                 popups.clone(),
                                 queue.clone(),
                                 cx,
                                 window.mouse_position(),
+                                Some(top),
                                 ListWindow::Variables,
                                 SharedString::from(tr("Variables")),
                                 rows,
                             );
                         })
                         .child(crate::widgets::variable_button()),
-                );
+                hit,
+                ));
             }
             cell.into_any_element()
         }
@@ -602,16 +611,33 @@ fn open_list_window(
     title: SharedString,
     rows: Vec<(String, &'static str, Value)>,
 ) {
+    open_list_window_at(popups, queue, cx, anchor, None, kind, title, rows);
+}
+
+/// Same as [`open_list_window`] with the trigger's exact top (when it reported one).
+fn open_list_window_at(
+    popups: crate::panels::PopupReqs,
+    queue: crate::panels::Cmds,
+    cx: &mut App,
+    anchor: Point<Pixels>,
+    exact_top: Option<Pixels>,
+    kind: ListWindow,
+    title: SharedString,
+    rows: Vec<(String, &'static str, Value)>,
+) {
     let trail = match kind {
         ListWindow::Variables => tr("Variable"),
         ListWindow::Styles => tr("Style"),
     };
     let list: Vec<crate::popovers::Row> =
         rows.into_iter().map(|(label, cmd, params)| crate::popovers::Row::new(label, cmd, params).group(tr("This file")).trail(trail)).collect();
-    let w = match kind {
+    let mut w = match kind {
         ListWindow::Variables => crate::popovers::WindowState::variables(queue, cx, anchor, list),
         ListWindow::Styles => crate::popovers::WindowState::styles(queue, cx, anchor, title, list),
     };
+    if let Some(top) = exact_top {
+        w.anchor_to_button_top(top);
+    }
     // No `Entity<CanvasView>` guard: the root view drains the slot on its next frame.
     popups.request(w);
 }
@@ -619,24 +645,31 @@ fn open_list_window(
 /// A header icon that opens the detached Variables window (egui `variable_ui::picker`) instead
 /// of a little dropdown. These are the visible buttons in the Appearance / Typography headers —
 /// wiring the window only to the small in-row binding button left them looking unconnected.
-fn variables_window_button(f: &RightFields, icon: Icon, rows: Vec<(String, &'static str, Value)>) -> IconButton {
+fn variables_window_button(f: &RightFields, icon: Icon, rows: Vec<(String, &'static str, Value)>) -> gpui::AnyElement {
     let root = f.popups();
     let queue = f.queue();
-    IconButton::new(icon).size(24.0).on_click(move |_e, window, cx: &mut App| {
-        open_list_window(
-            root.clone(),
-            queue.clone(),
-            cx,
-            window.mouse_position(),
-            ListWindow::Variables,
-            SharedString::from(tr("Variables")),
-            rows.clone(),
-        );
-    })
+    let hit = Rc::new(Cell::new(None));
+    let hit_click = hit.clone();
+    crate::popovers::with_button_bounds(
+        IconButton::new(icon).size(24.0).on_click(move |_e, window, cx: &mut App| {
+            let top = crate::popovers::button_top(&hit_click, window);
+            open_list_window_at(
+                root.clone(),
+                queue.clone(),
+                cx,
+                window.mouse_position(),
+                Some(top),
+                ListWindow::Variables,
+                SharedString::from(tr("Variables")),
+                rows.clone(),
+            );
+        }),
+        hit,
+    )
 }
 
 /// 一行的 24 pt 图标按钮组（header 的 trailing 槽）。
-pub(crate) fn icon_row(items: Vec<IconButton>) -> gpui::Div {
+pub(crate) fn icon_row<E: gpui::IntoElement>(items: Vec<E>) -> gpui::Div {
     let mut d = div().flex().flex_row().items_center().gap(pt(4.0));
     for i in items {
         d = d.child(i);
@@ -645,7 +678,7 @@ pub(crate) fn icon_row(items: Vec<IconButton>) -> gpui::Div {
 }
 
 /// 某类样式的「Styles」菜单（egui `style_picker::open` 的等价：列出该类样式并 `style.apply`）。
-fn style_menu(f: &RightFields, d: &PanelData, ty: &'static str, target: Option<&'static str>, icon: Icon) -> IconButton {
+fn style_menu(f: &RightFields, d: &PanelData, ty: &'static str, target: Option<&'static str>, icon: Icon) -> gpui::AnyElement {
     // egui `style_picker::apply`: a fill/stroke slot also sends `target` (`"fill"` / `"stroke"`),
     // so the engine knows which paint list the style applies to. Text/effect/grid slots do not.
     let rows: Vec<(String, &'static str, Value)> = d
@@ -671,9 +704,24 @@ fn style_menu(f: &RightFields, d: &PanelData, ty: &'static str, target: Option<&
     };
     let root = f.popups();
     let queue = f.queue();
-    IconButton::new(icon).size(24.0).on_click(move |_e, window, cx: &mut App| {
-        open_list_window(root.clone(), queue.clone(), cx, window.mouse_position(), ListWindow::Styles, SharedString::from(title), rows.clone());
-    })
+    let hit = Rc::new(Cell::new(None));
+    let hit_click = hit.clone();
+    crate::popovers::with_button_bounds(
+        IconButton::new(icon).size(24.0).on_click(move |_e, window, cx: &mut App| {
+            let top = crate::popovers::button_top(&hit_click, window);
+            open_list_window_at(
+                root.clone(),
+                queue.clone(),
+                cx,
+                window.mouse_position(),
+                Some(top),
+                ListWindow::Styles,
+                SharedString::from(title),
+                rows.clone(),
+            );
+        }),
+        hit,
+    )
 }
 
 /// egui `style_picker::chip`：已链接共享样式时，在节的**标题下面**多画一行
@@ -792,10 +840,13 @@ fn color_pick(
     params: Value,
     key: &'static str,
     base_paint: Option<Value>,
-) -> ColorField {
+) -> (ColorField, Rc<Cell<Option<Bounds<Pixels>>>>) {
     let popups = f.popups();
     let cmds = f.cmds.clone();
-    cf.on_swatch(move |pos: Point<Pixels>, _window, cx: &mut App| {
+    let hit = Rc::new(Cell::new(None));
+    let hit_click = hit.clone();
+    let cf = cf.on_swatch(move |pos: Point<Pixels>, window, cx: &mut App| {
+        let top = crate::popovers::button_top(&hit_click, window);
         let on_pick = Rc::new({
             let cmds = cmds.clone();
             let params = params.clone();
@@ -830,13 +881,15 @@ fn color_pick(
             });
         // Synchronous request, no detached async `spawn` and no root-Entity guard: the old
         // `cx.spawn(...).detach()` delayed the picker by a frame and could be dropped entirely.
-        let w = crate::popovers::WindowState::color(cx, pos, current, picker, on_pick, cmds.clone());
+        let mut w = crate::popovers::WindowState::color(cx, pos, current, picker, on_pick, cmds.clone());
+        w.anchor_to_button_top(top);
         popups.request(w);
-    })
+    });
+    (cf, hit)
 }
 
 /// paint 行的 swatch（`paints.rs::paint_row`）：选色推 `fill.set`/`stroke.set`，带 `index`。
-fn paint_swatch(f: &RightFields, row: &PaintRow, cf: ColorField) -> ColorField {
+fn paint_swatch(f: &RightFields, row: &PaintRow, cf: ColorField) -> (ColorField, Rc<Cell<Option<Bounds<Pixels>>>>) {
     let current = row.paint.solid_color().map(crate::widgets::swatch::color32).unwrap_or(Color32::BLACK);
     let cmd = if row.fills { "fill.set" } else { "stroke.set" };
     color_pick(f, cf, current, cmd, json!({ "index": row.index }), "color", None)
@@ -884,9 +937,10 @@ pub(crate) fn paints(
                 ("Even-odd".into(), "vector.fillRule", json!({ "rule": "evenOdd" })),
             ],
             false,
-        ));
+        )
+        .into_any_element());
     }
-    icons.push(icon_cmd(Icon::Plus, add_cmd, json!({}), f, false));
+    icons.push(icon_cmd(Icon::Plus, add_cmd, json!({}), f, false).into_any_element());
     // 空 / Mixed（多选混合，`list == None`）：**只有置灰头部**——不写提示文字、不给 body、
     // 也就没有 `PanelSection` 那 12 pt 底边距。`+` 图标照旧可点，功能没少。
     let Some(rows) = list.filter(|v| !v.is_empty()) else {
@@ -945,7 +999,7 @@ pub(crate) fn paints(
         // 颜色输入框跨两列（w_full），行尾只有两个 24 pt 槽，同 egui `paint_row` 的
         // `available_width - 56` + `icon_pair`。绑定/解绑一律由 ColorField 自己的尾插槽承担。
         let cf = ColorField::new(cx, row.paint.clone(), text, row_w, hex_ed, op_ed);
-        let cf = paint_swatch(f, row, cf);
+        let (cf, swatch_hit) = paint_swatch(f, row, cf);
         // 变量绑定态 = 设计稿 `Field-color / Disabled`：无背景、整框可点换绑、透明度数值消失，
         // 24 pt 尾插槽换成解绑按钮；未绑定态该插槽仍是 100 / "%"。
         let cf = match row.bound.as_deref() {
@@ -960,6 +1014,7 @@ pub(crate) fn paints(
             ),
             None => cf,
         };
+        let cf = crate::popovers::with_button_bounds(cf, swatch_hit);
         let eye = icon_cmd(if row.visible { Icon::Eye } else { Icon::EyeOff }, cmd, json!({ "index": index, "visible": !row.visible }), f, false);
         let minus = icon_cmd(Icon::Minus, if fills { "fill.remove" } else { "stroke.remove" }, json!({ "index": index }), f, false);
         // Motion mode: the first solid paint's row carries a keyframe diamond (egui `diamond()`).
@@ -1014,11 +1069,18 @@ pub(crate) fn paints(
             let popups = f.popups();
             let stroke_queue = f.queue();
             let stroke_data = d.clone();
-            let dots = IconButton::new(Icon::Menu).size(24.0).on_click(move |_e, window, cx: &mut App| {
-                let anchor = window.mouse_position();
-                let w = crate::popovers::WindowState::stroke(stroke_queue.clone(), &stroke_data, cx, anchor);
-                popups.request(w);
-            });
+            let dots_hit = Rc::new(Cell::new(None));
+            let dots_click = dots_hit.clone();
+            let dots = crate::popovers::with_button_bounds(
+                IconButton::new(Icon::Menu).size(24.0).on_click(move |_e, window, cx: &mut App| {
+                    let anchor = window.mouse_position();
+                    let top = crate::popovers::button_top(&dots_click, window);
+                    let mut w = crate::popovers::WindowState::stroke(stroke_queue.clone(), &stroke_data, cx, anchor);
+                    w.anchor_to_button_top(top);
+                    popups.request(w);
+                }),
+                dots_hit,
+            );
             // 第二行 = 描边对齐下拉 + **线宽字段** + 独立边宽 + 高级描边（egui `paints.rs`:
             // `dropdown(align, half)` 之后紧跟 `number_field_mixed("strokeWeight", …, weight_w)`）。
             sec = sec.child(field_row(
@@ -1027,7 +1089,7 @@ pub(crate) fn paints(
                     // 线宽可绑变量（`paints.rs::stroke`：`variable_ui::number_field_mixed(..., "strokeWeight", ...)`）。
                     bindable(f, "strokeWeight", d.bound.get("strokeWeight").map(String::as_str), &d.number_variables, f.stroke_weight.clone().into_any_element()),
                 ],
-                vec![sides, dots],
+                vec![sides.into_any_element(), dots],
             ));
         }
     }
@@ -1149,14 +1211,16 @@ fn effect_settings_button(f: &RightFields, row: &EffectRow, col: f32) -> Dropdow
     let label = SharedString::from(row.label.clone());
     let index = row.index;
     Dropdown::new(label.clone(), col, None).fill().on_click(move |bounds, _window, cx: &mut App| {
-        popups.request(crate::popovers::WindowState::effect_settings(
+        let mut w = crate::popovers::WindowState::effect_settings(
             cmds.clone(),
             cx,
             bounds.origin,
             index,
             label.clone(),
             effect.clone(),
-        ));
+        );
+        w.anchor_to_button_top(bounds.origin.y);
+        popups.request(w);
     })
 }
 
@@ -1173,7 +1237,7 @@ pub(crate) fn effects(
     // `[Styles, Plus]`；`+` 点开是「添加效果」菜单：7 种内置效果 + 分隔线 + 固定目录里每个
     // `.wgsl` 文件项（有多少文件就多少项）。选中文件写 plugin_data 绑定，其参数才在下方展开。
     // WGSL 与内置效果同处一个菜单，不再另起独立下拉行。
-    let icons = vec![style_menu(f, d, "effect", None, Icon::Dot), add_effect_menu(f)];
+    let icons = vec![style_menu(f, d, "effect", None, Icon::Dot), add_effect_menu(f).into_any_element()];
 
     // WGSL 材质：只在「已绑定」时于下方就地展开参数输入框（选中文件由上面的 `+` 菜单写入）。
     // 空态（0 效果、未绑定）连参数行都不画，Effects 节就是一行置灰头部 + 可点的 `+`。
@@ -1454,7 +1518,7 @@ pub(crate) fn selection_colors(
         let current = paint.solid_color().map(crate::widgets::swatch::color32).unwrap_or(Color32::BLACK);
         let cf = ColorField::new(cx, paint, text, row_w, hex_ed, op_ed);
         // swatch 点击开取色器（`selection_colors.rs::toggle`）：`selection.setPaint` 用 `paint` 键。
-        let cf = color_pick(f, cf, current, "selection.setPaint", json!({ "targets": targets }), "paint", Some(row.paint.clone()));
+        let (cf, swatch_hit) = color_pick(f, cf, current, "selection.setPaint", json!({ "targets": targets }), "paint", Some(row.paint.clone()));
         // 选区颜色组绑定到变量时同样走 `Field-color / Disabled`：整框可点换绑，24 pt
         // 尾插槽换成解绑按钮（`selection.detachColor`）。换绑菜单只列这组作用域内的变量。
         let var_names: Vec<String> = row.variables.iter().map(|(name, _)| name.clone()).collect();
@@ -1470,6 +1534,7 @@ pub(crate) fn selection_colors(
             ),
             None => cf,
         };
+        let cf = crate::popovers::with_button_bounds(cf, swatch_hit);
         let bind = selection_bind(f, row, d).into_any_element();
         let select = icon_cmd(Icon::Search, "selection.selectColor", json!({ "targets": targets }), f, false).into_any_element();
         // 两个 24 pt 尾槽：Styles/变量（绑定态留空占位） + 选中同色图层。
@@ -1523,7 +1588,7 @@ mod selection_colors_tests {
 pub(crate) fn grids(f: &RightFields, d: &PanelData, col: f32) -> Section {
     // `[Styles, Plus]`；egui `effects.rs::grids` 的 `+` 直接加一条默认网格（`grid.add {ids}`），
     // 类型再在行内下拉改。GPUI 不要在 header 弹类型菜单，直接加默认网格（与源码一致）。
-    let icons = vec![style_menu(f, d, "grid", None, Icon::Dot), icon_cmd(Icon::Plus, "grid.add", json!({}), f, false)];
+    let icons = vec![style_menu(f, d, "grid", None, Icon::Dot), icon_cmd(Icon::Plus, "grid.add", json!({}), f, false).into_any_element()];
     // 空 / Mixed：只有置灰头部（同 Fill / Stroke）。
     let Some(rows) = d.grids.clone().filter(|v| !v.is_empty()) else {
         return Section::empty(tr("Layout grid"), icon_row(icons));
@@ -1723,26 +1788,34 @@ pub(crate) fn shows_corner_smoothing(supported: bool, radius: f64) -> bool {
 ///
 /// 冻结的 `Icon` 集里没有平滑圆角字形（Type settings 的同类入口也因缺图标改用 `Icon::Menu`），
 /// 这里按约定用文本字形 `◇` 自绘一个 24 pt 小按钮，不新增图标、不另造控件。
-fn corner_smoothing_button(f: &RightFields, d: &PanelData) -> Div {
+fn corner_smoothing_button(f: &RightFields, d: &PanelData) -> gpui::AnyElement {
     let t = tokens();
     let popups = f.popups();
     let queue = f.queue();
     let value = d.corner_smoothing.unwrap_or(0.0) as f32;
-    div()
-        .size(pt(24.0))
-        .flex_none()
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(pt(4.0))
-        .text_size(pt(12.0))
-        .text_color(rgba(t.text_secondary))
-        .cursor_pointer()
-        .hover(|s| s.bg(rgba(t.hover)))
-        .on_mouse_down(MouseButton::Left, move |_e: &MouseDownEvent, window, _cx: &mut App| {
-            popups.request(crate::popovers::WindowState::corner_smoothing(queue.clone(), value, window.mouse_position()));
-        })
-        .child("◇")
+    let hit = Rc::new(Cell::new(None));
+    let hit_click = hit.clone();
+    crate::popovers::with_button_bounds(
+        div()
+            .size(pt(24.0))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(pt(4.0))
+            .text_size(pt(12.0))
+            .text_color(rgba(t.text_secondary))
+            .cursor_pointer()
+            .hover(|s| s.bg(rgba(t.hover)))
+            .on_mouse_down(MouseButton::Left, move |_e: &MouseDownEvent, window, _cx: &mut App| {
+                let top = crate::popovers::button_top(&hit_click, window);
+                let mut w = crate::popovers::WindowState::corner_smoothing(queue.clone(), value, window.mouse_position());
+                w.anchor_to_button_top(top);
+                popups.request(w);
+            })
+            .child("◇"),
+        hit,
+    )
 }
 
 /// Appearance 的 header 图标（egui `paints.rs::appearance`：Eye/Variable/Blend）。
@@ -1774,12 +1847,12 @@ pub(crate) fn appearance(
     });
     // Figma 在 Corner radius 字段右侧给一个 24 pt 小按钮，点开「Corner smoothing」小窗；
     // 只在「可平滑圆角的类型 + 圆角不为 0」时出现（圆角为 0 就谈不上平滑）。
-    let mut trail: Vec<Div> = Vec::new();
+    let mut trail: Vec<gpui::AnyElement> = Vec::new();
     if shows_corner_smoothing(d.corner_smoothing_supported, d.corner_radius) {
         trail.push(corner_smoothing_button(f, d));
     }
     let mut sec = PanelSection::new(tr("Appearance"))
-        .header_trail(icon_row(vec![eye, bind, blend]))
+        .header_trail(icon_row(vec![eye.into_any_element(), bind, blend.into_any_element()]))
         .child(sublabel_row2(tr("Opacity"), tr("Corner radius")))
         .child(field_row(
             vec![
@@ -1921,13 +1994,21 @@ pub(crate) fn typography(f: &RightFields, d: &PanelData) -> PanelSection {
 ///
 /// 图标用 `Icon::Menu`（三条横线 =「更多选项」）：egui 的 `Icon::TypeSettings` 字形在冻结的
 /// 图标集里没有对应项，而 `Icon::Settings` 目前只是占位圆点（不是齿轮），画出来认不出。
-fn type_settings_button(f: &RightFields, d: &PanelData) -> IconButton {
+fn type_settings_button(f: &RightFields, d: &PanelData) -> gpui::AnyElement {
     let popups = f.popups();
     let queue = f.queue();
     let text = d.text.clone().unwrap_or_default();
-    IconButton::new(Icon::Menu).size(24.0).on_click(move |_e, window, cx: &mut App| {
-        popups.request(crate::popovers::WindowState::type_settings(queue.clone(), &text, cx, window.mouse_position()));
-    })
+    let hit = Rc::new(Cell::new(None));
+    let hit_click = hit.clone();
+    crate::popovers::with_button_bounds(
+        IconButton::new(Icon::Menu).size(24.0).on_click(move |_e, window, cx: &mut App| {
+            let top = crate::popovers::button_top(&hit_click, window);
+            let mut w = crate::popovers::WindowState::type_settings(queue.clone(), &text, cx, window.mouse_position());
+            w.anchor_to_button_top(top);
+            popups.request(w);
+        }),
+        hit,
+    )
 }
 
 /// 矢量编辑模式下选中点的面板（egui `vector_panel.rs::points`）。
@@ -3536,6 +3617,8 @@ fn local_style_row(
         "effect" => tr("Edit effect style"),
         _ => tr("Edit grid style"),
     });
+    // 触发按钮在 prepaint 把自身 top 写进这个 cell；右键菜单那条路径没有按钮，留空走旧近似。
+    let editor_hit: Rc<Cell<Option<Bounds<Pixels>>>> = Rc::new(Cell::new(None));
     let open_editor: Rc<dyn Fn(&mut Window, &mut App)> = {
         let popups = f.popups();
         let cmds = cmds.clone();
@@ -3546,8 +3629,9 @@ fn local_style_row(
         let stext = s.text.clone();
         let seff = s.effects.clone();
         let sgrid = s.grids.clone();
+        let hit = editor_hit.clone();
         Rc::new(move |window: &mut Window, cx: &mut App| {
-            popups.request(crate::popovers::WindowState::style_editor(
+            let mut w = crate::popovers::WindowState::style_editor(
                 cmds.clone(),
                 cx,
                 window.mouse_position(),
@@ -3562,7 +3646,11 @@ fn local_style_row(
                 seff.clone(),
                 sgrid.clone(),
                 popups.clone(),
-            ));
+            );
+            if let Some(top) = hit.get().map(|b| b.origin.y) {
+                w.anchor_to_button_top(top);
+            }
+            popups.request(w);
         })
     };
     // 左侧徽标（egui `paint_dot` / "Ag" / `slot.icon()`）。
@@ -3625,6 +3713,7 @@ fn local_style_row(
         .flex_row()
         .items_center()
         .gap(pt(LS_ICON_GAP))
+        .child(crate::popovers::bounds_probe(editor_hit.clone()))
         // 每层缩进同一个固定值 LS_STEP（用户 2026-11-15）：图标起点 = 行基准 + depth * LS_STEP，
         // 正好对齐上一层文件夹的文字左边。badge_hit 的 ml(-4) 与内部居中 +4 抵消，圆形视觉左边 = pl。
         .pl(pt(ls_indent(depth)))
@@ -3848,8 +3937,8 @@ pub(crate) fn page(f: &RightFields, d: &PanelData, row_w: f32, n: &mut usize, wi
     let color = figcraft_color::Color::from_hex(&p.background).unwrap_or(figcraft_color::Color::WHITE);
     let cf = ColorField::new(cx, figcraft_color::Paint::solid(color), ColorText::Hex(SharedString::from(p.background.clone())), row_w, hex_ed, op_ed);
     // swatch → picker (`toggle_picker(PickerTarget::PageBackground)`).
-    let cf = color_pick(f, cf, Color32::from_hex(&p.background).unwrap_or(Color32::WHITE), "page.setBackground", json!({}), "color", None);
-    sec = sec.child(field_row_full(cf));
+    let (cf, swatch_hit) = color_pick(f, cf, Color32::from_hex(&p.background).unwrap_or(Color32::WHITE), "page.setBackground", json!({}), "color", None);
+    sec = sec.child(field_row_full(crate::popovers::with_button_bounds(cf, swatch_hit)));
     // egui keeps this as local UI state and opens a dialog; GPUI has no dialog yet, so the
     // engine's `file.colorProfile` command is the equivalent. `node.set {"colorProfile": …}`
     // was rejected: `colorProfile` is not a node property.

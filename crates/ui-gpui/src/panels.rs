@@ -2500,14 +2500,21 @@ pub(crate) fn auto_layout_section(
         let popups = f.popups();
         let settings_queue = f.queue();
         let settings_data = data.clone();
-        let layout_dots = IconButton::new(Icon::Menu).id("layout-settings-dots").size(24.0).on_click(move |_e, window, cx: &mut App| {
-            if std::env::var_os("FC_DEBUG_POPUP_BTN").is_some() {
-                eprintln!("[popup-btn] layout dots clicked");
-            }
-            let anchor = window.mouse_position();
-            let w = crate::popovers::WindowState::layout(settings_queue.clone(), &settings_data, cx, anchor);
-            popups.request(w);
-        });
+        let dots_hit = std::rc::Rc::new(std::cell::Cell::new(None));
+        let dots_click = dots_hit.clone();
+        let layout_dots = crate::popovers::with_button_bounds(
+            IconButton::new(Icon::Menu).id("layout-settings-dots").size(24.0).on_click(move |_e, window, cx: &mut App| {
+                if std::env::var_os("FC_DEBUG_POPUP_BTN").is_some() {
+                    eprintln!("[popup-btn] layout dots clicked");
+                }
+                let anchor = window.mouse_position();
+                let top = crate::popovers::button_top(&dots_click, window);
+                let mut w = crate::popovers::WindowState::layout(settings_queue.clone(), &settings_data, cx, anchor);
+                w.anchor_to_button_top(top);
+                popups.request(w);
+            }),
+            dots_hit,
+        );
         sec = sec.child(sublabel_row2(left_cap, tr("Spacing"))).child(crate::widgets::field_row_h(
             vec![picker, right_col],
             vec![layout_dots],

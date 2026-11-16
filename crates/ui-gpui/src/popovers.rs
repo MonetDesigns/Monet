@@ -582,6 +582,10 @@ pub(crate) struct WindowState {
     measured_h: Rc<Cell<f32>>,
     /// `Some` once the header has been dragged (egui's `Place::At`).
     place: Option<Point<Pixels>>,
+    /// Exact window-space **top** of the button that opened this card, when the trigger
+    /// reported it. `anchored_open` uses this instead of guessing from the press point.
+    /// `None` keeps the old pointer-minus-half-button fallback (keyboard / command opens).
+    exact_top: Option<Pixels>,
     origin: Point<Pixels>,
     /// Last viewport the card was laid out in. A drag clamps every step to it, exactly like
     /// egui's `clamp(at - grab, size, screen)`, so a pointer leaving the window cannot park the
@@ -702,8 +706,12 @@ fn style_write_queue(cmds: &Cmds, style_id: String, text: Rc<RefCell<Value>>) ->
 }
 
 impl WindowState {
-    /// DIAGNOSTIC CUT glue: no-op anchor adjustment (base WindowState lacks exact_top).
-    pub(crate) fn anchor_to_button_top(&mut self, _top: Pixels) {}
+    /// Pin the card's top to the exact top of its trigger button (window coordinates).
+    /// Call this at the open site when the button reported its own `Bounds`; the press
+    /// point is then used only to decide *which* button was pressed, never to place the card.
+    pub(crate) fn anchor_to_button_top(&mut self, top: Pixels) {
+        self.exact_top = Some(top);
+    }
 
     /// 供根视图判断当前是否是某个特定窗口（例如变量面板已开时再点按钮就不要二次弹出）。
     pub(crate) fn kind(&self) -> WindowKind {
@@ -722,6 +730,7 @@ impl WindowState {
             height: 240.0,
             measured_h: Rc::new(Cell::new(0.0)),
             place: None,
+            exact_top: None,
             origin: Point { x: px(0.0), y: px(0.0) },
             viewport: size(px(0.0), px(0.0)),
             hold: crate::hold_drag::HoldDrag::default(),
@@ -3385,14 +3394,22 @@ impl WindowState {
                     let pick = PaintPicker { paint: paint.clone(), on_write: write };
                     let on_pick: Rc<dyn Fn(crate::canvas::geom::Color32, &mut Window, &mut App)> = Rc::new(|_, _, _| {});
                     let open_cmds = self.cmds.clone();
-                    cf = cf.on_swatch(move |pos: Point<Pixels>, _w, cx: &mut App| {
+                    let hit = Rc::new(Cell::new(None));
+                    let hit_click = hit.clone();
+                    cf = cf.on_swatch(move |pos: Point<Pixels>, window, cx: &mut App| {
                         // 往**左**让 8 pt：取色器右缘贴着面板左缘排开（`open_pos` 会把它放在
                         // 锚点左侧），两个卡片并排而不是一开一关。
+                        let top = button_top(&hit_click, window);
                         let anchor = Point { x: pos.x - px(8.0), y: pos.y };
-                        let child = Self::color(cx, anchor, current, Some(pick.clone()), on_pick.clone(), open_cmds.clone());
+                        let mut child = Self::color(cx, anchor, current, Some(pick.clone()), on_pick.clone(), open_cmds.clone());
+                        child.anchor_to_button_top(top);
                         *slot.borrow_mut() = Some(Box::new(child));
                         open_cmds.wake();
                     });
+                    return Some(with_button_bounds(
+                        crate::widgets::panel_section::field_row_full_trailing(cf, vec![eye, minus]),
+                        hit,
+                    ));
                 }
                 Some(crate::widgets::panel_section::field_row_full_trailing(cf, vec![eye, minus]).into_any_element())
             }
@@ -4373,7 +4390,7 @@ impl WindowState {
         self.viewport = viewport;
         // 变量编辑器把拖动绑在**自己的头部左侧**（不是整张卡片），所以要把回调传进 body。
         self.drag_start = Some(drag.clone());
-        let open = anchored_open(self.open, right_edge);
+        let open = anchored_open(self.open, right_edge, self.exact_top);
         // Full 呈现：egui 的 `variables_panel::full(panel)` —— 只占「面板 + 画布」那块（左侧 rail
         // 保留），`Frame::NONE` 贴边铺满；Floating 用构造时的宽高与拖拽位置。
         let full = self.kind == WindowKind::VariablesTable && self.variables_full();
@@ -4684,11 +4701,16 @@ fn wire_set(field: &Entity<TextField>, cx: &mut App, cmds: &Cmds, key: &'static 
 
 /// Placement rule from `ui-egui/src/popover.rs`: the card's right edge sits on the Design
 /// panel's left edge, its top on the button that opened it — "lifted so its bottom keeps off the
-/// screen's bottom". Callers hand us the press point; only its y survives (moved up to the
-/// button's top). The pointer's x must never decide where a detached window opens.
-fn anchored_open(open: Open, right_edge: Pixels) -> Open {
+/// screen's bottom". The pointer's x must never decide where a detached window opens.
+///
+/// When the trigger reports its own bounds we use that exact top. Otherwise (keyboard / command
+/// opens) the old approximation stays: the press point minus half of a 24 pt button.
+fn anchored_open(open: Open, right_edge: Pixels, exact_top: Option<Pixels>) -> Open {
     match open {
-        Open::Anchor(a) => Open::Anchor(Point { x: right_edge, y: px((f32::from(a.y) - BUTTON_HALF).max(0.0)) }),
+        Open::Anchor(a) => {
+            let y = exact_top.unwrap_or_else(|| px((f32::from(a.y) - BUTTON_HALF).max(0.0)));
+            Open::Anchor(Point { x: right_edge, y })
+        }
         other => other,
     }
 }
@@ -4742,12 +4764,24 @@ fn picker_knob(x: f32, y: f32, fill: Color32) -> gpui::Div {
         )
 }
 
-/// 记录元素矩形（弹窗菜单锚点用）的透明探针：prepaint 存盒子，绘制阶段什么都不画。
-fn bounds_probe(hit: Rc<Cell<Option<Bounds<Pixels>>>>) -> gpui::Div {
+/// 记录元素矩形（弹窗菜单锚点 / 浮窗精确顶部）的透明探针：prepaint 存盒子，绘制阶段什么都不画。
+pub(crate) fn bounds_probe(hit: Rc<Cell<Option<Bounds<Pixels>>>>) -> gpui::Div {
     div().absolute().left_0().top_0().w_full().h_full().child(gpui::canvas(
         move |bounds, _, _| hit.set(Some(bounds)),
         |_, _, _, _| {},
     ))
+}
+
+/// Attach a bounds probe to a trigger button without changing the widget itself (frozen).
+/// The cell holds the button's window-space `Bounds` after the first prepaint.
+pub(crate) fn with_button_bounds<E: IntoElement>(el: E, hit: Rc<Cell<Option<Bounds<Pixels>>>>) -> AnyElement {
+    div().relative().child(el).child(bounds_probe(hit)).into_any_element()
+}
+
+/// Exact button top for a window opened from `hit`, falling back to the press point when the
+/// probe has not run yet (e.g. a keyboard open on the first frame).
+pub(crate) fn button_top(hit: &Rc<Cell<Option<Bounds<Pixels>>>>, window: &Window) -> Pixels {
+    hit.get().map(|b| b.origin.y).unwrap_or_else(|| window.mouse_position().y - px(BUTTON_HALF))
 }
 
 /// WCAG 相对亮度（sRGB，按 0.2126 / 0.7152 / 0.0722 加权）。
@@ -4791,16 +4825,29 @@ mod tests {
     #[test]
     fn every_window_opens_against_the_design_panel_not_the_pointer() {
         // The press was out in the right panel; only its y (button top) may survive.
-        let open = anchored_open(Open::Anchor(Point { x: px(2589.0), y: px(503.0) }), px(980.0));
+        let open = anchored_open(Open::Anchor(Point { x: px(2589.0), y: px(503.0) }), px(980.0), None);
         match open {
             Open::Anchor(p) => {
                 assert_eq!(f32::from(p.x), 980.0, "right edge belongs on the panel edge");
-                assert_eq!(f32::from(p.y), 503.0 - BUTTON_HALF, "top belongs on the button top");
+                assert_eq!(f32::from(p.y), 503.0 - BUTTON_HALF, "fallback guesses the button top");
             }
             _ => panic!("an anchor must stay an anchor"),
         }
         // All five kinds are built as anchors now; none pins its top-left to the pointer.
         assert!(matches!(open, Open::Anchor(_)));
+    }
+
+    #[test]
+    fn an_exact_button_top_wins_over_the_press_point() {
+        // A click near the bottom edge of a 24 pt button: pointer − 12 would be 11 pt too low.
+        let open = anchored_open(Open::Anchor(Point { x: px(2589.0), y: px(514.0) }), px(980.0), Some(px(502.0)));
+        match open {
+            Open::Anchor(p) => {
+                assert_eq!(f32::from(p.x), 980.0, "left edge stays on the panel");
+                assert_eq!(f32::from(p.y), 502.0, "top is the button's, not the pointer's");
+            }
+            _ => panic!("an anchor must stay an anchor"),
+        }
     }
 
     #[test]
