@@ -49,6 +49,9 @@ mod hold_drag;
 mod inline_input;
 mod render_stack;
 
+/// 双向文字里的名称（A22）：RTL / 混排脚本的标签名按实测宽度截断，省略号落在视觉末端。
+mod bidi;
+
 /// 通用尺寸拖动状态机：左面板宽度 / 底部时间轴高度共用（thread_local + 窗口轴相对位移）。
 mod resize_drag;
 
@@ -5935,7 +5938,7 @@ impl Render for CanvasView {
         let tabs_cmds = self.fields.queue();
         let tabs_me = cx.entity();
         let tab_bar = title_bar::title_bar(
-            tabs_view::tab_strip(&mut self.tabs, &tab_docs, tabs_active, tabs_dark, tabs_reduce_motion, content_w, &tabs_cmds, &tabs_me),
+            tabs_view::tab_strip(&mut self.tabs, window, &tab_docs, tabs_active, tabs_dark, tabs_reduce_motion, content_w, &tabs_cmds, &tabs_me),
             window.is_maximized(),
         );
 
