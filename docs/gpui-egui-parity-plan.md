@@ -48,7 +48,7 @@
 | **A21** | **无障碍 a11y**（AccessKit 树、F6/Shift+F6 区域切换、Tab 焦点环、方向键导航） | `a11y.rs`（1071 行，`focus.region` 请求） | 🔄 2026-11-16：**区域级导航已落地** `ui-gpui/src/a11y.rs` —— 消费引擎 `focus.region`，`F6`/`Shift+F6` 在工具条→左栏→画布→右栏间循环（根节点兜底派发，输入框有焦点也收得到）、活动区域画强调色焦点环、`Escape` 回画布、方向键走 `select.previous/next`、指针在画布按下即回指针模式，2 条单测 | **AccessKit 树与控件级 Tab 遍历做不了**：GPUI 0.2 不暴露 AccessKit，也不像 egui 能取回上一帧每个控件矩形；读屏/控件级 Tab 需等框架或另建控件注册表 | P2 | 大 |
 | **A22** | **双向文字 + 界面缩放**（UAX#9 名称、阿拉伯连字、括号镜像；`pref.uiScale`） | `bidi.rs`（127 行）、`ui_scale.rs`（117 行） | 🔄 2026-11-16：`bidi.rs` 已落地（AC 节）——名称按实测宽度截断、省略号落在视觉末端；UAX#9 重排 / 阿拉伯连字 / 括号镜像由 GPUI 的平台塑形器（DirectWrite / Core Text / cosmic-text）完成，无需重写。**uiScale 未做**：GPUI 0.2 没有 zoom factor / `set_scale_factor` / 元素整体缩放接口，界面全用 `pt()`/`px()` 常量 | RTL 名称截断已正确；界面大小仍不可调（需框架支持或全量 UI 度量重构） | P2 | 中 |
 | **A23** | **平台服务层**（原生文件对话框 / 剪贴板 / `OPEN_EXTENSIONS` / 拖放进度卡片 / IME） | `services.rs`、`open.rs`、`pending_open.rs`、`app/ime.rs`、`app/clipboard.rs` | 🔄 2026-11-16 核对：原生文件对话框 ✅（`rfd`：打开 / 导入 / 放置图片 / 画笔导入 / 导出保存 / 导出图层选文件夹 / zip 保存）、`OPEN_EXTENSIONS` 等扩展名表 ✅（`open.rs`，含单测）、文本剪贴板 ✅（GPUI `write_to_clipboard` / `read_from_clipboard`）、IME ✅（GPUI 输入框 + canvas `EntityInputHandler` 原生 IME）。**本日新增**：`file.export` / `file.exportLayers` 无路径时引擎回 base64，UI 解 base64 后按结果形状走保存对话框或文件夹 | 图像剪贴板（Copy as PNG）与 `pending_open` 拖放进度卡片未做（GPUI 0.2 剪贴板只有文本；拖放同步执行） | P2 | 中 |
-| **A24** | **字段通用行为**（数字框 `+10/*2/50%` 相对运算、字体预览、实时文本提示、`menus/select_layer.rs`） | `widgets/field_math.rs`、`widgets/font_preview.rs`、`canvas/live_text.rs`、`menus/select_layer.rs` | 🔄 2026-11-16：`field_math` 已 1:1 移植（AD 节）——算术表达式 / 括号 / 单位 / 十进制逗号 / `%` 相对编辑 / 箭头步进的浮点去尘全部接通；百分比字段按后缀把 `%` 当单位 | 仍缺：字体预览（`font_preview`）、右键「Select layer」子菜单、实时文本提示（属 A28 Live） | P3 | 中 |
+| **A24** | **字段通用行为**（数字框 `+10/*2/50%` 相对运算、字体预览、实时文本提示、`menus/select_layer.rs`） | `widgets/field_math.rs`、`widgets/font_preview.rs`、`canvas/live_text.rs`、`menus/select_layer.rs` | 🔄 2026-11-16：`field_math` 已 1:1 移植（AD 节）；右键「Select layer」子菜单（`context_menu::layers_at` + `select.set:` 动态键）与 `canvas/live_text.rs`（他人文字光标/选区/名字标签）已落地 | 仍缺：字体预览（`font_preview`） | P3 | 中 |
 | **A25** | **插件 widget 悬浮栏** | `canvas/widget_bar.rs`（113 行，`widget.menu`） | ✅ `widget_bar.rs` 已移植（同一套 HEIGHT/CELL/SWATCH/GAP/PAD 与 `widget.menu` 载荷），`lib.rs:4750` 接入 | 无 | P2 | 小 |
 | **A26** | **原型画布连线**（noodles、「+」拖拽手柄、overlay ghost） | `canvas/proto_canvas.rs`（341 行）+ `canvas/proto_canvas/overlay_ghost.rs` | ✅ 2026-11-16 已落地 `canvas/proto_canvas.rs`（Z 节）：连线曲线 / 命中 / 「+」手柄 / ghost 拖动全接 | 无（缩略图铺底走 accent 填充分支） | P2 | 中 |
 | **A27** | **画板协作小工具**（计时器 / 投票 / 自动连接 / 模板与表格行列选择器） | `canvas/board_facilitate.rs`（340 行）、`canvas/board_connect.rs`（255 行）、`widgets/board_picker.rs`（163 行） | ✅ **2026-11-16 已落地**：`board_facilitate.rs`（药丸 + 计时器/投票/结果弹层 + 票数徽标）、`canvas/board_connect.rs`（四向「+」、悬停落点、拖动建/连线）；模板选择器此前已在 `board_picker.rs` | 已可用（实机视觉冒烟待跑） | P2 | 中 |
@@ -208,7 +208,7 @@
 - A6 导出、A7 首选项、A20 查找替换、A10 色彩配置、A8/A17 重命名、A12 导入报告、A23 另存、A9 分支已通过通用壳接到**真实引擎命令**（`file.export` / `view.panelWidths` / `edit.findReplace` / `file.colorProfile` / `object.rename` / `file.saveAs` / `branch.create`）；但字段仍是通用版，不等于 EGUI 的完整交互（预览、多选导出、逐字体替换等）。
 - A18 首轮只接了引擎 `dialog.unsaved` 请求，`tabs_view.rs` 的 Alt+close / 关闭三问当时未接；已在 17:2x「G 表第 6 行落地」补齐（见下），此处保留原记录仅为时间线。
 - A13 缺失字体、A15 取样色、A14 更新、A11 About、A4 插件目前是**带说明的提示窗口**，因为引擎没有对应命令或依赖 C2 升版；按钮只有 Close，不提交不存在的命令。
-- A1 Home / A2 Boards / A3 Comments / A16 多窗口 / A21 a11y / A22 uiScale / A24 字体预览·Select layer 子菜单 / A28 Live / B8 Present 子模块仍未开始（B2 调色板已于 18:4x 落地，见下；A24 的 field_math 已落地，见 AD 节）。
+- A1 Home / A2 Boards / A3 Comments / A16 多窗口 / A21 a11y / A22 uiScale / A24 字体预览 / A28 Live / B8 Present 子模块仍未开始（B2 调色板已于 18:4x 落地，见下；A24 的 field_math、Select layer 子菜单与实时文字光标已落地，见 AD 节）。
 
 ### 17:25–17:33 按现场反馈追加调整
 
@@ -997,10 +997,10 @@ R 节（17:0x 审计）把 R1/R2 标成「✅ 已实施」，但回源码核对�
 | A21 a11y | 1071 行 | 区域级导航已落地（F6/Shift+F6 + 焦点环 + Escape + 方向键）；AccessKit 树/控件级 Tab 无框架接口 | 剩余读屏树与控件级 Tab 需 GPUI 暴露 AccessKit 或自建控件注册表 |
 | A22 bidi/ui_scale | ~244 行 | `bidi.rs` 已落地；`ui_scale` 无对应框架接口 | bidi 已按实测宽度截断（AC 节）；uiScale 等 GPUI 提供整体缩放或全量 UI 度量重构 |
 | A23 services | — | 原生对话框 / 扩展名表 / 文本剪贴板 / IME 已具备；本日补导出落盘 | 图像剪贴板与拖放进度卡片未做 |
-| A24 field_math | — | `field_math.rs` 已落地并接入 `TextEdit`（AD 节） | 仍缺字体预览 / Select layer 子菜单 / 实时文本提示 |
+| A24 field_math | — | `field_math.rs` 已落地并接入 `TextEdit`；Select layer 子菜单与实时文字光标已落地（AD 节） | 仍缺字体预览 |
 | A16 多窗口 | — | 弹层非 OS 多窗口 | 需重构 `Session` 所有权共享（J 节已记） |
 | A14 更新器 | 依赖 craft-update 升版 | 提示窗 | 等 C2 升版 |
-| A28 Live | 1672 行 | 完全缺失 | 光标/聊天/spotlight/共享/加入/断连，最大块 |
+| A28 Live | 1672 行 | 画布文字光标/选区/名字标签已落地（`canvas/live_text.rs`）；presence / peers / 网络唤醒沿用引擎 | 光标/聊天/spotlight/共享/加入/断连前端仍缺，最大块 |
 | B6/B7/B10 | — | 部分 | 变量表列行为/导出、属性面板 fill_rule 反向环、光标逐工具核对 |
 
 ### X.3 推进纪律
@@ -1127,7 +1127,7 @@ R 节（17:0x 审计）把 R1/R2 标成「✅ 已实施」，但回源码核对�
 **🔄 部分完成（有 UI，细节未齐）**：A11（About 贡献者表）、A12（引擎不发导入报告请求）、
 A15（SampledColor 仅提示窗）、A17（Link 已 1:1，Offset / Move to page 未搬）、B4（拖出成窗口）、
 B6 / B7 / B8 / B10、**A22**（bidi 已落地，见 AC 节；uiScale 受 GPUI 0.2 无缩放接口限制）、
-**A24**（field_math 已落地，见 AD 节；字体预览 / Select layer 子菜单 / 实时文本提示仍缺）。
+**A24**（field_math 已落地；Select layer 子菜单与实时文字光标已落地，见 AD 节；字体预览仍缺）。
 
 **❌ 仍未开始**：A14（依赖 C2 升版）、A16 多窗口、A21 a11y、A28 Live 协作前端、
 C2、C3（文案规范待全面对齐）。
@@ -1185,7 +1185,12 @@ C2、C3（文案规范待全面对齐）。
 （面板宽度读到 421、图标 SVG viewBox、主菜单命中测试），已用 stash 在同一提交上复现。
 
 **仍缺（A24 剩余）**：`font_preview`（字体族预览，GPUI 可对每行 `font_family` 直接绘制，但要改
-字体下拉的行渲染）、`menus/select_layer.rs`（右键「Select layer」子菜单需要把点击点传进
-`context_menu::items`）、`canvas/live_text.rs`（属 A28 Live，等协作整块）。
+字体下拉的行渲染）。
+
+**2026-11-16 补完**：`menus/select_layer.rs` → `context_menu::layers_at` + Select layer 子菜单
+（最多 40 行、按 depth 缩进、选中打勾；行键 `select.set:<node>`，`pick_context` 解析后执行
+`select.set {ids:[id]}`）；`canvas/live_text.rs` → `canvas/live_text.rs`（远端光标/选区/名字标签，
+`live.presence` 为空或本页不是会话文档时直接返回；`live_wake` 保证 presence 到达后有一帧重绘）。
+`context_menu::items` 现在多一个 `layers` 参数，右栏「More actions」传空列表保持不变。
 
 

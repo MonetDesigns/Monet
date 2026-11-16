@@ -3313,9 +3313,12 @@ impl CanvasView {
 
         let ids = context_menu::target(&mut self.app, page);
 
+        // What the click landed on, for the "Select layer" submenu (egui `select_layer_menu`).
+        let layers = context_menu::layers_at(&self.app, page);
+
         let doc = self.app.session.doc().ok();
 
-        let items = context_menu::items(doc, &ids);
+        let items = context_menu::items(doc, &ids, &layers);
 
         self.tool_flyout = None;
 
@@ -3373,6 +3376,15 @@ impl CanvasView {
     /// as-is (egui's `menus.rs` has the same special case).
 
     fn pick_context(&mut self, id: &str, cx: &mut Context<Self>) {
+        // A "Select layer" submenu row carries its node in the key (egui runs `select.set`).
+        if let Some(node) = context_menu::select_layer_target(id) {
+            self.popup = None;
+
+            self.run_command("select.set", serde_json::json!({ "ids": [node] }), cx);
+
+            return;
+        }
+
         let params = if id == "edit.paste" {
             // The click point in page coordinates: the menu was opened at it, so the pointer still
 
