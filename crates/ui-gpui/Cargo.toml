@@ -31,9 +31,6 @@ gpui = "0.2"
 # A21：从 gpui-pre 0.3.12 抄来的无障碍层所需的底层 AccessKit 原语与 Windows 平台适配器。
 # 不引入 gpui-pre / gpui-kit 本体，避免两套 GPUI 类型同时进图。
 accesskit = { version = "0.24", features = ["enumn"] }
-accesskit_windows = "0.32"
-raw-window-handle = "0.6"
-windows = { version = "0.62", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
 # Monet 内部 crate（path 依赖；因本 crate 被 exclude，不能用 workspace = true）。
 figcraft-engine = { path = "../engine" }
 figcraft-doc = { path = "../doc" }
@@ -85,6 +82,14 @@ required-features = ["gpu"]
 [[example]]
 name = "solid_probe"
 required-features = ["gpu"]
+
+# CodeRabbit PR#24: accesskit_windows and the windows crate expose their API only on Windows —
+# building the adapter unconditionally broke Linux/macOS. Keep the platform adapter target-scoped;
+# a11y/platform.rs provides a stub with the same interface on other targets.
+[target.'cfg(windows)'.dependencies]
+accesskit_windows = "0.32"
+raw-window-handle = "0.6"
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
 
 # 画布是**逐像素**的活：整页贴图 440 万像素，每次重绘都要把预乘 RGBA 转成 BGRA。
 # 未优化的 debug 构建下 tiny-skia 和这趟转换会慢 20~40 倍，一次拖拽的渲染从 6ms 涨到

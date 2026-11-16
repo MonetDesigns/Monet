@@ -2963,7 +2963,9 @@ fn local_styles_block(f: &RightFields, d: &PanelData, window: &mut Window, cx: &
     {
         let ui_blank = ui.clone();
         let wake_blank = wake.clone();
-        root = root.child(div().flex_1().min_h(px(0.0)).on_mouse_down(MouseButton::Left, move |_e, _, _cx| {
+        // CodeRabbit PR#24: a nonzero minimum so a short list still leaves a clickable blank
+        // area; flex_1 alone collapses to zero inside a content-sized PanelSection body.
+        root = root.child(div().flex_1().min_h(px(120.0)).on_mouse_down(MouseButton::Left, move |_e, _, _cx| {
             let mut st = ui_blank.borrow_mut();
             let had = st.sel.take().is_some() || st.sel_folder.take().is_some();
             drop(st);

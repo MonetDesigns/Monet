@@ -55,7 +55,6 @@ pub fn static_text(text: SharedString, color: gpui::Hsla, height: f32) -> impl I
     div().w_full().h(px(height)).child(
         gpui::canvas(
             move |bounds, window, _cx| {
-HEAD
                 // A22：按格子实测宽度截断，省略号落在视觉末端（上游 `bidi::paint_name` 的
                 // `max_w`）。名称始终保持逻辑顺序，双向排版由平台塑形器负责。
                 let fitted = crate::bidi::fit(window, &prepaint_text, FONT, f32::from(bounds.size.width));
@@ -69,7 +68,6 @@ HEAD
                     underline: None,
                     strikethrough: None,
                 };
-HEAD
                 let line = window.text_system().shape_line(fitted, px(FONT), &[run], None);
                 let ink = line.ascent + line.descent;
                 let top = bounds.origin.y + (bounds.size.height - ink) * 0.5;

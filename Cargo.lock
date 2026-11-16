@@ -2404,6 +2404,7 @@ version = "0.11.2"
 dependencies = [
  "accesskit",
  "accesskit_windows",
+ "base64 0.22.1",
  "bytemuck",
  "figcraft-abr",
  "figcraft-collab-net",
