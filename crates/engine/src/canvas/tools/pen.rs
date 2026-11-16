@@ -222,6 +222,9 @@ impl Session {
         }
         let page = self.page()?;
         let parent = pen.parent.unwrap_or(page);
+        // CodeRabbit PR#11 outside-diff: a new Pen vector must use the toolbar's chosen colour and
+        // weight; the strokes used to be hard-coded BLACK and never revisited.
+        let pen_ink = self.tool.draw_style(ToolId::Pen).map(|s| (s.color(), s.weight(ToolId::Pen)));
         if pen.id.is_none() {
             self.begin_interaction("Pen")?;
         }
@@ -270,7 +273,9 @@ impl Session {
                 let id = doc.alloc_id();
                 let mut n = Node::new(id, NodeKind::Vector { network: VectorNetwork::default() }, "Vector", 0.0, 0.0);
                 n.fills.clear();
-                n.strokes = vec![figcraft_color::Paint::solid(figcraft_color::Color::BLACK)];
+                let (ink, weight) = pen_ink.unwrap_or((figcraft_color::Color::BLACK, 2.0));
+                n.strokes = vec![figcraft_color::Paint::solid(ink)];
+                n.stroke.weight = weight;
                 n.stroke.align = StrokeAlign::Center;
                 doc.insert(n, parent, None)?;
                 id

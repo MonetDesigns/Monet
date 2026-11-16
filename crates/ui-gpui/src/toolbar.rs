@@ -249,7 +249,14 @@ fn draw_art(inks: [[u8; 3]; 3]) -> NibArt {
         }
         crate::canvas::render_worker::wrap_rgba(w, h, out)
     });
-    NIB_CACHE.with(|c| c.borrow_mut().insert(inks, art.clone()));
+    // CodeRabbit PR#11: bound the cache — each tuple retains three full RGBA nib images, so an
+    // unbounded map grows all session as colours change. Clear when full (colour changes are rare).
+    const NIB_CACHE_MAX: usize = 32;
+    NIB_CACHE.with(|c| {
+        let mut cache = c.borrow_mut();
+        if cache.len() >= NIB_CACHE_MAX { cache.clear(); }
+        cache.insert(inks, art.clone());
+    });
     art
 }
 

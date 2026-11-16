@@ -4506,12 +4506,14 @@ fn type_row(label: &SharedString, t: &crate::theme::Tokens, control: AnyElement)
 /// 提交值按 `[min, max]` 夹紧 —— egui 那边是 `value.clamp(...)`，越界的键入不该写进文档。
 /// 空文本视为「不动」：`Auto` 类的值（装饰线粗细）本来就允许留空。
 /// clone 一份 effect JSON，只改一个顶层键，作为 `effect.set` 的 `effect` 参数。
-/// 所有键都属于当前类型，不会触发引擎的 unknown properties 拒收。
-fn effect_with(effect: &Value, key: &str, value: Value) -> Value {
-    let mut e = effect.clone();
+/// CodeRabbit PR#10: write the edited effect back to `shared` like `effect_number` does — otherwise
+/// toggling then editing a number submits the number's snapshot and silently drops the toggle.
+fn effect_with(shared: &Rc<RefCell<Value>>, key: &str, value: Value) -> Value {
+    let mut e = shared.borrow().clone();
     if let Some(o) = e.as_object_mut() {
         o.insert(key.to_string(), value);
     }
+    *shared.borrow_mut() = e.clone();
     e
 }
 
@@ -4590,8 +4592,8 @@ fn effect_setting_rows(cx: &mut App, cmds: &Cmds, index: usize, shared: &Rc<RefC
                 label: SharedString::from($label),
                 on: Rc::new(RefCell::new(cur)),
                 supported: true,
-                on_cmd: Opt::dynamic("On", "effect.set", Rc::new(move || json!({ "index": index, "effect": effect_with(&s_on.borrow(), $key, json!(true)) }))),
-                off_cmd: Opt::dynamic("Off", "effect.set", Rc::new(move || json!({ "index": index, "effect": effect_with(&s_off.borrow(), $key, json!(false)) }))),
+                on_cmd: Opt::dynamic("On", "effect.set", Rc::new(move || json!({ "index": index, "effect": effect_with(&s_on, $key, json!(true)) }))),
+                off_cmd: Opt::dynamic("Off", "effect.set", Rc::new(move || json!({ "index": index, "effect": effect_with(&s_off, $key, json!(false)) }))),
             });
         }};
     }
@@ -4604,7 +4606,7 @@ fn effect_setting_rows(cx: &mut App, cmds: &Cmds, index: usize, shared: &Rc<RefC
                 .map(|(l, v)| {
                     let s = shared.clone();
                     let val = Value::String(v.to_string());
-                    Opt::dynamic(*l, "effect.set", Rc::new(move || json!({ "index": index, "effect": effect_with(&s.borrow(), $key, val.clone()) })))
+                    Opt::dynamic(*l, "effect.set", Rc::new(move || json!({ "index": index, "effect": effect_with(&s, $key, val.clone()) })))
                 })
                 .collect();
             let active = vals.iter().position(|(_, v)| *v == cur.as_str());

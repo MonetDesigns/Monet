@@ -4628,6 +4628,13 @@ impl Render for CanvasView {
 
         let ime_focus = self.focus.clone();
 
+        // CodeRabbit PR#11: don't yank focus back to the canvas on every paint while a text edit is
+        // active — that made the Actions search field (and right-panel editors) unusable. Only
+        // reclaim when no other editor holds the keyboard; handle_input below still registers the
+        // IME handler each frame so composition keeps working once the canvas owns focus.
+        let palette_editor = self.palette_field.read(cx).edit();
+        let other_editor_focused = palette_editor.read(cx).is_active(window);
+
         let ime_entity = cx.entity();
 
         // Motion 播放中：画布必须每帧续帧，否则 `advance()` 只推进一帧就停（播放按钮点了不走）。
@@ -4668,7 +4675,7 @@ impl Render for CanvasView {
                     // 在 `with_input_handler(..).take()?` 处被静默丢弃 —— 表现就是「双击文字
                     // 进得了编辑态、光标也在闪，但一个字符都打不进去」。编辑文字期间画布本来就
                     // 该独占键盘（和 egui 那边文本编辑态一致），所以这里补一次聚焦兜底。
-                    if !ime_focus.is_focused(window) {
+                    if !ime_focus.is_focused(window) && !other_editor_focused {
                         window.focus(&ime_focus);
                     }
 
@@ -5430,11 +5437,13 @@ impl Render for CanvasView {
                             }
                         } else {
                             // 上游 `copy_or_cut`：有选中文字才写剪贴板；cut 再删掉选区。
+                            // CodeRabbit PR#11: Delete must share the non-empty-selection branch —
+                            // a collapsed Ctrl/Cmd+X used to delete the char after the caret without copying.
                             if let Some(text) = figcraft_engine::textedit::selected_text(&this.app.session).filter(|t| !t.is_empty()) {
                                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
-                            }
-                            if e.keystroke.key.as_str() == "x" {
-                                let _ = figcraft_engine::textedit::key(&mut this.app.session, "Delete", false, false, false);
+                                if e.keystroke.key.as_str() == "x" {
+                                    let _ = figcraft_engine::textedit::key(&mut this.app.session, "Delete", false, false, false);
+                                }
                             }
                         }
                         cx.notify();
