@@ -523,12 +523,18 @@ pub(crate) fn dim_trail_menu(
                     "Hug contents" => push("node.set", json!({ "props": { sizing_key: "hug" } })),
                     "Fill container" => push("node.set", json!({ "props": { sizing_key: "fill" } })),
                     "Add min" => {
-                        // egui 直接把当前尺寸写成 min；`limit_open` 只是让行在文档回推前先出现。
-                        push("node.set", json!({ "props": { min_key: current.unwrap_or(0.0) } }));
+                        // CodeRabbit PR#11: mixed-width selection has `current == None`; writing 0.0
+                        // would pin an explicit 0 on every layer. Only open the input row for an
+                        // explicit value instead.
+                        if let Some(c) = current {
+                            push("node.set", json!({ "props": { min_key: c } }));
+                        }
                         limit_open.borrow_mut()[if horizontal { 0 } else { 2 }] = true;
                     }
                     "Add max" => {
-                        push("node.set", json!({ "props": { max_key: current.unwrap_or(0.0) } }));
+                        if let Some(c) = current {
+                            push("node.set", json!({ "props": { max_key: c } }));
+                        }
                         limit_open.borrow_mut()[if horizontal { 1 } else { 3 }] = true;
                     }
                     "Remove min and max" => {

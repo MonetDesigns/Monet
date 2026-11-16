@@ -270,7 +270,17 @@ impl ShadeBoard {
 
 /// The cache key of one layer's shade: the shader, its parameters, the geometry it is drawn into,
 /// and the pixels underneath it.
-pub fn shade_key(spec: &ShaderSpec, size: (u32, u32), origin_px: (f32, f32), radii_px: [f32; 4], scale: f64, backdrop: &[u8]) -> u64 {
+pub fn shade_key(
+    spec: &ShaderSpec,
+    size: (u32, u32),
+    node_px: (f32, f32),
+    bounds: [f64; 4],
+    smoothing: f64,
+    origin_px: (f32, f32),
+    radii_px: [f32; 4],
+    scale: f64,
+    backdrop: &[u8],
+) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     spec.effect_id.hash(&mut h);
@@ -280,6 +290,14 @@ pub fn shade_key(spec: &ShaderSpec, size: (u32, u32), origin_px: (f32, f32), rad
         v.to_bits().hash(&mut h);
     }
     size.hash(&mut h);
+    // CodeRabbit PR#10: the geometry drawn into is part of the result; without these a grown rect
+    // (fixed layer size, changed bounds/smoothing) hits an old raster.
+    (node_px.0).to_bits().hash(&mut h);
+    (node_px.1).to_bits().hash(&mut h);
+    smoothing.to_bits().hash(&mut h);
+    for v in bounds {
+        v.to_bits().hash(&mut h);
+    }
     for v in [origin_px.0, origin_px.1, radii_px[0], radii_px[1], radii_px[2], radii_px[3], scale as f32] {
         v.to_bits().hash(&mut h);
     }
@@ -416,15 +434,18 @@ mod tests {
     #[test]
     fn the_key_moves_with_parameters_geometry_and_backdrop() {
         let s = spec();
-        let base = shade_key(&s, (8, 8), (0.0, 0.0), [2.0; 4], 1.0, &[1, 2, 3, 4]);
-        assert_eq!(base, shade_key(&s, (8, 8), (0.0, 0.0), [2.0; 4], 1.0, &[1, 2, 3, 4]), "stable");
-        assert_ne!(base, shade_key(&s, (8, 8), (0.0, 0.0), [2.0; 4], 1.0, &[1, 2, 3, 5]), "backdrop");
-        assert_ne!(base, shade_key(&s, (9, 8), (0.0, 0.0), [2.0; 4], 1.0, &[1, 2, 3, 4]), "size");
-        assert_ne!(base, shade_key(&s, (8, 8), (1.0, 0.0), [2.0; 4], 1.0, &[1, 2, 3, 4]), "window");
-        assert_ne!(base, shade_key(&s, (8, 8), (0.0, 0.0), [3.0; 4], 1.0, &[1, 2, 3, 4]), "radii");
+        let base = shade_key(&s, (8, 8), (0.0, 0.0), [0.0; 4], 0.0, (0.0, 0.0), [2.0; 4], 1.0, &[1, 2, 3, 4]);
+        assert_eq!(base, shade_key(&s, (8, 8), (0.0, 0.0), [0.0; 4], 0.0, (0.0, 0.0), [2.0; 4], 1.0, &[1, 2, 3, 4]), "stable");
+        assert_ne!(base, shade_key(&s, (8, 8), (0.0, 0.0), [0.0; 4], 0.0, (0.0, 0.0), [2.0; 4], 1.0, &[1, 2, 3, 5]), "backdrop");
+        assert_ne!(base, shade_key(&s, (8, 8), (9.0, 8.0), [0.0; 4], 0.0, (0.0, 0.0), [2.0; 4], 1.0, &[1, 2, 3, 4]), "node_px");
+        assert_ne!(base, shade_key(&s, (8, 8), (0.0, 0.0), [0.0, 0.0, 9.0, 9.0], 0.0, (0.0, 0.0), [2.0; 4], 1.0, &[1, 2, 3, 4]), "bounds");
+        assert_ne!(base, shade_key(&s, (8, 8), (0.0, 0.0), [0.0; 4], 0.5, (0.0, 0.0), [2.0; 4], 1.0, &[1, 2, 3, 4]), "smoothing");
+        assert_ne!(base, shade_key(&s, (9, 8), (0.0, 0.0), [0.0; 4], 0.0, (0.0, 0.0), [2.0; 4], 1.0, &[1, 2, 3, 4]), "size");
+        assert_ne!(base, shade_key(&s, (8, 8), (0.0, 0.0), [0.0; 4], 0.0, (1.0, 0.0), [2.0; 4], 1.0, &[1, 2, 3, 4]), "window");
+        assert_ne!(base, shade_key(&s, (8, 8), (0.0, 0.0), [0.0; 4], 0.0, (0.0, 0.0), [3.0; 4], 1.0, &[1, 2, 3, 4]), "radii");
         let mut other = ShaderSpec::new("material:abc", "glass.wgsl");
         other.params.insert("u.frost".into(), 5.0);
-        assert_ne!(base, shade_key(&other, (8, 8), (0.0, 0.0), [2.0; 4], 1.0, &[1, 2, 3, 4]), "params");
+        assert_ne!(base, shade_key(&other, (8, 8), (0.0, 0.0), [0.0; 4], 0.0, (0.0, 0.0), [2.0; 4], 1.0, &[1, 2, 3, 4]), "params");
     }
 
     #[test]

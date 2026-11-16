@@ -405,7 +405,11 @@ fn patch(last: Frame, doc: &Arc<Document>, page: NodeId, view: &View, px: (i64, 
     }
     // Background blurs read the backdrop around them, so a change shows that far off: under a blur
     // beside a changed layer, and at the old view's edge (where the backdrop used to end).
-    let reach = crate::backdrop_reach(s.backdrop_blur.max(last.sensitive.backdrop_blur), view.scale).ceil();
+    // CodeRabbit PR#10: a material samples beyond the backdrop-blur reach; omitting shade_reach
+    // leaves stale refracted pixels just outside the damage strips.
+    let reach = crate::backdrop_reach(s.backdrop_blur.max(last.sensitive.backdrop_blur), view.scale)
+        .max(opts.shade_reach)
+        .ceil();
     if !reach.is_finite() || reach > MAX_MARGIN_PX {
         return None;
     }

@@ -769,10 +769,11 @@ fn shader_layer(
     });
     let bounds = bounds.map_or([0.0; 4], |r| [r.x0, r.y0, r.x1, r.y1]);
     let radii_px = n.corners.radii.map(|v| (v * ctx.scale).max(0.0) as f32);
+    let smoothing = n.corners.smoothing;
     // 这一层背后（不含层自己）的像素：内置 Glass 读的就是这份底图，材质读同一份。
     let back = backdrop::backdrop(pix, ctx.under, at.0, at.1, lw, lh)?;
     let straight = crate::shade::straight(&back);
-    let key = crate::shade::shade_key(spec, (lw, lh), origin, radii_px, ctx.scale, &straight);
+    let key = crate::shade::shade_key(spec, (lw, lh), node_px, bounds, smoothing, origin, radii_px, ctx.scale, &straight);
     if let Some(s) = board.ready(n.id, key) {
         return Some(s.pixmap.clone());
     }
@@ -786,7 +787,7 @@ fn shader_layer(
         radii_px,
         scale: ctx.scale,
         bounds,
-        smoothing: n.corners.smoothing,
+        smoothing,
         backdrop: Arc::new(straight),
     });
     // 没算出来就用这一层上一张：拖动材质本身时键每帧都换，画空白会闪。第一次见到这个节点
