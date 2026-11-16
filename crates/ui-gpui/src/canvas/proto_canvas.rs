@@ -43,6 +43,9 @@ pub struct GhostDrag {
     grab: [f64; 2],
     start: [f64; 2],
     last: [f64; 2],
+    /// CodeRabbit PR#23: the document this ghost was grabbed from. A `doc.switch` during the drag
+    /// must not write the old action into a same-id node in the new document.
+    doc: usize,
 }
 
 /// 原型连线的跨帧状态。
@@ -375,6 +378,9 @@ pub fn drag_end(app: &mut CanvasApp) -> Option<(NodeId, usize)> {
         return None;
     }
     let r = app.session.execute("proto.interaction.add", &json!({"ids": [d.source], "dest": dest})).ok()?;
+    // CodeRabbit PR#22: select the source before handing back the slot, otherwise the editor opens
+    // for `(d.source, 0)` while the selection still points elsewhere.
+    let _ = app.session.execute("select.set", &json!({ "ids": [d.source] }));
     let k = r.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
     Some((d.source, k))
 }
@@ -396,6 +402,7 @@ fn ghost_press(app: &mut CanvasApp, p: Pos2) -> bool {
         grab: [at.x, at.y],
         start: m.offset,
         last: m.offset,
+        doc: std::sync::Arc::as_ptr(&doc) as usize,
     });
     true
 }
@@ -403,6 +410,11 @@ fn ghost_press(app: &mut CanvasApp, p: Pos2) -> bool {
 /// 把 ghost 挪到「抓取点在 `p` 下」，动作的 X/Y 跟着走。
 fn ghost_move(app: &mut CanvasApp, p: Pos2) {
     let Some(mut d) = app.proto.ghost.take() else { return };
+    // CodeRabbit PR#23: abandon the ghost if the active document changed mid-drag, so a stale
+    // action never lands on a different document's node with the same id.
+    if app.session.ds().ok().map(|s| std::sync::Arc::as_ptr(&s.doc) as usize) != Some(d.doc) {
+        return;
+    }
     let at = app.to_page(p);
     let o = [
         (d.start[0] + at.x - d.grab[0]).round(),
@@ -418,7 +430,12 @@ fn ghost_move(app: &mut CanvasApp, p: Pos2) {
         if let Value::Object(x) = &mut params {
             x.insert("action".into(), serde_json::to_value(&action).unwrap_or(Value::Null));
         }
-        let _ = app.session.execute("proto.action.set", &params);
+        // CodeRabbit PR#22: if undo removed the underlying engine interaction, the command fails.
+        // End the ghost instead of retrying every move (which would create a stray undo step each
+        // time the action "succeeds" on a same-id node).
+        if app.session.execute("proto.action.set", &params).is_err() {
+            return;
+        }
         d.last = o;
     }
     app.proto.ghost = Some(d);

@@ -102,6 +102,22 @@ impl Parser<'_> {
             // 十进制逗号当小数点。
             digits.push(if c == ',' { '.' } else { c });
         }
+        // CodeRabbit PR#19/#22/#23: consume a scientific-notation exponent before the unit scan,
+        // otherwise `e` is read as a unit: `1e3` parses as 1 and `1e+2` becomes `1 + 2 = 3`.
+        // Only treat `e/E` as an exponent when an optional sign is followed by a digit, so a real
+        // unit starting with `e` is still left for the unit scanner.
+        let mut exp = self.chars.clone();
+        if exp.next().is_some_and(|c| c == 'e' || c == 'E') {
+            let mut exp_digits = exp.clone();
+            if exp_digits.next_if(|c| *c == '+' || *c == '-').is_some() {
+                exp_digits.next_if(|c| c.is_ascii_digit());
+            }
+            if exp_digits.next_if(|c| c.is_ascii_digit()).is_some() {
+                while let Some(c) = self.chars.next_if(|c| c.is_ascii_digit() || matches!(c, 'e' | 'E' | '+' | '-')) {
+                    digits.push(c);
+                }
+            }
+        }
         let v = digits.parse::<f64>().ok().filter(|v| v.is_finite())?;
         // 单位：字母（px、pt、ms、x）、度数符号，以及百分比字段里的百分号。可以跟在空格后（"3 px"）。
         let percent_unit = self.percent_unit;
@@ -185,6 +201,15 @@ mod tests {
         assert_eq!(parse("10 °", true), Some(Typed::Value(10.0)));
         assert_eq!(parse("50 %", true), Some(Typed::Value(50.0)));
         assert_eq!(parse("3 px + 2 px", true), Some(Typed::Value(5.0)));
+    }
+
+    #[test]
+    fn scientific_notation() {
+        // CodeRabbit PR#19/#22/#23: `e` must not be swallowed as a unit.
+        assert_eq!(parse("1e3", true), Some(Typed::Value(1000.0)));
+        assert_eq!(parse("1e+2", true), Some(Typed::Value(100.0)));
+        assert_eq!(parse("1e-2", true), Some(Typed::Value(0.01)));
+        assert_eq!(parse("1.5e2px", true), Some(Typed::Value(150.0)));
     }
 
     #[test]

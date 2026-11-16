@@ -400,8 +400,11 @@ impl Color32 {
             let lo = (b[i + 1] as char).to_digit(16)?;
             Some((hi * 16 + lo) as u8)
         };
+        // CodeRabbit PR#23: single-digit hex needs its own nibble reader — reusing parse2 here
+        // read b[i+1] out of bounds for "#RGB" and `*17` overflowed u8 in debug builds.
+        let nibble = |i: usize| (b[i] as char).to_digit(16).map(|v| (v * 17) as u8);
         match b.len() {
-            3 => Some(Self([parse2(0)? * 17, parse2(1)? * 17, parse2(2)? * 17, 255])),
+            3 => Some(Self([nibble(0)?, nibble(1)?, nibble(2)?, 255])),
             6 => Some(Self([parse2(0)?, parse2(2)?, parse2(4)?, 255])),
             8 => Some(Self([parse2(0)?, parse2(2)?, parse2(4)?, parse2(6)?])),
             _ => None,

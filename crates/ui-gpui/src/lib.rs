@@ -4025,6 +4025,9 @@ impl CanvasView {
             || self.app.guides.drag.is_some()
             || self.app.proto.drag.is_some()
             || self.app.proto.ghost.is_some()
+            // CodeRabbit PR#17/#23: a board auto-connect drag lives on the window route too;
+            // without this the window drag-move handler early-returns and the connection can't track.
+            || self.app.connect.drag.is_some()
     }
 
     fn end_popup_drag(&mut self) {
@@ -5800,7 +5803,10 @@ impl Render for CanvasView {
                     && run_binding(&mut this.app, id)
                 {
                     cx.notify();
-
+                    // CodeRabbit PR#20/#22/#23: the root handler has the same keymap fallback;
+                    // without stopping propagation a handled canvas shortcut (undo/redo, delete…)
+                    // runs twice.
+                    cx.stop_propagation();
                     return;
                 }
 
@@ -7331,6 +7337,14 @@ impl drag_manager::WindowDragTarget for CanvasView {
         // 状态残留、下次移动鼠标卡片又跟着走。幂等。
         if crate::motion::clip_popover::drag_active() {
             crate::motion::clip_popover::end_drag();
+        }
+
+        // CodeRabbit PR#17/#23: a board auto-connect drag that ends off-canvas never reaches
+        // route_canvas_drag, so finish it here (the canvas path calls the same drag_end).
+        if self.app.connect.drag.is_some() && canvas::board_connect::drag_end(&mut self.app) {
+            self.drag_just_ended = true;
+            cx.notify();
+            return;
         }
 
         // 左分隔条收尾（thread_local，与 timeline 同式）：必须在画布级分支之前清掉，
