@@ -898,6 +898,13 @@ impl RightFields {
             return false;
         }
         let mut st = self.local_styles_ui.borrow_mut();
+        // CodeRabbit PR#24: Escape must clear a selected folder even when all style rows are
+        // folded away (st.rows empty but the folder header is still selectable).
+        if key == "escape" {
+            st.sel = None;
+            st.sel_folder = None;
+            return false;
+        }
         if st.rows.is_empty() {
             return false;
         }
