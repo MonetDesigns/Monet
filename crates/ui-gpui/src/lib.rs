@@ -721,6 +721,11 @@ pub struct CanvasView {
     pane: PaneState,
 }
 
+/// OS 窗口句柄 → 登记的窗口 id（还没登记的窗口当作主窗口 0）。
+fn window_id_of(windows: &windows::Windows, window: &Window) -> u64 {
+    windows.list.iter().find(|w| w.window_id == window.window_handle().window_id()).map_or(0, |w| w.id)
+}
+
 impl CanvasView {
     /// CodeRabbit PR#24: bind the shared session to the document this window is showing. The same
     /// root entity is mounted in several OS windows, so `session.active` set by the last window to
@@ -752,12 +757,22 @@ impl CanvasView {
         self.pane_wid = wid;
     }
 
+    /// 只换入窗口 `wid` 的私有 UI 状态，不动 `session.active`。窗口级 Capture 监听用它：
+    /// 鼠标移动 / 抬起 / 滚轮一进入窗口，后续所有 handler 读到的 `self.popup` /
+    /// `self.left_w` / `self.pointer` 就都是**这个窗口**的那份，而不是最后渲染的那个窗口的。
+    pub(crate) fn enter_window(&mut self, window: &mut Window) {
+        let wid = window_id_of(&self.windows.borrow(), window);
+        windows::set_current(wid);
+        self.windows.borrow_mut().current = wid;
+        self.enter_pane(wid);
+    }
+
     /// `authoritative`：**事件**处理时为 true —— 事件来自哪个窗口，那个窗口的文档就必须成为
     /// 全局 `session.active`，否则第二个窗口里点「加页」会加到第一个窗口的文档上
     /// （用户 2026-11-16 实测）。渲染时为 false：只有聚焦窗口写，避免两个窗口每帧互相覆盖。
     pub(crate) fn bind_window_document(&mut self, window: &mut Window, authoritative: bool) {
         let mut wins = self.windows.borrow_mut();
-        let wid = wins.list.iter().find(|w| w.window_id == window.window_handle().window_id()).map_or(0, |w| w.id);
+        let wid = window_id_of(&wins, window);
         windows::set_current(wid);
         wins.current = wid;
         let want = if wid == 0 { wins.main_active } else { wins.entry(wid).and_then(|w| w.active) };
@@ -4593,6 +4608,67 @@ impl CanvasView {
 
         self.fields.set_stroke_color(color, cx);
     }
+
+    /// 窗口级 Capture 监听层：`canvas` 的 paint 阶段每帧注册一次，早于**所有**元素级
+    /// 点击 / 移动 handler 运行（`Window::dispatch_mouse_event` 先跑 window-level Capture，
+    /// 再倒序跑 Bubble）。按下时绑定本窗口的文档，移动 / 抬起 / 滚轮至少换入本窗口的
+    /// 私有状态——两个窗口共用一份 `CanvasView` 时，事件 handler 读到的才是**事件所属
+    /// 窗口**的浮层 / 面板 / 指针，而不是最后渲染那个窗口的。
+    /// 1×1 绝对定位：不参与布局、不接管命中区，但 paint 闭包照常每帧运行。
+    fn window_bind_layer(&self, cx: &mut Context<Self>) -> AnyElement {
+        let me = cx.entity().downgrade();
+        let down = me.clone();
+        let moved = me.clone();
+        let up = me.clone();
+        let scroll = me;
+        gpui::canvas(
+            |_, _, _| {},
+            move |_, _, window, _cx| {
+                let me = down.clone();
+                window.on_mouse_event(move |_e: &MouseDownEvent, phase, window, cx| {
+                    if !phase.capture() {
+                        return;
+                    }
+                    if let Some(me) = me.upgrade() {
+                        me.update(cx, |this, _cx| this.bind_window_document(window, true));
+                    }
+                });
+                let me = moved.clone();
+                window.on_mouse_event(move |_e: &MouseMoveEvent, phase, window, cx| {
+                    if !phase.capture() {
+                        return;
+                    }
+                    if let Some(me) = me.upgrade() {
+                        me.update(cx, |this, _cx| this.enter_window(window));
+                    }
+                });
+                let me = up.clone();
+                window.on_mouse_event(move |_e: &MouseUpEvent, phase, window, cx| {
+                    if !phase.capture() {
+                        return;
+                    }
+                    if let Some(me) = me.upgrade() {
+                        me.update(cx, |this, _cx| this.enter_window(window));
+                    }
+                });
+                let me = scroll.clone();
+                window.on_mouse_event(move |_e: &ScrollWheelEvent, phase, window, cx| {
+                    if !phase.capture() {
+                        return;
+                    }
+                    if let Some(me) = me.upgrade() {
+                        me.update(cx, |this, _cx| this.enter_window(window));
+                    }
+                });
+            },
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .w(px(1.0))
+        .h(px(1.0))
+        .into_any_element()
+    }
 }
 
 impl Render for CanvasView {
@@ -7266,6 +7342,9 @@ impl Render for CanvasView {
 
         // 窗口级拖拽层：paint 阶段注册窗口级监听，所有拖拽统一由它路由。
         let drag_overlay = self.drag_layer.layer(cx.entity().downgrade());
+
+        // 窗口级 Capture 监听层：早于任何元素 handler 换入**事件所属窗口**的私有状态。
+        let bind_overlay = self.window_bind_layer(cx);
         div()
             .size_full()
             .flex()
@@ -7297,6 +7376,11 @@ impl Render for CanvasView {
                     this.commit_edits(window, cx);
                 }),
             )
+            // Capture 阶段的按键：早于焦点链上的每个控件 handler，先把本窗口换入并绑定
+            // 本窗口的文档（Bubble 里的根节点 handler 太晚，输入框已经按别的窗口的文档处理过）。
+            .capture_key_down(cx.listener(|this: &mut CanvasView, _e: &KeyDownEvent, window, _cx| {
+                this.bind_window_document(window, true);
+            }))
             // Local styles 列表的键盘（↑/↓ / Enter / Delete / Ctrl+C / Ctrl+V / Ctrl+D）。
             // 必须挂在**根节点**上：GPUI 的按键沿焦点链派发（root → 焦点节点），而画布那个
             // `on_key_down` 只覆盖画布子树——焦点在右栏的列表行时按键到不了它，列表键盘
@@ -7437,6 +7521,8 @@ impl Render for CanvasView {
             // 通用窗口级拖拽层：paint 阶段每帧注册 move / up / down 监听并转给
             // `WindowDragTarget`。所有拖拽统一从这里按窗口坐标推进，不再依赖任何
             // 元素级 `on_mouse_move`（指针移出最初的元素就停发）。
+            // Capture 层在它之前：两者都是 paint 阶段的窗口级监听，Capture 一定先跑。
+            .child(bind_overlay)
             .child(drag_overlay)
     }
 }
