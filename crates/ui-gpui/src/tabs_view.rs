@@ -235,7 +235,7 @@ pub(crate) fn tab_strip(
 ) -> Stateful<Div> {
     let t = tokens();
     let now = state.now();
-    state.motion.begin_frame(docs.iter().map(|d| d.uid), now, reduce_motion);
+    state.motion.begin_frame(crate::windows::current(), docs.iter().map(|d| d.uid), now, reduce_motion);
     let opening = state.motion.opening().to_vec();
     // 上游还会排除「正在演示」的情况；GPUI 的 present 是覆盖层、不是标签（P2）。
     let home_active = state.home || docs.is_empty();
