@@ -113,7 +113,9 @@ fn font_picker_button(f: &RightFields, label: impl Into<SharedString>, width: f3
     let queue = f.queue();
     let mut d = Dropdown::new(label, width, None).fill();
     d = d.on_click(move |anchor: Bounds<Pixels>, _window, cx: &mut App| {
-        popups.request(crate::popovers::WindowState::font_picker(queue.clone(), cx, current.as_deref(), anchor.origin));
+        let mut w = crate::popovers::WindowState::font_picker(queue.clone(), cx, current.as_deref(), anchor.origin);
+        w.anchor_to_button_top(anchor.origin.y);
+        popups.request(w);
     });
     d
 }
