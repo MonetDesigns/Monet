@@ -1551,7 +1551,7 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
     // More actions：右键菜单的顶层行（子菜单 / 不可运行的命令跳过，分隔线顺延到下一行）。
     let mut more_actions: Vec<(String, &'static str, bool)> = Vec::new();
     let mut carry_sep = false;
-    for it in crate::context_menu::items(Some(doc), ids) {
+    for it in crate::context_menu::items(Some(doc), ids, &[]) {
         let sep = it.separator_before || carry_sep;
         if it.sub.is_empty() && !it.disabled && !it.id.is_empty() {
             more_actions.push((it.label.to_string(), it.id, sep));

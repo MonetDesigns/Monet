@@ -24,6 +24,44 @@ pub(crate) const WIDTH: f32 = 240.0;
 /// The marker row that opens the Copy-as submenu (`COPY_AS` in the original).
 const COPY_AS: &str = tr_noop("Copy as");
 
+/// The marker row that opens the Select-layer submenu (`SELECT_LAYER` in the original).
+const SELECT_LAYER: &str = tr_noop("Select layer");
+
+/// Every layer under the click (page coordinates, front-most first) with its depth and name — what
+/// the Select-layer submenu lists. Mirrors `menus/select_layer.rs`: at most 40 rows, an unnamed
+/// layer showing its kind (`kind.type_name().to_lowercase()`).
+pub(crate) fn layers_at(app: &CanvasApp, p: Point) -> Vec<(NodeId, usize, String)> {
+    let Ok(ds) = app.session.ds() else { return Vec::new() };
+    let tol = 2.0 / ds.view.zoom.max(1e-6);
+    let outline = figcraft_engine::booleans::result_outline(&ds.doc, &ds.selection);
+    figcraft_doc::geometry::layers_at(&ds.doc, ds.page, p, tol, Some(&outline))
+        .into_iter()
+        .take(40)
+        .filter_map(|(id, depth)| {
+            ds.doc.node(id).map(|n| (id, depth, if n.name.is_empty() { n.kind.type_name().to_lowercase() } else { n.name.clone() }))
+        })
+        .collect()
+}
+
+/// A Select-layer row's key (`select.set:<node>`) → the layer it selects. `None` for any other key.
+pub(crate) fn select_layer_target(key: &str) -> Option<NodeId> {
+    key.strip_prefix("select.set:").and_then(|n| n.parse::<u64>().ok()).map(NodeId)
+}
+
+/// The Select-layer submenu: one indented, checkable row per layer under the click.
+fn select_layer(layers: &[(NodeId, usize, String)], ids: &[NodeId]) -> Item {
+    let ready = can_run("select.set");
+    let sub = layers
+        .iter()
+        .map(|(id, depth, name)| {
+            // egui indents a row 12 pt per level; at 11 pt a space is ~3 pt, so four per level.
+            let label = format!("{}{}", " ".repeat(4 * (*depth).min(8)), name);
+            Item::new("select.set", label).key(format!("select.set:{}", id.0)).checked(Some(ids.contains(id))).disabled(!ready)
+        })
+        .collect();
+    Item::new(SELECT_LAYER, tr("Select layer")).sub(sub)
+}
+
 /// Select what a right-click at `p` (page coordinates) lands on, and return the selection the menu
 /// acts on. Mirrors `open_context_menu`: the hit layer is resolved to a select target (a group's
 /// child, an instance's main component's parts, …) and becomes the selection when it is not
@@ -89,12 +127,17 @@ fn group(rows: &mut Vec<Item>, items: Vec<Item>) {
     }
 }
 
-/// The menu's rows for `ids` (the selection the menu was opened on).
-pub(crate) fn items(doc: Option<&Document>, ids: &[NodeId]) -> Vec<Item> {
+/// The menu's rows for `ids` (the selection the menu was opened on). `layers` is what the click
+/// landed on: the Select-layer submenu only appears when it isn't empty.
+pub(crate) fn items(doc: Option<&Document>, ids: &[NodeId], layers: &[(NodeId, usize, String)]) -> Vec<Item> {
     let mut rows: Vec<Item> = Vec::new();
+    // The original puts Select layer first, with the rest of the menu below it.
+    if !layers.is_empty() {
+        rows.push(select_layer(layers, ids));
+    }
     if ids.is_empty() {
         // Empty canvas: the page's own commands, no dividers before the first one.
-        let mut first = true;
+        let mut first = rows.is_empty();
         for (id, label) in [
             ("edit.paste", tr("Paste here")),
             ("select.all", tr("Select all")),
@@ -208,7 +251,7 @@ mod tests {
     /// first row.
     #[test]
     fn empty_canvas_offers_the_page_commands() {
-        let rows = items(None, &[]);
+        let rows = items(None, &[], &[]);
         assert_eq!(ids(&rows), ["edit.paste", "select.all", "view.toggleUi", "view.zoomFit", "view.rulers", "view.pixelGrid"]);
         assert!(!rows[0].separator_before);
         assert!(rows[1..].iter().all(|r| r.separator_before));
@@ -218,7 +261,7 @@ mod tests {
     /// with the dividers the original puts between them.
     #[test]
     fn a_selection_offers_the_layer_commands() {
-        let rows = items(None, &[NodeId(1)]);
+        let rows = items(None, &[NodeId(1)], &[]);
         let list = ids(&rows);
         assert_eq!(list.first(), Some(&"edit.copy"));
         assert_eq!(list.last(), Some(&"edit.delete"));
@@ -236,5 +279,24 @@ mod tests {
         assert!(!can_run("edit.copyAsCss"));
         assert!(can_run("edit.copy"));
         assert!(can_run("view.rulers"));
+    }
+
+    /// Layers under the click add the Select-layer submenu first: nested rows indented, the
+    /// selected one checked, each carrying its node in the row key, and a divider before the
+    /// commands that follow.
+    #[test]
+    fn layers_under_the_click_offer_the_select_layer_submenu() {
+        let layers = [(NodeId(3), 0, "Card".to_string()), (NodeId(4), 1, "Title".to_string())];
+        let rows = items(None, &[NodeId(3)], &layers);
+        assert_eq!(rows[0].id, SELECT_LAYER);
+        assert_eq!(rows[0].sub.len(), 2);
+        assert_eq!(rows[0].sub[0].label, "Card");
+        assert_eq!(rows[0].sub[0].checked, Some(true));
+        assert_eq!(rows[0].sub[0].key, "select.set:3");
+        assert_eq!(rows[0].sub[1].label, "    Title", "one level = four spaces");
+        assert_eq!(rows[0].sub[1].checked, Some(false));
+        assert_eq!(select_layer_target(rows[0].sub[1].key.as_ref()), Some(NodeId(4)));
+        assert_eq!(select_layer_target("edit.copy"), None);
+        assert!(rows[1].separator_before, "the commands start below a divider");
     }
 }

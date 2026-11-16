@@ -13,6 +13,8 @@ pub mod frame_stats;
 pub mod geom;
 pub mod guides;
 pub mod handles;
+/// 其他人的文字光标与选区（共享文档，egui `canvas/live_text.rs`）。
+pub mod live_text;
 pub mod measure_overlay;
 /// Motion 模式的画布叠加层（运动路径 + 变换手柄，desigma `motion/inspector/overlay.rs`）。
 pub mod motion_overlay;
@@ -528,6 +530,8 @@ pub(crate) fn draw_overlays(app: &mut CanvasApp, painter: &mut Painter, t: &Toke
     handles::draw(app, painter, app.pointer);
     // 多选间距/重排手柄（原 `canvas.rs` 在 `handles::draw` 之后调 `selection_spacing::draw`）。
     selection_spacing::draw(app, painter);
+    // 共享文档里别人的文字光标与选区（egui 在 `selection_spacing` / `comments` 之后画）。
+    live_text::draw(app, painter);
     // A27：画板自动连线的「+」手柄、悬停落点与拖动预览（egui `board_connect::draw`）。
     board_connect::draw(app, painter);
     // A27：投票徽标（egui `board_facilitate::badges`）。

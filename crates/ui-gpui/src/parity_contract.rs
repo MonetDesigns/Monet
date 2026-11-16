@@ -114,7 +114,7 @@ fn capabilities() -> BTreeSet<String> {
                     out.insert((*title).to_string());
                 }
                 dialogs::Field::Action { label, id, .. } => {
-                    out.insert((*label).to_string());
+                    out.insert(label.to_string());
                     out.insert((*id).to_string());
                 }
                 dialogs::Field::Color { .. }
@@ -289,6 +289,6 @@ mod tests {
             assert!(ids.insert(c.id), "duplicate contract id {}", c.id);
             assert!(!c.requires.is_empty(), "{} declares no capabilities", c.id);
         }
-        assert_eq!(dialogs::Kind::ALL.len(), 16, "a new dialog needs an audited contract or spec");
+        assert_eq!(dialogs::Kind::ALL.len(), 18, "a new dialog needs an audited contract or spec");
     }
 }

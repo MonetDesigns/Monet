@@ -28,6 +28,9 @@
 
 mod app;
 
+/// A21：键盘区域导航（F6 / Shift+F6 / Escape / 方向键 + 焦点环）。
+mod a11y;
+
 mod canvas;
 
 /// 标签条的纯几何 / 动画状态（上游 `ui-egui/src/tabs.rs` 的可测部分，P0-1）。
@@ -459,6 +462,9 @@ pub struct CanvasView {
     /// 键盘焦点（空格平移、Z 缩放工具要收键盘事件）。
     focus: FocusHandle,
 
+    /// A21：F6 / Shift+F6 的区域键盘导航状态（焦点环 + 方向键移动选区）。
+    a11y: a11y::KeyboardNav,
+
     /// 按下后正在拖拽（Move 事件只在拖拽时送给引擎）。
     dragging: bool,
 
@@ -773,6 +779,8 @@ impl CanvasView {
             worker: Worker::new(wake),
 
             focus: cx.focus_handle(),
+
+            a11y: a11y::KeyboardNav::default(),
 
             dragging: false,
 
@@ -1431,6 +1439,15 @@ impl CanvasView {
             // engine call, never a centred dialog. Catch them **before** `dialogs::ui_action`.
 
             match r.kind.as_str() {
+                // A21：F6 / Shift+F6 的区域移动由 UI 侧维护（引擎只发 `step`）。
+                "focus.region" => {
+                    self.a11y.step(r.data.get("step").and_then(serde_json::Value::as_i64).unwrap_or(1));
+
+                    cx.notify();
+
+                    continue;
+                }
+
                 "canvas.renameLabel" => {
                     if let Some(id) = r.data.get("id").and_then(figcraft_engine::params::id_of) {
                         self.begin_inline_rename(vec![id], InlineRenameTarget::Label, cx);
@@ -1746,6 +1763,24 @@ impl CanvasView {
                     .unwrap_or_default();
                 std::borrow::Cow::Owned(serde_json::json!({ "ids": sorted, "names": names }))
             }
+            dialogs::Kind::MoveToPage => {
+                // A17：`MenuInput::MoveToPage` 列出除当前页与分隔线外的全部页面（egui 同源）。
+                let pages = self
+                    .app
+                    .session
+                    .ds()
+                    .ok()
+                    .map(|ds| {
+                        ds.doc
+                            .pages
+                            .iter()
+                            .filter(|p| **p != ds.page && !ds.doc.is_divider(**p))
+                            .filter_map(|p| ds.doc.node(*p).map(|n| serde_json::json!({ "id": n.id, "name": n.name })))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                std::borrow::Cow::Owned(serde_json::json!({ "pages": pages }))
+            }
             _ => std::borrow::Cow::Borrowed(data),
         };
 
@@ -2008,13 +2043,22 @@ impl CanvasView {
 
                 let params = panels::cmd_params(&ids, c.params);
 
-                if let Err(e) = self.app.session.execute(c.id, &params) {
-                    // Do not swallow it silently: a button that looks dead may actually be a
+                match self.app.session.execute(c.id, &params) {
+                    Ok(result) => {
+                        self.capture_import_report(c.id, &params, &result, cx);
 
-                    // rejected command. `FC_DEBUG_CMDS=1` shows the exact id/params/error.
+                        // A23：导出命令没给路径时引擎只回 base64，UI 负责弹保存对话框落盘。
+                        self.deliver_download(c.id, &result, cx);
+                    }
 
-                    if std::env::var_os("FC_DEBUG_CMDS").is_some() {
-                        eprintln!("[panel cmd] {} {} -> {}", c.id, params, e);
+                    Err(e) => {
+                        // Do not swallow it silently: a button that looks dead may actually be a
+
+                        // rejected command. `FC_DEBUG_CMDS=1` shows the exact id/params/error.
+
+                        if std::env::var_os("FC_DEBUG_CMDS").is_some() {
+                            eprintln!("[panel cmd] {} {} -> {}", c.id, params, e);
+                        }
                     }
                 }
             }
@@ -2599,7 +2643,7 @@ impl CanvasView {
             if let Some(path) = dialog.pick_file() {
                 let params = serde_json::json!({ "path": path.to_string_lossy() });
 
-                if self.execute_reporting(cmd, params, cx) {
+                if self.execute_reporting(cmd, params, cx).is_some() {
                     cx.notify();
                 }
             }
@@ -2607,11 +2651,28 @@ impl CanvasView {
             return;
         }
 
-        if let Err(e) = self.app.session.execute(id, &params) {
-            // 不做无声吞掉：`FC_DEBUG_CMDS=1` 时把 id / 参数 / 错误打出来（同右栏那条通道）。
+        // A17：需要输入的菜单命令（Offset path / Move to page / Create link）在**所有**入口
+        // 都先开对话框：菜单、Actions 面板、右栏按钮都走这里。带了真实参数（对话框提交后）
+        // 就正常执行，不会被再拦一次。
+        if params.as_object().is_none_or(|o| o.is_empty())
+            && let Some(kind) = dialogs::menu_action(id)
+        {
+            self.open_dialog(kind, &params, cx);
 
-            if std::env::var_os("FC_DEBUG_CMDS").is_some() {
-                eprintln!("[ui cmd] {id} {params} -> {e}");
+            self.close_popup(cx);
+
+            return;
+        }
+
+        match self.app.session.execute(id, &params) {
+            Ok(result) => self.capture_import_report(id, &params, &result, cx),
+
+            Err(e) => {
+                // 不做无声吞掉：`FC_DEBUG_CMDS=1` 时把 id / 参数 / 错误打出来（同右栏那条通道）。
+
+                if std::env::var_os("FC_DEBUG_CMDS").is_some() {
+                    eprintln!("[ui cmd] {id} {params} -> {e}");
+                }
             }
         }
 
@@ -2738,10 +2799,17 @@ impl CanvasView {
     }
 
     /// 跑一条命令；失败时把引擎的原话弹出来（egui 的 `app.run` + `show_error`）。
+    ///
+    /// 成功时返回引擎的结果值，交给 [`Self::capture_import_report`]（A12：导入报告的
+    /// 判定完全读结果里的 `warnings` / `summary`，与 `ui-egui` 的 `Report::from_result` 同源）。
 
-    fn execute_reporting(&mut self, id: &str, params: serde_json::Value, cx: &mut Context<Self>) -> bool {
+    fn execute_reporting(&mut self, id: &str, params: serde_json::Value, cx: &mut Context<Self>) -> Option<serde_json::Value> {
         match self.app.session.execute(id, &params) {
-            Ok(_) => true,
+            Ok(result) => {
+                self.capture_import_report(id, &params, &result, cx);
+
+                Some(result)
+            }
 
             Err(e) => {
                 if std::env::var_os("FC_DEBUG_CMDS").is_some() {
@@ -2750,9 +2818,92 @@ impl CanvasView {
 
                 self.toast(e.to_string(), cx);
 
-                false
+                None
             }
         }
+    }
+
+    /// A12：导入报告的判定与数据在 [`dialogs::import_report_data`]（纯函数、可单测）；
+    /// 这里只负责在命令成功后把它交给通用对话框壳。
+    fn capture_import_report(&mut self, command: &str, params: &serde_json::Value, result: &serde_json::Value, cx: &mut Context<Self>) {
+        if let Some(data) = dialogs::import_report_data(command, params, result) {
+            self.open_dialog(dialogs::Kind::ImportReport, &data, cx);
+        }
+    }
+
+    /// A23：导出结果落盘。引擎在没有 `path` 时把内容以 base64 `data` 返回（egui 侧交给
+    /// `Services::download` / `pick_save`）；桌面版用原生保存对话框：
+    ///
+    /// * 单个文件（`file.export` / `file.saveAs` / `.fig` / PDF）→ 保存对话框；
+    /// * `file.exportLayers` 的多个文件（顶层没有 `data`、每项自带 `data`）→ 选文件夹后
+    ///   按 `files[].name` 逐个写入（egui `services.pick_folder` 同义）；
+    /// * `file.exportLayers` 的 zip（顶层 `data`）→ 保存对话框，扩展名 `.zip`。
+    fn deliver_download(&mut self, command: &str, result: &serde_json::Value, cx: &mut Context<Self>) {
+        use base64::Engine as _;
+
+        let decode = |s: &str| base64::engine::general_purpose::STANDARD.decode(s).ok();
+
+        let doc_name = self.app.session.ds().ok().map(|d| d.doc.name.clone()).unwrap_or_else(|| "export".into());
+
+        if result.get("data").is_none() {
+            let files: Vec<(String, Vec<u8>)> = result
+                .get("files")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|f| Some((f.get("name")?.as_str()?.to_string(), decode(f.get("data")?.as_str()?)?)))
+                .collect();
+
+            if files.is_empty() {
+                return;
+            }
+
+            let Some(dir) = rfd::FileDialog::new().set_title(tr("Export layers")).pick_folder() else {
+                return;
+            };
+
+            for (name, bytes) in files {
+                let path = dir.join(name);
+
+                if let Some(parent) = path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+
+                if let Err(e) = std::fs::write(&path, bytes) {
+                    self.toast(e.to_string(), cx);
+
+                    return;
+                }
+            }
+
+            cx.notify();
+
+            return;
+        }
+
+        let Some(data) = result.get("data").and_then(serde_json::Value::as_str) else {
+            return;
+        };
+
+        let Some(bytes) = decode(data) else {
+            return;
+        };
+
+        let ext = result.get("format").and_then(serde_json::Value::as_str).unwrap_or("png");
+
+        let ext = if command == "file.exportLayers" { "zip" } else { ext };
+
+        let name = format!("{doc_name}.{ext}");
+
+        let Some(path) = rfd::FileDialog::new().set_file_name(&name).add_filter(ext.to_uppercase(), &[ext]).save_file() else {
+            return;
+        };
+
+        if let Err(e) = std::fs::write(&path, bytes) {
+            self.toast(e.to_string(), cx);
+        }
+
+        cx.notify();
     }
 
     /// 一次拖入（`ui-egui/src/canvas/input.rs::import_dropped` 与 `home.rs::dropped` 的合并）：
@@ -2782,7 +2933,7 @@ impl CanvasView {
 
         for path in paths {
             if crate::open::is_document(path) {
-                if self.execute_reporting("file.open", serde_json::json!({ "path": path.to_string_lossy() }), cx) {
+                if self.execute_reporting("file.open", serde_json::json!({ "path": path.to_string_lossy() }), cx).is_some() {
                     opened += 1;
                 }
 
@@ -2791,7 +2942,7 @@ impl CanvasView {
 
             if on_home {
                 if crate::open::opens(path) {
-                    if self.execute_reporting("file.open", serde_json::json!({ "path": path.to_string_lossy() }), cx) {
+                    if self.execute_reporting("file.open", serde_json::json!({ "path": path.to_string_lossy() }), cx).is_some() {
                         opened += 1;
                     }
                 } else {
@@ -2807,7 +2958,7 @@ impl CanvasView {
 
             let params = serde_json::json!({ "path": path.to_string_lossy(), "x": pt.x, "y": pt.y });
 
-            if self.execute_reporting("file.import", params, cx) {
+            if self.execute_reporting("file.import", params, cx).is_some() {
                 imported += 1;
             }
         }
@@ -3162,9 +3313,12 @@ impl CanvasView {
 
         let ids = context_menu::target(&mut self.app, page);
 
+        // What the click landed on, for the "Select layer" submenu (egui `select_layer_menu`).
+        let layers = context_menu::layers_at(&self.app, page);
+
         let doc = self.app.session.doc().ok();
 
-        let items = context_menu::items(doc, &ids);
+        let items = context_menu::items(doc, &ids, &layers);
 
         self.tool_flyout = None;
 
@@ -3222,6 +3376,15 @@ impl CanvasView {
     /// as-is (egui's `menus.rs` has the same special case).
 
     fn pick_context(&mut self, id: &str, cx: &mut Context<Self>) {
+        // A "Select layer" submenu row carries its node in the key (egui runs `select.set`).
+        if let Some(node) = context_menu::select_layer_target(id) {
+            self.popup = None;
+
+            self.run_command("select.set", serde_json::json!({ "ids": [node] }), cx);
+
+            return;
+        }
+
         let params = if id == "edit.paste" {
             // The click point in page coordinates: the menu was opened at it, so the pointer still
 
@@ -4260,6 +4423,10 @@ impl CanvasView {
 
 impl Render for CanvasView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // A28：共享会话每帧收取网络事件。引擎约定 UI 每帧调 `live_poll`（presence、远端改动都由它
+        // 落地，网络线程的 `live_wake` 只负责叫醒一帧）；不调则画布上的他人光标永远为空。
+        self.app.session.live_poll();
+
         // DEBUG-PICKER: `FIGCRAFT_DEBUG_PICKER=1`（或 `=grad`）在启动首帧自动打开取色器面板，
         // 供截图核对 1:1 版式；不含任何运行时逻辑，核完即删。
         if let Ok(mode) = std::env::var("FIGCRAFT_DEBUG_PICKER") {
@@ -6701,6 +6868,39 @@ impl Render for CanvasView {
 
         let present_el: Vec<AnyElement> = self.present.as_ref().map(|st| present::render(&self.app, st).into_any_element()).into_iter().collect();
 
+        // A21：键盘所在区域的焦点环（F6 / Shift+F6 切区域时显示，指针一按即消失）。
+        // 只标区域边界：GPUI 0.2 没有控件级 AccessKit 树，环是用户唯一能看到的落点提示。
+        let a11y_ring: Option<AnyElement> = self.a11y.region.and_then(|region| {
+            let dock = self.dock();
+            let vw = f32::from(vp.width);
+            let vh = f32::from(vp.height);
+            let center_h = (vh - dock.titlebar_h - dock.bottom_h).max(1.0);
+            let (x, y, w, h) = match region {
+                a11y::Region::Toolbar => {
+                    (dock.center_x(), vh - toolbar::PILL_H - 16.0, dock.center_w(vw), toolbar::PILL_H + 16.0)
+                }
+                a11y::Region::Layers => (dock.rail_w, dock.titlebar_h, dock.left_w, center_h),
+                a11y::Region::Canvas => (dock.center_x(), dock.titlebar_h, dock.center_w(vw), center_h),
+                a11y::Region::Properties => {
+                    let x = dock.right_x(vw);
+                    (x, dock.titlebar_h, (vw - x).max(0.0), center_h)
+                }
+            };
+            (w > 0.0 && h > 0.0).then(|| {
+                let t = widgets::tokens();
+                div()
+                    .absolute()
+                    .left(px(x))
+                    .top(px(y))
+                    .w(px(w))
+                    .h(px(h))
+                    .rounded(px(4.0))
+                    .border_2()
+                    .border_color(widgets::rgba(t.accent))
+                    .into_any_element()
+            })
+        });
+
         // A19：通用对话框（遮罩 + 居中窗口）画在所有面板 / 弹层 / 整面板之上。
 
         let dialog_el: Vec<AnyElement> = self.dialog.as_mut().map(|d| d.render(vp, cx)).unwrap_or_default();
@@ -6846,6 +7046,11 @@ impl Render for CanvasView {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this: &mut CanvasView, _e: &MouseDownEvent, window, cx| {
+                    // A21：鼠标一按就回到指针模式（焦点环消失，上游同义）。
+                    if this.a11y.region.take().is_some() {
+                        cx.notify();
+                    }
+
                     this.commit_edits(window, cx);
                 }),
             )
@@ -6879,9 +7084,32 @@ impl Render for CanvasView {
                     )
                     .map(|b| b.id);
                     if let Some(id) = binding
-                        && (id == "edit.undo" || id == "edit.redo")
+                        && matches!(id, "edit.undo" | "edit.redo" | "view.nextRegion" | "view.previousRegion")
                         && run_binding(&mut this.app, id)
                     {
+                        cx.notify();
+                        cx.stop_propagation();
+                        return;
+                    }
+                }
+
+                // A21：键盘在某块面板里时，方向键移动图层选择、Escape 回到画布。
+                // 只在区域导航模式、没有对话框时接管：输入框里的方向键 / Escape 仍归输入框。
+                if this.a11y.is_navigating() && this.dialog.is_none() {
+                    let key = canonical_key(&e.keystroke.key);
+                    if let Some(id) = match key.as_str() {
+                        "ArrowUp" | "ArrowLeft" => Some("select.previous"),
+                        "ArrowDown" | "ArrowRight" => Some("select.next"),
+                        _ => None,
+                    } {
+                        if run_binding(&mut this.app, id) {
+                            cx.notify();
+                        }
+                        cx.stop_propagation();
+                        return;
+                    }
+                    if key == "Escape" {
+                        this.a11y.to_canvas();
                         cx.notify();
                         cx.stop_propagation();
                         return;
@@ -6909,6 +7137,7 @@ impl Render for CanvasView {
             .children(extra_el)
             .children(present_el)
             .children(drop_el)
+            .children(a11y_ring)
             .children(dialog_el)
             .children(toast_el)
             .children(inline_el)
