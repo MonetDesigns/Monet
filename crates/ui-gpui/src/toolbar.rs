@@ -26,7 +26,7 @@ use figcraft_engine::ToolId;
 use figcraft_engine::tools::{DrawLineStyle, DrawStyle};
 use figcraft_engine::vectoredit::VTool;
 use figcraft_i18n::tr;
-use gpui::{App, BoxShadow, Div, ImageSource, MouseButton, MouseDownEvent, SharedString, Stateful, Window, div, img, point, prelude::*, px};
+use gpui::{App, Bounds, BoxShadow, Div, ImageSource, MouseButton, MouseDownEvent, Pixels, SharedString, Stateful, Window, div, img, point, prelude::*, px};
 use std::rc::Rc;
 
 /// Every mark in the row is painted in a box this size, so they share one optical size.
@@ -180,6 +180,8 @@ pub(crate) enum Intent {
     DrawWeight(f64),
     DrawLine(&'static str),
     DrawPreset(Option<&'static str>),
+    /// Draw toolbar: open the brush-preset popup at the clicked trigger's rectangle.
+    DrawPresetMenu(Bounds<Pixels>),
     /// Draw toolbar: Pen's "Done drawing" → `tool.set move`.
     DrawDone,
 }
@@ -727,16 +729,34 @@ pub(crate) fn drawing_bar(
         .child(extra_button("+", false, Intent::DrawWeight((weight + 1.0).min(500.0)), on.clone()));
 
     if tool == ToolId::Pencil {
-        row = row.child(divider());
-        for (ls, label) in [(DrawLineStyle::Solid, "Solid"), (DrawLineStyle::Dashed, "Dashed"), (DrawLineStyle::Dotted, "Dotted")] {
-            row = row.child(extra_button(label, style.line_style == ls, Intent::DrawLine(ls.id()), on.clone()));
+        // Brush nib = the pencil plus an ABR preset; Pencil nib = a plain pencil. Their bars
+        // differ (a brush tip has no line style), but **both** keep the brush popup: without it,
+        // picking the Pencil nib cleared the preset and there was no way back to a brush.
+        if brush.is_some() {
+            row = row.child(divider());
+        } else {
+            row = row.child(divider());
+            for (ls, label) in [(DrawLineStyle::Solid, "Solid"), (DrawLineStyle::Dashed, "Dashed"), (DrawLineStyle::Dotted, "Dotted")] {
+                row = row.child(extra_button(label, style.line_style == ls, Intent::DrawLine(ls.id()), on.clone()));
+            }
+            row = row.child(divider());
         }
-        row = row.child(divider());
+        // One popup of every installed `.abr` preset (the engine has no built-in shapes).
+        // `Dropdown`'s width is a fixed point width (0 renders an invisible button and a
+        // zero-width menu anchor — the "no width / flies away" report).
         let current = brush.unwrap_or("");
-        for (id, label) in [("", "Plain"), ("taper", "Taper"), ("ink", "Ink"), ("bristle", "Bristle")] {
-            let preset = if id.is_empty() { None } else { Some(id) };
-            row = row.child(extra_button(label, current == id, Intent::DrawPreset(preset), on.clone()));
-        }
+        let label = if figcraft_abr::infos().is_empty() {
+            tr("No brushes").to_string()
+        } else if current.is_empty() {
+            tr("Plain").to_string()
+        } else {
+            figcraft_abr::resolve(current).map(|b| b.name.clone()).unwrap_or_else(|| current.to_string())
+        };
+        let on_menu = on.clone();
+        let trigger = crate::widgets::dropdown::dropdown(SharedString::from(label), 120.0, None)
+            .menu("draw-brush-preset")
+            .on_click(move |rect, w, cx| on_menu(Intent::DrawPresetMenu(rect), w, cx));
+        row = row.child(trigger);
     }
     if tool == ToolId::Pen {
         row = row.child(divider());

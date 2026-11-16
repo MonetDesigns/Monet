@@ -2445,6 +2445,8 @@ mod cmd_queue_tests {
             "vector.fillRule",
             "stroke.widthProfile",
             "stroke.brush",
+            "brush.import",
+            "brush.reload",
             "node.set",
             "effect.add",
             "effect.set",

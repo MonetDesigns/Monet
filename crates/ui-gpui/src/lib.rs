@@ -2304,6 +2304,20 @@ impl CanvasView {
     /// 把一次指针事件交给引擎（对应原文 `pointer_event` + `session.pointer`）。
 
     fn send(&mut self, kind: PointerKind, pos: Pos2, mods: &Modifiers) {
+        // The pointer is captured during a drag, so moves keep arriving while it is over a panel,
+        // the title bar or outside the window. Those coordinates are not canvas coordinates; a
+        // Pencil stroke would jump far away from the path. Clamp a Pencil's pointer into the
+        // canvas (other tools may legitimately drag outside it, e.g. guides).
+        let pos = if self.app.session.tool.tool == figcraft_engine::ToolId::Pencil {
+            let (w, h) = (self.app.canvas.rect.width(), self.app.canvas.rect.height());
+            // A captured pointer keeps reporting while it is over a panel or outside the window;
+            // those coordinates are not canvas coordinates. Clamp them, and leave the samples
+            // themselves alone: the engine drops the ones a hand cannot make (see `despike`), so
+            // a fast stroke is not mistaken for a stray one.
+            pos2(pos.x.clamp(0.0, w), pos.y.clamp(0.0, h))
+        } else {
+            pos
+        };
         let p = self.app.to_page(pos);
 
         let zoom = self.app.session.ds().map(|d| d.view.zoom).unwrap_or(1.0);
@@ -2523,6 +2537,8 @@ impl CanvasView {
             "file.import" => Some((tr("Import"), crate::open::IMPORT_EXTENSIONS, "file.import")),
 
             "file.placeImage" => Some((tr("Place image"), crate::open::IMAGE_EXTENSIONS, "file.placeImage")),
+
+            "brush.import" => Some((tr("Import brushes"), BRUSH_EXTENSIONS, "brush.import")),
 
             _ => None,
         };
@@ -2869,37 +2885,25 @@ impl CanvasView {
             }
 
             toolbar::Intent::DrawColor => {
-                let tool = self.app.session.tool.tool;
-                // The Brush nib owns its own colour; Pen / Pencil read their draw_style.
-                let brush_nib = tool == figcraft_engine::ToolId::Pencil
-                    && self.app.session.tool.pencil_brush.is_some();
+                // Pen, Pencil and Brush all take their stroke colour from `tool.drawStyle.color`.
+                // This engine has no `ToolId::Brush` — the brush is the pencil carrying a preset —
+                // so it shares the pencil's colour. Writing the brush colour to a separate UI-only
+                // slot never reaches the stroke the engine draws, which was the "colour doesn't
+                // come through" bug: the brush kept painting in the pencil's (default black) colour.
                 let style_color = self
                     .app
                     .session
                     .tool
-                    .draw_style(tool)
+                    .draw_style(self.app.session.tool.tool)
                     .map(|s| crate::widgets::swatch::color32(s.color()))
                     .unwrap_or_else(|| Color32::from_rgb(0, 0, 0));
-                let current = if brush_nib {
-                    self.draw_brush_ink
-                        .map(|[r, g, b]| Color32::from_rgba_unmultiplied(r, g, b, 255))
-                        .unwrap_or(style_color)
-                } else {
-                    style_color
-                };
                 let me = cx.entity();
                 let on_pick: std::rc::Rc<dyn Fn(Color32, &mut Window, &mut App)> = std::rc::Rc::new(move |c, _w, cx| {
                     me.update(cx, |cv, cx| {
-                        if brush_nib {
-                            // Do not write pencil_style: that would retint the Pencil nib too.
-                            cv.draw_brush_ink = Some([c.0[0], c.0[1], c.0[2]]);
-                            cx.notify();
-                        } else {
-                            cv.run_command("tool.drawStyle", serde_json::json!({ "color": c.to_hex() }), cx);
-                        }
+                        cv.run_command("tool.drawStyle", serde_json::json!({ "color": c.to_hex() }), cx);
                     });
                 });
-                self.open_color(window.mouse_position(), current, on_pick, cx);
+                self.open_color(window.mouse_position(), style_color, on_pick, cx);
             }
 
             toolbar::Intent::DrawWeight(w) => {
@@ -2912,6 +2916,33 @@ impl CanvasView {
 
             toolbar::Intent::DrawPreset(preset) => {
                 self.run_command("tool.drawStyle", serde_json::json!({ "preset": preset }), cx);
+            }
+
+            toolbar::Intent::DrawPresetMenu(rect) => {
+                // Every brush comes from an external `.abr` file; "Plain" clears the preset.
+                let current = self.app.session.tool.pencil_brush.as_ref().map(|b| b.preset.clone());
+                let mut rows = Vec::new();
+                let mut ids: std::collections::HashMap<String, Option<String>> = std::collections::HashMap::new();
+                let plain = figcraft_i18n::tr("Plain").to_string();
+                rows.push(MenuRow::new(plain.clone()).checked(Some(current.is_none())));
+                ids.insert(plain, None);
+                for b in figcraft_abr::infos() {
+                    let label = if b.folder.is_empty() {
+                        format!("{} / {}", b.group, b.name)
+                    } else {
+                        format!("{} / {} / {}", b.group, b.folder.join(" / "), b.name)
+                    };
+                    rows.push(MenuRow::new(label.clone()).checked(Some(current.as_deref() == Some(b.id.as_str()))));
+                    ids.insert(label, Some(b.id));
+                }
+                let cmds = self.fields.queue();
+                let on_pick = std::rc::Rc::new(move |label: &str, _w: &mut Window, _cx: &mut App| {
+                    if let Some(preset) = ids.get(label) {
+                        cmds.push(panels::Cmd { id: "tool.drawStyle", params: Some(serde_json::json!({ "preset": preset })) });
+                    }
+                });
+                let anchor = crate::widgets::dropdown::menu_anchor("draw-brush-preset");
+                self.open_dropdown_menu(Some(anchor), rect, Some(160.0), rows, on_pick, cx);
             }
 
             toolbar::Intent::DrawDone => {
@@ -6956,6 +6987,9 @@ impl drag_manager::WindowDragTarget for CanvasView {
     }
 }
 
+/// Extensions accepted by the native brush-import dialog.
+const BRUSH_EXTENSIONS: &[&str] = &["abr"];
+
 /// 应用入口。
 
 pub fn run() {
@@ -6964,6 +6998,12 @@ pub fn run() {
     // 否则文字宽度会是 0/1px（画出来就是一条竖线）。egui 版在启动时也是这么做的。
 
     figcraft_text::scan_system_fonts();
+
+    // 外置 ABR 笔刷库：首次启动把出厂 `.abr` 放进用户目录，之后只扫描目录。
+    // 引擎不内嵌任何笔刷形状，所有笔刷都来自这些外部文件。
+    if let Err(e) = figcraft_abr::bootstrap() {
+        log::warn!("brush library: {e}");
+    }
 
     // `--control <port>`：开本地控制通道（与 `cargo run -p figcraft -- --control 7979` 同义）。
 

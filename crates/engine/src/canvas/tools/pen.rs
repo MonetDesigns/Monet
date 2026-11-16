@@ -5,6 +5,10 @@ use super::{
 };
 use crate::vectoredit::VTool;
 
+/// Default stroke weight (pt) for a brush stroke. The pencil's 2 pt default reads as a thin line
+/// that looks just like a pencil stroke, so a brush starts wider unless the user sets a weight.
+const BRUSH_DEFAULT_WEIGHT: f64 = 8.0;
+
 /// Pen pressure along drawn samples as width profile points `[t, scale]`: `t` by length, at most
 /// 32 points, medium pressure (0.5) at the stroke weight, from a tenth to twice it. `None` when no
 /// sample has pressure.
@@ -34,6 +38,49 @@ pub(crate) fn pressure_profile(points: &[Point], pressure: &[Option<f32>]) -> Op
         [t, (p / 0.5).clamp(0.1, 2.0)]
     });
     Some(profile.collect())
+}
+
+/// Drop samples that cannot be a hand movement.
+///
+/// A fast stroke moves tens of points between two pointer events, so a *long step* is normal and
+/// must be kept — dropping it truncated the stroke ("release quickly and the curve is lost"). What
+/// a hand cannot do is go far out and straight back: that is a stray pointer position (a captured
+/// move over a panel, a display change). So a sample is dropped only when it is the far end of a
+/// sharp reversal, or when it teleports past [`TELEPORT`] (coordinates from another space).
+pub(crate) fn despike(points: &[Point], pressure: &[Option<f32>]) -> (Vec<Point>, Vec<Option<f32>>) {
+    /// A step this long is not a hand movement at any zoom: it is a coordinate from another space.
+    const TELEPORT: f64 = 2000.0;
+    if points.len() < 3 {
+        return (points.to_vec(), pressure.to_vec());
+    }
+    let mut out = Vec::with_capacity(points.len());
+    let mut out_pressure = Vec::with_capacity(points.len());
+    out.push(points[0]);
+    out_pressure.push(pressure.first().copied().flatten());
+    for i in 1..points.len() - 1 {
+        let (prev, here, next) = (points[i - 1], points[i], points[i + 1]);
+        let (incoming, outgoing) = (here - prev, next - here);
+        let (li, lo) = (incoming.hypot(), outgoing.hypot());
+        let reversal = li > 1.0 && lo > 1.0 && (incoming.dot(outgoing) / (li * lo)).clamp(-1.0, 1.0) < -0.5;
+        // Out and back, and far: the sample is the tip of a spike, so the stroke continues from
+        // `prev`. The distance matters — a hand-drawn V turns back too, and its tip must stay.
+        if reversal && li > 60.0 && lo > 60.0 {
+            continue;
+        }
+        if li > TELEPORT {
+            continue;
+        }
+        out.push(here);
+        out_pressure.push(pressure.get(i).copied().flatten());
+    }
+    // The release point is where the hand ended up; keep it unless it is a coordinate from
+    // another space.
+    let last = points[points.len() - 1];
+    if out.last().is_none_or(|p| (last - *p).hypot() <= TELEPORT) {
+        out.push(last);
+        out_pressure.push(pressure.last().copied().flatten());
+    }
+    (out, out_pressure)
 }
 
 /// A frame or section drawn around layers takes those of its siblings that lie fully inside it
@@ -333,19 +380,22 @@ impl Session {
     }
 
     pub(super) fn pencil_finish(&mut self, points: &[Point], pressure: &[Option<f32>]) -> Result<()> {
+        // A hand never teleports: a sample many times the stroke's own pace is a stray pointer
+        // position (a captured move over a panel, a display change, the position the button came
+        // up at). Fitting a curve through it puts a spike in the stroke — "the circle flies off".
+        let (clean, clean_pressure) = despike(points, pressure);
+        let (points, pressure) = (&clean[..], &clean_pressure[..]);
         if points.len() < 2 {
             return Ok(());
         }
-        // Smooth: fit a curve through the samples.
-        let mut poly = figcraft_geom::BezPath::new();
-        for (k, p) in points.iter().enumerate() {
-            if k == 0 {
-                poly.move_to(*p);
-            } else {
-                poly.line_to(*p);
-            }
-        }
-        let fitted = figcraft_geom::kurbo::simplify::simplify_bezpath(poly.iter(), 0.75, &Default::default());
+        // Fit a curve through the samples. kurbo's `simplify_bezpath` only fits across joins whose
+        // tangents are nearly parallel, so a hand-drawn stroke came out as one straight line per
+        // sample — hundreds of points, visibly faceted. `fit_polyline` fits the whole stroke with
+        // the fewest cubics that stay within a point of it (it smooths the hand's tremor first, so
+        // the fit is not chasing noise), and each segment carries its own curvature handles.
+        let Some(fitted) = figcraft_geom::fit_polyline(points, 1.0) else {
+            return Ok(());
+        };
         let d = fitted.to_svg();
         if matches!(self.tool.tool, ToolId::Marker | ToolId::Highlighter) {
             return self.ink_finish(&d);
@@ -361,7 +411,15 @@ impl Session {
         // white on a dark parent, #1741) and `PENCIL_STROKE`'s 2 pt.
         let tool = self.tool.tool;
         let style = self.tool.draw_style(tool).cloned().unwrap_or_default();
-        let weight = style.weight(tool);
+        // A brush paints wider than a pencil: the pencil's 2 pt default reads as a thin line that
+        // looks just like a pencil stroke (the "brush isn't great" report). Lift the default, but
+        // only when the user hasn't set a weight, so an explicit thin brush still draws thin.
+        let brush = self.tool.pencil_brush.is_some();
+        let weight = if brush && style.weight.is_none() {
+            BRUSH_DEFAULT_WEIGHT
+        } else {
+            style.weight(tool)
+        };
         let color = match style.color {
             Some(c) => c,
             None => super::handles::pencil_color(self.doc()?, parent),

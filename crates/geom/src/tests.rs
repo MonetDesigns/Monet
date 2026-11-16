@@ -1,4 +1,5 @@
 use super::*;
+use kurbo::ParamCurveNearest;
 
 fn area(p: &BezPath) -> f64 {
     p.area().abs()
@@ -365,4 +366,154 @@ fn svg_path_refuses_numbers_past_the_limit_before_parsing() {
     assert!(!number_past("M0 0L-2.5.5 1e-3-4e2z", 1e3));
     assert!(number_past("M0 0L-2.5.5 1e-3-4e3z", 1e3));
     assert!(number_past("M.5.5e10", 1e3));
+}
+
+// ---- Fitting hand-drawn strokes -------------------------------------------------------------
+
+/// A hand-drawn circle: `n` samples round a circle of radius 80, with `jitter` of shake.
+fn circle_samples(n: usize, jitter: f64) -> Vec<Point> {
+    let mut z = 0x1234_5678u32;
+    let mut rnd = || {
+        z ^= z << 13;
+        z ^= z >> 17;
+        z ^= z << 5;
+        (f64::from(z) / f64::from(u32::MAX)) * 2.0 - 1.0
+    };
+    (0..n)
+        .map(|i| {
+            let t = i as f64 / (n - 1) as f64 * std::f64::consts::TAU * 0.97;
+            Point::new(100.0 + 80.0 * t.cos() + jitter * rnd(), 100.0 + 80.0 * t.sin() + jitter * rnd())
+        })
+        .collect()
+}
+
+fn polyline_path(pts: &[Point]) -> BezPath {
+    let mut path = BezPath::new();
+    if let Some(first) = pts.first() {
+        path.move_to(*first);
+        for p in &pts[1..] {
+            path.line_to(*p);
+        }
+    }
+    path
+}
+
+/// How far the worst sample sits from `path`.
+fn stray(path: &BezPath, pts: &[Point]) -> f64 {
+    let segs: Vec<_> = path.segments().collect();
+    pts.iter()
+        .map(|p| segs.iter().map(|s| s.nearest(*p, 1e-6).distance_sq).fold(f64::INFINITY, f64::min).sqrt())
+        .fold(0.0, f64::max)
+}
+
+fn counts(path: &BezPath) -> (usize, usize) {
+    let mut lines = 0;
+    let mut curves = 0;
+    for el in path.elements() {
+        match el {
+            kurbo::PathEl::LineTo(_) => lines += 1,
+            kurbo::PathEl::CurveTo(..) | kurbo::PathEl::QuadTo(..) => curves += 1,
+            _ => {}
+        }
+    }
+    (lines, curves)
+}
+
+#[test]
+fn a_smooth_stroke_fits_in_a_few_cubics() {
+    // kurbo's fit gives one straight line per sample here (299 lines, no curve at all): the
+    // stroke is a polyline with hundreds of points. The fit must be a few curves instead.
+    let pts = circle_samples(300, 0.0);
+    let path = fit_polyline(&pts, 0.75).unwrap_or_default();
+    let (lines, curves) = counts(&path);
+    assert_eq!(lines, 0, "a smooth stroke must not come out as straight lines");
+    assert!((2..=20).contains(&curves), "expected a few cubics, got {curves}");
+    // The fit is allowed its accuracy plus the little the smoothing moves a smooth arc.
+    assert!(stray(&path, &pts) <= 1.0, "strayed {:.3}", stray(&path, &pts));
+}
+
+#[test]
+fn a_shaky_stroke_is_smoothed_not_traced() {
+    // Two pixels of tremor: a pencil should even it out, not fit a segment per wobble.
+    let pts = circle_samples(600, 0.8);
+    let path = fit_polyline(&pts, 0.75).unwrap_or_default();
+    let (lines, curves) = counts(&path);
+    assert_eq!(lines, 0, "a shaky stroke must not fall back to straight lines");
+    assert!(curves <= 40, "expected the tremor to be smoothed, got {curves} cubics");
+    assert!(stray(&path, &pts) <= 2.5, "strayed {:.3} from the samples", stray(&path, &pts));
+}
+
+#[test]
+fn a_stroke_that_turns_back_does_not_shoot_past() {
+    // Upstream #1741: going out and back to the same point made kurbo's fit run far off the
+    // stroke. `simplify_path` keeps the turn a corner.
+    let mut pts = vec![Point::new(0.0, 0.0)];
+    for i in 1..=20 {
+        pts.push(Point::new(f64::from(i) * 0.25, 0.0));
+    }
+    for i in (0..20).rev() {
+        pts.push(Point::new(f64::from(i) * 0.25, 0.0));
+    }
+    let source = polyline_path(&pts);
+    let path = simplify_path(&source, 0.75);
+    assert!(stray(&path, &pts) <= 1.5, "the fit ran {:.3} off the stroke", stray(&path, &pts));
+}
+
+#[test]
+fn a_fitted_stroke_starts_and_ends_on_its_samples() {
+    let pts = circle_samples(120, 0.0);
+    let path = fit_polyline(&pts, 0.75).unwrap_or_default();
+    let ends: Vec<Point> = path.elements().iter().filter_map(|el| match el {
+        kurbo::PathEl::MoveTo(p) | kurbo::PathEl::LineTo(p) => Some(*p),
+        kurbo::PathEl::CurveTo(_, _, p) => Some(*p),
+        _ => None,
+    }).collect();
+    assert_eq!(ends.first(), pts.first(), "the stroke must start where it was drawn");
+    let last = ends.last().copied().unwrap_or_default();
+    let want = *pts.last().unwrap_or(&Point::ZERO);
+    assert!((last - want).hypot() < 1e-6, "the stroke must end where it was drawn");
+}
+
+#[test]
+fn a_gentle_arc_does_not_come_out_straight() {
+    // A 60° arc of radius 80 sits 10.7 points off its own chord: a fit that flattens it into a
+    // line is wrong even when both ends land on the samples.
+    let (r, span) = (80.0f64, std::f64::consts::TAU / 6.0);
+    let n = 60;
+    let mut z = 0x2468_ace0u32;
+    let mut rnd = || {
+        z ^= z << 13;
+        z ^= z >> 17;
+        z ^= z << 5;
+        (f64::from(z) / f64::from(u32::MAX)) * 2.0 - 1.0
+    };
+    let pts: Vec<Point> = (0..n)
+        .map(|i| {
+            let t = i as f64 / (n - 1) as f64 * span;
+            Point::new(100.0 + r * t.cos() + rnd(), 100.0 + r * t.sin() + rnd())
+        })
+        .collect();
+    let path = fit_polyline(&pts, 1.0).unwrap_or_default();
+    let (lines, curves) = counts(&path);
+    assert_eq!(lines, 0, "the arc came out as {lines} straight segments");
+    assert!(curves <= 8, "expected a few cubics, got {curves}");
+    let mid = Point::new(100.0 + r * (span / 2.0).cos(), 100.0 + r * (span / 2.0).sin());
+    let off = stray(&path, &[mid]);
+    assert!(off <= 1.5, "the arc was flattened: its middle is {off:.2} off the curve");
+}
+
+#[test]
+fn a_quarter_arc_is_one_cubic() {
+    // A 90° arc of radius 80 is within a cubic's reach at a point of accuracy; needing more means
+    // the fit is not converging, and every extra segment is another control point the user sees.
+    let r = 80.0;
+    let pts: Vec<Point> = (0..=100)
+        .map(|i| {
+            let t = i as f64 / 100.0 * std::f64::consts::FRAC_PI_2;
+            Point::new(r * t.cos(), r * t.sin())
+        })
+        .collect();
+    let path = fit_polyline(&pts, 1.0).unwrap_or_default();
+    let (lines, curves) = counts(&path);
+    assert_eq!((lines, curves), (0, 1), "a quarter arc came out as {lines} lines and {curves} curves");
 }
