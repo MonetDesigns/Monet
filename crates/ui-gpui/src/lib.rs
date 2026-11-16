@@ -787,16 +787,33 @@ impl CanvasView {
         // ⛔ 渲染时**不能**用 `entry.active` 覆盖 `session.active`：用户刚点标签切换、
         // `doc.switch` 已经把 active 改到新文档，下一帧再被覆盖回去 → 「标签切不动」。
         // 只有当前 active 不属于本窗口（窗口刚出现 / 文档被拖走）时才需要修正。
-        let cur_owned = self.app.session.ds().ok().map(|d| d.uid).is_some_and(|uid| wins.of(uid) == wid);
+        let cur = self.app.session.ds().ok().map(|d| d.uid);
+        let cur_owned = cur.is_some_and(|uid| wins.of(uid) == wid);
         let drives = authoritative || !cur_owned;
-        // 只能绑定**本窗口拥有**的文档：否则主窗口会把「已经被拖到别的窗口」的文档设成
-        // 全局 active，画布显示一份它没有标签的文档（用户 2026-11-16：切不过去）。
-        if drives
-            && let Some(uid) = want
-            && wins.of(uid) == wid
-            && let Some(i) = self.app.session.docs.iter().position(|d| d.uid == uid)
-        {
-            self.app.session.active = i;
+        if drives {
+            // 本窗口该显示的文档：`want`（确属本窗口）→ 当前 active 若属于本窗口 →
+            // 本窗口自己的第一个文档。最后这条回落不能少：文档被拖走 / 新窗口刚出现的
+            // 情况下 `want` 可能为空或不属本窗口，没有它就停在别人的文档上，而
+            // `wins.of(uid) != wid` 又禁止写 active → 窗口空白、标签切不过去
+            // （用户 2026-11-16）。
+            let show = want
+                .filter(|uid| wins.of(*uid) == wid)
+                .or_else(|| cur.filter(|uid| wins.of(*uid) == wid))
+                .or_else(|| {
+                    if wid == 0 {
+                        // 主窗口的文档 = 不属于任何额外窗口的那些（按 session 的打开顺序）。
+                        self.app.session.docs.iter().map(|d| d.uid).find(|uid| wins.of(*uid) == 0)
+                    } else {
+                        wins.entry(wid).and_then(|w| w.docs.first().copied())
+                    }
+                });
+            // 只能绑定**本窗口拥有**的文档：否则主窗口会把「已经被拖到别的窗口」的文档设成
+            // 全局 active，画布显示一份它没有标签的文档（用户 2026-11-16：切不过去）。
+            if let Some(uid) = show
+                && let Some(i) = self.app.session.docs.iter().position(|d| d.uid == uid)
+            {
+                self.app.session.active = i;
+            }
         }
         if let Some(uid) = self.app.session.ds().ok().map(|d| d.uid) {
             let owner = wins.of(uid);
