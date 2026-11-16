@@ -470,7 +470,7 @@ pub struct CanvasView {
     a11y: a11y::KeyboardNav,
     /// A21：F6 / Shift+F6 的区域键盘导航状态。
     /// A16：本视图之外的 OS 窗口（共享同一会话）。
-    windows: windows::Windows,
+    windows: std::rc::Rc<std::cell::RefCell<windows::Windows>>,
 
     /// 按下后正在拖拽（Move 事件只在拖拽时送给引擎）。
     dragging: bool,
@@ -705,10 +705,11 @@ impl CanvasView {
     /// render is not necessarily the one an input event belongs to. Call this at the start of any
     /// handler that reads `app.session` (and from render).
     fn bind_window_document(&mut self, window: &mut Window) {
-        let wid = self.windows.list.iter().find(|w| w.window_id == window.window_handle().window_id()).map_or(0, |w| w.id);
+        let mut wins = self.windows.borrow_mut();
+        let wid = wins.list.iter().find(|w| w.window_id == window.window_handle().window_id()).map_or(0, |w| w.id);
         windows::set_current(wid);
-        self.windows.current = wid;
-        let want = if wid == 0 { self.windows.main_active } else { self.windows.entry(wid).and_then(|w| w.active) };
+        wins.current = wid;
+        let want = if wid == 0 { wins.main_active } else { wins.entry(wid).and_then(|w| w.active) };
         if let Some(uid) = want
             && let Some(i) = self.app.session.docs.iter().position(|d| d.uid == uid)
         {
@@ -716,8 +717,8 @@ impl CanvasView {
         }
         if let Some(uid) = self.app.session.ds().ok().map(|d| d.uid) {
             if wid == 0 {
-                self.windows.main_active = Some(uid);
-            } else if let Some(entry) = self.windows.entry_mut(wid) {
+                wins.main_active = Some(uid);
+            } else if let Some(entry) = wins.entry_mut(wid) {
                 entry.active = Some(uid);
             }
         }
@@ -812,7 +813,7 @@ impl CanvasView {
 
             a11y: a11y::KeyboardNav::default(),
 
-            windows: windows::Windows::default(),
+            windows: std::rc::Rc::new(std::cell::RefCell::new(windows::Windows::default())),
 
             dragging: false,
 
@@ -1475,7 +1476,9 @@ impl CanvasView {
                 // A16：File ▸ New window / Open in new window / 拖出成窗口都走 window.new。
                 "window.new" | "window.focus" => {
                     let root = cx.entity();
-                    if let Err(e) = windows::requests(&mut self.windows, cx, root, &r.kind, &r.data) {
+                    // 这里在 `render` 的 `&mut self` 里：把 `windows` 与 `app.session` 两个字段
+                    // 分别借出去，绝不能再 `root.read/update`（会 double-lease panic）。
+                    if let Err(e) = windows::requests(&self.windows, cx, root, &mut self.app.session, &r.kind, &r.data) {
                         self.toast(e, cx);
                     }
                     cx.notify();
