@@ -124,6 +124,9 @@ mod export_preview;
 #[cfg(test)]
 mod parity_contract;
 
+#[cfg(test)]
+mod undo_audit_tests;
+
 mod panels;
 
 /// 左面板控件树（Layers 树）：可展开/折叠、选中、显隐/锁定，含父子级拖动排序（复用 `drag` 通用件）。
@@ -6844,6 +6847,37 @@ impl Render for CanvasView {
             // 其它情况原样放行给内层控件与画布。
             .on_key_down(cx.listener(|this: &mut CanvasView, e: &KeyDownEvent, window, cx| {
                 let accel = e.keystroke.modifiers.platform || e.keystroke.modifiers.control;
+
+                // 撤销 / 重做必须在根节点兜底：GPUI 的按键沿**焦点链**派发，而整套命令快捷键
+                // 挂在画布元素上，只有焦点在画布子树时才收得到。右栏属性框、对话框输入框、
+                // 内联改名框一旦拿到焦点（这些操作本来就会把焦点吸进输入框），Cmd+Z 就再也
+                // 到不了引擎 —— 表现正是「改了属性 / 提交了对话框 / 改名之后撤销没反应」，
+                // 而画布上的拖拽（焦点没跑）却正常。这里只补 `edit.undo` / `edit.redo` 两个
+                // id，其余快捷键仍按原样只在画布子树里生效，避免抢走输入框的按键。
+                // 引擎正在做画布文字编辑时不接管：那种情况由画布子树的 text_keys 处理。
+                if this.app.session.ds().is_ok_and(|d| d.text_edit.is_none()) {
+                    let held = figcraft_engine::keymap::Mods {
+                        shift: e.keystroke.modifiers.shift,
+                        alt: e.keystroke.modifiers.alt,
+                        cmd: e.keystroke.modifiers.platform,
+                        ctrl: e.keystroke.modifiers.control,
+                    };
+                    let binding = figcraft_engine::keymap::lookup(
+                        figcraft_engine::keymap::Platform::current(),
+                        figcraft_engine::keymap::Context::Canvas,
+                        &canonical_key(&e.keystroke.key),
+                        held,
+                    )
+                    .map(|b| b.id);
+                    if let Some(id) = binding
+                        && (id == "edit.undo" || id == "edit.redo")
+                        && run_binding(&mut this.app, id)
+                    {
+                        cx.notify();
+                        cx.stop_propagation();
+                        return;
+                    }
+                }
 
                 if this.fields.local_style_key(&e.keystroke.key, accel, window, cx) {
                     cx.stop_propagation();
