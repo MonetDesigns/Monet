@@ -1000,7 +1000,7 @@ R 节（17:0x 审计）把 R1/R2 标成「✅ 已实施」，但回源码核对�
 | A24 field_math | — | `field_math.rs` 已落地并接入 `TextEdit`；Select layer 子菜单与实时文字光标已落地（AD 节） | 仍缺字体预览 |
 | A16 多窗口 | — | 弹层非 OS 多窗口 | 需重构 `Session` 所有权共享（J 节已记） |
 | A14 更新器 | 依赖 craft-update 升版 | 提示窗 | 等 C2 升版 |
-| A28 Live | 1672 行 | 画布文字光标/选区/名字标签已落地（`canvas/live_text.rs`）；presence / peers / 网络唤醒沿用引擎 | 光标/聊天/spotlight/共享/加入/断连前端仍缺，最大块 |
+| A28 Live | 1672 行 | 画布文字光标/选区/名字标签已落地（`canvas/live_text.rs`）；`render` 每帧 `live_poll`（presence / 远端改动由此落地），网络唤醒沿用 `NetLink` | 光标/聊天/spotlight/共享/加入/断连前端仍缺，最大块 |
 | B6/B7/B10 | — | 部分 | 变量表列行为/导出、属性面板 fill_rule 反向环、光标逐工具核对 |
 
 ### X.3 推进纪律
@@ -1189,8 +1189,8 @@ C2、C3（文案规范待全面对齐）。
 
 **2026-11-16 补完**：`menus/select_layer.rs` → `context_menu::layers_at` + Select layer 子菜单
 （最多 40 行、按 depth 缩进、选中打勾；行键 `select.set:<node>`，`pick_context` 解析后执行
-`select.set {ids:[id]}`）；`canvas/live_text.rs` → `canvas/live_text.rs`（远端光标/选区/名字标签，
-`live.presence` 为空或本页不是会话文档时直接返回；`live_wake` 保证 presence 到达后有一帧重绘）。
+`select.set {ids:[id]}`）；`canvas/live_text.rs` → `canvas/live_text.rs`（远端光标/选区/名字标签，`live.presence` 为空或本页
+不是会话文档时直接返回；`render` 每帧调 `Session::live_poll`，presence 到达后同一帧就画出来）。
 `context_menu::items` 现在多一个 `layers` 参数，右栏「More actions」传空列表保持不变。
 
 
