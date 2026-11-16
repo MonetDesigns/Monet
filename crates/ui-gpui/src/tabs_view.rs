@@ -265,8 +265,11 @@ pub(crate) fn tab_strip(
         .justify_center()
         .when(home_active, move |d| d.bg(rgba(t.pressed)))
         .hover(move |s| s.bg(rgba(t.hover)))
-        .on_click(move |_e: &ClickEvent, _window, cx: &mut App| {
+        .on_click(move |_e: &ClickEvent, window, cx: &mut App| {
             me_home.update(cx, |cv, cx| {
+                // ⛔ 先绑定本窗口：`show_home` 改的是**窗口私有**状态，不绑定就会写进
+                // 另一个窗口的 pane（用户 2026-11-16：两个窗口一起切首页）。
+                cv.bind_window_document(window, true);
                 cv.show_home();
                 cx.notify();
             });
@@ -321,7 +324,10 @@ pub(crate) fn tab_strip(
             .gap(pt(6.0))
             .overflow_hidden()
             .id(("tab-body", uid as usize))
-            .on_click(move |_e: &ClickEvent, _window, cx: &mut App| {
+            .on_click(move |_e: &ClickEvent, window, cx: &mut App| {
+                // 命令按「发起窗口」路由，必须先把当前窗口绑定好，否则会被判成别的窗口的
+                // 命令而丢弃（表现为「点标签切不过去」）。
+                me_switch.update(cx, |cv, _| cv.bind_window_document(window, true));
                 cmds_switch.push(Cmd { id: "doc.switch", params: Some(json!({ "index": index })) });
                 me_switch.update(cx, |cv, _| cv.close_home());
             })

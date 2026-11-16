@@ -469,6 +469,9 @@ struct PaneState {
     left_collapsed: bool,
     dialog: Option<dialogs::DialogState>,
     home: bool,
+    /// 整块浮层（Home / Shortcuts / Versions / Dev compare / Assets）。`show_home` 会把
+    /// `home` 和 `extra` **一起**改，所以它必须跟着窗口走，否则「切首页」两个窗口一起切。
+    extra: Option<panels::extra::ExtraKind>,
     pointer: Option<Pos2>,
     mods: Modifiers,
 }
@@ -743,6 +746,7 @@ impl CanvasView {
             left_collapsed: self.left_collapsed,
             dialog: self.dialog.take(),
             home: std::mem::take(&mut self.tabs.home),
+            extra: self.extra.take(),
             pointer: self.pointer,
             mods: self.mods,
         };
@@ -757,6 +761,7 @@ impl CanvasView {
                 self.left_collapsed = n.left_collapsed;
                 self.dialog = n.dialog;
                 self.tabs.home = n.home;
+                self.extra = n.extra;
                 self.pointer = n.pointer;
                 self.mods = n.mods;
             }
@@ -765,6 +770,7 @@ impl CanvasView {
                 self.popup = None;
                 self.dialog = None;
                 self.tabs.home = false;
+                self.extra = None;
                 self.pointer = None;
             }
         }
@@ -774,7 +780,7 @@ impl CanvasView {
     /// `authoritative`：**事件**处理时为 true —— 事件来自哪个窗口，那个窗口的文档就必须成为
     /// 全局 `session.active`，否则第二个窗口里点「加页」会加到第一个窗口的文档上
     /// （用户 2026-11-16 实测）。渲染时为 false：只有聚焦窗口写，避免两个窗口每帧互相覆盖。
-    fn bind_window_document(&mut self, window: &mut Window, authoritative: bool) {
+    pub(crate) fn bind_window_document(&mut self, window: &mut Window, authoritative: bool) {
         let mut wins = self.windows.borrow_mut();
         let wid = wins.list.iter().find(|w| w.window_id == window.window_handle().window_id()).map_or(0, |w| w.id);
         windows::set_current(wid);
