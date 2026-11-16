@@ -84,6 +84,9 @@ pub struct TextEdit {
     /// `keep_focus`: the editor element is new on the start frame, ask for focus once it exists.
     focus_pending: bool,
     number: Option<NumberConfig>,
+    /// 字段后缀是 `%`：输入里的百分号只是单位（`field_math::parse` 的 `percent_unit`），
+    /// 不再代表「相对当前值的百分比」。
+    percent_unit: bool,
     pub(crate) focus: FocusHandle,
     /// 失焦订阅：焦点离开就立即提交，不再依赖「下一帧恰好重绘到这个 Entity」。
     /// GPUI 会缓存未标脏的嵌套 Entity 的 prepaint（`view.rs:208-214`），把提交只挂在
@@ -118,6 +121,7 @@ impl TextEdit {
             select_all_pending: false,
             focus_pending: false,
             number: None,
+            percent_unit: false,
             focus: cx.focus_handle(),
             focus_out: None,
             on_commit: None,
@@ -197,6 +201,8 @@ impl TextEdit {
     }
     /// Ported from `number_field_bindable`: suffix + step (big step defaults to `step * 10`).
     pub fn set_numeric(&mut self, suffix: impl Into<SharedString>, step: f64) {
+        let suffix = suffix.into();
+        self.percent_unit = suffix.as_ref() == "%";
         self.input.set_suffix(suffix);
         self.number = Some(NumberConfig::new(step));
     }
@@ -208,6 +214,7 @@ impl TextEdit {
     pub fn clear_numeric(&mut self) {
         self.input.set_suffix("");
         self.number = None;
+        self.percent_unit = false;
     }
     /// 设置允许的输入范围（含端点），并把当前值夹进去。
     /// 在 `set_numeric` / `set_number_config` **之后**调用，否则会被后写的配置覆盖。
@@ -336,10 +343,10 @@ impl TextEdit {
         window.blur();
     }
 
-    /// egui's `typed`: absolute value, or `+ - * /` applied to the value at edit start.
-    /// `Empty::Auto` also accepts the word "auto".
+    /// egui 的 `typed`：数值、算术表达式，或 `+ - * /` 相对编辑开始时的值；百分比字段里的
+    /// `%` 是单位，别的字段里 `50%` 表示一半。`Empty::Auto` 也接受 "auto" 一词。
     fn resolve_number(&self, text: &str) -> String {
-        resolve_number_with(self.number, &self.kept, text)
+        resolve_number_with(self.number, self.percent_unit, &self.kept, text)
     }
 
     /// ArrowUp/Down step, both while idle (`on_field`) and while typing. The stepped value
@@ -349,7 +356,7 @@ impl TextEdit {
         let by = (if big { cfg.big } else { cfg.step }) * dir;
         let base = if self.editing { self.input.buffer.text().to_string() } else { self.value.clone() };
         let cur = self.resolve_number(&base).parse::<f64>().unwrap_or(0.0);
-        let next = fmt_num(cfg.clamp(cur + by));
+        let next = fmt_num(cfg.clamp(crate::field_math::stepped(cur, 1.0, by)));
         self.input.buffer.set_text(next.clone());
         if self.editing {
             self.input.buffer.select_all();
@@ -385,9 +392,10 @@ impl TextEdit {
     }
 }
 
-/// 纯函数形式的 `typed`：绝对值，或以编辑开始时的值为基准计算 `+ - * /`。
+/// 纯函数形式的 `typed`：数值或算术表达式（数字后可带单位），或以编辑开始时的值为基准的
+/// `+ - * /` 与 `%` 相对编辑（`field_math`）。`percent_unit` 为真时 `%` 只是单位。
 /// 抽出来是为了让「范围夹紧」可以在没有 `Entity<TextEdit>` 的单元测试里直接验证。
-fn resolve_number_with(number: Option<NumberConfig>, kept: &str, text: &str) -> String {
+fn resolve_number_with(number: Option<NumberConfig>, percent_unit: bool, kept: &str, text: &str) -> String {
     let Some(cfg) = number else { return text.to_string() };
     let t = text.trim();
     if t.is_empty() {
@@ -397,17 +405,7 @@ fn resolve_number_with(number: Option<NumberConfig>, kept: &str, text: &str) -> 
         return "0".to_string();
     }
     let cur = kept.parse::<f64>().ok();
-    let parsed = if let Some(rest) = t.strip_prefix('+') {
-        cur.and_then(|c| rest.parse::<f64>().ok().map(|x| c + x))
-    } else if let Some(rest) = t.strip_prefix('-') {
-        cur.and_then(|c| rest.parse::<f64>().ok().map(|x| c - x))
-    } else if let Some(rest) = t.strip_prefix('*') {
-        cur.and_then(|c| rest.parse::<f64>().ok().map(|x| c * x))
-    } else if let Some(rest) = t.strip_prefix('/') {
-        cur.and_then(|c| rest.parse::<f64>().ok().filter(|x| *x != 0.0).map(|x| c / x))
-    } else {
-        t.parse::<f64>().ok()
-    };
+    let parsed = crate::field_math::eval(t, cur, percent_unit);
     parsed.map(|v| fmt_num(cfg.clamp(v))).unwrap_or_else(|| text.to_string())
 }
 
@@ -815,15 +813,22 @@ mod tests {
     #[test]
     fn resolve_number_applies_the_range() {
         let cfg = NumberConfig::new(1.0).with_range(Some(0.0), Some(100.0));
-        let s = |v: &str, kept: &str, number| resolve_number_with(number, kept, v);
+        let s = |v: &str, kept: &str, number| resolve_number_with(number, false, kept, v);
         assert_eq!(s("250", "100", Some(cfg)), "100");
         assert_eq!(s("-150", "100", Some(cfg)), "0");
-        assert_eq!(s("-30", "100", Some(cfg)), "70");
+        // 上游 `field_math`：前导 `-` 是数值的负号（"-30" 就是 -30），相对编辑只认 `+ * /`。
+        assert_eq!(s("-30", "100", Some(cfg)), "0");
         assert_eq!(s("+50", "80", Some(cfg)), "100");
         assert_eq!(s("*3", "80", Some(cfg)), "100");
         assert_eq!(s("/2", "80", Some(cfg)), "40");
         assert_eq!(s("/0", "80", Some(cfg)), "/0");
         assert_eq!(s("  ", "80", Some(cfg)), "  ");
         assert_eq!(s("250", "100", None), "250");
+        // A22 之外的字段通用行为：算术与百分比相对编辑。
+        assert_eq!(s("(10+5)*2", "10", Some(cfg)), "30");
+        assert_eq!(s("30px + 12", "30", Some(cfg)), "42");
+        assert_eq!(s("50%", "80", Some(cfg)), "40");
+        assert_eq!(s("+10%", "80", Some(cfg)), "88");
+        assert_eq!(resolve_number_with(Some(cfg), true, "80", "50%"), "50");
     }
 }
