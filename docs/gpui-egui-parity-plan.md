@@ -1044,4 +1044,29 @@ R 节（17:0x 审计）把 R1/R2 标成「✅ 已实施」，但回源码核对�
 - **select_all_on_focus**：egui 两个输入框聚焦时全选，冻结 `TextField` 无此钩子，未做。
 - **实机视觉验证**：像素级比对与双击打字冒烟需跑 GUI，单测不能替代。
 - ImportReport（引擎捕获导入 warnings）、Link 的 Offset/移动到页、A4 Browse 联网、
-  A27 计时器/投票、A26 原型连线仍是 X.1 的后续批次。
+  A27 计时器/投票仍是 X.1 的后续批次。
+- A26 原型连线已迁（见 Z）；其中 ghost 的缩略图铺底依赖资产缩略图管线（A4），暂走 egui
+  缩略图缺失时的 12% accent 填充分支。
+
+## Z. 原型画布连线（A26）已迁移（2026-11-16）
+
+照 `ui-egui/src/canvas/proto_canvas.rs` + `proto_canvas/overlay_ghost.rs` 1:1 移植到
+`ui-gpui/src/canvas/proto_canvas.rs`，挂在 `draw_overlays` 的最前面（与 egui `overlays()` 同序）。
+
+- **连线**：Prototype 标签且非演示态时，给每个带交互的图层画到目标 frame 的三次曲线（GPUI
+  画笔无贝塞尔图元，按 32 段折线采样）＋ 起点圆点 ＋ 箭头；选中层或正在编辑时加粗并把目标
+  frame 框出来；命中曲线（5px）点击选中源图层并打开该条交互的编辑器。
+- **「+」连接手柄**：选中层右边缘垂直居中；按下起拖、拖过其它顶层 frame 松开即
+  `proto.interaction.add`（引擎返回 index）并打开编辑器；拖动中高亮目标 frame。section
+  目标按原实现落到它所在 frame 显示的最后一张图。
+- **ghost**：编辑器开在 Manual Open overlay 上时画目标 frame 轮廓，可拖动改 `offset`
+  （`begin_interaction` / `proto.action.set` / `commit_interaction` 整段一步撤销），条件块
+  里的 Manual overlay 也能找到（路径 `[块内下标…]`）。
+- **状态**：跨帧拖拽放 `CanvasApp::proto`；编辑器开合由右栏 `RightFields::proto_open`
+  持有，类型由 `Option<usize>` 改为 `Option<(NodeId, usize)>`（画布也能打开，切选不串行），
+  每帧同步进 `CanvasApp::proto_editor` / `proto_active`。
+- **输入优先级**：画布按下先跑原型（ghost → 手柄 → 曲线 → 收起编辑器），再走参考线/各类
+  手柄；拖动接入 `route_canvas_drag` 与窗口级抬起，指针移出画布也能松手。
+- **验收**：`cargo check -p figcraft-ui-gpui` 通过；
+  `cargo test -p figcraft-ui-gpui --lib --features test-support proto_canvas` 2/2 通过。
+  实机视觉冒烟（连线/手柄/ghost 拖动）仍需跑 GUI。

@@ -3844,6 +3844,8 @@ impl CanvasView {
             || self.app.handles.drag.is_some()
             || self.app.motion_gizmo.drag.is_some()
             || self.app.guides.drag.is_some()
+            || self.app.proto.drag.is_some()
+            || self.app.proto.ghost.is_some()
     }
 
     fn end_popup_drag(&mut self) {
@@ -3881,7 +3883,9 @@ impl CanvasView {
             || self.app.selection_spacing.is_dragging()
             || self.app.handles.drag.is_some()
             || self.app.motion_gizmo.drag.is_some()
-            || self.app.guides.drag.is_some();
+            || self.app.guides.drag.is_some()
+            || self.app.proto.drag.is_some()
+            || self.app.proto.ghost.is_some();
 
         if !active {
             return false;
@@ -3950,6 +3954,13 @@ impl CanvasView {
                 self.guide_input(pos, false, true, e.modifiers.alt);
             }
 
+            // 原型：ghost 拖动落成一步撤销；连接拖到别的 frame 上新建交互并打开编辑器。
+            canvas::proto_canvas::end_ghost(&mut self.app);
+
+            if let Some(slot) = canvas::proto_canvas::drag_end(&mut self.app) {
+                self.fields.set_proto_editor(Some(slot));
+            }
+
             cx.notify();
 
             return true;
@@ -3962,6 +3973,19 @@ impl CanvasView {
         self.mods = e.modifiers;
 
         self.pointer = Some(pos);
+
+        // 原型：ghost 跟随 / 连接拖出（指针移出画布也不断）。
+        if canvas::proto_canvas::ghost_drag_move(&mut self.app, pos) {
+            cx.notify();
+
+            return true;
+        }
+
+        if canvas::proto_canvas::drag_move(&mut self.app, pos) {
+            cx.notify();
+
+            return true;
+        }
 
         // 标尺参考线：按下后靠 move 连续更新，指针移到画布外也不能断。
         if self.app.guides.drag.is_some() {
@@ -4306,6 +4330,12 @@ impl Render for CanvasView {
         // egui 在 `FigApp::sync_dev_mode()` 做同一件事（进入时结束文字/矢量编辑、丢掉手势）。
 
         self.sync_dev_mode();
+
+        // Prototype 标签：画布原型连线只在 Prototype（非演示态）下画/收输入；
+        // 交互编辑器的开合状态由右栏持有，同步给画布读写。
+        self.app.proto_active = self.fields.right_tab() == 1 && self.present.is_none();
+
+        self.app.proto_editor = self.fields.proto_editor();
 
         // 控制通道：在真实的一帧里把排到的请求答掉（与原文 `drain(app, ctx)` 同处）。
 
@@ -4808,6 +4838,26 @@ impl Render for CanvasView {
                     this.pointer = Some(pos);
 
                     this.primary_down = true;
+
+                    // Prototype 连线：ghost / 「+」手柄 / 曲线，原文 `proto_canvas::input` 在
+                    // 参考线与各类手柄之前先跑。
+                    if !this.space && !this.zoom_key && this.app.proto_active {
+                        match canvas::proto_canvas::press(&mut this.app, pos) {
+                            canvas::proto_canvas::Press::Consumed => {
+                                this.fields.set_proto_editor(this.app.proto_editor);
+
+                                cx.notify();
+
+                                return;
+                            }
+
+                            canvas::proto_canvas::Press::CloseEditor => {
+                                this.fields.set_proto_editor(None);
+                            }
+
+                            canvas::proto_canvas::Press::Ignored => {}
+                        }
+                    }
 
                     if !this.space && !this.zoom_key && this.guide_input(pos, true, false, e.modifiers.alt) {
                         cx.notify();
@@ -7066,6 +7116,21 @@ impl drag_manager::WindowDragTarget for CanvasView {
 
         if let Some(start) = self.zoom_drag.take() {
             self.finish_zoom(start, pos, e.modifiers.alt);
+
+            self.drag_just_ended = true;
+
+            cx.notify();
+
+            return;
+        }
+
+        // 原型：ghost / 连接拖出在窗口级抬起时收尾（指针移出画布也一样）。
+        if self.app.proto.ghost.is_some() || self.app.proto.drag.is_some() {
+            canvas::proto_canvas::end_ghost(&mut self.app);
+
+            if let Some(slot) = canvas::proto_canvas::drag_end(&mut self.app) {
+                self.fields.set_proto_editor(Some(slot));
+            }
 
             self.drag_just_ended = true;
 

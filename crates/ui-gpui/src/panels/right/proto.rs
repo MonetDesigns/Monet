@@ -274,8 +274,8 @@ fn interactions_section(f: &RightFields, p: &ProtoData, cx: &mut App, n: &mut us
     }
     for (i, it) in list.iter().enumerate() {
         let remove = icon_cmd(Icon::Minus, "proto.interaction.remove", json!({ "index": i }), f, false);
-        sec = sec.child(interaction_line(f, it, i, remove));
-        if *f.proto_open.borrow() == Some(i) {
+        sec = sec.child(interaction_line(f, it, i, p.node, remove));
+        if (*f.proto_open.borrow()).is_some_and(|(node, k)| Some(node) == p.node && k == i) {
             for row in editor_rows(f, it, i, cx, n) {
                 sec = sec.child(row);
             }
@@ -449,9 +449,9 @@ fn ms_of(trigger: &Value) -> u64 {
 }
 
 /// 一条交互行：连接字形 + 触发器（半粗）/ 动作摘要（次要）+ 删除；点行展开编辑器。
-fn interaction_line(f: &RightFields, it: &InteractionRow, i: usize, remove: IconButton) -> crate::widgets::FieldRow {
+fn interaction_line(f: &RightFields, it: &InteractionRow, i: usize, node: Option<figcraft_doc::NodeId>, remove: IconButton) -> crate::widgets::FieldRow {
     let t = tokens();
-    let open = *f.proto_open.borrow() == Some(i);
+    let open = (*f.proto_open.borrow()).is_some_and(|(n, k)| Some(n) == node && k == i);
     let glyph = IconButton::new(Icon::LinkOn).size(20.0);
     // 点文字区域展开 / 收起编辑器（egui 是点开出浮窗，GPUI 就地展开，功能等价）。
     let toggler = f.proto_open.clone();
@@ -471,7 +471,8 @@ fn interaction_line(f: &RightFields, it: &InteractionRow, i: usize, remove: Icon
         .on_mouse_down(gpui::MouseButton::Left, move |_e, _w, _cx| {
             {
                 let mut cur = toggler.borrow_mut();
-                *cur = if *cur == Some(i) { None } else { Some(i) };
+                let same = node.is_some() && cur.is_some_and(|(n, k)| Some(n) == node && k == i);
+                *cur = if same { None } else { node.map(|n| (n, i)) };
             }
             cmds.wake();
         })

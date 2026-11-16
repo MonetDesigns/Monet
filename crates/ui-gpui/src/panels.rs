@@ -574,8 +574,9 @@ pub(crate) struct RightFields {
     inspect_lang: std::rc::Rc<std::cell::RefCell<usize>>,
     inspect_fmt: std::rc::Rc<std::cell::RefCell<usize>>,
     inspect_rem: std::rc::Rc<std::cell::RefCell<bool>>,
-    /// Prototype 面板里展开编辑的那条交互（行下标）；`None` = 都没展开。
-    proto_open: std::rc::Rc<std::cell::RefCell<Option<usize>>>,
+    /// Prototype 面板里展开编辑的那条交互：`(节点, 行下标)`；`None` = 都没展开。
+    /// 带节点是因为画布上的原型连线/手柄也能打开编辑器，切选后同一下标不该串行。
+    proto_open: std::rc::Rc<std::cell::RefCell<Option<(figcraft_doc::NodeId, usize)>>>,
     /// WGSL 参数输入框池：retained tree 不能每帧新建，预建固定个数，按当前 shader 的参数数认领。
     wgsl_param_fields: Vec<Entity<TextField>>,
     /// 每个参数字段提交时的运行时上下文（当前绑定快照 + uniform 路径 + 控件范围）。
@@ -1290,6 +1291,19 @@ impl RightFields {
     /// 右栏当前标签（0 = Design / 1 = Prototype / 2 = Inspect）。画布的 Dev Mode 行为要读它。
     pub(crate) fn right_tab(&self) -> u8 {
         *self.right_tab.borrow()
+    }
+
+    /// 交互编辑器开在哪个槽（画布原型连线/手柄会写、并同步进 `CanvasApp::proto_editor`）。
+    pub(crate) fn proto_editor(&self) -> Option<(figcraft_doc::NodeId, usize)> {
+        *self.proto_open.borrow()
+    }
+
+    /// 画布上点曲线 / 拖出新连接后打开（或收起）交互编辑器。
+    pub(crate) fn set_proto_editor(&self, open: Option<(figcraft_doc::NodeId, usize)>) {
+        if *self.proto_open.borrow() != open {
+            *self.proto_open.borrow_mut() = open;
+            self.cmds.wake();
+        }
     }
 
     /// 引擎 `ui_requests` 切右栏标签（panel.design / panel.prototype / panel.devMode）。
