@@ -287,6 +287,12 @@ pub(crate) struct PopupReqs {
     open_trigger: Rc<std::cell::RefCell<Option<String>>>,
     /// 按钮请求关闭当前窗口；根视图每帧 `take_close` 消费一次。
     close_req: Rc<std::cell::Cell<bool>>,
+    /// 渲染帧号（`sync_open` 每帧 +1）。用于「同一帧内同一个按钮只触发一次」的去重。
+    frame: Rc<std::cell::Cell<u64>>,
+    /// 上一次 toggle 的 `(帧号, 触发标识)`：某些元素会同时收到 click 与 mouse-down 两个
+    /// 回调，重复触发会「先开一次、再用新锚点开一次」（用户 2026-11-16 的
+    /// 「第 1 次启动，第 2 次刷新位置」）。
+    last_toggle: Rc<std::cell::RefCell<(u64, Option<String>)>>,
 }
 
 impl PopupReqs {
@@ -306,6 +312,15 @@ impl PopupReqs {
     /// 两处都写会导致同一件事写两遍（用户 2026-11-16 指出）。
     pub(crate) fn toggle(&self, trigger: impl Into<String>, w: crate::popovers::WindowState) {
         let trigger = trigger.into();
+        // 同一帧里同一个按钮重复触发：忽略第二次（否则会重建一次窗口、位置被刷新）。
+        {
+            let frame = self.frame.get();
+            let mut last = self.last_toggle.borrow_mut();
+            if last.0 == frame && last.1.as_deref() == Some(trigger.as_str()) {
+                return;
+            }
+            *last = (frame, Some(trigger.clone()));
+        }
         if self.is_open(&trigger) {
             self.close_req.set(true);
             self.cmds.wake();
@@ -317,6 +332,7 @@ impl PopupReqs {
 
     /// 根视图每帧告诉这里「当前是否还开着 detached 窗口」；关掉时清空触发标识。
     pub(crate) fn sync_open(&self, window_open: bool) {
+        self.frame.set(self.frame.get().wrapping_add(1));
         if !window_open {
             *self.open_trigger.borrow_mut() = None;
         }
@@ -698,6 +714,9 @@ pub(crate) struct RightFields {
     popup_slot: Rc<std::cell::RefCell<Option<crate::popovers::WindowState>>>,
     /// 当前打开的窗口种类（根视图每帧写回）：触发按钮的选中态与「再点一次关闭」都读它。
     popup_open_trigger: Rc<std::cell::RefCell<Option<String>>>,
+    /// 渲染帧号 + 上一次 toggle，见 `PopupReqs::toggle` 的同帧去重。
+    popup_frame: Rc<std::cell::Cell<u64>>,
+    popup_last_toggle: Rc<std::cell::RefCell<(u64, Option<String>)>>,
     /// 触发按钮请求关闭当前窗口（根视图每帧消费）。
     popup_close_req: Rc<std::cell::Cell<bool>>,
     /// 全部编辑器实体（含所有 TextField 的内层 editor、颜色行 editor、列表行池）。
@@ -1273,6 +1292,8 @@ impl RightFields {
             root: None,
             popup_slot: Rc::new(std::cell::RefCell::new(None)),
             popup_open_trigger: Rc::new(std::cell::RefCell::new(None)),
+            popup_frame: Rc::new(std::cell::Cell::new(0)),
+            popup_last_toggle: Rc::new(std::cell::RefCell::new((0, None))),
             popup_close_req: Rc::new(std::cell::Cell::new(false)),
             last_fill: std::cell::RefCell::new(None),
             last_stroke: std::cell::RefCell::new(None),
@@ -1608,6 +1629,8 @@ impl RightFields {
             cmds: self.cmds.clone(),
             open_trigger: self.popup_open_trigger.clone(),
             close_req: self.popup_close_req.clone(),
+            frame: self.popup_frame.clone(),
+            last_toggle: self.popup_last_toggle.clone(),
         }
     }
 
@@ -2603,11 +2626,10 @@ pub(crate) fn auto_layout_section(
                     if std::env::var_os("FC_DEBUG_POPUP_BTN").is_some() {
                         eprintln!("[popup-btn] layout dots clicked");
                     }
-                    let anchor = window.mouse_position();
                     let top = crate::popovers::button_top(&dots_click, window);
-                    let mut w = crate::popovers::WindowState::layout(settings_queue.clone(), &settings_data, cx, anchor);
-                    w.anchor_to_button_top(top);
-                    popups.toggle("layout", w);
+                    right::sections::open_detached_with(popups.clone(), "layout", Some(top), cx, |anchor, cx| {
+                        crate::popovers::WindowState::layout(settings_queue.clone(), &settings_data, cx, anchor)
+                    });
                 }),
             dots_hit,
         );

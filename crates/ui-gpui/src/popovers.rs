@@ -3414,7 +3414,14 @@ impl WindowState {
                         };
                         let picker = PaintPicker { paint: all[idx].clone(), on_write: Rc::new(write) };
                         let on_pick: Rc<dyn Fn(crate::canvas::geom::Color32, &mut Window, &mut App)> = Rc::new(|_, _, _| {});
-                        popups.request(Self::color(cx, e.position, current, Some(picker), on_pick, cmds.clone()));
+                        // 走右栏统一的打开入口：触发标识 + 再点关闭 + 精确顶部一套逻辑。
+                        crate::panels::right::sections::open_detached_with(
+                            popups.clone(),
+                            format!("style-paint-{sid}-{idx}"),
+                            None,
+                            cx,
+                            |anchor, cx| Self::color(cx, anchor, current, Some(picker), on_pick, cmds.clone()),
+                        );
                     });
                 }
                 Some(row.into_any_element())
