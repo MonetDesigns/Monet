@@ -453,6 +453,26 @@ enum InlineRenameTarget {
     Page,
 }
 
+/// 一个窗口**自己的** UI 状态（对应 EGUI `windows.rs::Pane`）。
+///
+/// 所有 OS 窗口共用同一个 `CanvasView` 和一份 Session（文档内容共享），但「首页/弹层/页签/
+/// 面板宽度/指针」这些是窗口私有的。进入某个窗口的渲染或事件前 `enter_pane` 换入它的状态，
+/// 下次进入别的窗口时先把它换出——否则两个窗口共用一套状态（用户 2026-11-16：
+/// 「我切到首页，两个窗口同时切到首页」）。
+#[derive(Default)]
+struct PaneState {
+    left_w: f32,
+    right_w: f32,
+    popup: Option<Popup>,
+    motion: bool,
+    left_tab: u8,
+    left_collapsed: bool,
+    dialog: Option<dialogs::DialogState>,
+    home: bool,
+    pointer: Option<Pos2>,
+    mods: Modifiers,
+}
+
 /// 画布视图：引擎会话 + 画布状态 + 交互状态。
 
 pub struct CanvasView {
@@ -471,6 +491,9 @@ pub struct CanvasView {
     /// A21：F6 / Shift+F6 的区域键盘导航状态。
     /// A16：本视图之外的 OS 窗口（共享同一会话）。
     windows: std::rc::Rc<std::cell::RefCell<windows::Windows>>,
+    /// 每个窗口的私有 UI 状态（`PaneState`）；`pane_wid` 是当前换入的那个窗口。
+    panes: std::collections::HashMap<u64, PaneState>,
+    pane_wid: u64,
 
     /// 按下后正在拖拽（Move 事件只在拖拽时送给引擎）。
     dragging: bool,
@@ -704,6 +727,50 @@ impl CanvasView {
     /// root entity is mounted in several OS windows, so `session.active` set by the last window to
     /// render is not necessarily the one an input event belongs to. Call this at the start of any
     /// handler that reads `app.session` (and from render).
+    /// 换入窗口 `wid` 的私有 UI 状态：先把当前窗口的状态存回 `panes`，再取目标窗口的。
+    /// 目标窗口第一次出现时只清掉「窗口私有」的东西（首页/弹层/指针），面板宽度沿用当前值。
+    fn enter_pane(&mut self, wid: u64) {
+        if self.pane_wid == wid {
+            return;
+        }
+        let old = self.pane_wid;
+        let snap = PaneState {
+            left_w: self.left_w,
+            right_w: self.right_w,
+            popup: self.popup.take(),
+            motion: self.motion,
+            left_tab: self.left_tab,
+            left_collapsed: self.left_collapsed,
+            dialog: self.dialog.take(),
+            home: std::mem::take(&mut self.tabs.home),
+            pointer: self.pointer,
+            mods: self.mods,
+        };
+        self.panes.insert(old, snap);
+        match self.panes.remove(&wid) {
+            Some(n) => {
+                self.left_w = n.left_w;
+                self.right_w = n.right_w;
+                self.popup = n.popup;
+                self.motion = n.motion;
+                self.left_tab = n.left_tab;
+                self.left_collapsed = n.left_collapsed;
+                self.dialog = n.dialog;
+                self.tabs.home = n.home;
+                self.pointer = n.pointer;
+                self.mods = n.mods;
+            }
+            None => {
+                // 新窗口：从干净状态开始，别继承别的窗口的首页/弹层。
+                self.popup = None;
+                self.dialog = None;
+                self.tabs.home = false;
+                self.pointer = None;
+            }
+        }
+        self.pane_wid = wid;
+    }
+
     /// `authoritative`：**事件**处理时为 true —— 事件来自哪个窗口，那个窗口的文档就必须成为
     /// 全局 `session.active`，否则第二个窗口里点「加页」会加到第一个窗口的文档上
     /// （用户 2026-11-16 实测）。渲染时为 false：只有聚焦窗口写，避免两个窗口每帧互相覆盖。
@@ -748,6 +815,9 @@ impl CanvasView {
                 entry.active = Some(uid);
             }
         }
+        drop(wins);
+        // 进入这个窗口的上下文：换入它自己的 UI 状态（首页 / 弹层 / 面板宽度 / 指针 …）。
+        self.enter_pane(wid);
     }
 
     pub fn new(cx: &mut Context<Self>) -> Self {
@@ -840,6 +910,8 @@ impl CanvasView {
             a11y: a11y::KeyboardNav::default(),
 
             windows: std::rc::Rc::new(std::cell::RefCell::new(windows::Windows::default())),
+            panes: std::collections::HashMap::new(),
+            pane_wid: 0,
 
             dragging: false,
 
