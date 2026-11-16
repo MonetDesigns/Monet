@@ -767,6 +767,9 @@ impl CanvasView {
                 p.tabs.home = false;
                 p.extra = None;
                 p.pointer = None;
+                // `clone()` 只复制了 `Rc` 指针：右栏的折叠 / 展开 / 过滤面板会和别的窗口
+                // 共享同一块内存，一处折叠处处折叠（用户 2026-11-16 实测）。
+                p.fields = p.fields.detached();
                 p
             }
         };
@@ -797,49 +800,41 @@ impl CanvasView {
     /// 全局 `session.active`，否则第二个窗口里点「加页」会加到第一个窗口的文档上
     /// （用户 2026-11-16 实测）。渲染时为 false：只有聚焦窗口写，避免两个窗口每帧互相覆盖。
     pub(crate) fn bind_window_document(&mut self, window: &mut Window, authoritative: bool) {
+        let doc_uids: Vec<u64> = self.app.session.docs.iter().map(|d| d.uid).collect();
         let mut wins = self.windows.borrow_mut();
         let wid = window_id_of(&wins, window);
         windows::set_current(wid);
         wins.current = wid;
         let want = if wid == 0 { wins.main_active } else { wins.active_of(wid) };
-        // ⛔ 只有**当前聚焦**的窗口能改全局 `session.active`：两个窗口共用一份 Session，
-        // 每帧各自写一遍会让画布在两份文档之间来回切 → 「整个画布不停闪」（用户 2026-11-16）。
-        // 非聚焦窗口只记录自己的 active，画面跟随聚焦窗口（稳定优先）。
-        // 事件来自哪个窗口，它就成为「聚焦窗口」——否则 `focused` 永远停在上次新建的那个，
-        // 之后所有窗口的渲染都拿不到 active 写权限。
+        // 事件来自哪个窗口，它就成为「聚焦窗口」——否则 `focused` 永远停在上次新建的那个。
         if authoritative {
             wins.focused = wid;
         }
-        // ⛔ 渲染时**不能**用 `entry.active` 覆盖 `session.active`：用户刚点标签切换、
-        // `doc.switch` 已经把 active 改到新文档，下一帧再被覆盖回去 → 「标签切不动」。
-        // 只有当前 active 不属于本窗口（窗口刚出现 / 文档被拖走）时才需要修正。
+        // ⛔ 每个窗口画的是**它自己**的活动文档：`session.active` 是全局共享的，另一个窗口
+        // 渲染时一定会把它改成那边自己的文档。渲染时不再「只在 active 不属于本窗口时才修正」
+        // ——那样本窗口点标签切到 B 后，别的窗口一渲染把 active 改成 C，本窗口下一次重绘
+        // （`cx.notify()` 会让所有窗口重绘）又按「C 不属于我」回落成自己的旧文档，
+        // 表现就是「拉开多个窗口后点标签切不过去」（用户 2026-11-16）。
+        // 正确做法：每帧都按**本窗口的记录**把 active 写回来，各窗口各自画各自的文档。
         let cur = self.app.session.ds().ok().map(|d| d.uid);
-        let cur_owned = cur.is_some_and(|uid| wins.of(uid) == wid);
-        let drives = authoritative || !cur_owned;
-        if drives {
-            // 本窗口该显示的文档：`want`（确属本窗口）→ 当前 active 若属于本窗口 →
-            // 本窗口自己的第一个文档。最后这条回落不能少：文档被拖走 / 新窗口刚出现的
-            // 情况下 `want` 可能为空或不属本窗口，没有它就停在别人的文档上，而
-            // `wins.of(uid) != wid` 又禁止写 active → 窗口空白、标签切不过去
-            // （用户 2026-11-16）。
-            let show = want
-                .filter(|uid| wins.of(*uid) == wid)
-                .or_else(|| cur.filter(|uid| wins.of(*uid) == wid))
-                .or_else(|| {
-                    if wid == 0 {
-                        // 主窗口的文档 = 不属于任何额外窗口的那些（按 session 的打开顺序）。
-                        self.app.session.docs.iter().map(|d| d.uid).find(|uid| wins.of(*uid) == 0)
-                    } else {
-                        wins.entry(wid).and_then(|w| w.docs.first().copied())
-                    }
-                });
-            // 只能绑定**本窗口拥有**的文档：否则主窗口会把「已经被拖到别的窗口」的文档设成
-            // 全局 active，画布显示一份它没有标签的文档（用户 2026-11-16：切不过去）。
-            if let Some(uid) = show
-                && let Some(i) = self.app.session.docs.iter().position(|d| d.uid == uid)
-            {
-                self.app.session.active = i;
-            }
+        let owned = |uid: u64| wins.of(uid) == wid && doc_uids.contains(&uid);
+        let show = want
+            .filter(|uid| owned(*uid))
+            .or_else(|| cur.filter(|uid| owned(*uid)))
+            .or_else(|| {
+                if wid == 0 {
+                    // 主窗口的文档 = 不属于任何额外窗口的那些（按 session 的打开顺序）。
+                    doc_uids.iter().copied().find(|uid| wins.of(*uid) == 0)
+                } else {
+                    wins.entry(wid).and_then(|w| w.docs.first().copied()).filter(|uid| doc_uids.contains(uid))
+                }
+            });
+        // 只能绑定**本窗口拥有**的文档：否则主窗口会把「已经被拖到别的窗口」的文档设成
+        // 全局 active，画布显示一份它没有标签的文档（用户 2026-11-16：切不过去）。
+        if let Some(uid) = show
+            && let Some(i) = self.app.session.docs.iter().position(|d| d.uid == uid)
+        {
+            self.app.session.active = i;
         }
         if let Some(uid) = self.app.session.ds().ok().map(|d| d.uid) {
             let owner = wins.of(uid);
@@ -857,6 +852,36 @@ impl CanvasView {
         drop(wins);
         // 进入这个窗口的上下文：换入它自己的 UI 状态（首页 / 弹层 / 面板宽度 / 指针 …）。
         self.enter_pane(wid);
+    }
+
+    /// 标签点击：按 **uid** 当场切文档。
+    ///
+    /// 不走命令队列 —— 队列里带的 `index` 是渲染那一刻的下标，多窗口增删文档后会漂移，
+    /// 守卫据此判定「这是别的窗口的文档」并丢弃，表现就是「点标签切不过去」
+    /// （用户 2026-11-16）。uid 不漂移，且这里仍校验归属，不会切到别的窗口的文档。
+    pub(crate) fn select_doc(&mut self, uid: u64, cx: &mut Context<Self>) {
+        let Some(i) = self.app.session.docs.iter().position(|d| d.uid == uid) else { return };
+        let res = self.app.session.execute("doc.switch", &serde_json::json!({ "index": i }));
+        // 引擎命令可能因为正在编辑文字等原因拒绝执行；此时直接把活动文档切过去，
+        // 保证点击一定生效（`canvas::show` 只看 `session.active` / `ds()`）。
+        if res.is_err() {
+            self.app.session.active = i;
+        }
+        // ⛔ 必须把新文档记到**本窗口**自己的活动项上：`session.active` 是全局共享的，
+        // 别的窗口下一次渲染就会把它改成那边自己的文档；而每次渲染都会按窗口记录把
+        // active 写回来（见 `bind_window_document`）。不记这一步，点击那一刻切过去了，
+        // 下一帧又被本窗口的旧记录覆盖回原文档 —— 「点标签切不过去」（用户 2026-11-16）。
+        let wid = crate::windows::current();
+        {
+            let mut wins = self.windows.borrow_mut();
+            if wid == 0 {
+                wins.main_active = Some(uid);
+            } else if let Some(entry) = wins.entry_mut(wid) {
+                entry.active = Some(uid);
+            }
+        }
+        self.close_home();
+        cx.notify();
     }
 
     pub fn new(cx: &mut Context<Self>) -> Self {
@@ -2248,6 +2273,23 @@ impl CanvasView {
                 match self.app.session.execute(c.id, &params) {
                     Ok(result) => {
                         self.capture_import_report(c.id, &params, &result, cx);
+
+                        // 新建 / 打开出来的文档属于**发起命令的那个窗口**：否则点第二个窗口的
+                        // 「+」会在第一个窗口里多一个标签页（用户 2026-11-16 实测）。
+                        if matches!(c.id, "file.new" | "file.open")
+                            && let Ok(ds) = self.app.session.ds()
+                        {
+                            let uid = ds.uid;
+                            let wid = crate::windows::current();
+                            if wid != 0
+                                && let Some(e) = self.windows.borrow_mut().entry_mut(wid)
+                            {
+                                if !e.docs.contains(&uid) {
+                                    e.docs.push(uid);
+                                }
+                                e.active = Some(uid);
+                            }
+                        }
 
                         // A23：导出命令没给路径时引擎只回 base64，UI 负责弹保存对话框落盘。
                         self.deliver_download(c.id, &result, cx);

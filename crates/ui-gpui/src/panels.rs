@@ -1378,6 +1378,49 @@ impl RightFields {
         }
     }
 
+    /// 新 OS 窗口拿到的一份**独立**右栏 UI 状态。
+    ///
+    /// `RightFields` 里大量字段是 `Rc<RefCell<_>>`：直接 `clone()` 只是共享同一块内存，
+    /// 于是右栏的折叠 / 展开 / 局部列表会在所有窗口同步（用户 2026-11-16 实测：
+    /// 一个窗口折叠右栏 section，其它窗口一起折叠）。这里把所有纯 UI 的 `Rc` 换成新的，
+    /// 命令队列 / 弹层槽位 / 输入框实体仍保持共享（它们本来就按窗口或按文档分槽）。
+    pub(crate) fn detached(&self) -> Self {
+        let mut f = self.clone();
+        f.preset_open = Default::default();
+        f.selection_colors_open = Default::default();
+        f.selection_colors_hover = Default::default();
+        f.right_tab = Default::default();
+        f.local_style_renaming = Default::default();
+        f.local_style_rename_style = Default::default();
+        f.local_style_rename_seen = Default::default();
+        f.local_style_folded = Default::default();
+        f.local_styles_ui = Default::default();
+        f.comment_ui = Default::default();
+        f.inspect_lang = Default::default();
+        f.inspect_fmt = Default::default();
+        f.inspect_rem = Default::default();
+        f.proto_open = Default::default();
+        f.wgsl_param_ctx = Default::default();
+        f.dev_filter = Default::default();
+        f.dev_cat_filter = Default::default();
+        f.dev_res_add = Default::default();
+        f.dev_res_edit = Default::default();
+        f.asset_fmt = Default::default();
+        f.scale_ctx = Default::default();
+        f.pad = Default::default();
+        f.pad_individual = Default::default();
+        f.corners_individual = Default::default();
+        f.row_ctx = Default::default();
+        f.limit_open = Default::default();
+        f.bind_hover = Default::default();
+        f.blend_open = Default::default();
+        f.popup_open_trigger = Default::default();
+        f.popup_frame = Default::default();
+        f.popup_last_toggle = Default::default();
+        f.popup_close_req = Default::default();
+        f
+    }
+
     /// Take the commands raised since the last frame.
     pub(crate) fn take_cmds(&self) -> Vec<Cmd> {
         self.cmds.drain()

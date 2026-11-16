@@ -47,6 +47,13 @@ pub fn title_bar_options() -> TitlebarOptions {
     }
 }
 
+/// 标题栏底色：**灰**，与画布的近白色/近黑色区分开（用户 2026-11-16）。
+/// 深色 #2C2C2C、浅色 #F5F5F5；亮主题下 `panel` 是纯白，标题栏会和内容糊在一起。
+fn bar_gray() -> crate::canvas::geom::Color32 {
+    let t = tokens();
+    if t.dark { t.panel } else { t.canvas }
+}
+
 /// 标题栏里留给 TabBar 内容的宽度：窗口宽 − 左留白 − 三个窗口控制按钮。
 pub fn content_width(viewport_w: f32) -> f32 {
     (viewport_w - LEFT_PAD - CONTROLS_W).max(0.0)
@@ -97,7 +104,7 @@ pub fn title_bar(content: impl IntoElement, maximized: bool) -> Div {
         .flex()
         .flex_row()
         .items_center()
-        .bg(rgba(tokens().panel))
+        .bg(rgba(bar_gray()))
         // Do NOT put `Drag` on the whole bar: that makes the OS treat the entire title bar as
         // HTCAPTION and swallows clicks on the Home button and the tabs. Only the left padding and
         // a short strip before the window controls are drag regions.

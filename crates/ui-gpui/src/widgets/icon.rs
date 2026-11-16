@@ -619,7 +619,15 @@ struct SvgCanvas {
     shapes: Vec<String>,
 }
 
+/// 用户 2026-11-16 提供的 24×24 房子轮廓路径（原样使用，坐标 24 网格）。
+const HOME_PATH: &str = "M7 17L7.00001 11.4142C7.00001 11.149 7.10536 10.8946 7.2929 10.7071L11.2929 6.70711C11.6834 6.31658 12.3166 6.31658 12.7071 6.70711L16.7071 10.7071C16.8947 10.8946 17 11.149 17 11.4142V17C17 17.5523 16.5523 18 16 18H14C13.4477 18 13 17.5523 13 17V14H11V17C11 17.5523 10.5523 18 10 18H8C7.44772 18 7 17.5523 7 17Z";
+
 impl SvgCanvas {
+    /// 直接塞入一段现成的 SVG 片段（外部给定路径 / mask 时用，避免再拆成图元）。
+    fn raw(&mut self, s: &str) {
+        self.shapes.push(s.to_string());
+    }
+
     fn polygon(&mut self, pts: &[(f32, f32)]) {
         if pts.len() < 3 {
             return;
@@ -1157,9 +1165,16 @@ fn svg_canvas(icon: Icon) -> SvgCanvas {
         }
         // ── 标签条（P0-1）：与上面同一套 16 单位网格与原语 ────────────────────────────────
         Icon::Home => {
-            poly_fill(&mut p, ox, oy, s, &[(1.5, 8.0), (8.0, 2.0), (14.5, 8.0)]);
-            outline_rect(&mut p, ox, oy, s, 3.5, 8.0, 12.5, 14.0, 1.6);
-            rect(&mut p, ox, oy, s, 7.0, 10.5, 9.0, 14.0);
+            // 用户 2026-11-16 给的 24×24 房子 SVG，原样嵌入（不再手画）：
+            // `stroke-width=2` + 同形状 mask 是 Figma 图标的标准写法 —— mask 把描边落在
+            // 轮廓外侧的一半裁掉，等效 1px 内描边。坐标按 24 → 16 网格缩放 2/3。
+            // `stroke-width` 按放大倍数退回去：标题栏用 32pt 渲染（此前 20pt），
+            // 线宽保持与 20pt 时一致（用户 2026-11-16：等比放大，线宽不变）。
+            // 有效线宽 = sw / 2（mask 裁掉外半） × size / 24 ⇒ 20pt: 0.833，32pt: 0.833。
+            p.raw(&format!(
+                "<defs><mask id=\"home-mask\" fill=\"white\"><path d=\"{HOME_PATH}\"/></mask></defs>\
+                 <g transform=\"scale(0.666667)\"><path d=\"{HOME_PATH}\" stroke-width=\"1.25\" stroke=\"#fff\" fill=\"none\" mask=\"url(#home-mask)\"/></g>"
+            ));
         }
         Icon::Sun => {
             disc(&mut p, ox, oy, s, 8.0, 8.0, 3.4);
