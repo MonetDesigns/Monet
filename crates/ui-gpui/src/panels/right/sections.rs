@@ -15,7 +15,7 @@ use crate::canvas::geom::Color32;
 use crate::motion::{Act, Queue};
 use crate::panels::{Cmd, ROW_EDITORS, RightFields, RowEditCtx, visibility};
 use crate::widgets::{
-    ColorField, ColorText, Dropdown, HEADER_H, Icon, IconButton, MenuRow, PAD, PanelSection, SECTION_BOTTOM, SectionHeader,
+    Checkbox, ColorField, ColorText, Dropdown, HEADER_H, Icon, IconButton, MenuRow, PAD, PanelSection, SECTION_BOTTOM, SectionHeader,
     SectionHeaderVariant, Segmented, TITLE_PT, block_row, field_row, field_row_full, field_row_full_trailing, pt, rgba, sublabel_row, sublabel_row2,
     swatch, tokens, variable_button,
 };
@@ -1693,6 +1693,52 @@ pub(crate) fn export(f: &RightFields, d: &PanelData, col: f32, n: &mut usize, cx
 // Variable modes / Section / Header / Page
 // ───────────────────────────────────────────────────────────────────────────────────────────────
 
+/// Frame-like 的「Clip content」勾选行（Figma 的 Frame 设置区）。
+///
+/// 多选时值不一致按**未勾选**显示（`Option::unwrap_or(false)`，与 egui `common` 的语义一致）；
+/// 切换推 `node.set {"props":{"clipsContent":!current}}`，引擎按当前选区执行。
+pub(crate) fn clip_content(f: &RightFields, d: &PanelData) -> PanelSection {
+    let cmds = f.cmds.clone();
+    let cb = Checkbox::new("clip-content")
+        .label(tr("Clip content"))
+        .checked(d.clip.unwrap_or(false))
+        .on_change(move |next: &bool, _w, _cx| {
+            cmds.push(Cmd { id: "node.set", params: Some(json!({ "props": { "clipsContent": *next } })) });
+        });
+    PanelSection::new(tr("Frame")).child(field_row_full(cb))
+}
+
+/// 「Corner smoothing」入口的显隐规则：类型支持平滑圆角、且至少有一个圆角不为 0。
+pub(crate) fn shows_corner_smoothing(supported: bool, radius: f64) -> bool {
+    supported && radius > 0.0
+}
+
+/// 圆角行尾的「Corner smoothing」小按钮：打开 `WindowState::corner_smoothing` 小窗。
+///
+/// 冻结的 `Icon` 集里没有平滑圆角字形（Type settings 的同类入口也因缺图标改用 `Icon::Menu`），
+/// 这里按约定用文本字形 `◇` 自绘一个 24 pt 小按钮，不新增图标、不另造控件。
+fn corner_smoothing_button(f: &RightFields, d: &PanelData) -> Div {
+    let t = tokens();
+    let popups = f.popups();
+    let queue = f.queue();
+    let value = d.corner_smoothing.unwrap_or(0.0) as f32;
+    div()
+        .size(pt(24.0))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(pt(4.0))
+        .text_size(pt(12.0))
+        .text_color(rgba(t.text_secondary))
+        .cursor_pointer()
+        .hover(|s| s.bg(rgba(t.hover)))
+        .on_mouse_down(MouseButton::Left, move |_e: &MouseDownEvent, window, _cx: &mut App| {
+            popups.request(crate::popovers::WindowState::corner_smoothing(queue.clone(), value, window.mouse_position()));
+        })
+        .child("◇")
+}
+
 /// Appearance 的 header 图标（egui `paints.rs::appearance`：Eye/Variable/Blend）。
 pub(crate) fn appearance(
     f: &RightFields,
@@ -1720,6 +1766,12 @@ pub(crate) fn appearance(
         *blend_open_for_click.borrow_mut() = open;
         blend_cmds.wake();
     });
+    // Figma 在 Corner radius 字段右侧给一个 24 pt 小按钮，点开「Corner smoothing」小窗；
+    // 只在「可平滑圆角的类型 + 圆角不为 0」时出现（圆角为 0 就谈不上平滑）。
+    let mut trail: Vec<Div> = Vec::new();
+    if shows_corner_smoothing(d.corner_smoothing_supported, d.corner_radius) {
+        trail.push(corner_smoothing_button(f, d));
+    }
     let mut sec = PanelSection::new(tr("Appearance"))
         .header_trail(icon_row(vec![eye, bind, blend]))
         .child(sublabel_row2(tr("Opacity"), tr("Corner radius")))
@@ -1730,7 +1782,7 @@ pub(crate) fn appearance(
                 bindable(f, "opacity", d.bound.get("opacity").map(String::as_str), &d.number_variables, opacity.clone().into_any_element()),
                 bindable(f, "cornerRadius", d.bound.get("cornerRadius").map(String::as_str), &d.number_variables, corner.clone().into_any_element()),
             ],
-            Vec::<IconButton>::new(),
+            trail,
         ));
     // 仅当 header 的 blend 开关打开时才显示 blend-mode 下拉行（egui `blend_open`）。
     if *f.blend_open.borrow() {
@@ -1743,6 +1795,19 @@ pub(crate) fn appearance(
         sec = sec.child(field_row_full(pick_dropdown(f, shown, row_w, rows)));
     }
     sec
+}
+
+#[cfg(test)]
+mod corner_smoothing_tests {
+    use super::shows_corner_smoothing;
+
+    /// Figma 只在「可平滑圆角 + 圆角不为 0」的节点上给入口；多选里有一个 0 圆角还算最大值为正。
+    #[test]
+    fn entry_needs_a_smoothable_kind_and_a_nonzero_radius() {
+        assert!(!shows_corner_smoothing(false, 8.0));
+        assert!(!shows_corner_smoothing(true, 0.0));
+        assert!(shows_corner_smoothing(true, 8.0));
+    }
 }
 
 /// Typography 的 header 图标（egui `typography.rs`：Variable/Styles）。

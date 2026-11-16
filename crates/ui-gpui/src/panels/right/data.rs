@@ -1290,6 +1290,14 @@ pub struct PanelData {
     pub variables: crate::panels::right::variables::VariablesData,
     /// Appearance 的可见性（`object.toggleVisible`）。
     pub visible: Option<bool>,
+    /// Frame-like 的「Clip content」勾选（Figma 的 Frame 设置区）；`None` = 多选不一致。
+    pub clip: Option<bool>,
+    /// Appearance 圆角行旁「Corner smoothing」小窗的值（0..1）；`None` = 多选不一致。
+    pub corner_smoothing: Option<f64>,
+    /// 选中节点是否都支持平滑圆角（`NodeKind::has_corner_smoothing`）。
+    pub corner_smoothing_supported: bool,
+    /// 选中节点里最大的圆角（`0` = 都没有圆角 → 平滑圆角入口不显示）。
+    pub corner_radius: f64,
     /// 画布辅助元素的显示 / 隐藏开关（右栏顶部 Zoom / Show 菜单）。
     pub view: ViewData,
     /// Prototype 标签的全部数据（flows / settings / interactions / scroll）。
@@ -1716,6 +1724,14 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
     d.bool_variables = doc.variables.variables.iter().filter(|v| v.kind == figcraft_doc::VariableType::Boolean).map(|v| v.name.clone()).collect();
     d.text_variables = doc.variables.variables.iter().filter(|v| v.kind == figcraft_doc::VariableType::String).map(|v| v.name.clone()).collect();
     d.visible = common(doc, ids, |n| n.visible);
+    // ── Frame 设置：裁剪内容 + Appearance 的平滑圆角（`node.set` 的两条属性）──
+    d.clip = common(doc, ids, |n| n.clip);
+    d.corner_smoothing = common(doc, ids, |n| n.corners.smoothing);
+    d.corner_smoothing_supported = !ids.is_empty();
+    for n in ids.iter().filter_map(|i| doc.node(*i)) {
+        d.corner_smoothing_supported &= n.kind.has_corner_smoothing();
+        d.corner_radius = d.corner_radius.max(n.corners.radii.iter().copied().fold(0.0, f64::max));
+    }
 
     // ── Auto layout 的对齐快照（picker 用，与 `CanvasView::selected_layout` 同构）──
     {

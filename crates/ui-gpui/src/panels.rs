@@ -2235,6 +2235,11 @@ pub(crate) fn right_panel(
         body = body.child(star_section(f)).child(sep());
     }
 
+    // ── Frame 设置：Clip content（Figma 的 Frame 区；仅 frame-like 类型显示）────────────
+    if sel.all_frame {
+        body = body.child(right::sections::clip_content(f, data)).child(sep());
+    }
+
     body = body
         // ── Appearance（egui `paints.rs::appearance`：Eye / Variable / Blend 三个 header 图标）──
         .child(right::sections::appearance(f, data, row_w, &f.opacity, &f.corner))

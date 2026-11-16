@@ -77,6 +77,8 @@ fn dialog_commands() -> Vec<&'static str> {
             match f {
                 dialogs::Field::Choice { commands: Some(c), .. } => out.extend(c.iter().copied()),
                 dialogs::Field::Action { id, .. } => out.push(*id),
+                // 缺失字体行里的下载按钮：有来源的族才画，命令是引擎的 `font.download`。
+                dialogs::Field::FontRows { families } if families.iter().any(|f| f.source.is_some()) => out.push("font.download"),
                 _ => {}
             }
         }
@@ -119,7 +121,8 @@ fn capabilities() -> BTreeSet<String> {
                 }
                 dialogs::Field::Color { .. }
                 | dialogs::Field::InsertCodes { .. }
-                | dialogs::Field::RenamePreview { .. } => {}
+                | dialogs::Field::RenamePreview { .. }
+                | dialogs::Field::FontRows { .. } => {}
                 dialogs::Field::Note { .. } => {}
             }
             if let dialogs::Field::Choice { commands: Some(c), .. } = f {

@@ -6494,24 +6494,19 @@ impl Render for CanvasView {
                     ));
                 }
 
-                Popup::Flyout { key, items } => {
-                    // Geometry is recomputed from the current canvas size every render, so the card
-
-                    // tracks the centred pill as the window resizes (`用户 2026-11-06`). It is **as
-
-                    // wide as its content** — no fixed width; only its height comes from the rows.
+                Popup::Flyout { items, .. } => {
+                    // 工具组的向上弹出菜单：宽度**等于工具栏宽度**、左边与工具栏左缘对齐
+                    // （用户 2026-11-16）。原来的做法是贴着 caret 按内容宽铺开，行宽和工具栏
+                    // 对不齐；现在整张卡与 pill 同宽，行内 `w_full` 直接铺满。
+                    // 几何每帧按当前画布尺寸重算，窗口缩放 / 面板变化时跟随居中的 pill。
 
                     let pill_left = canvas_left + (canvas_w - bar_w) / 2.0;
-
-                    let caret = toolbar::caret_left(toolbar::groups(board), *key, board, self.draw_mode).unwrap_or(0.0);
-
-                    let left = pill_left + caret;
 
                     let bottom = pill_top + toolbar::CELL_TOP - toolbar::FLYOUT_GAP;
 
                     let h = menu_card::height(items, toolbar::FLYOUT_ROW_H);
 
-                    let x = left.max(m);
+                    let x = pill_left.max(m);
 
                     let y = (bottom - h).max(m);
 
@@ -6528,7 +6523,7 @@ impl Render for CanvasView {
                     els.push(menu_card::card(
                         x,
                         y,
-                        menu_card::Width::Fit,
+                        menu_card::Width::Min(bar_w),
                         toolbar::FLYOUT_ROW_H,
                         items,
                         None,

@@ -180,6 +180,19 @@ pub(crate) enum Field {
     RenamePreview {
         names: Vec<String>,
     },
+    /// 缺失字体清单（`text.missingFonts` 的 `families`）：每行族名 + 使用处，装在字体库里的族
+    /// 还带一个 `font.download` 按钮。数据来自引擎的 UI 请求，不在前端重新扫描字体。
+    FontRows {
+        families: Vec<FontRow>,
+    },
+}
+
+/// 一条缺失字体：族名、用到它的文本层数（0 = 只用文本样式/变量里），以及字体库来源。
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct FontRow {
+    pub family: String,
+    pub layers: u64,
+    pub source: Option<String>,
 }
 
 impl Field {
@@ -805,11 +818,35 @@ pub(crate) fn spec(kind: Kind, data: &Value) -> Spec {
                 .button(Button::submit(tr("Keep values"), "file.colorProfile", json!({ "convert": false })))
                 .with_cancel()
         }
-        Kind::MissingFonts => Spec::new(tr("Missing fonts"))
-            .width(400.0)
-            .message(tr("This file uses fonts that are not installed. Font substitution has no engine command yet, so this is a notice rather than a fake control."))
-            .field(Field::Note { text: str_field("font", data, "Unknown font") })
-            .button(Button::close(tr("Close"))),
+        Kind::MissingFonts => {
+            // 1:1 with `ui-egui/src/dialogs/missing_fonts.rs::body`: 说明文字 + 逐族清单
+            // （族名、用它的层数、可下载来源）+ Close。清单由 `text.missingFonts` 随 UI 请求带来。
+            let families: Vec<FontRow> = data
+                .get("families")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| {
+                            Some(FontRow {
+                                family: v.get("family")?.as_str()?.to_string(),
+                                layers: v.get("layers").and_then(Value::as_u64).unwrap_or(0),
+                                source: v.get("source").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string),
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let spec = Spec::new(tr("Missing fonts")).width(400.0);
+            let spec = if families.is_empty() {
+                spec.message(tr("All the fonts this file uses are installed."))
+            } else {
+                spec.message(tr(
+                    "This file uses fonts that aren't installed on this computer. Their text is drawn in a fallback font until you install them.",
+                ))
+                .field(Field::FontRows { families })
+            };
+            spec.button(Button::close(tr("Close")))
+        }
         Kind::ImportReport => Spec::new(tr("Import report"))
             .width(440.0)
             .message(str_field("message", data, "The file was imported. Review the warnings below."))
@@ -1010,7 +1047,9 @@ impl DialogState {
                 Field::Choice { active, .. } => (None, Rc::new(RefCell::new(*active))),
                 Field::Toggle { value, .. } => (None, Rc::new(RefCell::new(if *value { 1 } else { 0 }))),
                 Field::Note { .. } | Field::Preview { .. } | Field::Section { .. } | Field::Action { .. } | Field::Color { .. }
-                | Field::InsertCodes { .. } | Field::RenamePreview { .. } => (None, Rc::new(RefCell::new(0usize))),
+                | Field::InsertCodes { .. } | Field::RenamePreview { .. } | Field::FontRows { .. } => {
+                    (None, Rc::new(RefCell::new(0usize)))
+                }
             };
             rendered.push(Rendered { field: f.clone(), input, active });
         }
@@ -1079,6 +1118,8 @@ impl DialogState {
                 Field::Color { .. } => 32.0,
                 // Five preview rows plus the "and N more"/error line.
                 Field::RenamePreview { names } => (names.len().min(5) + 1) as f32 * 16.0,
+                // 一行一个族（28pt 内容 + 4pt 间隔）。
+                Field::FontRows { families } => families.len() as f32 * 32.0,
                 _ => 0.0,
             })
             .sum();
@@ -1120,7 +1161,7 @@ impl DialogState {
                 Field::Choice { key, options, values, .. } => Source::Choice(key, options.clone(), values.clone(), r.active.clone()),
                 Field::Toggle { key, .. } => Source::Toggle(key, r.active.clone()),
                 Field::Note { .. } | Field::Preview { .. } | Field::Section { .. } | Field::Action { .. } | Field::Color { .. }
-                | Field::InsertCodes { .. } | Field::RenamePreview { .. } => Source::Note,
+                | Field::InsertCodes { .. } | Field::RenamePreview { .. } | Field::FontRows { .. } => Source::Note,
             })
             .collect()
     }
@@ -1169,9 +1210,8 @@ impl DialogState {
                 Field::Text { label, .. } | Field::Number { label, .. } | Field::Choice { label, .. } => SharedString::from(*label),
                 Field::Preview { label } | Field::Section { title: label } => SharedString::from(*label),
                 Field::Action { label, .. } => label.clone(),
-                Field::Note { .. } | Field::Color { .. } | Field::Toggle { .. } | Field::InsertCodes { .. } | Field::RenamePreview { .. } => {
-                    SharedString::from("")
-                }
+                Field::Note { .. } | Field::Color { .. } | Field::Toggle { .. } | Field::InsertCodes { .. } | Field::RenamePreview { .. }
+                | Field::FontRows { .. } => SharedString::from(""),
             };
             let label = || {
                 div()
@@ -1362,6 +1402,36 @@ impl DialogState {
                                     .child(SharedString::from(figcraft_i18n::trn("and {n} more", names.len() - rows.len(), &[]))),
                             );
                         }
+                    }
+                    field_row_full(col)
+                }
+                Field::FontRows { families } => {
+                    let mut col = div().w_full().flex().flex_col().gap(pt(4.0));
+                    for f in families {
+                        let used = if f.layers == 0 {
+                            tr("Only in a text style or variable").to_string()
+                        } else {
+                            figcraft_i18n::trn("{n} text layers", f.layers as usize, &[])
+                        };
+                        let mut row = div()
+                            .w_full()
+                            .h(pt(28.0))
+                            .flex()
+                            .items_center()
+                            .gap(pt(8.0))
+                            .child(div().flex_none().text_size(pt(11.0)).text_color(rgba(t.text)).child(SharedString::from(f.family.clone())))
+                            .child(div().flex_1().text_size(pt(10.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(used)));
+                        if f.source.is_some() {
+                            let family = f.family.clone();
+                            let cmds_row = self.cmds.clone();
+                            row = row.child(
+                                div().flex_none().child(dialog_button(tr("Download"), false, true, move |_: &MouseDownEvent, _w: &mut Window, _cx: &mut App| {
+                                    cmds_row.push(Cmd { id: "font.download", params: Some(json!({ "family": family.clone() })) });
+                                    cmds_row.wake();
+                                })).child(tr("Download")),
+                            );
+                        }
+                        col = col.child(row);
                     }
                     field_row_full(col)
                 }
