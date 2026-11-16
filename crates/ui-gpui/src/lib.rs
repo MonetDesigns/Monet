@@ -1075,7 +1075,9 @@ impl CanvasView {
                     me.update(cx, |v, cx| {
                         v.palette_query = q;
 
-                        v.palette_sel = Some(0);
+                        // 高亮落到**第一条可执行行**：分组标题是 disabled，不能一开就停在它上面。
+                        let items = palette::items(&palette::sections(&v.palette_query, v.palette_tab, &v.app.session));
+                        v.palette_sel = items.iter().position(|it| !it.disabled);
 
                         cx.notify();
                     });
@@ -1090,7 +1092,8 @@ impl CanvasView {
                 me.update(cx, |v, cx| {
                     let items = palette::items(&palette::sections(&v.palette_query, v.palette_tab, &v.app.session));
 
-                    if let Some(item) = v.palette_sel.and_then(|i| items.get(i)) {
+                    // 只有可执行行能回车触发（分组标题 `disabled`，key 为空）。
+                    if let Some(item) = v.palette_sel.and_then(|i| items.get(i)).filter(|it| !it.disabled) {
                         let key = item.key.to_string();
 
                         v.pick_palette(&key, cx);
@@ -5620,14 +5623,31 @@ impl Render for CanvasView {
                 // field's commit) runs it.
                 if matches!(&this.popup, Some(Popup::Palette { .. })) {
                     let key = e.keystroke.key.as_str();
-                    if key == "up" || key == "down" {
-                        let count = palette::items(&palette::sections(&this.palette_query, this.palette_tab, &this.app.session)).len();
-                        if count > 0 {
-                            let cur = this.palette_sel.unwrap_or(0);
-                            this.palette_sel = Some(if key == "up" { cur.saturating_sub(1) } else { (cur + 1).min(count - 1) });
+                    if key == "up" || key == "down" || key == "escape" {
+                        let items = palette::items(&palette::sections(&this.palette_query, this.palette_tab, &this.app.session));
+                        // gpui-kit `Command` 的键盘语义：↑/↓ **循环并跳过禁用行**（分组标题是
+                        // disabled 的，不能停上去）；Esc 先清空非空查询，空了才关闭。
+                        let pickable: Vec<usize> = items.iter().enumerate().filter(|(_, it)| !it.disabled).map(|(i, _)| i).collect();
+                        if key == "escape" && !this.palette_query.is_empty() {
+                            this.palette_query.clear();
+                            this.palette_sel = pickable.first().copied();
                             cx.notify();
+                            return;
                         }
-                        return;
+                        if (key == "up" || key == "down") && !pickable.is_empty() {
+                            let cur = this.palette_sel.unwrap_or(pickable[0]);
+                            let pos = pickable.iter().position(|i| *i == cur).unwrap_or(0);
+                            let next = if key == "up" {
+                                if pos == 0 { pickable.len() - 1 } else { pos - 1 }
+                            } else if pos + 1 >= pickable.len() {
+                                0
+                            } else {
+                                pos + 1
+                            };
+                            this.palette_sel = Some(pickable[next]);
+                            cx.notify();
+                            return;
+                        }
                     }
                 }
 
