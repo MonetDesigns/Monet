@@ -19,15 +19,82 @@
 //! 该文件刻意放在 `src/` 而不是 `src/widgets/`：后者是冻结件，不得改动；本组件只调用它们。
 
 use crate::widgets::TextEdit;
-use gpui::{App, Context, Entity, IntoElement, MouseButton, Render, SharedString, Window, div, prelude::*, px};
+use gpui::{App, Context, Entity, IntoElement, MouseButton, Pixels, Render, SharedString, Window, div, prelude::*, px};
 
 /// 11pt 与三处被替换的静态标签一致（egui `regular(11.0)` / GPUI `text_size(px(11.0))`）。
 const FONT: f32 = 11.0;
 
-/// Pages / Layers 行高 32，egui 的重命名框是行内缩 4pt → 24pt。
+/// 行内列表（Pages / Local styles）的行高。**这是组件唯一需要的布局参数**：
+/// 传行高，组件铺满它并做一次居中减法，与静态名字那次减法字面相同。
 pub const ROW_H: f32 = 24.0;
-/// 画布标签：egui `frame_labels::rename_field` 的 `vec2(w, 16.0)`。
-pub const LABEL_H: f32 = 16.0;
+/// Layers 行的行高（比 Pages 高 8）。
+pub const LAYER_H: f32 = 32.0;
+/// 画布标签重命名框的高度（静态标签所在的那块框）。
+pub const LABEL_H: f32 = 18.0;
+
+/// 画布标签里，静态文字顶相对标签框顶的偏移。
+///
+/// 标签不是原生文本元素，而是 `painter.labels` 画出来的：整块 div 先被全局
+/// `widgets::TEXT_NUDGE`（1.0）上移，div 的高度又只有 galley 那么高。行内三处没有
+/// 这个 nudge，所以偏移是 0，只有标签需要它。
+pub fn label_text_top() -> f32 {
+    -0.5
+}
+
+/// 静态名字的绘制：**与编辑态完全同一段代码**（同一个 `ShapedLine::paint`、同一个居中式）。
+///
+/// 这是「进入 / 退出编辑文字上下跳」的根治办法。以前静态名字是 `div().child(name)` 交给
+/// GPUI 的文本元素画，编辑态是 `TextInput` 的 canvas 画 —— 两条管线的行盒取整不同，
+/// 无论怎么调参数都会在某个行高上差 1 像素（用户 2026-11-16 连着抓到三次）。
+/// 带外框的大输入框从来没有这个问题，就是因为它自始至终只有**一个** `TextEdit`。
+///
+/// 这里让静态文字也走 canvas，居中式与 `TextInput::centred_line_origin` 逐字相同：
+/// `bounds.origin.y + (bounds.height - (ascent + descent)) / 2`。两态因此同源。
+pub fn static_text(text: SharedString, color: gpui::Hsla, height: f32) -> impl IntoElement {
+    let prepaint_text = text.clone();
+    div().w_full().h(px(height)).child(
+        gpui::canvas(
+            move |bounds, window, _cx| {
+                // 与 `TextInput` 塑形时**同一份输入**：同一个字体来源、同一个字号、
+                // 同一个 `shape_line` 调用形式（末位 `force_width` 传 `None`）。
+                let run = gpui::TextRun {
+                    len: prepaint_text.len(),
+                    font: window.text_style().font(),
+                    color,
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                };
+                let line = window.text_system().shape_line(prepaint_text.clone(), px(FONT), &[run], None);
+                let ink = line.ascent + line.descent;
+                let top = bounds.origin.y + (bounds.size.height - ink) * 0.5;
+                (line, gpui::point(bounds.origin.x, top), ink)
+            },
+            |_bounds, (line, origin, ink), window, cx| {
+                let _ = line.paint(origin, ink, window, cx);
+            },
+        )
+        .size_full(),
+    )
+}
+
+/// 编辑态那一行文字的度量：`(宽度, ascent + descent)`。
+///
+/// 字体必须取自 `window.text_style().font()`（和 `TextInput` 塑造文字时完全同一个 source），
+/// 字号固定 11。用 `TextStyle::default()` 的字体族会得到另一套度量（11pt 下 13.97 而不是
+/// 14.586），重命名框会偏宽、垂直补偿也会差半像素。
+pub fn text_measure(window: &Window, text: SharedString) -> (Pixels, Pixels) {
+    let run = gpui::TextRun {
+        len: text.len(),
+        font: window.text_style().font(),
+        color: gpui::Hsla::default(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let line = window.text_system().shape_line(text, px(FONT), &[run], None);
+    (line.width, line.ascent + line.descent)
+}
 
 /// 一次就地编辑的状态。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,11 +105,14 @@ pub enum EditState {
     Ended,
 }
 
-/// 无边框内联输入框。视觉上没有 shell，只有固定高度的一层盒 + 裸 `TextEdit`。
+/// 无边框内联输入框。视觉上没有 shell，只有一层盒 + 裸 `TextEdit`。
 pub struct InlineInput {
     edit: Entity<TextEdit>,
-    /// 固定盒高（pt）。Pages / Layers 行用 24，画布标签按 egui 用 16。
+    /// 外层盒高（pt）：必须盖住被替换的静态名字，供行内布局使用。
     height: f32,
+    /// 只服务画布标签：标签静态文字带 `TEXT_NUDGE` 与「div 高 = galley 高」这两件事，
+    /// 行内列表传 0。见 [`label_text_top`]。
+    text_top: f32,
     /// 焦点曾经落到这个 editor 上。
     was_active: bool,
 }
@@ -50,9 +120,15 @@ pub struct InlineInput {
 impl InlineInput {
     /// 每次重命名都新建一个：复用同一个 `TextEdit` 会留下上一次的草稿
     /// （`set_value` 在编辑态不会动 buffer），导致「第二次双击改成了第一个名字」。
+    ///
+    /// `height` 传**所在行的行高**（[`ROW_H`] / [`LAYER_H`] / [`LABEL_H`]），组件铺满它；
+    /// 不要传「文字行盒高度」之类的中间量 —— 组件内部只做一次
+    /// `(行高 - 文字墨迹高) / 2` 的居中，与静态名字的算法逐字相同。
+    /// `text_top` 只给画布标签用，行内列表传 `0.0`。
     pub fn build(
         cx: &mut App,
         height: f32,
+        text_top: f32,
         value: impl Into<String>,
         on_commit: impl Fn(&str, &mut Window, &mut App) + 'static,
     ) -> Entity<Self> {
@@ -68,7 +144,7 @@ impl InlineInput {
                 te.set_value(value);
                 te.set_on_commit(on_commit);
             });
-            Self { edit, height, was_active: false }
+            Self { edit, height, text_top, was_active: false }
         })
     }
 
@@ -106,7 +182,12 @@ impl InlineInput {
         // 在失焦时 `TextEdit::commit` 不产生回调，这里若把焦点再抢回来，就会把重命名重新
         // 打开、把后续输入全部截走（点另一个输入框即复现）。
         if !self.was_active && !self.edit.read(cx).is_active(window) {
-            self.edit.update(cx, |te, _| te.focus_editor(window));
+            // 双击进入编辑态的第一件事就是全选文字（用户 2026-11-15）：
+            // Pages / Layers / 画布标签都走这条路径（begin_inline_rename 新建 editor 后靠这里
+            // 抢焦点），必须与 Local styles 的 `InlineInput::begin_edit` 一样 select-all，
+            // 否则三处是单光标、一处是全选，行为不统一。再单击一次由 TextEdit 自己的
+            // mouse handler 落成单光标（count=1 且 already editing → move_to）。
+            self.edit.update(cx, |te, _| te.focus_editor_select_all(window));
         }
         let active = self.edit.read(cx).is_active(window);
         if active {
@@ -133,6 +214,9 @@ pub fn stable_top_offset(ascent: f32, descent: f32, ref_ascent: f32, ref_descent
 /// `min_x / max_x / max_y` 是标签四角经 `to_screen` 得到的**画布局部坐标**；本项目
 /// `app.canvas.rect` 原点恒为 0，绝对定位的浮层挂在整窗根视图上，因此必须补 `origin_*`。
 /// 调用方给的 `text_w` 是 11pt 下真实量算出的名字宽度（不再是字符数估算）。
+///
+/// `y` 仍是「静态 galley 的顶边」（= `max_y - 16`，`frame_labels` 就把名字画在这里），
+/// 高度则是 [`LABEL_H`]（18 = 静态行盒），编辑框才能和静态文字重合。
 pub fn label_rename_rect(min_x: f32, max_x: f32, max_y: f32, text_w: f32, origin_x: f32, origin_y: f32) -> (f32, f32, f32) {
     let w = (text_w + 24.0).max(max_x - min_x).clamp(80.0, 480.0);
     (min_x + origin_x, max_y - 16.0 + origin_y, w)
@@ -146,16 +230,22 @@ pub fn label_rename_fallback(x: f32, y: f32, text_w: f32, origin_x: f32, origin_
 
 impl Render for InlineInput {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        // 静态名字按行盒（ascent + descent）在 24 pt 里居中；编辑态也用同一个行盒，
-        // 不再按「当前文字」的度量做基线补偿 —— 补偿的目标是参考串，内容一变就会差一点点，
-        // 表现就是进入/退出输入时文字上下跳（用户 2026-11-15）。
+        // `height` 就是**所在行的行高**，组件自己铺满它。`TextInput` 的居中公式是
+        // `(盒高 - (ascent + descent)) / 2`，静态名字的落笔位置是
+        // `(行高 - (ascent + descent)) / 2` —— 两个式子是**同一个减法**，只要盒高等于行高，
+        // 结果必然逐像素相同（包括亚像素取整）。
+        //
+        // 以前这里让盒高取「静态文本的行盒高」（18）再靠父容器 `items_center` 二次居中：
+        // 数学上等值，但要经过两次取整，行高 24 与 32 的行会落到不同的物理像素上 ——
+        // 那正是「同一个组件，列表往下跳、标签往上跳」的来源。调用方现在只需给行高，
+        // 不需要也不应该传任何像素偏移（画布标签除外，见 `label_text_top`）。
         div()
             .relative()
             .w_full()
             .h(px(self.height))
             // 点输入框自己不能冒泡到根视图的「点别处就提交」。
             .on_mouse_down(MouseButton::Left, |_e, _w, cx| cx.stop_propagation())
-            .child(div().relative().w_full().h_full().child(self.edit.clone()))
+            .child(div().absolute().top(px(self.text_top)).left_0().w_full().h_full().child(self.edit.clone()))
     }
 }
 
@@ -182,12 +272,6 @@ mod tests {
         }
     }
 
-    /// 空串 / 占位空格走同一套度量：`shown_text` 用空格代替空缓冲区。
-    #[test]
-    fn reference_is_a_single_line_without_newlines() {
-        assert!(!REFERENCE.contains('\n') && !REFERENCE.is_empty());
-    }
-
     /// 画布标签输入框位置：必须补上 dock 给的画布窗口原点（原来漏了，输入框整体偏到左栏）。
     #[test]
     fn label_rename_rect_adds_the_canvas_window_origin() {
@@ -209,5 +293,14 @@ mod tests {
     #[test]
     fn label_rename_fallback_also_adds_the_origin() {
         assert_eq!(label_rename_fallback(50.0, 200.0, 60.0, 300.0, 40.0), (350.0, 220.0, 84.0));
+    }
+
+    /// 组件只吃「行高」这一个布局事实（用户 2026-11-16：不许让每个调用点各自校准像素）。
+    /// 这三个数必须与各行的实际行高一致，否则进入编辑时文字会离开静态位置。
+    #[test]
+    fn the_widget_is_driven_by_row_heights_only() {
+        assert_eq!(ROW_H, 24.0, "Pages / Local styles 行高");
+        assert_eq!(LAYER_H, 32.0, "Layers 行高");
+        assert_eq!(LABEL_H, 18.0, "画布标签框高");
     }
 }

@@ -419,11 +419,15 @@ impl CanvasView {
             let is_cur = id == cur;
             let editing = renaming_page == Some(id) && !divider;
             let name_cell = if editing {
-                // 共用的无边框输入框自带 24pt 固定行盒和「点内部不冒泡」；
-                // 这里只补 egui `pages()` 的 8pt 左缩进。
+                // 共用的无边框输入框自带与静态名字同高的盒子；外层结构与静态那一支**逐项一致**
+                // （`h_full + flex + items_center + px(8)`），这样文字顶由同一棵布局树算出，
+                // 不会出现「进入编辑时文字上下跳」（用户 2026-11-16）。
                 div()
                     .flex_1()
                     .min_w(px(0.0))
+                    .h_full()
+                    .flex()
+                    .items_center()
                     .px(pt(8.0))
                     .on_mouse_down(MouseButton::Left, |_e, _w, cx| cx.stop_propagation())
                     .child(rename_editor.clone())
@@ -439,11 +443,13 @@ impl CanvasView {
                     .whitespace_nowrap()
                     .rounded(pt(5.0))
                     .px(pt(8.0))
-                    .text_size(pt(11.0))
-                    .text_color(ink())
                     .when(is_cur, |d| d.bg(rgba(t.selected_row)))
                     .when(!is_cur, |d| d.hover(|s| s.bg(rgba(t.hover))))
-                    .child(if divider { SharedString::from("—") } else { SharedString::from(name) })
+                    .child(crate::inline_input::static_text(
+                        if divider { SharedString::from("—") } else { SharedString::from(name) },
+                        ink().into(),
+                        24.0,
+                    ))
                     .into_any_element()
             };
             let me_row = me.clone();
@@ -626,7 +632,8 @@ impl CanvasView {
                 .h(px(ICON_BOX))
                 .flex()
                 .items_center()
-                .justify_center()
+                // 箭头贴着自己格子的右缘，类型图标贴着左缘，两者之间不留空（用户 2026-11-15）。
+                .justify_end()
                 .on_mouse_down(MouseButton::Left, {
                     let me = me.clone();
                     move |_e: &MouseDownEvent, _w: &mut Window, app: &mut App| {
@@ -708,11 +715,16 @@ impl CanvasView {
         // input field itself. No hit handler while editing, so clicking the field does not
         // re-select the layer underneath it.
         let name_cell = if let Some(field) = rename_field {
-            // 与 Pages 行、画布标签完全同一个组件：固定 24pt 行盒、无边框、基线稳定。
-            // 不再套一层 h_full + items_center —— 多一层盒子就多一个让文字漂移的地方。
+            // 与静态那一支**同一棵树**：`flex_1 + min_w(0) + h_full + flex + items_center + pl(8)`。
+            // 盒子高度由 InlineInput 自己给（= 静态名字的行盒高），外层不再是「多套一层」，
+            // 而是逐项对齐 —— 文字顶因此和静态名字同一个算法（用户 2026-11-16）。
             div()
                 .flex_1()
                 .min_w(px(0.0))
+                .h_full()
+                .flex()
+                .items_center()
+                .pl(px(8.0))
                 .on_mouse_down(MouseButton::Left, |_e, _w, cx| cx.stop_propagation())
                 .child(field)
         } else {
@@ -722,6 +734,7 @@ impl CanvasView {
                 .h_full()
                 .flex()
                 .items_center()
+                .pl(px(8.0))
                 .on_mouse_down(MouseButton::Left, {
                     let me = me.clone();
                     move |e: &MouseDownEvent, _w: &mut Window, app: &mut App| {
@@ -738,7 +751,12 @@ impl CanvasView {
                         });
                     }
                 })
-                .child(div().child(name).text_size(px(11.0)).text_color(name_color).truncate())
+                // 与 Pages 行、样式行同一棵树：文本直接挂在这个 `h_full + items_center`
+                // 的 div 上，不再多套一层 —— 多一层就多一次「按内容高度居中」，
+                // 取整结果就和其它行差一个物理像素（用户 2026-11-16）。
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .child(crate::inline_input::static_text(SharedString::from(name), name_color.into(), ROW_H))
         };
 
         div()
@@ -750,7 +768,6 @@ impl CanvasView {
             .w_full()
             .flex()
             .items_center()
-            .gap(px(2.0))
             .px(px(4.0))
             // The inset layer: an overlay the size of the row whose padding squeezes the highlight into an 8/4 inset block.
             .child(div().absolute().top_0().left_0().size_full().px(pt(ROW_INSET)).pt(pt(inset_top)).pb(pt(inset_bottom)).child(highlight))
@@ -771,7 +788,7 @@ impl CanvasView {
             })
             .child(div().w(px(indent)))
             .child(chevron)
-            .child(div().w(px(ICON_BOX)).h(px(ICON_BOX)).flex().items_center().justify_center().child(Self::layer_glyph_element(r)))
+            .child(div().w(px(ICON_BOX)).h(px(ICON_BOX)).flex().items_center().justify_start().child(Self::layer_glyph_element(r)))
             .child(name_cell)
             .child(eye)
             .child(lock)
@@ -1093,6 +1110,11 @@ impl CanvasView {
         };
         if set_anchor {
             self.layer_tree.anchor = Some(id);
+        }
+        // 重复点击已选中的行：选区没变就别再发 select.set —— 引擎内部先清后设，
+        // 触发两次变更，表现成选中块「取消又选中」闪一下（用户 2026-11-15）。
+        if new_sel == sel {
+            return;
         }
         let _ = self.app.session.execute("select.set", &json!({ "ids": new_sel }));
         cx.notify();

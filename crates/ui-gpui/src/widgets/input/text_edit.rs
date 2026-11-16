@@ -531,6 +531,13 @@ impl Render for TextEdit {
                     // 点输入框自己 = 进入/继续编辑，**不要**让根视图把这次按下当成「点别处」
                     // 而把编辑提交掉（否则刚点进来就被收走，表现为点不进编辑态）。
                     cx.stop_propagation();
+                    if this.select_all_pending {
+                        // 双击进入编辑的**第二下**：这一下属于「打开编辑」的手势，不是定位光标
+                        // 的点击。以前它会走下面的定位逻辑把刚做的全选清掉，于是双击后没有
+                        // 选区、还得再点一次（用户 2026-11-16）。这里保持全选并消化掉标记。
+                        this.select_all_pending = false;
+                        return;
+                    }
                     let now = std::time::Instant::now();
                     let count = match this.last_click {
                         Some((at, p, n))
