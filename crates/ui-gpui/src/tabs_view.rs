@@ -333,10 +333,17 @@ pub(crate) fn tab_strip(
                 let me_menu = me.clone();
                 let cmds_menu = cmds.clone();
                 move |e: &MouseDownEvent, _window, cx: &mut App| {
-                    let rows = vec![MenuRow::new("Open in new window")];
+                    // 额外窗口里多一条「塞回主窗口」：拖出去之后没有办法拖回来（GPUI 没有跨窗口
+                    // 拖拽），所以给一个显式入口。
+                    let extra = crate::windows::current() != 0;
+                    let mut rows = vec![MenuRow::new("Open in new window")];
+                    if extra {
+                        rows.push(MenuRow::new("Move to main window"));
+                    }
                     let cmds_pick = cmds_menu.clone();
-                    let on_pick: Rc<dyn Fn(&str, &mut Window, &mut App)> = Rc::new(move |_label, _window, _cx| {
-                        cmds_pick.push(Cmd { id: "window.new", params: Some(json!({ "index": index })) });
+                    let on_pick: Rc<dyn Fn(&str, &mut Window, &mut App)> = Rc::new(move |label: &str, _window, _cx| {
+                        let id = if label == "Move to main window" { "window.merge" } else { "window.new" };
+                        cmds_pick.push(Cmd { id, params: Some(json!({ "index": index })) });
                     });
                     let anchor = Bounds { origin: e.position, size: size(px(1.0), px(1.0)) };
                     me_menu.update(cx, |cv, cx| cv.open_menu(anchor, Some(200.0), rows, on_pick, cx));

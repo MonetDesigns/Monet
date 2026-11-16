@@ -187,6 +187,34 @@ pub(crate) fn requests(
             cx.defer(move |cx| open_now(&wins, cx, root, uid, title));
             Ok(())
         }
+        "window.merge" => {
+            // 把文件从额外窗口塞回主窗口（用户 2026-11-16：拖出去之后没法塞回去）。
+            let Some(index) = data.get("index").and_then(Value::as_u64).map(|i| i as usize) else { return Ok(()) };
+            let Some(uid) = session.docs.get(index).map(|d| d.uid) else { return Ok(()) };
+            {
+                let mut w = windows.borrow_mut();
+                for e in &mut w.list {
+                    e.docs.retain(|u| *u != uid);
+                    if e.active == Some(uid) {
+                        e.active = e.docs.first().copied();
+                    }
+                }
+                w.main_active = Some(uid);
+                // 空掉的额外窗口直接关掉，不留一个空白窗口。
+                let empties: Vec<u64> = w.list.iter().filter(|e| e.docs.is_empty()).map(|e| e.id).collect();
+                for id in empties {
+                    if let Some(e) = w.entry(id) {
+                        let _ = e.handle.update(cx, |_, window, _| window.remove_window());
+                    }
+                }
+                w.list.retain(|e| !e.docs.is_empty());
+                w.focused = 0;
+            }
+            if let Some(pos) = session.docs.iter().position(|d| d.uid == uid) {
+                session.active = pos;
+            }
+            Ok(())
+        }
         "window.focus" => {
             let id = data.get("id").and_then(Value::as_u64).unwrap_or(u64::MAX);
             // `handle.update` 会租借同一个 `CanvasView`，同样必须推迟。

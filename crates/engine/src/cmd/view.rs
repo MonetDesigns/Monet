@@ -372,6 +372,17 @@ pub fn specs() -> Vec<CommandSpec> {
                 ok()
             }
         ),
+        spec!(
+            "window.merge",
+            "Move file back to the main window",
+            "{index}  open file `index` goes back to the main window (the extra window closes if it becomes empty)",
+            false,
+            |s, p| {
+                let index = req_index("window.merge", p, "index")?;
+                s.request_ui("window.merge", json!({"index": index}));
+                ok()
+            }
+        ),
         spec!("window.focus", "Bring window to front", "{id}  a window id (control channel `window.list`)", false, |s, p| {
             let id = req_index("window.focus", p, "id")?;
             s.request_ui("window.focus", json!({"id": id}));

@@ -710,7 +710,12 @@ impl CanvasView {
         windows::set_current(wid);
         wins.current = wid;
         let want = if wid == 0 { wins.main_active } else { wins.entry(wid).and_then(|w| w.active) };
-        if let Some(uid) = want
+        // ⛔ 只有**当前聚焦**的窗口能改全局 `session.active`：两个窗口共用一份 Session，
+        // 每帧各自写一遍会让画布在两份文档之间来回切 → 「整个画布不停闪」（用户 2026-11-16）。
+        // 非聚焦窗口只记录自己的 active，画面跟随聚焦窗口（稳定优先）。
+        let drives = wid == 0 || wins.focused == wid;
+        if drives
+            && let Some(uid) = want
             && let Some(i) = self.app.session.docs.iter().position(|d| d.uid == uid)
         {
             self.app.session.active = i;
