@@ -87,7 +87,15 @@ fn title_of(name: Option<&str>) -> String {
 /// （`sync_ui_requests` 正是如此），draw 就会二次租借该实体 →
 /// `cannot read CanvasView while it is already being updated` → 整个应用 abort。
 /// 所以由调用方用 `App::defer` 把这一步推到本次更新之后。
-fn open_now(windows: &std::rc::Rc<RefCell<Windows>>, cx: &mut App, root: Entity<CanvasView>, uid: u64, title: String) {
+fn open_now(
+    windows: &std::rc::Rc<RefCell<Windows>>,
+    cx: &mut App,
+    root: Entity<CanvasView>,
+    uid: u64,
+    title: String,
+    // 主窗口在文档被抢走后应该显示的另一份文档（没有就 None）。
+    main_fallback: Option<u64>,
+) {
     let bounds = Bounds::centered(None, size(px(1280.0), px(860.0)), cx);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -121,6 +129,11 @@ fn open_now(windows: &std::rc::Rc<RefCell<Windows>>, cx: &mut App, root: Entity<
     w.next_id += 1;
     let id = w.next_id;
     w.list.push(Entry { id, window_id, handle, docs: vec![uid], active: Some(uid), title });
+    // 新窗口的首帧还没登记，会被当成主窗口、把 `main_active` 写成这个 uid；这里纠正，
+    // 否则主窗口会一直想显示一份它没有标签的文档。
+    if w.main_active == Some(uid) {
+        w.main_active = main_fallback;
+    }
     w.focused = id;
 }
 
@@ -183,8 +196,9 @@ pub(crate) fn requests(
                 session.active = i;
             }
             // 建窗必须推迟到本次更新之后（见 `open_now` 的说明）。
+            let main_fallback = session.docs.iter().find(|d| d.uid != uid).map(|d| d.uid);
             let wins = windows.clone();
-            cx.defer(move |cx| open_now(&wins, cx, root, uid, title));
+            cx.defer(move |cx| open_now(&wins, cx, root, uid, title, main_fallback));
             Ok(())
         }
         "window.merge" => {

@@ -714,16 +714,25 @@ impl CanvasView {
         // 每帧各自写一遍会让画布在两份文档之间来回切 → 「整个画布不停闪」（用户 2026-11-16）。
         // 非聚焦窗口只记录自己的 active，画面跟随聚焦窗口（稳定优先）。
         let drives = wid == 0 || wins.focused == wid;
+        // 只能绑定**本窗口拥有**的文档：否则主窗口会把「已经被拖到别的窗口」的文档设成
+        // 全局 active，画布显示一份它没有标签的文档（用户 2026-11-16：切不过去）。
         if drives
             && let Some(uid) = want
+            && wins.of(uid) == wid
             && let Some(i) = self.app.session.docs.iter().position(|d| d.uid == uid)
         {
             self.app.session.active = i;
         }
         if let Some(uid) = self.app.session.ds().ok().map(|d| d.uid) {
+            let owner = wins.of(uid);
             if wid == 0 {
-                wins.main_active = Some(uid);
-            } else if let Some(entry) = wins.entry_mut(wid) {
+                // 主窗口只记住自己拥有的文档，别把额外窗口的 uid 写进 `main_active`。
+                if owner == 0 {
+                    wins.main_active = Some(uid);
+                }
+            } else if owner == wid
+                && let Some(entry) = wins.entry_mut(wid)
+            {
                 entry.active = Some(uid);
             }
         }
