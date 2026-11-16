@@ -37,9 +37,9 @@
 | A13 | **缺失字体提示 Missing fonts** | `dialogs/missing_fonts.rs` | **2026-11-11 自检更正**：已落地 `dialogs.rs::Kind::MissingFonts`（`dialog.missingFonts` → Spec + 形状测试），原「0 处引用」是**判断失误** | ~~打开缺字体文件无提示/替换入口~~ 已可做替换（仍是居中对话框） | P2 | 小 |
 | A14 | **更新对话框 Updates** | `dialogs/updates_ui.rs` + craft-update | 0 处引用 | 无法检查/安装更新 | P1 | 中 |
 | A15 | **取色器 Eyedropper / Sampled color** | `dialogs/sampled_color.rs` | 只有光标名命中（`canvas/cursors.rs`），无取样 UI | 屏幕取色不可用 | P2 | 小 |
-| A16 | **多窗口**（File ▸ New window / Open in new window / 标签拖出成窗口） | `windows.rs` | `open_window` 是弹层 `popovers::WindowState`，非 OS 多窗口 | 只能单窗口 | P2 | 大 |
+| A16 | **多窗口**（File ▸ New window / Open in new window / 标签拖出成窗口） | `windows.rs` | ✅ 已落地：真正的 OS 窗口（多个 `cx.open_window`，共享同一 `Entity<CanvasView>` / `Session`），`window.new` / `window.focus` 请求、标签拖出、标签右键 “Open in new window” 均已接线；每个窗口记住自己的 active 文件 | 各窗口仍显示同一组标签（未做按窗口过滤），关闭/未保存询问沿用主窗口 | P2 | 大 |
 | A17 | **菜单项取值对话框**（Create link / Offset path / Move to page 等） | `dialogs/menu_input.rs` | 无对应实现 | 这些命令没有输入入口 | P2 | 小 |
-| A18 | **标签关闭未保存询问**（Don't Save / Cancel / Save；Alt+close 直接丢弃） | `windows.rs:392,422,542`（引擎请求 `dialog.unsaved`，**原文写的 `app.rs` #2032 不是对话框所在处**） | ✅ 已落地：`tabs_view.rs:388,392` 的 `force: e.modifiers.alt`、`lib.rs:1400` 消费 `dialog.unsaved`、`dialogs.rs:285-295` 三问 | Save 后不会自动再关闭；拖出成窗口（A16）仍缺（见 I 节） | P1 | 小 |
+| A18 | **标签关闭未保存询问**（Don't Save / Cancel / Save；Alt+close 直接丢弃） | `windows.rs:392,422,542`（引擎请求 `dialog.unsaved`，**原文写的 `app.rs` #2032 不是对话框所在处**） | ✅ 已落地：`tabs_view.rs:388,392` 的 `force: e.modifiers.alt`、`lib.rs:1400` 消费 `dialog.unsaved`、`dialogs.rs:285-295` 三问 | Save 后不会自动再关闭；拖出成窗口（A16）已接 | P1 | 小 |
 | **A19** | **通用对话框框架**（数据驱动：标题 / 说明 / 字段 / 按钮 / 确认取消 / Escape / 遮罩） | `dialogs.rs`（579 行，`renderers()` 统一 About·Preferences·Shortcuts·Find·Rename·Variables·Export） | **2026-11-11 自检更正**：已落地 `dialogs.rs`（`Kind::ALL` 16 种 + `Spec` + `parity_contract` 双向比对）；原两处是 2026-11-10 扫描快照，现已过时 | **A6/A7/A8/A10/A11/A12/A13/A15/A17/A18 十个对话框的共同前置**；不做就只能每个各造一套壳 | **P0** | 中 |
 | **A20** | **查找替换 Find and replace** | `dialogs.rs:368-404`（`edit.findReplace`） | **2026-11-11 自检更正**：已落地 `Kind::Find`（`edit.findReplace` / `dialog.find` → Spec + Find / Replace all 按钮 + 3 条测试），原「全 0 命中」是**判断失误** | ~~无法批量查找替换~~ 已可用（仍是居中对话框，非 EGUI 内联） | P1 | 小 |
 | **A21** | **无障碍 a11y**（AccessKit 树、F6/Shift+F6 区域切换、Tab 焦点环、方向键导航） | `a11y.rs`（1071 行，`focus.region` 请求） | `AccessKit` / `accesskit` / `focus_ring` / `Key::F6` 全 0；`tabs_view.rs:13` 自认「a11y（AccessKit，P4）」 | 键盘/读屏用户不可用 | P2 | 大 |
@@ -60,7 +60,7 @@
 | B1 | ~~右栏第三个 tab~~ | `"Developer Mode"`（#2135 商标改名，`right_tab_label()` + 命名回归测试） | 改名与命名回归测试已落地；**2026-11-10 用户要求从右栏 tabs 行去掉该按钮**，现只剩 Design / Prototype。`naming.rs` 的常量/函数保留给 a11y 与其它入口，Developer Mode 面板仍可从底部工具栏 开发 或 Shift+D 进入 | 命名合规完成；可见 tab 按用户要求移除；底部模式切换第 4 格 `Inspect`→`开发`（修掉退役名），动画/开发模式下右栏 tabs 行改为显示「动画」/「开发」文本（见下方进度） | ✅ |
 | B2 | ~~Actions 调色板（Cmd+K）~~ | 三个 tab `All / Assets / Plugins & widgets`、`Recents`、前缀优先排序、最多 60 行（`menus/palette.rs:90,162,170`） | 2026-11-10 落地 `palette.rs`：三 tab + Recents（读引擎 `prefs.recent_actions`）+ 按顶层菜单分组 + 搜索时前缀优先/60 行上限 + Assets/Plugins/widgets 真实数据 | 键盘上下键选中、Enter 运行高亮行、实时过滤（冻结的 `TextField` 只有 commit 回调）未移植；见 H 节 18:4x | ✅ |
 | B3 | 工具条 | 设计模式 6 组 + **画板模式 8 组**（bmove/marker/sticky/bshape/connector/text/section…） | 设计模式 6 组齐全；画板组全无（`toolbar.rs:17-20` 明写未移植） | 见 A2 / A27 | P1 |
-| B4 | 标签条 | 拖拽重排、关闭询问、拖出成窗口、Alt+close 直接丢弃 | 拖拽重排与关闭询问均已接；**拖出成窗口仍缺**：引擎有 `window.new` 请求，但 GPUI 需重构 `Session` 所有权才能共享会话（见 J 节） | 见 A16 与 J 节 | 🔄 |
+| B4 | 标签条 | 拖拽重排、关闭询问、拖出成窗口、Alt+close 直接丢弃 | 拖拽重排、关闭询问、拖出成 OS 窗口均已接（共享根实体，见 A16 / J 节） | 各窗口标签未过滤 | ✅ |
 | B5 | ~~协作 Live~~ | ~~59 个文件规模~~ → 实为 `live.rs` + `live/agent.rs` 共 1672 行 | ~~26 个文件规模~~ → **0 个文件**，整块缺失 | **已移到 A28**；原文「需逐项比对」严重低估 | P1（见 A28） |
 | B6 | 变量面板 | Full / Floating + 表格列、重命名、导出 | `variables_full` 有（`lib.rs:585`），`WindowKind::VariablesTable` 有 | 列行为/多选/导出细节待逐项核 | P2 |
 | B7 | 属性面板（右栏 sections） | `panels/right/{effects,inspect,menu,paints,stroke}.rs` 分模块 | 集中在 `panels/right/sections.rs`（+inspect.rs/proto.rs/component.rs） | 需按 section 逐条比对；`fill_rule.rs`（442 行）只有 Non-zero/Even-odd 菜单（GPUI `sections.rs:669-670`），`reverseLoop` 与填充区域蓝/橙可视化、点击反转环仍缺 | P2 |
@@ -205,7 +205,7 @@
 - A6 导出、A7 首选项、A20 查找替换、A10 色彩配置、A8/A17 重命名、A12 导入报告、A23 另存、A9 分支已通过通用壳接到**真实引擎命令**（`file.export` / `view.panelWidths` / `edit.findReplace` / `file.colorProfile` / `object.rename` / `file.saveAs` / `branch.create`）；但字段仍是通用版，不等于 EGUI 的完整交互（预览、多选导出、逐字体替换等）。
 - A18 首轮只接了引擎 `dialog.unsaved` 请求，`tabs_view.rs` 的 Alt+close / 关闭三问当时未接；已在 17:2x「G 表第 6 行落地」补齐（见下），此处保留原记录仅为时间线。
 - A13 缺失字体、A15 取样色、A14 更新、A11 About、A4 插件目前是**带说明的提示窗口**，因为引擎没有对应命令或依赖 C2 升版；按钮只有 Close，不提交不存在的命令。
-- A1 Home / A2 Boards / A3 Comments / A16 多窗口 / A21 a11y / A22 bidi·ui_scale / A24 字段运算 / A28 Live / B8 Present 子模块仍未开始（B2 调色板已于 18:4x 落地，见下）。
+- A1 Home / A2 Boards / A3 Comments / A22 bidi·ui_scale / A24 字段运算 / A28 Live / B8 Present 子模块仍未开始；A16 多窗口与 A21 a11y 已落地（B2 调色板已于 18:4x 落地，见下）。
 
 ### 17:25–17:33 按现场反馈追加调整
 
@@ -267,13 +267,14 @@ B9=done
 B2=done
 A6=done
 A7=done
-A18B4=partial
+A18B4=done
+A16=done
 A1=done
 A2B3A27=done
 A8=done
 -->
 
-**结论（19:1x 补全后）**：核查出的缺口已补 —— A6 预览、A7 三项、C1 全仓文案、A1 Home 全部落地；第 1 批 6 项现为 **5 项完成 + 1 项部分（B4 拖出成窗口）**。B4 是**有意不做**：引擎只有 `window.new` 请求，GPUI 侧缺 OS 多窗口的会话共享，按「不自己弄」的约束留待 A16。所有状态已回填 A/B/C/G 表，并由 J 节的契约测试自动守护。
+**结论（2026-11-16 更新）**：A16 多窗口已落地——不再用弹层冒充窗口，`windows.rs` 用同一个 `Entity<CanvasView>` 作为多个 OS 窗口的根视图，`Session` 因此天然共享，无需重构 475 处 `&mut Session` 调用；引擎的 `window.new` / `window.focus` 请求、标签拖出都已接。第 1 批 6 项现为 **6 项完成**。仍保留的小缺口：各窗口目前显示同一组标签，只是 active 文件各自记住（按窗口过滤标签留待后续）。
 
 **（下一步已移至 K 节末尾）**
 
@@ -298,7 +299,7 @@ A8=done
 **维护规则**：新增/删减能力 → 先改 `CONTRACTS`，再改代码，最后同步状态块与 I 节表格；三者不一致时
 `cargo test -p figcraft-ui-gpui --lib --features test-support -- parity_contract` 会失败。**不要只改文档来让测试变绿。**
 
-**仍诚实保留的缺口**：`A18B4=partial` 依赖 `detach_window`。引擎确实有 `window.new` 请求（`cmd/view.rs:365`），但 GPUI 侧接 OS 多窗口要重构 `Session` 所有权以共享会话，属于「自己弄」，本轮按用户约束不做；契约保留这个 token，真正接上才会自动翻成 `done`。
+**A16 的契约证据**：`detach_window` 由三处真实源码共同派生——`windows.rs` 的 `cx.open_window`、`tabs_view.rs` 的 `window.new` 拖出命令、`lib.rs` 的 `windows::requests` 消费；退回弹层实现或删掉拖出命令会直接让 `A16` / `A18B4` 契约变红。
 
 ---
 
@@ -349,8 +350,8 @@ A8=done
 EGUI 原文件再动手，禁止再出现简化替代**；完成后同步 `CONTRACTS` / 代码 / 状态块。
 
 **下一步（19:4x 修订）**：先按上表把 `panels/extra.rs` 的四块整面板与 `popovers.rs` 的
-`Setting::Options` 换成真实 `dropdown` / `tab_strip` / 网格；B4 拖出成窗口（A16）需要共享
-`Session` 的多窗口架构，单独排期。涉及 `widgets/**` 冻结件的改动（A24 字段运算、调色板实时过滤）
+`Setting::Options` 换成真实 `dropdown` / `tab_strip` / 网格；B4 拖出成窗口（A16）已通过共享根实体实现，
+无需复制 `Session`（见 J 节）。涉及 `widgets/**` 冻结件的改动（A24 字段运算、调色板实时过滤）
 必须先与用户确认。
 
 ---
@@ -995,7 +996,7 @@ R 节（17:0x 审计）把 R1/R2 标成「✅ 已实施」，但回源码核对�
 | A22 bidi/ui_scale | ~244 行 | 不存在 | 移植 UAX#9/RTL/pref.uiScale |
 | A23 services | — | 不存在 | 原生文件对话框/剪贴板/OPEN_EXTENSIONS/IME |
 | A24 field_math | — | 不存在（冻结件，改前须确认） | 数字框相对运算/字体预览/实时提示/图层选择菜单 |
-| A16 多窗口 | — | 弹层非 OS 多窗口 | 需重构 `Session` 所有权共享（J 节已记） |
+| A16 多窗口 | `windows.rs` | ✅ 多个 OS 窗口共享根实体 / 会话 | 各窗口标签过滤待做 |
 | A14 更新器 | 依赖 craft-update 升版 | 提示窗 | 等 C2 升版 |
 | A28 Live | 1672 行 | 完全缺失 | 光标/聊天/spotlight/共享/加入/断连，最大块 |
 | B6/B7/B10 | — | 部分 | 变量表列行为/导出、属性面板 fill_rule 反向环、光标逐工具核对 |

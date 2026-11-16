@@ -31,6 +31,9 @@ mod app;
 /// A21：无障碍语义层（从 gpui-pre 0.3.12 / gpui-kit 抄来，适配 GPUI 0.2）。
 mod a11y;
 
+/// A16：真正的 OS 多窗口（共享根实体与会话）。
+mod windows;
+
 mod canvas;
 
 /// 标签条的纯几何 / 动画状态（上游 `ui-egui/src/tabs.rs` 的可测部分，P0-1）。
@@ -454,6 +457,9 @@ pub struct CanvasView {
     /// A21：F6 / Shift+F6 的区域键盘导航状态。
     a11y: a11y::KeyboardNav,
 
+    /// A16：本视图之外的 OS 窗口（共享同一会话）。
+    windows: windows::Windows,
+
     /// 按下后正在拖拽（Move 事件只在拖拽时送给引擎）。
     dragging: bool,
 
@@ -767,6 +773,8 @@ impl CanvasView {
             focus: cx.focus_handle(),
 
             a11y: a11y::KeyboardNav::default(),
+
+            windows: windows::Windows::default(),
 
             dragging: false,
 
@@ -1423,6 +1431,16 @@ impl CanvasView {
             // engine call, never a centred dialog. Catch them **before** `dialogs::ui_action`.
 
             match r.kind.as_str() {
+                // A16：File ▸ New window / Open in new window / 拖出成窗口都走 window.new。
+                "window.new" | "window.focus" => {
+                    let root = cx.entity();
+                    if let Err(e) = windows::requests(&mut self.windows, cx, root, &r.kind, &r.data) {
+                        self.toast(e, cx);
+                    }
+                    cx.notify();
+                    continue;
+                }
+
                 // A21：区域导航由 UI 侧维护，引擎只发 step。
                 "focus.region" => {
                     self.a11y.step(r.data.get("step").and_then(serde_json::Value::as_i64).unwrap_or(1));
@@ -4226,6 +4244,16 @@ impl Render for CanvasView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // A21：上一帧的控件登记表成为这一帧的读屏树与 Tab 列表。
         a11y::begin_frame(cx);
+        // A16：同一个实体挂在多个 OS 窗口上，先告诉本帧/本事件是哪个窗口。
+        let wid = self.windows.list.iter().find(|w| w.window_id == window.window_handle().window_id()).map_or(0, |w| w.id);
+        windows::set_current(wid);
+        self.windows.current = wid;
+        let want = if wid == 0 { self.windows.main_active } else { self.windows.entry(wid).and_then(|w| w.active) };
+        if let Some(uid) = want
+            && let Some(i) = self.app.session.docs.iter().position(|d| d.uid == uid)
+        {
+            self.app.session.active = i;
+        }
         let a11y_focused = window.focused(cx);
         let a11y_scale = window.scale_factor();
         for (_, command) in a11y::commit_frame("Monet", a11y_focused.as_ref(), a11y_scale, window, cx) {

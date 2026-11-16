@@ -171,12 +171,18 @@ fn begin_tab_drag(state: &TabDragState, cmds: &Cmds, from: usize, at: Point<Pixe
             wake.wake();
         },
         move |_window, _cx| {
-            let (from, pointer_x, visible, moved) = {
+            let (from, pointer_x, pointer_y, visible, moved) = {
                 let b = on_end.0.borrow();
                 let Some(d) = b.current.as_ref() else { return };
-                (d.from, f32::from(d.pointer.x), b.visible.clone(), d.moved)
+                (d.from, f32::from(d.pointer.x), f32::from(d.pointer.y), b.visible.clone(), d.moved)
             };
             on_end.0.borrow_mut().current = None;
+            // A16：标签拖出标签条下方 2 行即脱离成独立 OS 窗口（egui 的 detach 判定）。
+            if moved && pointer_y > HEIGHT * 3.0 {
+                wake_end.push(Cmd { id: "window.new", params: Some(json!({ "index": from })) });
+                wake_end.wake();
+                return;
+            }
             if moved
                 && let Some((to, _)) = tab_drop_position(&visible, from, pointer_x)
                 && to != from
@@ -330,6 +336,20 @@ pub(crate) fn tab_strip(
             })
             .on_mouse_down(MouseButton::Left, move |e: &MouseDownEvent, _window, _cx| {
                 begin_tab_drag(&drag, &drag_cmds, index, e.position);
+            })
+            // A16：标签右键的 "Open in new window"（egui `tabs.rs` 同款菜单项）。
+            .on_mouse_down(MouseButton::Right, {
+                let me_menu = me.clone();
+                let cmds_menu = cmds.clone();
+                move |e: &MouseDownEvent, _window, cx: &mut App| {
+                    let rows = vec![MenuRow::new("Open in new window")];
+                    let cmds_pick = cmds_menu.clone();
+                    let on_pick: Rc<dyn Fn(&str, &mut Window, &mut App)> = Rc::new(move |_label, _window, _cx| {
+                        cmds_pick.push(Cmd { id: "window.new", params: Some(json!({ "index": index })) });
+                    });
+                    let anchor = Bounds { origin: e.position, size: size(px(1.0), px(1.0)) };
+                    me_menu.update(cx, |cv, cx| cv.open_menu(anchor, Some(200.0), rows, on_pick, cx));
+                }
             })
             .child(icon::paint(file_mark(d.board), rgba(t.accent), BAR_ICON))
             .child(

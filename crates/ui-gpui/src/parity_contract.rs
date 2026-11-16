@@ -47,6 +47,7 @@ pub const CONTRACTS: &[Contract] = &[
         requires: &["view.themeDark", "pref.language", "pref.keepTool", "pref.userName", "pref.publishServer", "pref.nudge", "pref.uiScaleReset"],
     },
     Contract { id: "A18B4", requires: &["file.close", "file.save", "detach_window"] },
+    Contract { id: "A16", requires: &["os-window", "window.new", "detach_window"] },
     Contract { id: "A1", requires: &["home", "action_card", "home_section", "home-screen"] },
     Contract {
         id: "A2B3A27",
@@ -210,9 +211,22 @@ fn capabilities() -> BTreeSet<String> {
     if panels::extra::ui_action("home", &empty, 0).is_some() {
         out.insert("home".into());
     }
-    // A16/B4: only becomes true once the front-end really handles the engine's `window.new`
-    // request. It is *not* a token we can declare by hand.
-    if panels::extra::ui_action("window.new", &empty, 0).is_some() {
+    // A16/B4: derived from the real OS-window wiring and the engine request it consumes.
+    // `detach_window` requires all three sources, so reverting to the popover-only
+    // `open_window` or dropping the drag-out command turns the contract red.
+    let windows_src = include_str!("windows.rs");
+    let tabs_src = include_str!("tabs_view.rs");
+    let lib_src = include_str!("lib.rs");
+    if windows_src.contains(".open_window(") {
+        out.insert("os-window".into());
+    }
+    if lib_src.contains("\"window.new\" | \"window.focus\"") {
+        out.insert("window.new".into());
+    }
+    if windows_src.contains(".open_window(")
+        && tabs_src.contains("id: \"window.new\"")
+        && lib_src.contains("windows::requests")
+    {
         out.insert("detach_window".into());
     }
     out
