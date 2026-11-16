@@ -747,7 +747,7 @@ impl CanvasView {
 
         // R4/R5: 三处重命名共用的无边框输入框（Pages / Layers / 画布标签）。
         // 真正打开时 begin_inline_rename 会再建一个带提交回调的实例。
-        let inline_rename_field = inline_input::InlineInput::build(cx, inline_input::ROW_H, String::new(), |_text, _w, _cx| {});
+        let inline_rename_field = inline_input::InlineInput::build(cx, inline_input::ROW_H, 0.0, String::new(), |_text, _w, _cx| {});
 
         let extra_state = panels::extra::ExtraState::new(cx, &fields.queue());
 
@@ -2626,8 +2626,14 @@ impl CanvasView {
         // 的草稿带进来（表现是「第二次双击改成了第一个名字」）。
         let pending = self.inline_rename_pending.clone();
         let ids_for_cb = ids.clone();
-        let height = if target == InlineRenameTarget::Label { inline_input::LABEL_H } else { inline_input::ROW_H };
-        let editor = inline_input::InlineInput::build(cx, height, name, move |text, _w, _cx| {
+        // 组件只吃行高：行内三处各按自己那一行的行高，标签给标签框高。除了标签
+        // （静态文字来自 `painter.labels`，自带 `TEXT_NUDGE`），其余都不需要偏移。
+        let (height, text_top) = match target {
+            InlineRenameTarget::Label => (inline_input::LABEL_H, inline_input::label_text_top()),
+            InlineRenameTarget::Layer => (inline_input::LAYER_H, 0.0),
+            _ => (inline_input::ROW_H, 0.0),
+        };
+        let editor = inline_input::InlineInput::build(cx, height, text_top, name, move |text, _w, _cx| {
             *pending.borrow_mut() = Some((target, ids_for_cb.clone(), text.trim().to_string()));
         });
 
@@ -2645,18 +2651,15 @@ impl CanvasView {
     /// 不需要这一步 —— 这正是原来输入框位置不对的原因。
     ///
     /// 矩形公式逐项照抄 egui：`x = area.min.x`、`y = area.max.y - 16`、
-    /// `w = (text_w + 24).max(area.width).clamp(80, 480)`、`h = 16`（宽度用真实量算，
-    /// 不再是「字符数 × 6.5」的估算）。
+    /// `w = (text_w + 24).max(area.width).clamp(80, 480)`（宽度用真实量算，
+    /// 不再是「字符数 × 6.5」的估算）。高度用 `LABEL_H`（18 = 静态行盒），不是 egui 的 16。
     fn label_rename_rect(&self, window: &Window, id: Option<figcraft_doc::NodeId>) -> Option<(f32, f32, f32)> {
         let id = id?;
 
         let name = self.app.session.ds().ok().and_then(|ds| ds.doc.node(id).map(|n| n.name.clone())).unwrap_or_default();
 
         let shaped_name = name.replace(['\n', '\r'], " ");
-        let text_w = window
-            .text_system()
-            .shape_line(gpui::SharedString::from(shaped_name.clone()), px(11.0), &[window.text_style().to_run(shaped_name.len())], None)
-            .width;
+        let (text_w, _ink) = inline_input::text_measure(window, gpui::SharedString::from(shaped_name));
 
         let (ox, oy) = self.dock().canvas_origin();
 
@@ -2668,7 +2671,8 @@ impl CanvasView {
             let w = ds.doc.world_transform(id);
             let p = w * figcraft_geom::Point::new(0.0, 0.0);
             let s = self.app.to_screen(p.x, p.y);
-            return Some(inline_input::label_rename_fallback(s.x, s.y, f32::from(text_w), ox, oy));
+            let (x, y, w) = inline_input::label_rename_fallback(s.x, s.y, f32::from(text_w), ox, oy);
+            return Some((x, y, w));
         };
 
         let mut min_x = f32::MAX;
@@ -2686,7 +2690,8 @@ impl CanvasView {
             return None;
         }
 
-        Some(inline_input::label_rename_rect(min_x, max_x, max_y, f32::from(text_w), ox, oy))
+        let (x, y, w) = inline_input::label_rename_rect(min_x, max_x, max_y, f32::from(text_w), ox, oy);
+        Some((x, y, w))
     }
 
     pub(crate) fn toast(&mut self, text: impl Into<String>, cx: &mut Context<Self>) {

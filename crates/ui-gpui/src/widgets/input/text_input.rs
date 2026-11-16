@@ -302,20 +302,26 @@ impl TextInput {
             };
             let line = window.text_system().shape_line(display.clone(), font_size, &[run], None);
             let text_x = align.origin_x(bounds, line.width);
+            // 选区与光标用**同一条行盒**（`ascent + descent`），并且和文字同顶。
+            // 以前选区取 `bounds.size.height`（整个输入框的高度），高亮块比字形高一整截，
+            // 在 24pt 行里尤其明显；gpui-kit 的 Input 也是按行盒画选区与光标的。
+            let (line_origin, text_height) = centred_line_origin(bounds, &line, font_size, window);
+            let text_top = line_origin.y;
             let selection = if sel_a != sel_b {
                 let x0 = line.x_for_index(sel_a);
                 let x1 = line.x_for_index(sel_b);
-                Some(fill(Bounds { origin: point(text_x + x0, bounds.origin.y), size: size(x1 - x0, bounds.size.height) }, selection_color))
+                Some(fill(Bounds { origin: point(text_x + x0, text_top), size: size(x1 - x0, text_height) }, selection_color))
             } else {
                 None
             };
             let preedit = preedit_bytes.map(|(a, b)| {
                 let x0 = line.x_for_index(a);
                 let x1 = line.x_for_index(b);
-                fill(Bounds { origin: point(text_x + x0, bounds.origin.y + bounds.size.height - px(2.0)), size: size(x1 - x0, px(1.0)) }, color)
+                fill(Bounds { origin: point(text_x + x0, text_top + text_height - px(1.0)), size: size(x1 - x0, px(1.0)) }, color)
             });
-            // Blink: one ticker per editor, 530 ms on / 530 ms off, restarted whenever the field
-            // gains focus and reset to visible when it loses it.
+            // Blink: one ticker per editor, 500 ms on / 500 ms off (gpui-kit's `CursorBlink`
+            // default), restarted whenever the field gains focus and reset to visible when it
+            // loses it.
             if !focused {
                 blink.visible.set(true);
                 blink.started.set(false);
@@ -325,7 +331,7 @@ impl TextInput {
                 let e = blink_entity.clone();
                 cx.spawn(async move |cx: &mut gpui::AsyncApp| {
                     loop {
-                        cx.background_executor().timer(std::time::Duration::from_millis(530)).await;
+                        cx.background_executor().timer(std::time::Duration::from_millis(500)).await;
                         b.visible.set(!b.visible.get());
                         if e.update(cx, |_, cx| cx.notify()).is_err() {
                             break;
@@ -335,11 +341,8 @@ impl TextInput {
                 .detach();
             }
             let caret_visible = blink.visible.get();
-            // The caret shares the line box with the glyphs: same top, same height. Computing it
-            // from the field's own height instead (height − 8, centred) made the caret a
-            // different height from the text in every field that was not exactly 24 pt tall.
-            let (line_origin, text_height) = centred_line_origin(bounds, &line, font_size, window);
-            let text_top = line_origin.y;
+            // The caret shares the line box with the glyphs: same top, same height — both are
+            // taken from `centred_line_origin` above.
             let caret_quad = if focused && caret_visible && sel_a == sel_b {
                 let x = line.x_for_index(caret_byte);
                 // 1 pt wide with a 0.5 pt radius: both ends are round, so the caret reads as a
