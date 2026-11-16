@@ -42,8 +42,8 @@ const CARET_GAP: f32 = 1.0;
 const GAP: f32 = 8.0;
 /// The pill's left and right padding.
 const PAD: f32 = 8.0;
-/// The pill's height.
-const PILL_H: f32 = 48.0;
+/// The pill's height (also used to keep board connect's drag clear of it).
+pub(crate) const PILL_H: f32 = 48.0;
 /// The mode switcher's marks: smaller than the tools'.
 const MODE_GLYPH: f32 = 14.0;
 /// Draw · Design · Animation · Inspect.

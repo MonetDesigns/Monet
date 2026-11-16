@@ -105,6 +105,8 @@ mod icons_panel;
 
 mod board_bar;
 
+mod board_facilitate;
+
 mod board_picker;
 
 mod open;
@@ -649,6 +651,9 @@ pub struct CanvasView {
     /// B3: which connector popover is open: 0 none, 1 start cap, 2 end cap, 3 line style.
     board_line_open: std::rc::Rc<std::cell::RefCell<u8>>,
 
+    /// A27: the board facility pill's (timer / vote) popovers and their inputs.
+    board_fac: std::rc::Rc<std::cell::RefCell<board_facilitate::State>>,
+
     /// 当前打开的通用对话框（A19）。所有对话框共用 `dialogs::DialogState`，这里只存「有没有、
     /// 是哪一个」，控件状态由它自己保留。
     dialog: Option<dialogs::DialogState>,
@@ -905,6 +910,8 @@ impl CanvasView {
             board_shape_open: std::rc::Rc::new(std::cell::RefCell::new(false)),
 
             board_line_open: std::rc::Rc::new(std::cell::RefCell::new(0u8)),
+
+            board_fac: std::rc::Rc::new(std::cell::RefCell::new(board_facilitate::State::default())),
 
             dialog: None,
 
@@ -3844,6 +3851,8 @@ impl CanvasView {
             || self.app.handles.drag.is_some()
             || self.app.motion_gizmo.drag.is_some()
             || self.app.guides.drag.is_some()
+            || self.app.proto.drag.is_some()
+            || self.app.proto.ghost.is_some()
     }
 
     fn end_popup_drag(&mut self) {
@@ -3881,7 +3890,10 @@ impl CanvasView {
             || self.app.selection_spacing.is_dragging()
             || self.app.handles.drag.is_some()
             || self.app.motion_gizmo.drag.is_some()
-            || self.app.guides.drag.is_some();
+            || self.app.guides.drag.is_some()
+            || self.app.proto.drag.is_some()
+            || self.app.proto.ghost.is_some()
+            || self.app.connect.drag.is_some();
 
         if !active {
             return false;
@@ -3950,6 +3962,18 @@ impl CanvasView {
                 self.guide_input(pos, false, true, e.modifiers.alt);
             }
 
+            // A27：画板自动连线松手（点击新建 / 拖到对象上接连线 / 空白处新建）。
+            if self.app.connect.drag.is_some() {
+                canvas::board_connect::drag_end(&mut self.app);
+            }
+
+            // 原型：ghost 拖动落成一步撤销；连接拖到别的 frame 上新建交互并打开编辑器。
+            canvas::proto_canvas::end_ghost(&mut self.app);
+
+            if let Some(slot) = canvas::proto_canvas::drag_end(&mut self.app) {
+                self.fields.set_proto_editor(Some(slot));
+            }
+
             cx.notify();
 
             return true;
@@ -3962,6 +3986,26 @@ impl CanvasView {
         self.mods = e.modifiers;
 
         self.pointer = Some(pos);
+
+        // 原型：ghost 跟随 / 连接拖出（指针移出画布也不断）。
+        if canvas::proto_canvas::ghost_drag_move(&mut self.app, pos) {
+            cx.notify();
+
+            return true;
+        }
+
+        if canvas::proto_canvas::drag_move(&mut self.app, pos) {
+            cx.notify();
+
+            return true;
+        }
+
+        // A27：画板自动连线的拖动预览跟随指针。
+        if canvas::board_connect::drag_move(&mut self.app, pos) {
+            cx.notify();
+
+            return true;
+        }
 
         // 标尺参考线：按下后靠 move 连续更新，指针移到画布外也不能断。
         if self.app.guides.drag.is_some() {
@@ -4306,6 +4350,12 @@ impl Render for CanvasView {
         // egui 在 `FigApp::sync_dev_mode()` 做同一件事（进入时结束文字/矢量编辑、丢掉手势）。
 
         self.sync_dev_mode();
+
+        // Prototype 标签：画布原型连线只在 Prototype（非演示态）下画/收输入；
+        // 交互编辑器的开合状态由右栏持有，同步给画布读写。
+        self.app.proto_active = self.fields.right_tab() == 1 && self.present.is_none();
+
+        self.app.proto_editor = self.fields.proto_editor();
 
         // 控制通道：在真实的一帧里把排到的请求答掉（与原文 `drain(app, ctx)` 同处）。
 
@@ -4657,6 +4707,9 @@ impl Render for CanvasView {
             false
         };
 
+        // A27：画板计时器在走，每秒续一帧。
+        let fac_ticking = board_facilitate::ticking(&self.app);
+
         let shapes = gpui::canvas(
             |_, _, _| (),
             move |b, _, window, cx| {
@@ -4690,7 +4743,7 @@ impl Render for CanvasView {
 
                 // 播放中同样要续帧：动画的每一帧都是新的一帧画面。
 
-                if in_flight || motion_playing || present_playing || duration_ticking {
+                if in_flight || motion_playing || present_playing || duration_ticking || fac_ticking {
                     window.request_animation_frame();
                 }
             },
@@ -4708,6 +4761,11 @@ impl Render for CanvasView {
         // B3: the board selection's bar (colours first), above the selected board objects.
         if let Some(bar) = board_bar::bar(&self.app, self.fields.queue(), &self.board_shape_open, &self.board_line_open) {
             layers.push(bar);
+        }
+
+        // A27: the board facility pill (timer / vote) in the canvas's top-right corner.
+        if let Some(pill) = board_facilitate::pill(&self.app, self.fields.queue(), &self.board_fac) {
+            layers.push(pill);
         }
 
         // 文字层：GPUI 矢量文本，位置/居中由标签矩形决定。
@@ -4815,6 +4873,33 @@ impl Render for CanvasView {
                     this.pointer = Some(pos);
 
                     this.primary_down = true;
+
+                    // Prototype 连线：ghost / 「+」手柄 / 曲线，原文 `proto_canvas::input` 在
+                    // 参考线与各类手柄之前先跑。
+                    if !this.space && !this.zoom_key && this.app.proto_active {
+                        match canvas::proto_canvas::press(&mut this.app, pos) {
+                            canvas::proto_canvas::Press::Consumed => {
+                                this.fields.set_proto_editor(this.app.proto_editor);
+
+                                cx.notify();
+
+                                return;
+                            }
+
+                            canvas::proto_canvas::Press::CloseEditor => {
+                                this.fields.set_proto_editor(None);
+                            }
+
+                            canvas::proto_canvas::Press::Ignored => {}
+                        }
+                    }
+
+                    // A27：画板自动连线的「+」手柄，优先于参考线/手柄。
+                    if !this.space && !this.zoom_key && canvas::board_connect::press(&mut this.app, pos) {
+                        cx.notify();
+
+                        return;
+                    }
 
                     if !this.space && !this.zoom_key && this.guide_input(pos, true, false, e.modifiers.alt) {
                         cx.notify();
@@ -7075,6 +7160,21 @@ impl drag_manager::WindowDragTarget for CanvasView {
 
         if let Some(start) = self.zoom_drag.take() {
             self.finish_zoom(start, pos, e.modifiers.alt);
+
+            self.drag_just_ended = true;
+
+            cx.notify();
+
+            return;
+        }
+
+        // 原型：ghost / 连接拖出在窗口级抬起时收尾（指针移出画布也一样）。
+        if self.app.proto.ghost.is_some() || self.app.proto.drag.is_some() {
+            canvas::proto_canvas::end_ghost(&mut self.app);
+
+            if let Some(slot) = canvas::proto_canvas::drag_end(&mut self.app) {
+                self.fields.set_proto_editor(Some(slot));
+            }
 
             self.drag_just_ended = true;
 

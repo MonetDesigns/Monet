@@ -19,6 +19,10 @@ pub mod motion_overlay;
 pub mod outline;
 pub mod overlays;
 pub mod painter;
+/// Prototype 连线叠加层（原型连线 / 「+」手柄 / Manual overlay ghost）。
+pub mod proto_canvas;
+/// A27：画板自动连线（照 `ui-egui/src/canvas/board_connect.rs`）。
+pub mod board_connect;
 pub mod render;
 pub mod render_worker;
 pub mod rulers;
@@ -507,6 +511,8 @@ pub(crate) fn draw_overlays(app: &mut CanvasApp, painter: &mut Painter, t: &Toke
         Ok(ds) => (overlay_doc(tex_doc, display_doc, &ds.doc), ds.selection.clone()),
         Err(_) => (Arc::new(Document::new("empty")), Vec::new()),
     };
+    // Prototype 连线（egui `overlays.rs` 里第一件事就是画它）。
+    proto_canvas::draw(app, painter);
     // 叠加层（选中框/手柄/尺寸/框选/参考线）——与原实现同一份画法。
     // `overlays` 同时返回每个顶层帧/section 名称标签的矩形；写入 `tool.labels`，
     // 引擎 `label_at` 据此在点击标签时选中/拖拽对应容器（照搬 `ui-egui`）。
@@ -522,6 +528,10 @@ pub(crate) fn draw_overlays(app: &mut CanvasApp, painter: &mut Painter, t: &Toke
     handles::draw(app, painter, app.pointer);
     // 多选间距/重排手柄（原 `canvas.rs` 在 `handles::draw` 之后调 `selection_spacing::draw`）。
     selection_spacing::draw(app, painter);
+    // A27：画板自动连线的「+」手柄、悬停落点与拖动预览（egui `board_connect::draw`）。
+    board_connect::draw(app, painter);
+    // A27：投票徽标（egui `board_facilitate::badges`）。
+    crate::board_facilitate::badges(app, painter);
     // 标尺（View ▸ Rulers）。
     if app.session.ds().map(|d| d.view.rulers).unwrap_or(true) {
         rulers::rulers(app, painter, t, doc.as_ref(), &sel);

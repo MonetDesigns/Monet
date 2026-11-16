@@ -50,6 +50,15 @@ pub struct CanvasApp {
     pub motion_overlay: crate::canvas::motion_overlay::State,
     /// Motion gizmo 的跨帧拖动句柄（`State` 每帧重建，放不下）。
     pub motion_gizmo: crate::canvas::motion_overlay::Interaction,
+    /// Prototype 标签是否激活且不在演示态（egui `proto_canvas::active`）。
+    /// 每帧由 `CanvasView::render` 从 `RightFields::right_tab` / `present` 同步。
+    pub proto_active: bool,
+    /// 右栏交互编辑器开在哪个槽（`(节点, 交互序号)`）；画布点击曲线/手柄会写它。
+    pub proto_editor: Option<(NodeId, usize)>,
+    /// 原型连线的跨帧拖拽状态（拖出的连接 / 正在拖的 overlay ghost）。
+    pub(crate) proto: crate::canvas::proto_canvas::State,
+    /// A27：画板自动连线的跨帧拖拽状态（从「+」拖出的一段）。
+    pub(crate) connect: crate::canvas::board_connect::State,
     /// 本帧画布要显示的文档（Motion 求值后的预览）；None = 源文档。
     /// 由 `CanvasView::sync_motion` 每帧设置，渲染请求与叠加层都读它，
     /// 这样 `ds.doc` 在一帧内不再被临时替换，引擎 / 撤销 / 命中 / 右栏始终看到源文档。
@@ -76,6 +85,10 @@ impl CanvasApp {
             dev_cat_filter: None,
             motion_overlay: crate::canvas::motion_overlay::State::default(),
             motion_gizmo: crate::canvas::motion_overlay::Interaction::default(),
+            proto_active: false,
+            proto_editor: None,
+            proto: crate::canvas::proto_canvas::State::default(),
+            connect: crate::canvas::board_connect::State::default(),
             display_doc: None,
         };
         // 预选一个自动布局容器：启动即可见 hatch（紧贴轮廓 + padding 蓝斜线 + spacing 粉斜线），

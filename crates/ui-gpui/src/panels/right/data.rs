@@ -311,6 +311,8 @@ pub struct ScrollData {
 /// Prototype 面板的全部数据（无选中 = flows + settings；有选中 = flow / interactions / scroll）。
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct ProtoData {
+    /// 交互列表所属的节点（画布原型连线/手柄打开编辑器时要用 `(节点, 行)` 定位）。
+    pub node: Option<NodeId>,
     pub flows: Vec<FlowRow>,
     pub settings: ProtoSettingsData,
     /// `Some(inner)` = 选中节点是顶层 frame；`inner` 是它的 flow 行（还没有起点时 `None`）。
@@ -379,6 +381,7 @@ pub fn read_proto(doc: &Document, ids: &[NodeId], page: Option<NodeId>) -> Proto
     }
 
     let first = ids.first().copied();
+    p.node = first;
     // ── Flow starting point（顶层 frame 才有）──
     if let Some(id) = first
         && doc.top_level_frame(id) == Some(id)

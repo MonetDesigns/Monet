@@ -20,35 +20,38 @@
 
 ## A. 完全缺失的界面（GPUI 没有任何对应 UI）
 
+> **2026-11-16 打勾**：按代码实况重审本表，已完成项在「GPUI 现状」列首标 ✅（部分完成标 🔄）；
+> 详细落地证据见 M / Q / W / Y / Z / AA / AB 各节。
+
 | # | 界面 | EGUI 参照 | GPUI 现状（证据） | 影响 | 优先级 | 规模 |
 |---|---|---|---|---|---|---|
 | A1 | **首页 Home**（Recents / Online / Templates / Getting started） | `home.rs` + `home/` | ✅ `doc.home` → `home` ui_request → `ExtraKind::Home`；`home_body` 读 `prefs.recent_files` / `getting_started_dismissed`，命令全走引擎（`file.openRecent` 等），复用面板 `pill`/`note` | Online 区与缩略图网格仍未做 | P1 | 大 |
-| A2 | **画板模式 Boards**（笔/荧光笔/橡皮/便签/画板形状/连接线 + 画板画布） | `canvas/board_bar.rs`、`canvas/board_facilitate.rs`、`canvas/board_connect.rs`、`widgets/board_picker.rs`、`engine/src/boards`（**原文写的 `panels/boards/*` 目录不存在**） | 工具条无 `Marker/Highlighter/Eraser/Sticky/BoardShape/Connector` 任何 id（`toolbar.rs:60-82` 只有设计模式 6 组）；`board.timer` / `board.vote` / `addConnected` / `facilitate` / `BoardTimer` 全部 0 命中 | 整块白板功能不可用（计时器、投票、自动连线仍缺）；**2026-11-11 自检更正**：模板选择器已落地（M 节），此列原写「一起缺」是落后描述 | P1 | 大 |
-| A3 | **评论 Comments**（评论工具之外的评论列表/气泡/回复） | `comments_*`、`canvas/comments.rs` | 只有工具按钮 `ToolId::Comment`（`toolbar.rs:80`），无评论面板/线程 UI | 能点工具，无处查看/回复评论 | P1 | 中 |
-| A4 | **插件面板 Plugins**（浏览、安装、启用） | `dialogs/plugins_ui.rs`、`plugin_panel` | 只有主菜单 `"Plugins"` 字样（`main_menu.rs:37`），无浏览/管理面板 | 插件生态入口缺失 | P1 | 中 |
+| A2 | **画板模式 Boards**（笔/荧光笔/橡皮/便签/画板形状/连接线 + 画板画布） | `canvas/board_bar.rs`、`canvas/board_facilitate.rs`、`canvas/board_connect.rs`、`widgets/board_picker.rs`、`engine/src/boards`（**原文写的 `panels/boards/*` 目录不存在**） | ✅ 工具组在 `board_bar.rs`（笔/荧光笔/橡皮/便签/画板形状/连接线）；模板与表格行列选择器在 `board_picker.rs`；协作药丸与票数徽标在 `board_facilitate.rs`；四向「+」自动连线在 `canvas/board_connect.rs`（AA 节）；`board.timer` / `board.vote` / `board.addConnected` 全部接通 | 已可用；实机视觉冒烟待跑 | P1 | 大 |
+| A3 | **评论 Comments**（评论工具之外的评论列表/气泡/回复） | `comments_*`、`canvas/comments.rs` | ✅ `comments.rs`：`CommentUi`（filter/sort/search/open）+ 列表面板 + 画布 pin，全部走 `figcraft_engine::cmd::comment`（结构与 egui 同） | 无 | P1 | 中 |
+| A4 | **插件面板 Plugins**（浏览、安装、启用） | `dialogs/plugins_ui.rs`、`plugin_panel` | ✅ `dialogs.rs::Kind::Plugins`：已装列表（名称/版本/简介/Remove）+ `plugin.import` | Browse 联网拉取插件目录仍是后台任务（未接） | P1 | 中 |
 | A5 | **图标面板 Icons**（图标库插入） | `icons_panel.rs`（469 行） | ✅ 2026-11-11 落地 `crates/ui-gpui/src/icons_panel.rs`：搜索（名称 / 码位 / `U+` 前缀）、`New icon font`（`icon.font.create`）、字体条目（名称 + 重建 `icon.generateFont` + 删除 `icon.font.delete`）、图标行（按 outline 真实光栅化的预览、名称、`U+XXXX`、删除 `icon.delete`、点击复制字符到剪贴板）；空态两条。**2026-11-11 自检更正（R.4）**：入口 `ui.set {leftTab:"icons"}` → 左面板 tab 2，不再走 `ExtraKind::Icons` 居中浮层；原写「同一套整面板浮层约定」属错配残留，见 R / T 节 | 拖到画布插入文字层、行内改名 / 改码位、拖拽排序、导出字体（`icon.exportFont` + 保存对话框）未移植（egui 有）；重建按钮已按 egui 语义先逐图标 `icon.update` 再 `icon.generateFont` | P2 | 中 |
 | A6 | **导出对话框 Export**（格式/倍数/预览/多选导出） | `dialogs/export.rs:64 export_dialog` | ✅ A19 通用壳 + `Field::Preview` 位图预览（`export_preview.rs` 调 `figcraft_render::render_node`） | 多选导出、逐格式参数、原生路径选择仍缺；预览为 0.25 倍位图，不随格式实时切换 | P0 | 中 |
 | A7 | **首选项 Preferences 对话框** | `dialogs.rs:211 show`（Preferences 分支） | ✅ 补上 Language（`pref.language`）、Scroll wheel（`pref.scrollWheelZoom`）、`Reset widths`（`view.panelWidths` 空参数 = 引擎自带的重置语义） | 语言框只列 6 个常用项，其余 BCP 47 代码引擎仍支持但 UI 未列 | P0 | 中 |
-| A8 | **批量重命名 Batch rename** | `dialogs/batch_rename.rs` | 搜 `"Rename layers"` 0 命中 | 多选改名只能逐个 | P2 | 小 |
-| A9 | **分支 UI Branch** | `dialogs/branch_ui.rs` | 搜 `branch` 只命中控制通道/文本编辑，无 UI | 分支管理不可用 | P2 | 中 |
-| A10 | **色彩配置 Color profile** | `dialogs/color_profile.rs` | 仅 `panels/right/sections.rs:1823` 注释提到 Page 设置 | 色域 / 配置文件不可设 | P2 | 小 |
-| A11 | **Credits / 贡献者** | `dialogs/credits.rs` | 0 处引用 | 关于页缺失 | P3 | 小 |
-| A12 | **导入报告 Import report** | `dialogs/import_report.rs` | 0 处引用 | 导入结果/警告不可见 | P2 | 小 |
-| A13 | **缺失字体提示 Missing fonts** | `dialogs/missing_fonts.rs` | **2026-11-11 自检更正**：已落地 `dialogs.rs::Kind::MissingFonts`（`dialog.missingFonts` → Spec + 形状测试），原「0 处引用」是**判断失误** | ~~打开缺字体文件无提示/替换入口~~ 已可做替换（仍是居中对话框） | P2 | 小 |
-| A14 | **更新对话框 Updates** | `dialogs/updates_ui.rs` + craft-update | 0 处引用 | 无法检查/安装更新 | P1 | 中 |
-| A15 | **取色器 Eyedropper / Sampled color** | `dialogs/sampled_color.rs` | 只有光标名命中（`canvas/cursors.rs`），无取样 UI | 屏幕取色不可用 | P2 | 小 |
+| A8 | **批量重命名 Batch rename** | `dialogs/batch_rename.rs` | ✅ 2026-11-13 1:1 落地（Y 节）：Match / 正则 / Rename to / `$& $n $N` / Start / 前 5 行实时预览，提交 `object.batchRename` | 无（Enter 提交 / 聚焦全选见 Y.3） | P2 | 小 |
+| A9 | **分支 UI Branch** | `dialogs/branch_ui.rs` | ✅ `dialogs.rs::Kind::Branch`：列表（Open/Archive）+ 创建 | 并排 review 窗口未做 | P2 | 中 |
+| A10 | **色彩配置 Color profile** | `dialogs/color_profile.rs` | ✅ 2026-11-13 1:1：sRGB / Display P3 单选 + Keep appearance / Keep values → `file.colorProfile` | 无 | P2 | 小 |
+| A11 | **Credits / 贡献者** | `dialogs/credits.rs` | 🔄 `Kind::About` 只有版本 / 许可提示 | egui 670 行贡献者表未搬 | P3 | 小 |
+| A12 | **导入报告 Import report** | `dialogs/import_report.rs` | 🔄 `Kind::ImportReport` 已映射（`dialog.importReport` / `dialog.import`），但引擎不发该请求 | 需在导入命令执行路径捕获 `warnings` | P2 | 小 |
+| A13 | **缺失字体提示 Missing fonts** | `dialogs/missing_fonts.rs` | ✅ **2026-11-11 自检更正**：已落地 `dialogs.rs::Kind::MissingFonts`（`dialog.missingFonts` → Spec + 形状测试），原「0 处引用」是**判断失误** | ~~打开缺字体文件无提示/替换入口~~ 已可做替换（仍是居中对话框） | P2 | 小 |
+| A14 | **更新对话框 Updates** | `dialogs/updates_ui.rs` + craft-update | 0 处引用 | 无法检查/安装更新（依赖 C2 升版） | P1 | 中 |
+| A15 | **取色器 Eyedropper / Sampled color** | `dialogs/sampled_color.rs` | 🔄 `Kind::SampledColor` 已存在（提示窗） | egui 的 Style / Variable + 集合 + Create 未搬（需给 `Action` 加按字段选命令的变体） | P2 | 小 |
 | A16 | **多窗口**（File ▸ New window / Open in new window / 标签拖出成窗口） | `windows.rs` | `open_window` 是弹层 `popovers::WindowState`，非 OS 多窗口 | 只能单窗口 | P2 | 大 |
-| A17 | **菜单项取值对话框**（Create link / Offset path / Move to page 等） | `dialogs/menu_input.rs` | 无对应实现 | 这些命令没有输入入口 | P2 | 小 |
+| A17 | **菜单项取值对话框**（Create link / Offset path / Move to page 等） | `dialogs/menu_input.rs` | 🔄 `Kind::Link` 已 1:1（URL 输入 → `text.link`） | Offset path / Move to page 两类未搬 | P2 | 小 |
 | A18 | **标签关闭未保存询问**（Don't Save / Cancel / Save；Alt+close 直接丢弃） | `windows.rs:392,422,542`（引擎请求 `dialog.unsaved`，**原文写的 `app.rs` #2032 不是对话框所在处**） | ✅ 已落地：`tabs_view.rs:388,392` 的 `force: e.modifiers.alt`、`lib.rs:1400` 消费 `dialog.unsaved`、`dialogs.rs:285-295` 三问 | Save 后不会自动再关闭；拖出成窗口（A16）仍缺（见 I 节） | P1 | 小 |
-| **A19** | **通用对话框框架**（数据驱动：标题 / 说明 / 字段 / 按钮 / 确认取消 / Escape / 遮罩） | `dialogs.rs`（579 行，`renderers()` 统一 About·Preferences·Shortcuts·Find·Rename·Variables·Export） | **2026-11-11 自检更正**：已落地 `dialogs.rs`（`Kind::ALL` 16 种 + `Spec` + `parity_contract` 双向比对）；原两处是 2026-11-10 扫描快照，现已过时 | **A6/A7/A8/A10/A11/A12/A13/A15/A17/A18 十个对话框的共同前置**；不做就只能每个各造一套壳 | **P0** | 中 |
-| **A20** | **查找替换 Find and replace** | `dialogs.rs:368-404`（`edit.findReplace`） | **2026-11-11 自检更正**：已落地 `Kind::Find`（`edit.findReplace` / `dialog.find` → Spec + Find / Replace all 按钮 + 3 条测试），原「全 0 命中」是**判断失误** | ~~无法批量查找替换~~ 已可用（仍是居中对话框，非 EGUI 内联） | P1 | 小 |
+| **A19** | **通用对话框框架**（数据驱动：标题 / 说明 / 字段 / 按钮 / 确认取消 / Escape / 遮罩） | `dialogs.rs`（579 行，`renderers()` 统一 About·Preferences·Shortcuts·Find·Rename·Variables·Export） | ✅ **2026-11-11 自检更正**：已落地 `dialogs.rs`（`Kind::ALL` 16 种 + `Spec` + `parity_contract` 双向比对）；原两处是 2026-11-10 扫描快照，现已过时 | **A6/A7/A8/A10/A11/A12/A13/A15/A17/A18 十个对话框的共同前置** | **P0** | 中 |
+| **A20** | **查找替换 Find and replace** | `dialogs.rs:368-404`（`edit.findReplace`） | ✅ **2026-11-11 自检更正**：已落地 `Kind::Find`（`edit.findReplace` / `dialog.find` → Spec + Find / Replace all 按钮 + 3 条测试），原「全 0 命中」是**判断失误** | ~~无法批量查找替换~~ 已可用（仍是居中对话框，非 EGUI 内联） | P1 | 小 |
 | **A21** | **无障碍 a11y**（AccessKit 树、F6/Shift+F6 区域切换、Tab 焦点环、方向键导航） | `a11y.rs`（1071 行，`focus.region` 请求） | `AccessKit` / `accesskit` / `focus_ring` / `Key::F6` 全 0；`tabs_view.rs:13` 自认「a11y（AccessKit，P4）」 | 键盘/读屏用户不可用 | P2 | 大 |
 | **A22** | **双向文字 + 界面缩放**（UAX#9 名称、阿拉伯连字、括号镜像；`pref.uiScale`） | `bidi.rs`（127 行）、`ui_scale.rs`（117 行） | `bidi` / `UAX` / `ui_scale` / `pixels_per_point` 全 0；`tabs_view.rs:134` 自认没有 `bidi::paint_name` | RTL 语言图层名错乱；界面大小不可调（A7 只以「等设置」带过） | P2 | 中 |
 | **A23** | **平台服务层**（原生文件对话框 / 剪贴板 / `OPEN_EXTENSIONS` / 拖放进度卡片 / IME） | `services.rs`、`open.rs`、`pending_open.rs`、`app/ime.rs`、`app/clipboard.rs` | `pick_open` / `OPEN_EXTENSIONS` / `pending_open` 全 0；`context_menu.rs:44` 自认「clipboard and file dialogs — which this front-end does not have yet」 | 打开/另存/复制粘贴走不通原生路径 | P2 | 中 |
 | **A24** | **字段通用行为**（数字框 `+10/*2/50%` 相对运算、字体预览、实时文本提示、`menus/select_layer.rs`） | `widgets/field_math.rs`、`widgets/font_preview.rs`、`canvas/live_text.rs`、`menus/select_layer.rs` | `field_math` / `font_preview` / `editing_hint` / `select_layer` 全 0 | 数值/字体/文本编辑体验缺失（属通用行为，宜一次补齐给所有字段复用） | P3 | 中 |
-| **A25** | **插件 widget 悬浮栏** | `canvas/widget_bar.rs`（113 行，`widget.menu`） | `widget.menu` / `widget_bar` 0 命中；A4 只提了插件面板 | 画布上的插件小工具入口缺失 | P2 | 小 |
-| **A26** | **原型画布连线**（noodles、「+」拖拽手柄、overlay ghost） | `canvas/proto_canvas.rs`（341 行）+ `canvas/proto_canvas/overlay_ghost.rs` | `proto_canvas` / `noodle` / `overlay_ghost` 全 0；只有右栏属性 `panels/right/proto.rs` | 原型交互只能在属性面板配，画布上连不了线 | P2 | 中 |
-| **A27** | **画板协作小工具**（计时器 / 投票 / 自动连接 / 模板与表格行列选择器） | `canvas/board_facilitate.rs`（340 行）、`canvas/board_connect.rs`（255 行）、`widgets/board_picker.rs`（163 行） | `board.timer` / `board.vote` / `addConnected` / `connected_place` / `BoardTimer` 全 0 | A2 只点了工具条，实际还差整块画板交互 | P2 | 中 |
+| **A25** | **插件 widget 悬浮栏** | `canvas/widget_bar.rs`（113 行，`widget.menu`） | ✅ `widget_bar.rs` 已移植（同一套 HEIGHT/CELL/SWATCH/GAP/PAD 与 `widget.menu` 载荷），`lib.rs:4750` 接入 | 无 | P2 | 小 |
+| **A26** | **原型画布连线**（noodles、「+」拖拽手柄、overlay ghost） | `canvas/proto_canvas.rs`（341 行）+ `canvas/proto_canvas/overlay_ghost.rs` | ✅ 2026-11-16 已落地 `canvas/proto_canvas.rs`（Z 节）：连线曲线 / 命中 / 「+」手柄 / ghost 拖动全接 | 无（缩略图铺底走 accent 填充分支） | P2 | 中 |
+| **A27** | **画板协作小工具**（计时器 / 投票 / 自动连接 / 模板与表格行列选择器） | `canvas/board_facilitate.rs`（340 行）、`canvas/board_connect.rs`（255 行）、`widgets/board_picker.rs`（163 行） | ✅ **2026-11-16 已落地**：`board_facilitate.rs`（药丸 + 计时器/投票/结果弹层 + 票数徽标）、`canvas/board_connect.rs`（四向「+」、悬停落点、拖动建/连线）；模板选择器此前已在 `board_picker.rs` | 已可用（实机视觉冒烟待跑） | P2 | 中 |
 | **A28** | **Live 协作前端整块**（光标 / 聊天 / spotlight / 共享 / 加入 / 断连标记） | `live.rs`（1571 行）+ `live/agent.rs`（101 行） | `find crates/ui-gpui/src -iname '*live*' -o -iname '*collab*'` = **0 文件**；`tabs_view.rs:13` 自认「live/断连标记（P0-2）」未做 | 原 B5 写成「26 个文件规模、需逐项比对」，实际 GPUI 完全没有；应归到「完全缺失」 | P1 | 大 |
 
 ---
@@ -59,7 +62,7 @@
 |---|---|---|---|---|---|
 | B1 | ~~右栏第三个 tab~~ | `"Developer Mode"`（#2135 商标改名，`right_tab_label()` + 命名回归测试） | 改名与命名回归测试已落地；**2026-11-10 用户要求从右栏 tabs 行去掉该按钮**，现只剩 Design / Prototype。`naming.rs` 的常量/函数保留给 a11y 与其它入口，Developer Mode 面板仍可从底部工具栏 开发 或 Shift+D 进入 | 命名合规完成；可见 tab 按用户要求移除；底部模式切换第 4 格 `Inspect`→`开发`（修掉退役名），动画/开发模式下右栏 tabs 行改为显示「动画」/「开发」文本（见下方进度） | ✅ |
 | B2 | ~~Actions 调色板（Cmd+K）~~ | 三个 tab `All / Assets / Plugins & widgets`、`Recents`、前缀优先排序、最多 60 行（`menus/palette.rs:90,162,170`） | 2026-11-10 落地 `palette.rs`：三 tab + Recents（读引擎 `prefs.recent_actions`）+ 按顶层菜单分组 + 搜索时前缀优先/60 行上限 + Assets/Plugins/widgets 真实数据 | 键盘上下键选中、Enter 运行高亮行、实时过滤（冻结的 `TextField` 只有 commit 回调）未移植；见 H 节 18:4x | ✅ |
-| B3 | 工具条 | 设计模式 6 组 + **画板模式 8 组**（bmove/marker/sticky/bshape/connector/text/section…） | 设计模式 6 组齐全；画板组全无（`toolbar.rs:17-20` 明写未移植） | 见 A2 / A27 | P1 |
+| B3 | 工具条 | 设计模式 6 组 + **画板模式 8 组**（bmove/marker/sticky/bshape/connector/text/section…） | ✅ 设计模式 6 组 + 画板工具组（`board_bar.rs`）均已落地；模板 / 行列选择器见 `board_picker.rs` | 无 | P1 |
 | B4 | 标签条 | 拖拽重排、关闭询问、拖出成窗口、Alt+close 直接丢弃 | 拖拽重排与关闭询问均已接；**拖出成窗口仍缺**：引擎有 `window.new` 请求，但 GPUI 需重构 `Session` 所有权才能共享会话（见 J 节） | 见 A16 与 J 节 | 🔄 |
 | B5 | ~~协作 Live~~ | ~~59 个文件规模~~ → 实为 `live.rs` + `live/agent.rs` 共 1672 行 | ~~26 个文件规模~~ → **0 个文件**，整块缺失 | **已移到 A28**；原文「需逐项比对」严重低估 | P1（见 A28） |
 | B6 | 变量面板 | Full / Floating + 表格列、重命名、导出 | `variables_full` 有（`lib.rs:585`），`WindowKind::VariablesTable` 有 | 列行为/多选/导出细节待逐项核 | P2 |
@@ -1043,5 +1046,87 @@ R 节（17:0x 审计）把 R1/R2 标成「✅ 已实施」，但回源码核对�
   语义，本轮未接（按钮提交已可用）；接它需要确认冻结件的焦点事件。
 - **select_all_on_focus**：egui 两个输入框聚焦时全选，冻结 `TextField` 无此钩子，未做。
 - **实机视觉验证**：像素级比对与双击打字冒烟需跑 GUI，单测不能替代。
-- ImportReport（引擎捕获导入 warnings）、Link 的 Offset/移动到页、A4 Browse 联网、
-  A27 计时器/投票、A26 原型连线仍是 X.1 的后续批次。
+- ImportReport（引擎捕获导入 warnings）、Link 的 Offset/移动到页、A4 Browse 联网仍是 X.1
+  的后续批次（A27 计时器/投票已迁，见 AA）。
+- A26 原型连线已迁（见 Z）；其中 ghost 的缩略图铺底依赖资产缩略图管线（A4），暂走 egui
+  缩略图缺失时的 12% accent 填充分支。
+
+## Z. 原型画布连线（A26）已迁移（2026-11-16）
+
+照 `ui-egui/src/canvas/proto_canvas.rs` + `proto_canvas/overlay_ghost.rs` 1:1 移植到
+`ui-gpui/src/canvas/proto_canvas.rs`，挂在 `draw_overlays` 的最前面（与 egui `overlays()` 同序）。
+
+- **连线**：Prototype 标签且非演示态时，给每个带交互的图层画到目标 frame 的三次曲线（GPUI
+  画笔无贝塞尔图元，按 32 段折线采样）＋ 起点圆点 ＋ 箭头；选中层或正在编辑时加粗并把目标
+  frame 框出来；命中曲线（5px）点击选中源图层并打开该条交互的编辑器。
+- **「+」连接手柄**：选中层右边缘垂直居中；按下起拖、拖过其它顶层 frame 松开即
+  `proto.interaction.add`（引擎返回 index）并打开编辑器；拖动中高亮目标 frame。section
+  目标按原实现落到它所在 frame 显示的最后一张图。
+- **ghost**：编辑器开在 Manual Open overlay 上时画目标 frame 轮廓，可拖动改 `offset`
+  （`begin_interaction` / `proto.action.set` / `commit_interaction` 整段一步撤销），条件块
+  里的 Manual overlay 也能找到（路径 `[块内下标…]`）。
+- **状态**：跨帧拖拽放 `CanvasApp::proto`；编辑器开合由右栏 `RightFields::proto_open`
+  持有，类型由 `Option<usize>` 改为 `Option<(NodeId, usize)>`（画布也能打开，切选不串行），
+  每帧同步进 `CanvasApp::proto_editor` / `proto_active`。
+- **输入优先级**：画布按下先跑原型（ghost → 手柄 → 曲线 → 收起编辑器），再走参考线/各类
+  手柄；拖动接入 `route_canvas_drag` 与窗口级抬起，指针移出画布也能松手。
+- **验收**：`cargo check -p figcraft-ui-gpui` 通过；
+  `cargo test -p figcraft-ui-gpui --lib --features test-support proto_canvas` 2/2 通过。
+  实机视觉冒烟（连线/手柄/ghost 拖动）仍需跑 GUI。
+
+## AA. 画板协作（A27）已迁移（2026-11-16）
+
+照 `ui-egui/src/canvas/board_facilitate.rs` 与 `board_connect.rs` 1:1 移植：
+
+- **协作条**（`ui-gpui/src/board_facilitate.rs`）：画布右上角药丸 —— 计时器（预设 1/3/5/10/15
+  分钟、自定义分钟步进、开始/暂停/继续/加 1 分钟/停止、完成转红）＋ 分隔线 ＋ 投票（每人票数、
+  范围 All / Sticky notes / Selection、开始/剩余票数/结束、结果翻页与 Clear / Delete）。全部走
+  `board.timer` / `board.vote`；结果行点击 `select.set`。药丸只出现在画板上。
+- **票数徽标**：`badges` 在 `draw_overlays` 末尾按对象画 accent 圆 + 白圈 + 票数（投票中显示
+  自己的票，结束后显示统计），与 egui `BADGE_PX` / `facilitate::badge` 同算法。
+- **自动连线**（`ui-gpui/src/canvas/board_connect.rs`）：单个选中的便签/形状四边 `REACH=36`
+  处画「+」；悬停显示该侧下一个对象的虚线落点与连线；按下起拖，拖动中选中条让开、预览跟指针，
+  松手在空白处 `board.addConnected {at}`、在别的便签/形状（section/frame 内亦可）上
+  `board.connector`，出画布或落在底部工具栏上什么也不做；点击与拖动的区分用 4px 阈值。
+- **输入优先级**：画布按下先跑「+」手柄，再走参考线/手柄；拖动接入窗口级移动与抬起；换选后
+  拖动自动作废。计时器在走时每帧续帧（`board_facilitate::ticking`）。
+- **验收**：`cargo check -p figcraft-ui-gpui` 通过；
+  `cargo test -p figcraft-ui-gpui --lib --features test-support board_connect` 6/6、
+  `board_facilitate` 3/3 通过；`parity_contract` 4/4 通过。实机视觉冒烟仍待跑 GUI。
+
+## AB. 2026-11-16 计划表对账与打勾
+
+按 `crates/ui-gpui/src` 代码实况重审 A / B 表，已完成项在 A 表首标 ✅（部分完成标 🔄）。
+本节只记「状态」，落地证据仍在各自小节。
+
+**✅ 已完成（可直接打勾）**
+
+| 条目 | 证据 |
+|---|---|
+| A1 首页 | `home/mod.rs` + `doc.home` → Home；Recents / Templates / Getting started 全接（Online 区与缩略图网格除外） |
+| A2 画板模式 | `board_bar.rs` 工具组 + `board_picker.rs` 模板/行列选择器 + AA 节协作/连线 |
+| A3 评论 | `comments.rs` 面板 + 画布 pin，`lib.rs` / `canvas/mod.rs` 已接入 |
+| A4 插件面板 | `dialogs.rs::Kind::Plugins`（已装列表 + `plugin.import`） |
+| A5 图标面板 | Q 节（左栏 tab 2） |
+| A6 导出对话框 | A19 通用壳 + `export_preview.rs` 位图预览 |
+| A7 首选项 | A19 通用壳（Language / Scroll wheel / Reset widths） |
+| A8 批量重命名 | Y 节（1:1） |
+| A9 分支 UI | `Kind::Branch`（列表 Open/Archive + 创建） |
+| A10 色彩配置 | X.0 / `Kind::ColorProfile`（1:1） |
+| A13 缺失字体 | `Kind::MissingFonts`（提示窗） |
+| A18 标签关闭三问 | I 节（`dialog.unsaved` → Don't Save / Cancel / Save） |
+| A19 通用对话框框架 | `dialogs.rs`（16 种 `Kind` + `Spec` + `parity_contract`） |
+| A20 查找替换 | `Kind::Find` |
+| A25 插件 widget 悬浮栏 | `widget_bar.rs` + `lib.rs:4750` |
+| A26 原型画布连线 | Z 节 |
+| A27 画板协作 | AA 节 |
+| B1 / B2 / B9 | 命名合规 / Actions 调色板三 tab / Hide UI · Minimize UI |
+| B3 工具条 | 设计模式 6 组 + 画板工具组 |
+| C1 / C5 | Developer Mode 文案 / `.fig` 实例缩放 |
+
+**🔄 部分完成（有 UI，细节未齐）**：A11（About 贡献者表）、A12（引擎不发导入报告请求）、
+A15（SampledColor 仅提示窗）、A17（Link 已 1:1，Offset / Move to page 未搬）、B4（拖出成窗口）、
+B6 / B7 / B8 / B10。
+
+**❌ 仍未开始**：A14（依赖 C2 升版）、A16 多窗口、A21 a11y、A22 bidi/ui_scale、A24 字段通用行为、
+A28 Live 协作前端、C2、C3（文案规范待全面对齐）。
