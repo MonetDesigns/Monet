@@ -721,7 +721,11 @@ impl CanvasView {
         if authoritative {
             wins.focused = wid;
         }
-        let drives = authoritative || wid == 0 || wins.focused == wid;
+        // ⛔ 渲染时**不能**用 `entry.active` 覆盖 `session.active`：用户刚点标签切换、
+        // `doc.switch` 已经把 active 改到新文档，下一帧再被覆盖回去 → 「标签切不动」。
+        // 只有当前 active 不属于本窗口（窗口刚出现 / 文档被拖走）时才需要修正。
+        let cur_owned = self.app.session.ds().ok().map(|d| d.uid).is_some_and(|uid| wins.of(uid) == wid);
+        let drives = authoritative || !cur_owned;
         // 只能绑定**本窗口拥有**的文档：否则主窗口会把「已经被拖到别的窗口」的文档设成
         // 全局 active，画布显示一份它没有标签的文档（用户 2026-11-16：切不过去）。
         if drives
@@ -2100,6 +2104,17 @@ impl CanvasView {
             let ids = self.app.session.ds().ok().map(|d| d.selection.clone()).unwrap_or_default();
 
             for c in cmds {
+                // ⛔ 只能操作**本窗口拥有**的文档：否则第二个窗口能切到 / 关掉第一个窗口的文件
+                // （用户 2026-11-16 实测）。`index` 是 `session.docs` 的下标。
+                if matches!(c.id, "doc.switch" | "file.close")
+                    && let Some(i) = c.params.as_ref().and_then(|p| p.get("index")).and_then(|v| v.as_u64())
+                {
+                    // 只有带 `index` 的才校验；按 id 关闭等其它形式保持原样。
+                    let owner = self.app.session.docs.get(i as usize).map(|d| self.windows.borrow().of(d.uid));
+                    if owner != Some(crate::windows::current()) {
+                        continue;
+                    }
+                }
                 // egui ran `app.run(cmd, {"ids": ids})`; extra command params (e.g.
 
                 // `effect.add {type:"dropShadow"}`) are merged into that object here.
