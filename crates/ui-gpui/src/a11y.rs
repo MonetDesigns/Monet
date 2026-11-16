@@ -13,7 +13,132 @@
 //!   与上游「方向键沿图层行移动」的用户可见结果一致）；
 //! * 活动区域画一圈强调色焦点环；指针在画布上按下即回到指针模式。
 //!
-//! 控件级 `Tab` 遍历与读屏树依赖 AccessKit，这个 GPUI 版本给不了；见计划表 A21 的说明。
+//! 2026-11-16：控件级 `Tab` 与读屏树已按 gpui-pre 0.3.12 / gpui-kit 的做法补齐——
+//! 不升级 GPUI、不引入 gpui-kit 依赖，把缺的语义层抄进本模块（见 `a11y/` 子模块）。
+
+mod element;
+mod platform;
+mod registry;
+mod tree;
+
+pub(crate) use element::{A11yExt, Meta};
+
+use gpui::{App, FocusHandle, Window, prelude::*};
+
+/// App-global platform adapter, installed before the window is shown.
+struct PlatformGlobal(Option<platform::PlatformA11y>);
+
+impl gpui::Global for PlatformGlobal {}
+
+fn ensure_platform(cx: &mut App) {
+    if cx.try_global::<PlatformGlobal>().is_none() {
+        cx.set_global(PlatformGlobal(None));
+    }
+}
+
+/// Initialise the registry once, before the window is opened.
+pub(crate) fn init(cx: &mut App) {
+    registry::init(cx);
+    ensure_platform(cx);
+}
+
+/// Install the Windows AccessKit adapter in a hidden window, then show it.
+pub(crate) fn install(window: &Window, cx: &mut App) {
+    ensure_platform(cx);
+    let installed = platform::PlatformA11y::install(window);
+    if let Some(adapter) = &installed {
+        adapter.show();
+    }
+    cx.global_mut::<PlatformGlobal>().0 = installed;
+}
+
+/// Start a new frame's registry buffer.
+pub(crate) fn begin_frame(cx: &mut App) {
+    registry::with(cx, |reg| reg.begin_frame());
+}
+
+/// Finish the frame: publish the tree, apply focus actions, return commands
+/// that assistive technology asked us to run (the caller owns the engine).
+pub(crate) fn commit_frame(
+    title: &str,
+    focused: Option<&FocusHandle>,
+    scale: f32,
+    window: &mut Window,
+    cx: &mut App,
+) -> Vec<(accesskit::Action, String)> {
+    registry::ensure(cx);
+    ensure_platform(cx);
+    let update = {
+        let reg = &cx.global_mut::<registry::A11yGlobal>().registry;
+        tree::build_update(reg, title, focused, scale)
+    };
+    let mut commands = Vec::new();
+    if let Some(adapter) = cx.global_mut::<PlatformGlobal>().0.as_mut() {
+        adapter.update(update);
+        for request in adapter.drain() {
+            let entry = {
+                let reg = &cx.global_mut::<registry::A11yGlobal>().registry;
+                reg.control(request.target_node).map(|c| (c.focus.clone(), c.command.clone()))
+            };
+            if let Some((Some(handle), _)) = &entry {
+                window.focus(handle);
+            }
+            if let Some((_, Some(command))) = entry {
+                commands.push((request.action, command));
+            }
+        }
+    }
+    commands
+}
+
+/// Tab / Shift+Tab inside one region, using the same control list egui walks.
+/// Focus handles are stable and keyed, so this also works for stateless views.
+pub(crate) fn tab_next(cx: &mut App, region: Region, step: i32, focused: Option<&FocusHandle>) -> Option<FocusHandle> {
+    registry::ensure(cx);
+    let global = &cx.global::<registry::A11yGlobal>().registry;
+    let list = global.focusables(region);
+    if list.is_empty() {
+        return None;
+    }
+    let cur = focused
+        .and_then(|f| list.iter().position(|c| c.focus.as_ref() == Some(f)))
+        .and_then(|i| i32::try_from(i).ok())
+        .unwrap_or(-1);
+    let next = if cur < 0 {
+        if step > 0 { 0 } else { list.len() - 1 }
+    } else {
+        (cur + step).rem_euclid(list.len() as i32) as usize
+    };
+    list.get(next).and_then(|c| c.focus.clone())
+}
+
+/// Focus ring around the control that has keyboard focus. Bounds come from
+/// the previous frame's registry, i.e. the rectangles the user actually saw.
+pub(crate) fn focus_ring(focused: Option<&FocusHandle>, cx: &mut App) -> Option<gpui::AnyElement> {
+    registry::ensure(cx);
+    let control = {
+        let reg = &cx.global::<registry::A11yGlobal>().registry;
+        reg.previous.iter().find(|c| c.focus.is_some() && c.focus.as_ref() == focused)?.clone()
+    };
+    let b = control.bounds;
+    let t = crate::widgets::tokens();
+    let x = f32::from(b.origin.x) - 2.0;
+    let y = f32::from(b.origin.y) - 2.0;
+    let w = f32::from(b.size.width) + 4.0;
+    let h = f32::from(b.size.height) + 4.0;
+    Some(
+        gpui::div()
+            .absolute()
+            .left(gpui::px(x))
+            .top(gpui::px(y))
+            .w(gpui::px(w))
+            .h(gpui::px(h))
+            .rounded(gpui::px(6.0))
+            .border_2()
+            .border_color(crate::widgets::rgba(t.accent))
+            .into_any_element(),
+    )
+}
 
 /// 窗口的四个键盘区域（顺序即 `F6` 的顺序，同上游 `a11y::Region`）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,8 +183,7 @@ impl KeyboardNav {
     pub(crate) fn step(&mut self, step: i64) {
         let n = Region::ALL.len() as i64;
         let current = self.region.map_or(-1, |r| r.index() as i64);
-        // CodeRabbit PR#23: reduce `step` before adding. `current + i64::MIN` overflows and panics
-        // in debug builds; `step.rem_euclid(n)` is bounded and preserves the modulo result.
+        // keep step overflow fix from main
         let step = step.rem_euclid(n);
         self.region = Some(Region::from_index((current + step).rem_euclid(n) as usize));
     }

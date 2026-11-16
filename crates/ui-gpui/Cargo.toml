@@ -28,6 +28,12 @@ test-support = ["gpui/test-support", "dep:usvg"]
 [dependencies]
 # GPUI — Zed's GPU-accelerated UI framework, Apache-2.0.
 gpui = "0.2"
+# A21：从 gpui-pre 0.3.12 抄来的无障碍层所需的底层 AccessKit 原语与 Windows 平台适配器。
+# 不引入 gpui-pre / gpui-kit 本体，避免两套 GPUI 类型同时进图。
+accesskit = { version = "0.24", features = ["enumn"] }
+accesskit_windows = "0.32"
+raw-window-handle = "0.6"
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
 # Monet 内部 crate（path 依赖；因本 crate 被 exclude，不能用 workspace = true）。
 figcraft-engine = { path = "../engine" }
 figcraft-doc = { path = "../doc" }

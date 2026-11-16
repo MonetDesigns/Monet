@@ -30,6 +30,9 @@ mod app;
 
 /// A21：键盘区域导航（F6 / Shift+F6 / Escape / 方向键 + 焦点环）。
 mod a11y;
+/// A21：无障碍语义层（从 gpui-pre 0.3.12 / gpui-kit 抄来，适配 GPUI 0.2）。
+/// A16：真正的 OS 多窗口（共享根实体与会话）。
+mod windows;
 
 mod canvas;
 
@@ -464,6 +467,9 @@ pub struct CanvasView {
 
     /// A21：F6 / Shift+F6 的区域键盘导航状态（焦点环 + 方向键移动选区）。
     a11y: a11y::KeyboardNav,
+    /// A21：F6 / Shift+F6 的区域键盘导航状态。
+    /// A16：本视图之外的 OS 窗口（共享同一会话）。
+    windows: windows::Windows,
 
     /// 按下后正在拖拽（Move 事件只在拖拽时送给引擎）。
     dragging: bool,
@@ -781,6 +787,8 @@ impl CanvasView {
             focus: cx.focus_handle(),
 
             a11y: a11y::KeyboardNav::default(),
+
+            windows: windows::Windows::default(),
 
             dragging: false,
 
@@ -1440,6 +1448,17 @@ impl CanvasView {
 
             match r.kind.as_str() {
                 // A21：F6 / Shift+F6 的区域移动由 UI 侧维护（引擎只发 `step`）。
+                // A16：File ▸ New window / Open in new window / 拖出成窗口都走 window.new。
+                "window.new" | "window.focus" => {
+                    let root = cx.entity();
+                    if let Err(e) = windows::requests(&mut self.windows, cx, root, &r.kind, &r.data) {
+                        self.toast(e, cx);
+                    }
+                    cx.notify();
+                    continue;
+                }
+                // A21：区域导航由 UI 侧维护，引擎只发 step。
+
                 "focus.region" => {
                     self.a11y.step(r.data.get("step").and_then(serde_json::Value::as_i64).unwrap_or(1));
 
@@ -4429,6 +4448,24 @@ impl Render for CanvasView {
         // A28：共享会话每帧收取网络事件。引擎约定 UI 每帧调 `live_poll`（presence、远端改动都由它
         // 落地，网络线程的 `live_wake` 只负责叫醒一帧）；不调则画布上的他人光标永远为空。
         self.app.session.live_poll();
+        // A21：上一帧的控件登记表成为这一帧的读屏树与 Tab 列表。
+        a11y::begin_frame(cx);
+        // A16：同一个实体挂在多个 OS 窗口上，先告诉本帧/本事件是哪个窗口。
+        let wid = self.windows.list.iter().find(|w| w.window_id == window.window_handle().window_id()).map_or(0, |w| w.id);
+        windows::set_current(wid);
+        self.windows.current = wid;
+        let want = if wid == 0 { self.windows.main_active } else { self.windows.entry(wid).and_then(|w| w.active) };
+        if let Some(uid) = want
+            && let Some(i) = self.app.session.docs.iter().position(|d| d.uid == uid)
+        {
+            self.app.session.active = i;
+        }
+        let a11y_focused = window.focused(cx);
+        let a11y_scale = window.scale_factor();
+        for (_, command) in a11y::commit_frame("Monet", a11y_focused.as_ref(), a11y_scale, window, cx) {
+            let _ = self.app.session.execute(&command, &serde_json::json!({}));
+        }
+
 
         // DEBUG-PICKER: `FIGCRAFT_DEBUG_PICKER=1`（或 `=grad`）在启动首帧自动打开取色器面板，
         // 供截图核对 1:1 版式；不含任何运行时逻辑，核完即删。
@@ -7094,6 +7131,18 @@ impl Render for CanvasView {
                     }
                 }
 
+                // A21：Tab / Shift+Tab 在 F6 选中的区域内走控件（egui 的同名行为）。
+                if e.keystroke.key == "tab" && this.a11y.region.is_some() && this.dialog.is_none() {
+                    let step = if e.keystroke.modifiers.shift { -1 } else { 1 };
+                    let region = this.a11y.region.unwrap();
+                    let focused = window.focused(cx);
+                    if let Some(handle) = a11y::tab_next(cx, region, step, focused.as_ref()) {
+                        handle.focus(window);
+                    }
+                    cx.stop_propagation();
+                    return;
+                }
+
                 // A21：键盘在某块面板里时，方向键移动图层选择、Escape 回到画布。
                 // 只在区域导航模式、没有对话框时接管：输入框里的方向键 / Escape 仍归输入框。
                 if this.a11y.is_navigating() && this.dialog.is_none() {
@@ -7135,6 +7184,7 @@ impl Render for CanvasView {
             .when(self.motion && !variables_full && !ui_hidden, |d| d.child(dbg_tint(self.render_motion_timeline(window, cx), dbg, 0x8E4EC6)))
             // 变量编辑器在弹层之下、主布局之上：Full 时 rail 仍可点，主菜单等弹层盖在它上面。
             .children(variables_el)
+            .children(self.a11y.region.and_then(|_| a11y::focus_ring(a11y_focused.as_ref(), cx)))
             .children(extra_el)
             .children(present_el)
             .children(drop_el)
@@ -7572,6 +7622,8 @@ pub fn run() {
     let app = Application::new().with_assets(crate::canvas::svg_text::AppAssets);
 
     app.run(move |cx: &mut App| {
+        a11y::init(cx);
+
         let bounds = Bounds::centered(None, size(px(1280.0), px(860.0)), cx);
 
         // kit `TitleBar::window_options()` 的等价物：声明窗口标题栏区域
@@ -7583,10 +7635,14 @@ pub fn run() {
 
             titlebar: Some(title_bar::title_bar_options()),
 
+            show: false,
             ..Default::default()
         };
 
-        let view = match cx.open_window(options, |_window, cx| cx.new(CanvasView::new)) {
+        let view = match cx.open_window(options, |window, cx| {
+            a11y::install(window, cx);
+            cx.new(CanvasView::new)
+        }) {
             Ok(view) => Some(view),
 
             Err(e) => {
