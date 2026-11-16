@@ -1790,8 +1790,8 @@ pub(crate) fn clip_content(f: &RightFields, d: &PanelData) -> crate::widgets::pa
         .on_change(move |next: &bool, _w, _cx| {
             cmds.push(Cmd { id: "node.set", params: Some(json!({ "props": { "clipsContent": *next } })) });
         });
-    // CodeRabbit/用户：Clip content belongs on the Appearance section's grid, not in a lone
-    // "Frame" section with its own separator. Return the row so appearance() can own it.
+    // egui `layout_panel.rs::layout_section` 的末尾就是这一行（`if frames { row(24, checkbox) }`）：
+    // Clip content 属于 **Layout 节**，由 `auto_layout_section` 追加在网格轨道之后。
     field_row_full(cb)
 }
 
@@ -1843,7 +1843,6 @@ pub(crate) fn appearance(
     row_w: f32,
     opacity: &gpui::Entity<crate::widgets::TextField>,
     corner: &gpui::Entity<crate::widgets::TextField>,
-    clip: Option<crate::widgets::panel_section::FieldRow>,
 ) -> PanelSection {
     let visible = d.visible.unwrap_or(true);
     let eye = icon_cmd(if visible { Icon::Eye } else { Icon::EyeOff }, "object.toggleVisible", json!({}), f, false);
@@ -1864,18 +1863,23 @@ pub(crate) fn appearance(
         *blend_open_for_click.borrow_mut() = open;
         blend_cmds.wake();
     });
-    // Figma 在 Corner radius 字段右侧给一个 24 pt 小按钮，点开「Corner smoothing」小窗；
-    // 只在「可平滑圆角的类型 + 圆角不为 0」时出现（圆角为 0 就谈不上平滑）。
-    let mut trail: Vec<gpui::AnyElement> = Vec::new();
-    if shows_corner_smoothing(d.corner_smoothing_supported, d.corner_radius) {
-        trail.push(corner_smoothing_button(f, d));
-    }
+    // egui `right.rs::appearance`：Opacity 与 Corner radius 同一行；圆角字段**后面**紧跟一颗
+    // 24 pt「Individual corners」开关（`indep_ok` 才出现），展开后是两行四个独立圆角字段，
+    // 第二行行尾才是「Corner smoothing」按钮（点开通用小窗）。
+    let indep_open = *f.corners_individual.borrow();
+    let indep_toggle = if d.corners_independent {
+        let flag = f.corners_individual.clone();
+        let cmds = f.cmds.clone();
+        Some(IconButton::new(Icon::AbsolutePosition).size(24.0).active(indep_open).on_click(move |_e, _w, _cx| {
+            *flag.borrow_mut() = !*flag.borrow();
+            cmds.wake();
+        }))
+    } else {
+        None
+    };
     let mut sec = PanelSection::new(tr("Appearance"))
         .header_trail(icon_row(vec![eye.into_any_element(), bind, blend.into_any_element()]));
-    // Clip content shares this section's grid instead of occupying a lonely "Frame" section.
-    if let Some(clip) = clip {
-        sec = sec.child(clip);
-    }
+    let corner_row_trail: Vec<gpui::AnyElement> = indep_toggle.map(|b| b.into_any_element()).into_iter().collect();
     sec = sec
         .child(sublabel_row2(tr("Opacity"), tr("Corner radius")))
         .child(field_row(
@@ -1885,8 +1889,20 @@ pub(crate) fn appearance(
                 bindable(f, "opacity", d.bound.get("opacity").map(String::as_str), &d.number_variables, opacity.clone().into_any_element()),
                 bindable(f, "cornerRadius", d.bound.get("cornerRadius").map(String::as_str), &d.number_variables, corner.clone().into_any_element()),
             ],
-            trail,
+            corner_row_trail,
         ));
+    // 展开态：TL/TR 一行，BL/BR 一行；平滑圆角按钮只在第二行行尾（egui 同序）。
+    if indep_open && d.corners_independent {
+        sec = sec
+            .child(field_row(vec![f.corner_tl.clone(), f.corner_tr.clone()], Vec::<IconButton>::new()))
+            .child(field_row(vec![f.corner_bl.clone(), f.corner_br.clone()], {
+                let mut trail: Vec<gpui::AnyElement> = Vec::new();
+                if shows_corner_smoothing(d.corner_smoothing_supported, d.corner_radius) {
+                    trail.push(corner_smoothing_button(f, d));
+                }
+                trail
+            }));
+    }
     // 用户：外观的混合模式是一个「选了才加进来的条目」——header 图标点开先给下拉选，
     // 选中后出现一行 dropdown + 右侧 24pt 网格里的减号，减号清除回 Normal 并收起这一行。
     let blend_label = f.blend_label.borrow().clone();

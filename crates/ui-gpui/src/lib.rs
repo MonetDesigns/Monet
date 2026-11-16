@@ -2183,6 +2183,10 @@ impl CanvasView {
             self.fields.set_dim_limits(cx, dims.min_w, dims.max_w, dims.min_h, dims.max_h);
         }
 
+        // Appearance 展开后的四个独立圆角（egui `right.rs` 的 `topLeftRadius` …）。
+
+        self.fields.set_corner_values(cx, data.corner_radii);
+
         // 排版数值字段（字号 / 行高 / 字距 / 段落间距）：仅全选文本时回填。
 
         if let Some(t) = &data.text {

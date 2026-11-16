@@ -630,6 +630,14 @@ pub(crate) struct RightFields {
     pad_individual: std::rc::Rc<std::cell::RefCell<bool>>,
     /// Shared source of truth for the 4 padding values, so one field's edit re-pushes the whole array.
     pad: std::rc::Rc<std::cell::RefCell<[f64; 4]>>,
+    /// 四个独立圆角字段（`topLeftRadius` / `topRightRadius` / `bottomLeftRadius` /
+    /// `bottomRightRadius`）。只在 Appearance 的「Individual corners」展开后显示。
+    corner_tl: Entity<TextField>,
+    corner_tr: Entity<TextField>,
+    corner_bl: Entity<TextField>,
+    corner_br: Entity<TextField>,
+    /// 「独立圆角」展开开关（egui `right.rs` 的 `Id::new("indep_corners")` 临时标记）。
+    corners_individual: std::rc::Rc<std::cell::RefCell<bool>>,
     /// Alignment dropdown current labels (serde names) for the main and cross axes.
     align_main_label: std::cell::RefCell<SharedString>,
     align_cross_label: std::cell::RefCell<SharedString>,
@@ -846,6 +854,23 @@ fn nf_pad(
                 *pad_commit.borrow_mut() = arr;
                 cmds.push(Cmd { id: "node.set", params: Some(serde_json::json!({ "props": { "padding": arr.to_vec() } })) });
                 wake();
+            }
+        });
+    })
+}
+
+/// One of the four independent corner-radius fields (`egui right.rs` 的
+/// `topLeftRadius` / `topRightRadius` / `bottomRightRadius` / `bottomLeftRadius`)：每次提交只写
+/// 自己那一个 key（`node.set {"props": {<key>: v}}`），与 egui 的 `app.field(&ids, key, …)` 同义。
+fn nf_corner(cx: &mut App, lead: &'static str, key: &'static str, cmds: &Cmds) -> Entity<TextField> {
+    let cmds = cmds.clone();
+    TextField::build(cx, DEFAULT_COL, move |tf, _| {
+        tf.set_lead(Slot::Text(SharedString::from(lead)));
+        tf.set_numeric("", 1.0);
+        let cmds = cmds.clone();
+        tf.set_on_commit(move |text, _window, _cx| {
+            if let Ok(v) = text.trim().parse::<f64>() {
+                cmds.push(Cmd { id: "node.set", params: Some(serde_json::json!({ "props": { key: v.max(0.0) } })) });
             }
         });
     })
@@ -1200,6 +1225,11 @@ impl RightFields {
             pad_h: nf_set(cx, "H", 10.0, "", 1.0, "paddingHorizontal", &cmds, wake),
             pad_v: nf_set(cx, "V", 10.0, "", 1.0, "paddingVertical", &cmds, wake),
             pad_individual: std::rc::Rc::new(std::cell::RefCell::new(false)),
+            corner_tl: nf_corner(cx, "TL", "topLeftRadius", &cmds),
+            corner_tr: nf_corner(cx, "TR", "topRightRadius", &cmds),
+            corner_bl: nf_corner(cx, "BL", "bottomLeftRadius", &cmds),
+            corner_br: nf_corner(cx, "BR", "bottomRightRadius", &cmds),
+            corners_individual: std::rc::Rc::new(std::cell::RefCell::new(false)),
             align_main_label: std::cell::RefCell::new(SharedString::from("min")),
             align_cross_label: std::cell::RefCell::new(SharedString::from("min")),
             // Blend-mode dropdown: a button that opens the blend menu on click (egui `dropdown`).
@@ -1592,6 +1622,10 @@ impl RightFields {
             &self.star_ratio,
             &self.opacity,
             &self.corner,
+            &self.corner_tl,
+            &self.corner_tr,
+            &self.corner_bl,
+            &self.corner_br,
             &self.font_size,
             &self.stroke_weight,
             &self.gap,
@@ -1651,6 +1685,27 @@ impl RightFields {
         }
         *self.align_main_label.borrow_mut() = align_label("mainAlign", main_align);
         *self.align_cross_label.borrow_mut() = align_label("crossAlign", cross_align);
+    }
+
+    /// 四个独立圆角字段的回填（selection → panel）。`None` = 多选不一致 → "Mixed"。
+    /// `radii` 与 `Corners::radii` 同序：`[topLeft, topRight, bottomRight, bottomLeft]`。
+    pub(crate) fn set_corner_values(&self, cx: &mut App, radii: Option<[f64; 4]>) {
+        let mut fmt = |e: &Entity<TextField>, v: Option<f64>| {
+            e.update(cx, |tf, _| match v {
+                Some(val) => {
+                    tf.set_placeholder("");
+                    tf.set_value(fmt_num(val));
+                }
+                None => {
+                    tf.set_value("");
+                    tf.set_placeholder(tr("Mixed"));
+                }
+            });
+        };
+        fmt(&self.corner_tl, radii.map(|r| r[0]));
+        fmt(&self.corner_tr, radii.map(|r| r[1]));
+        fmt(&self.corner_br, radii.map(|r| r[2]));
+        fmt(&self.corner_bl, radii.map(|r| r[3]));
     }
 
     /// Dimensions 的 min/max 字段（`layout_panel.rs::limit_row_v`）。
@@ -2242,12 +2297,9 @@ pub(crate) fn right_panel(
         body = body.child(star_section(f)).child(sep());
     }
 
-    // Clip content is now a row inside the Appearance section (no lone "Frame" section / sep).
-    let clip_row = if sel.all_frame { Some(right::sections::clip_content(f, data)) } else { None };
-
     body = body
         // ── Appearance（egui `paints.rs::appearance`：Eye / Variable / Blend 三个 header 图标）──
-        .child(right::sections::appearance(f, data, row_w, &f.opacity, &f.corner, clip_row))
+        .child(right::sections::appearance(f, data, row_w, &f.opacity, &f.corner))
         .child(sep());
     // ── Variable modes（egui `paints.rs::variable_modes`）：没有变量时**不留线** ──────────
     if let Some(m) = modes_sec {
@@ -2558,6 +2610,11 @@ pub(crate) fn auto_layout_section(
     // ④ 网格轨道（egui `layout_panel.rs::tracks`，只在 grid frame 上出现）：
     // 每轴一组「Column sizes / Row sizes」+ 每条轨道一行（序号 / 尺寸 / sizing 下拉）。
     sec = right::sections::grid_track_rows(f, data, cx, n, sec);
+    // ⑤ Clip content：egui `layout_section` 末尾 `if frames { row(24, checkbox) }` —— 它属于
+    // **Layout 节**，不是 Appearance，也不是独立 "Frame" 节。
+    if sel.all_frame {
+        sec = sec.child(right::sections::clip_content(f, data));
+    }
     sec.into_any_element()
 }
 
