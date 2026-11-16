@@ -8,7 +8,7 @@
 //! lookups use the window the user is actually interacting with.
 
 use crate::CanvasView;
-use gpui::{AnyWindowHandle, App, Bounds, Context, Entity, Point, Pixels, SharedString, WindowBounds, WindowId, WindowOptions, size, px};
+use gpui::{AnyWindowHandle, App, Bounds, Context, Entity, Point, Pixels, SharedString, WindowBounds, WindowId, WindowOptions, point, size, px};
 use serde_json::{Value, json};
 use std::cell::RefCell;
 
@@ -136,7 +136,12 @@ fn open_now(
     // 主窗口在文档被抢走后应该显示的另一份文档（没有就 None）。
     main_fallback: Option<u64>,
 ) {
-    let bounds = Bounds::centered(None, size(px(1280.0), px(860.0)), cx);
+    // 新窗口**必须**和原窗口错开：`Bounds::centered` 会把新窗口正好盖在同样居中的主窗口上，
+    // 看起来像「切不过去」（点哪里都还是同一个位置），也看不出新窗口出来了。
+    // 按已开窗口数级联 24pt（EGUI 也是相对调用窗口偏移）。
+    let cascade = windows.borrow().list.len() as f32 + 1.0;
+    let base = Bounds::centered(None, size(px(1280.0), px(860.0)), cx);
+    let bounds = Bounds { origin: base.origin + point(px(24.0 * cascade), px(24.0 * cascade)), size: base.size };
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         titlebar: Some(gpui::TitlebarOptions {
@@ -188,6 +193,10 @@ fn open_now(
         w.main_active = main_fallback;
     }
     w.focused = id;
+    drop(w);
+    // `show: false` + Windows 后端：gpui 只在 `activate()` 里 `SetWindowPlacement`/显示窗口，
+    // 所以少了这一步新窗口一直隐藏、用户「切不过去」。登记完 Entry 后再激活。
+    let _ = handle.update(cx, |_, window, _| window.activate_window());
 }
 
 fn doc_uid(session: &figcraft_engine::Session, index: usize) -> Result<u64, String> {
