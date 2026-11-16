@@ -49,7 +49,10 @@ pub fn fit_with(name: &str, max_w: f32, measure: impl Fn(&str) -> f32) -> String
 /// 字体与 `inline_input` / 各输入框同一个来源（`window.text_style().font()`），所以同一行里
 /// 静态名称与编辑态的文字度量一致。
 pub fn fit(window: &Window, name: &str, font_size: f32, max_w: f32) -> SharedString {
-    SharedString::from(fit_with(name, max_w, |probe| measure(window, probe, font_size)))
+    // CodeRabbit PR#18: a document/layer name can contain a newline (file.new, unsanitised input).
+    // `shape_line` asserts on line breaks in debug builds, so fold them into spaces before measuring.
+    let single_line = name.replace(['\n', '\r'], " ");
+    SharedString::from(fit_with(&single_line, max_w, |probe| measure(window, probe, font_size)))
 }
 
 /// 一段逻辑字符串在当前窗口文字系统、`font_size`（pt）下的塑形宽度。

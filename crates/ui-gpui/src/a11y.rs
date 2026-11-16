@@ -58,6 +58,9 @@ impl KeyboardNav {
     pub(crate) fn step(&mut self, step: i64) {
         let n = Region::ALL.len() as i64;
         let current = self.region.map_or(-1, |r| r.index() as i64);
+        // CodeRabbit PR#23: reduce `step` before adding. `current + i64::MIN` overflows and panics
+        // in debug builds; `step.rem_euclid(n)` is bounded and preserves the modulo result.
+        let step = step.rem_euclid(n);
         self.region = Some(Region::from_index((current + step).rem_euclid(n) as usize));
     }
 

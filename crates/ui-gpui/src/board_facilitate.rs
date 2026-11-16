@@ -309,7 +309,9 @@ pub(crate) fn pill(app: &CanvasApp, cmds: Cmds, st: &Rc<RefCell<State>>) -> Opti
                 row = row.child(
                     small_button("bf-results", figcraft_i18n::tr("Results"), false).on_click(move |_, _, _| {
                         let mut s = st2.borrow_mut();
-                        s.results_open = true;
+                        // CodeRabbit PR#17: toggle so a read-only user can close the results popup
+                        // (the clear/vote close paths aren't available to them).
+                        s.results_open = !s.results_open;
                         s.pick = 0;
                     }),
                 );
@@ -512,7 +514,10 @@ fn vote_popup(app: &CanvasApp, cmds: Cmds, st: Rc<RefCell<State>>) -> AnyElement
     root = root.child(div().flex().flex_row().justify_end().child(
         small_button("bf-vote-start", figcraft_i18n::tr("Start vote"), true).on_click(move |_, _, _| {
             let s = st4.borrow();
-            let scope = SCOPES.get(s.on).map_or("all", |x| x.0);
+            // CodeRabbit PR#17/#23: apply the same "selection needs a selection" normalisation the
+            // popup renders, otherwise Start submits `on: selection` with empty ids and is rejected.
+            let on = if s.on == 2 && ids.is_empty() { 0 } else { s.on };
+            let scope = SCOPES.get(on).map_or("all", |x| x.0);
             let votes = s.votes.clamp(1, 99);
             drop(s);
             let mut params = json!({ "action": "start", "votes": votes, "on": scope });
@@ -592,10 +597,13 @@ fn results_popup(app: &CanvasApp, cmds: Cmds, st: Rc<RefCell<State>>, editable: 
         root = root.child(label(figcraft_i18n::tr("No votes yet"), true));
     }
     let Some(session) = sessions.get(pick) else { return root.into_any_element() };
+    // CodeRabbit PR#17/#23: bound the result rows to a scroll area so a long session can't push
+    // the Clear/Delete footer out of the (clamped) popup. header/footer stay outside the scroll.
+    let mut rows = div().id("bf-results-rows").max_h(px(280.0)).overflow_y_scroll().flex().flex_col().gap(px(2.0));
     for row in &session.rows {
         let cmds = cmds.clone();
         let id = row.id;
-        root = root.child(
+        rows = rows.child(
             div()
                 .id(gpui::ElementId::from(SharedString::from(format!("bf-row-{}", id.0))))
                 .flex()
@@ -620,6 +628,7 @@ fn results_popup(app: &CanvasApp, cmds: Cmds, st: Rc<RefCell<State>>, editable: 
                 .child(div().pl(px(14.0)).child(label(elide(&voters_line(row), 44), true))),
         );
     }
+    root = root.child(rows);
     if editable {
         let mut footer = div().flex().flex_row().gap(px(6.0)).pt(px(2.0));
         if session.on_board {

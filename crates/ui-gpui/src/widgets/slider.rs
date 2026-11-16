@@ -6,7 +6,7 @@
 
 use crate::widgets::{rgba, tokens};
 use gpui::prelude::*;
-use gpui::{App, Bounds, Corners, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, SharedString, Window, div, px};
+use gpui::{App, Bounds, Corners, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, SharedString, Window, div, px};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -34,6 +34,10 @@ pub struct Slider {
     on_change: Option<Rc<dyn Fn(f32, &mut Window, &mut App)>>,
     /// 轨道矩形：在 canvas 的 prepaint 里写入，鼠标事件里用来把 x 映射成值。
     hit: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// CodeRabbit PR#23: the last value this drag committed. The constructor `value` is a snapshot
+    /// and can lag behind while a document-driven rebuild is pending; comparing against it made the
+    /// thumb snap back and swallowed moves back toward the old value.
+    last: Rc<Cell<f32>>,
 }
 
 impl Slider {
@@ -51,6 +55,7 @@ impl Slider {
             paint_track: None,
             on_change: None,
             hit: Rc::new(Cell::new(None)),
+            last: Rc::new(Cell::new(value.clamp(min, max))),
         }
     }
 
@@ -104,6 +109,14 @@ impl Slider {
         let hit = self.hit.clone();
         let hit_down = hit.clone();
         let hit_move = hit.clone();
+        // CodeRabbit PR#23: track whether *this* slider owns the drag. A global "left button held"
+        // check let a drag started on the hue track also move the alpha track under the pointer.
+        let dragging = Rc::new(Cell::new(false));
+        let drag_down = dragging.clone();
+        let drag_move = dragging.clone();
+        let drag_up = dragging.clone();
+        let last_down = self.last.clone();
+        let last_move = self.last.clone();
         let on_change = self.on_change.clone();
         let on_change_move = self.on_change.clone();
         let paint_track = self.paint_track.clone();
@@ -154,11 +167,13 @@ impl Slider {
             .h_full()
             .cursor_pointer()
             .on_mouse_down(MouseButton::Left, move |e: &MouseDownEvent, window, cx| {
+            drag_down.set(true);
             let Some(b) = hit_down.get() else { return };
             let w = f32::from(b.size.width).max(1.0);
             let f = ((f32::from(e.position.x) - f32::from(b.origin.x)) / w).clamp(0.0, 1.0);
             let raw = min + f * (max - min);
             let next = (if step > 0.0 { (raw / step).round() * step } else { raw }).clamp(min, max);
+            last_down.set(next);
             if let Some(cb) = &on_change {
                 cb(next, window, cx);
             } else {
@@ -166,7 +181,7 @@ impl Slider {
             }
         })
         .on_mouse_move(move |e: &MouseMoveEvent, window, cx| {
-            if e.pressed_button != Some(MouseButton::Left) {
+            if !drag_move.get() {
                 return;
             }
             let Some(cb) = &on_change_move else { return };
@@ -175,11 +190,17 @@ impl Slider {
             let f = ((f32::from(e.position.x) - f32::from(b.origin.x)) / w).clamp(0.0, 1.0);
             let raw = min + f * (max - min);
             let next = (if step > 0.0 { (raw / step).round() * step } else { raw }).clamp(min, max);
-            // 值没变就不重复提交（命令队列里同一条命令会被合并，但拖动时每帧推送仍是浪费）。
-            if (next - value).abs() < 1e-4 {
+            // 值没变就不重复提交。Compare against the last committed value, not the constructor
+            // snapshot (CodeRabbit PR#23) — otherwise moving back toward the original value is
+            // swallowed while a document-driven rebuild is pending.
+            if (next - last_move.get()).abs() < 1e-4 {
                 return;
             }
+            last_move.set(next);
             cb(next, window, cx);
+        })
+        .on_mouse_up(MouseButton::Left, move |_e: &MouseUpEvent, _, _| {
+            drag_up.set(false);
         })
         .child(canvas);
 

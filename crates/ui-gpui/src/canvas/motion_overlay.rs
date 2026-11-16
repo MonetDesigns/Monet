@@ -702,7 +702,9 @@ pub(crate) fn input(app: &mut CanvasApp, pos: Pos2, pressed: bool, down: bool, r
     let selection_empty = app.session.ds().is_ok_and(|d| d.selection.is_empty());
     if selection_empty {
         if app.motion_gizmo.drag.is_some() {
-            let _ = app.session.cancel_interaction();
+            // CodeRabbit PR#20: commit, don't cancel. Cancelling rolls back edits made during the
+            // gesture (e.g. a keyboard Delete) with no undo step; the ending branch below commits.
+            let _ = app.session.commit_interaction();
         }
         app.motion_gizmo.drag = None;
         return false;
