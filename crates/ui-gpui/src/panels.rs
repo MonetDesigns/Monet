@@ -2242,14 +2242,12 @@ pub(crate) fn right_panel(
         body = body.child(star_section(f)).child(sep());
     }
 
-    // ── Frame 设置：Clip content（Figma 的 Frame 区；仅 frame-like 类型显示）────────────
-    if sel.all_frame {
-        body = body.child(right::sections::clip_content(f, data)).child(sep());
-    }
+    // Clip content is now a row inside the Appearance section (no lone "Frame" section / sep).
+    let clip_row = if sel.all_frame { Some(right::sections::clip_content(f, data)) } else { None };
 
     body = body
         // ── Appearance（egui `paints.rs::appearance`：Eye / Variable / Blend 三个 header 图标）──
-        .child(right::sections::appearance(f, data, row_w, &f.opacity, &f.corner))
+        .child(right::sections::appearance(f, data, row_w, &f.opacity, &f.corner, clip_row))
         .child(sep());
     // ── Variable modes（egui `paints.rs::variable_modes`）：没有变量时**不留线** ──────────
     if let Some(m) = modes_sec {

@@ -1768,7 +1768,7 @@ pub(crate) fn export(f: &RightFields, d: &PanelData, col: f32, n: &mut usize, cx
 ///
 /// 多选时值不一致按**未勾选**显示（`Option::unwrap_or(false)`，与 egui `common` 的语义一致）；
 /// 切换推 `node.set {"props":{"clipsContent":!current}}`，引擎按当前选区执行。
-pub(crate) fn clip_content(f: &RightFields, d: &PanelData) -> PanelSection {
+pub(crate) fn clip_content(f: &RightFields, d: &PanelData) -> crate::widgets::panel_section::FieldRow {
     let cmds = f.cmds.clone();
     let cb = Checkbox::new("clip-content")
         .label(tr("Clip content"))
@@ -1776,12 +1776,16 @@ pub(crate) fn clip_content(f: &RightFields, d: &PanelData) -> PanelSection {
         .on_change(move |next: &bool, _w, _cx| {
             cmds.push(Cmd { id: "node.set", params: Some(json!({ "props": { "clipsContent": *next } })) });
         });
-    PanelSection::new(tr("Frame")).child(field_row_full(cb))
+    // CodeRabbit/用户：Clip content belongs on the Appearance section's grid, not in a lone
+    // "Frame" section with its own separator. Return the row so appearance() can own it.
+    field_row_full(cb)
 }
 
-/// 「Corner smoothing」入口的显隐规则：类型支持平滑圆角、且至少有一个圆角不为 0。
-pub(crate) fn shows_corner_smoothing(supported: bool, radius: f64) -> bool {
-    supported && radius > 0.0
+/// 「Corner smoothing」入口的显隐规则：只取决于类型是否支持。
+/// 用户反馈：圆角为 0 时这颗 ◇ 被隐藏，「平滑圆角的设置跑哪去了 / 圆角半径展不开」。
+/// 现在只要类型支持就常显，圆角为 0 也能先设好平滑值。
+pub(crate) fn shows_corner_smoothing(supported: bool, _radius: f64) -> bool {
+    supported
 }
 
 /// 圆角行尾的「Corner smoothing」小按钮：打开 `WindowState::corner_smoothing` 小窗。
@@ -1825,6 +1829,7 @@ pub(crate) fn appearance(
     row_w: f32,
     opacity: &gpui::Entity<crate::widgets::TextField>,
     corner: &gpui::Entity<crate::widgets::TextField>,
+    clip: Option<crate::widgets::panel_section::FieldRow>,
 ) -> PanelSection {
     let visible = d.visible.unwrap_or(true);
     let eye = icon_cmd(if visible { Icon::Eye } else { Icon::EyeOff }, "object.toggleVisible", json!({}), f, false);
@@ -1852,7 +1857,12 @@ pub(crate) fn appearance(
         trail.push(corner_smoothing_button(f, d));
     }
     let mut sec = PanelSection::new(tr("Appearance"))
-        .header_trail(icon_row(vec![eye.into_any_element(), bind, blend.into_any_element()]))
+        .header_trail(icon_row(vec![eye.into_any_element(), bind, blend.into_any_element()]));
+    // Clip content shares this section's grid instead of occupying a lonely "Frame" section.
+    if let Some(clip) = clip {
+        sec = sec.child(clip);
+    }
+    sec = sec
         .child(sublabel_row2(tr("Opacity"), tr("Corner radius")))
         .child(field_row(
             vec![
@@ -1880,11 +1890,11 @@ pub(crate) fn appearance(
 mod corner_smoothing_tests {
     use super::shows_corner_smoothing;
 
-    /// Figma 只在「可平滑圆角 + 圆角不为 0」的节点上给入口；多选里有一个 0 圆角还算最大值为正。
+    /// 用户反馈圆角为 0 时平滑圆角设置找不到：入口只看类型是否支持，圆角可后设。
     #[test]
-    fn entry_needs_a_smoothable_kind_and_a_nonzero_radius() {
+    fn entry_only_needs_a_smoothable_kind() {
         assert!(!shows_corner_smoothing(false, 8.0));
-        assert!(!shows_corner_smoothing(true, 0.0));
+        assert!(shows_corner_smoothing(true, 0.0));
         assert!(shows_corner_smoothing(true, 8.0));
     }
 }
