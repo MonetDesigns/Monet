@@ -535,11 +535,20 @@ impl CanvasView {
         let entity = cx.entity();
         let scroll = self.layer_tree.scroll.clone();
         v_virtual_list("layer-scroll", &scroll, item_sizes, move |range, _window, _app| {
+            use crate::a11y::{A11yExt, Meta, Region};
             let mut out: Vec<AnyElement> = Vec::with_capacity(range.end - range.start);
             for ix in range {
                 let Some((r, mark, band_color, run_top, run_bottom)) = view.get(ix) else { continue };
                 let field = rename.as_ref().and_then(|(id, f)| (*id == r.id).then(|| f.clone()));
-                out.push(Self::layer_row(&entity, ix, r, drag, *mark, band_color.clone(), *run_top, *run_bottom, field).into_any_element());
+                out.push(
+                    Self::layer_row(&entity, ix, r, drag, *mark, band_color.clone(), *run_top, *run_bottom, field)
+                        .a11y(
+                            Meta::row(format!("layer:{:?}", r.id), r.name.clone(), r.selected)
+                                .region(Region::Layers)
+                                .description(r.depth.to_string()),
+                        )
+                        .into_any_element(),
+                );
             }
             out
         })

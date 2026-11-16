@@ -1002,8 +1002,9 @@ impl gpui::Render for Tip {
 }
 
 /// A square tool button: accent solid when active, grey on hover (`ui-egui::tool_cell`).
-fn tool_cell(id: &'static str, icon: Icon, active: bool, tip: SharedString, on_click: impl Fn(&mut Window, &mut App) + 'static) -> Stateful<Div> {
+fn tool_cell(id: &'static str, icon: Icon, active: bool, tip: SharedString, on_click: impl Fn(&mut Window, &mut App) + 'static) -> impl gpui::IntoElement {
     let t = tokens();
+    let a11y_tip = tip.to_string();
     let mut cell = div()
         .id(id)
         .flex_none()
@@ -1025,7 +1026,12 @@ fn tool_cell(id: &'static str, icon: Icon, active: bool, tip: SharedString, on_c
     } else {
         paint_icon(icon, color, GLYPH).into_any_element()
     };
-    cell.child(mark)
+    use crate::a11y::{A11yExt, Meta, Region};
+    cell.child(mark).a11y(
+        Meta::toggle(format!("tool:{id}"), a11y_tip, active)
+            .region(Region::Toolbar)
+            .description(active.then_some("selected").unwrap_or_default()),
+    )
 }
 
 /// "Rectangle  R": the tooltip text for a tool (`ui-egui`'s `format!("{}  {}", label, shortcut)`).

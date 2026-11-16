@@ -28,6 +28,9 @@
 
 mod app;
 
+/// A21：无障碍语义层（从 gpui-pre 0.3.12 / gpui-kit 抄来，适配 GPUI 0.2）。
+mod a11y;
+
 mod canvas;
 
 /// 标签条的纯几何 / 动画状态（上游 `ui-egui/src/tabs.rs` 的可测部分，P0-1）。
@@ -448,6 +451,9 @@ pub struct CanvasView {
     /// 键盘焦点（空格平移、Z 缩放工具要收键盘事件）。
     focus: FocusHandle,
 
+    /// A21：F6 / Shift+F6 的区域键盘导航状态。
+    a11y: a11y::KeyboardNav,
+
     /// 按下后正在拖拽（Move 事件只在拖拽时送给引擎）。
     dragging: bool,
 
@@ -759,6 +765,8 @@ impl CanvasView {
             worker: Worker::new(wake),
 
             focus: cx.focus_handle(),
+
+            a11y: a11y::KeyboardNav::default(),
 
             dragging: false,
 
@@ -1415,6 +1423,15 @@ impl CanvasView {
             // engine call, never a centred dialog. Catch them **before** `dialogs::ui_action`.
 
             match r.kind.as_str() {
+                // A21：区域导航由 UI 侧维护，引擎只发 step。
+                "focus.region" => {
+                    self.a11y.step(r.data.get("step").and_then(serde_json::Value::as_i64).unwrap_or(1));
+
+                    cx.notify();
+
+                    continue;
+                }
+
                 "canvas.renameLabel" => {
                     if let Some(id) = r.data.get("id").and_then(figcraft_engine::params::id_of) {
                         self.begin_inline_rename(vec![id], InlineRenameTarget::Label, cx);
@@ -4207,6 +4224,14 @@ impl CanvasView {
 
 impl Render for CanvasView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // A21：上一帧的控件登记表成为这一帧的读屏树与 Tab 列表。
+        a11y::begin_frame(cx);
+        let a11y_focused = window.focused(cx);
+        let a11y_scale = window.scale_factor();
+        for (_, command) in a11y::commit_frame("Monet", a11y_focused.as_ref(), a11y_scale, window, cx) {
+            let _ = self.app.session.execute(&command, &serde_json::json!({}));
+        }
+
         // DEBUG-PICKER: `FIGCRAFT_DEBUG_PICKER=1`（或 `=grad`）在启动首帧自动打开取色器面板，
         // 供截图核对 1:1 版式；不含任何运行时逻辑，核完即删。
         if let Ok(mode) = std::env::var("FIGCRAFT_DEBUG_PICKER") {
@@ -6754,6 +6779,38 @@ impl Render for CanvasView {
             .on_key_down(cx.listener(|this: &mut CanvasView, e: &KeyDownEvent, window, cx| {
                 let accel = e.keystroke.modifiers.platform || e.keystroke.modifiers.control;
 
+                // A21：Tab / Shift+Tab 在 F6 选中的区域内走控件（egui 的同名行为）。
+                if e.keystroke.key == "tab" && this.a11y.region.is_some() && this.dialog.is_none() {
+                    let step = if e.keystroke.modifiers.shift { -1 } else { 1 };
+                    let region = this.a11y.region.unwrap();
+                    let focused = window.focused(cx);
+                    if let Some(handle) = a11y::tab_next(cx, region, step, focused.as_ref()) {
+                        handle.focus(window);
+                    }
+                    cx.stop_propagation();
+                    return;
+                }
+
+                // A21：区域导航模式下方向键移动选区，Escape 回到画布。
+                if this.a11y.is_navigating() && this.dialog.is_none() {
+                    let key = canonical_key(&e.keystroke.key);
+                    if let Some(id) = match key.as_str() {
+                        "ArrowUp" | "ArrowLeft" => Some("select.previous"),
+                        "ArrowDown" | "ArrowRight" => Some("select.next"),
+                        _ => None,
+                    } {
+                        if run_binding(&mut this.app, id) { cx.notify(); }
+                        cx.stop_propagation();
+                        return;
+                    }
+                    if key == "Escape" {
+                        this.a11y.to_canvas();
+                        cx.notify();
+                        cx.stop_propagation();
+                        return;
+                    }
+                }
+
                 if this.fields.local_style_key(&e.keystroke.key, accel, window, cx) {
                     cx.stop_propagation();
                     return;
@@ -6772,6 +6829,7 @@ impl Render for CanvasView {
             .when(self.motion && !variables_full && !ui_hidden, |d| d.child(dbg_tint(self.render_motion_timeline(window, cx), dbg, 0x8E4EC6)))
             // 变量编辑器在弹层之下、主布局之上：Full 时 rail 仍可点，主菜单等弹层盖在它上面。
             .children(variables_el)
+            .children(self.a11y.region.and_then(|_| a11y::focus_ring(a11y_focused.as_ref(), cx)))
             .children(extra_el)
             .children(present_el)
             .children(drop_el)
@@ -7185,6 +7243,8 @@ pub fn run() {
     let app = Application::new().with_assets(crate::canvas::svg_text::AppAssets);
 
     app.run(move |cx: &mut App| {
+        a11y::init(cx);
+
         let bounds = Bounds::centered(None, size(px(1280.0), px(860.0)), cx);
 
         // kit `TitleBar::window_options()` 的等价物：声明窗口标题栏区域
@@ -7196,10 +7256,14 @@ pub fn run() {
 
             titlebar: Some(title_bar::title_bar_options()),
 
+            show: false,
             ..Default::default()
         };
 
-        let view = match cx.open_window(options, |_window, cx| cx.new(CanvasView::new)) {
+        let view = match cx.open_window(options, |window, cx| {
+            a11y::install(window, cx);
+            cx.new(CanvasView::new)
+        }) {
             Ok(view) => Some(view),
 
             Err(e) => {
