@@ -115,7 +115,7 @@ fn font_picker_button(f: &RightFields, label: impl Into<SharedString>, width: f3
     d = d.on_click(move |anchor: Bounds<Pixels>, _window, cx: &mut App| {
         let mut w = crate::popovers::WindowState::font_picker(queue.clone(), cx, current.as_deref(), anchor.origin);
         w.anchor_to_button_top(anchor.origin.y);
-        popups.request(w);
+        popups.toggle(crate::popovers::WindowKind::FontPicker, w);
     });
     d
 }
@@ -652,8 +652,13 @@ fn open_list_window_at(
     if let Some(top) = exact_top {
         w.anchor_to_button_top(top);
     }
+    // 同一个按钮再点一次 = 收起（`toggle` 读根视图写回的真实窗口种类），不是重新弹一张。
+    let kind_w = match kind {
+        ListWindow::Variables => crate::popovers::WindowKind::Variables,
+        ListWindow::Styles => crate::popovers::WindowKind::TextStyles,
+    };
     // No `Entity<CanvasView>` guard: the root view drains the slot on its next frame.
-    popups.request(w);
+    popups.toggle(kind_w, w);
 }
 
 /// A header icon that opens the detached Variables window (egui `variable_ui::picker`) instead
@@ -662,10 +667,11 @@ fn open_list_window_at(
 fn variables_window_button(f: &RightFields, icon: Icon, rows: Vec<(String, &'static str, Value)>) -> gpui::AnyElement {
     let root = f.popups();
     let queue = f.queue();
+    let active = root.is_open(crate::popovers::WindowKind::Variables);
     let hit = Rc::new(Cell::new(None));
     let hit_click = hit.clone();
     crate::popovers::with_button_bounds(
-        IconButton::new(icon).size(24.0).on_click(move |_e, window, cx: &mut App| {
+        IconButton::new(icon).size(24.0).active(active).on_click(move |_e, window, cx: &mut App| {
             let top = crate::popovers::button_top(&hit_click, window);
             open_list_window_at(
                 root.clone(),
@@ -718,10 +724,11 @@ fn style_menu(f: &RightFields, d: &PanelData, ty: &'static str, target: Option<&
     };
     let root = f.popups();
     let queue = f.queue();
+    let active = root.is_open(crate::popovers::WindowKind::TextStyles);
     let hit = Rc::new(Cell::new(None));
     let hit_click = hit.clone();
     crate::popovers::with_button_bounds(
-        IconButton::new(icon).size(24.0).on_click(move |_e, window, cx: &mut App| {
+        IconButton::new(icon).size(24.0).active(active).on_click(move |_e, window, cx: &mut App| {
             let top = crate::popovers::button_top(&hit_click, window);
             open_list_window_at(
                 root.clone(),
@@ -897,7 +904,7 @@ fn color_pick(
         // `cx.spawn(...).detach()` delayed the picker by a frame and could be dropped entirely.
         let mut w = crate::popovers::WindowState::color(cx, pos, current, picker, on_pick, cmds.clone());
         w.anchor_to_button_top(top);
-        popups.request(w);
+        popups.toggle(crate::popovers::WindowKind::Color, w);
     });
     (cf, hit)
 }
@@ -1086,13 +1093,16 @@ pub(crate) fn paints(
             let dots_hit = Rc::new(Cell::new(None));
             let dots_click = dots_hit.clone();
             let dots = crate::popovers::with_button_bounds(
-                IconButton::new(Icon::Menu).size(24.0).on_click(move |_e, window, cx: &mut App| {
-                    let anchor = window.mouse_position();
-                    let top = crate::popovers::button_top(&dots_click, window);
-                    let mut w = crate::popovers::WindowState::stroke(stroke_queue.clone(), &stroke_data, cx, anchor);
-                    w.anchor_to_button_top(top);
-                    popups.request(w);
-                }),
+                IconButton::new(Icon::Menu)
+                    .size(24.0)
+                    .active(popups.is_open(crate::popovers::WindowKind::Stroke))
+                    .on_click(move |_e, window, cx: &mut App| {
+                        let anchor = window.mouse_position();
+                        let top = crate::popovers::button_top(&dots_click, window);
+                        let mut w = crate::popovers::WindowState::stroke(stroke_queue.clone(), &stroke_data, cx, anchor);
+                        w.anchor_to_button_top(top);
+                        popups.toggle(crate::popovers::WindowKind::Stroke, w);
+                    }),
                 dots_hit,
             );
             // 第二行 = 描边对齐下拉 + **线宽字段** + 独立边宽 + 高级描边（egui `paints.rs`:
@@ -1234,7 +1244,7 @@ fn effect_settings_button(f: &RightFields, row: &EffectRow, col: f32) -> Dropdow
             effect.clone(),
         );
         w.anchor_to_button_top(bounds.origin.y);
-        popups.request(w);
+        popups.toggle(crate::popovers::WindowKind::EffectSettings, w);
     })
 }
 
@@ -1811,6 +1821,7 @@ fn corner_smoothing_button(f: &RightFields, d: &PanelData) -> gpui::AnyElement {
     let popups = f.popups();
     let queue = f.queue();
     let value = d.corner_smoothing.unwrap_or(0.0) as f32;
+    let open = popups.is_open(crate::popovers::WindowKind::CornerSmoothing);
     let hit = Rc::new(Cell::new(None));
     let hit_click = hit.clone();
     crate::popovers::with_button_bounds(
@@ -1822,14 +1833,15 @@ fn corner_smoothing_button(f: &RightFields, d: &PanelData) -> gpui::AnyElement {
             .justify_center()
             .rounded(pt(4.0))
             .text_size(pt(12.0))
-            .text_color(rgba(t.text_secondary))
+            .text_color(rgba(if open { t.accent } else { t.text_secondary }))
+            .when(open, |d| d.bg(rgba(t.selected_row)))
             .cursor_pointer()
             .hover(|s| s.bg(rgba(t.hover)))
             .on_mouse_down(MouseButton::Left, move |_e: &MouseDownEvent, window, _cx: &mut App| {
                 let top = crate::popovers::button_top(&hit_click, window);
                 let mut w = crate::popovers::WindowState::corner_smoothing(queue.clone(), value, window.mouse_position());
                 w.anchor_to_button_top(top);
-                popups.request(w);
+                popups.toggle(crate::popovers::WindowKind::CornerSmoothing, w);
             })
             .child("◇"),
         hit,
@@ -2042,14 +2054,15 @@ fn type_settings_button(f: &RightFields, d: &PanelData) -> gpui::AnyElement {
     let popups = f.popups();
     let queue = f.queue();
     let text = d.text.clone().unwrap_or_default();
+    let open = popups.is_open(crate::popovers::WindowKind::TypeSettings);
     let hit = Rc::new(Cell::new(None));
     let hit_click = hit.clone();
     crate::popovers::with_button_bounds(
-        IconButton::new(Icon::Menu).size(24.0).on_click(move |_e, window, cx: &mut App| {
+        IconButton::new(Icon::Menu).size(24.0).active(open).on_click(move |_e, window, cx: &mut App| {
             let top = crate::popovers::button_top(&hit_click, window);
             let mut w = crate::popovers::WindowState::type_settings(queue.clone(), &text, cx, window.mouse_position());
             w.anchor_to_button_top(top);
-            popups.request(w);
+            popups.toggle(crate::popovers::WindowKind::TypeSettings, w);
         }),
         hit,
     )
@@ -3694,7 +3707,7 @@ fn local_style_row(
             if let Some(top) = hit.get().map(|b| b.origin.y) {
                 w.anchor_to_button_top(top);
             }
-            popups.request(w);
+            popups.toggle(crate::popovers::WindowKind::StyleEditor, w);
         })
     };
     // 左侧徽标（egui `paint_dot` / "Ag" / `slot.icon()`）。

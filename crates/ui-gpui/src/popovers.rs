@@ -1474,7 +1474,9 @@ impl WindowState {
         // `var(--color-bg)`（**面板色**，不是菜单色），body 内联高度 429px、内边距 0。
         w.surface = Surface::Panel;
         w.width = 240.0;
-        w.height = 429.0;
+        // `height` 在 `Popover` 里是**整卡**高度（`open_pos` / `clamp` 用它算触底上翻），
+        // 所以要含 40pt 头部：body 429 + header 40。否则上翻会少算 40pt、卡片底仍飞出屏幕。
+        w.height = 429.0 + crate::widgets::popover::HEADER_H;
         w.pad = 0.0;
         w.rows = figcraft_text::family_names()
             .into_iter()
@@ -4501,7 +4503,14 @@ impl WindowState {
         let height = if full { f32::from(viewport.height) } else { base_h };
         // Full 是 `Frame::NONE`：内边距 0、无圆角/阴影；Floating 保留通用 16（变量表构造时是 0）。
         let pad = if full { 0.0 } else { self.pad };
-        let body_h = if full { f32::from(viewport.height) } else { height - 2.0 * self.pad };
+        let body_h = if full {
+            f32::from(viewport.height)
+        } else if self.fixed_height() {
+            // 固定高窗口的 `height` 是整卡高度（含 40pt 头部），body 要把它减掉。
+            (height - crate::widgets::popover::HEADER_H - 2.0 * self.pad).max(120.0)
+        } else {
+            height - 2.0 * self.pad
+        };
         let at = if full {
             // 贴着 rail 右缘，保留左侧图标栏（egui 的 full 就是「面板+画布」那块）。
             Some(Point { x: px(rail), y: px(0.0) })
