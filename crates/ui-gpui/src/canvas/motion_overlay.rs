@@ -696,11 +696,18 @@ pub(crate) fn input(app: &mut CanvasApp, pos: Pos2, pressed: bool, down: bool, r
     if !st.active || st.gizmo_hidden {
         return false;
     }
-    let Ok(ds) = app.session.ds() else { return false };
-    if ds.selection.is_empty() {
+    // 选中被清空时结束手势：**必须**把 begin_interaction 起的那次交互也收掉。
+    // 只清 `drag` 会留下一个永远不提交的 interaction，而引擎在 interaction 未结束时
+    // 不记录任何撤销步骤 —— 之后所有编辑（面板、对话框、右键菜单）都进不了撤销栈。
+    let selection_empty = app.session.ds().is_ok_and(|d| d.selection.is_empty());
+    if selection_empty {
+        if app.motion_gizmo.drag.is_some() {
+            let _ = app.session.cancel_interaction();
+        }
         app.motion_gizmo.drag = None;
         return false;
     }
+    let Ok(ds) = app.session.ds() else { return false };
 
     // ① 一次拖动进行中：推进 / 收尾。
     if let Some(drag) = app.motion_gizmo.drag.clone() {
