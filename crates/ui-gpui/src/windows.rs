@@ -24,9 +24,21 @@ pub(crate) struct Entry {
     pub(crate) title: String,
 }
 
+/// 正在创建、还没拿到 `AnyWindowHandle` 的窗口。`cx.open_window` 会在返回前同步跑一次
+/// 首帧绘制，那一帧已经需要知道「这个 OS 窗口是哪个窗口 id、拥有哪些文档」——否则新窗口
+/// 的首帧会被当成主窗口（把别人的 uid 写进 `main_active`、面板状态也换错）。
+/// 拿到 handle 后立刻转成真正的 [`Entry`] 并从这里删除。
+#[derive(Clone)]
+pub(crate) struct Pending {
+    pub(crate) window_id: WindowId,
+    pub(crate) id: u64,
+    pub(crate) uid: u64,
+}
+
 #[derive(Default)]
 pub(crate) struct Windows {
     pub(crate) list: Vec<Entry>,
+    pub(crate) pending: Vec<Pending>,
     pub(crate) current: u64,
     pub(crate) focused: u64,
     /// The main window's active file while another window draws.
@@ -49,11 +61,39 @@ pub(crate) fn current() -> u64 {
 
 impl Windows {
     pub(crate) fn of(&self, uid: u64) -> u64 {
+        // Pending 优先：文档刚要转到新窗口时，其它窗口的 `docs` 还没清理，但归属必须
+        // 已经是新窗口（否则首帧里新窗口写不进 active、旧窗口还会认领它）。
+        if let Some(p) = self.pending.iter().find(|p| p.uid == uid) {
+            return p.id;
+        }
         self.list.iter().find(|w| w.docs.contains(&uid)).map_or(0, |w| w.id)
     }
 
     pub(crate) fn exists(&self, id: u64) -> bool {
-        id == 0 || self.list.iter().any(|w| w.id == id)
+        id == 0 || self.list.iter().any(|w| w.id == id) || self.pending.iter().any(|p| p.id == id)
+    }
+
+    /// OS 窗口 id → 我们登记的窗口 id（pending 也算，0 = 主窗口 / 未登记）。
+    pub(crate) fn id_for(&self, window_id: WindowId) -> u64 {
+        if let Some(w) = self.list.iter().find(|w| w.window_id == window_id) {
+            return w.id;
+        }
+        if let Some(p) = self.pending.iter().find(|p| p.window_id == window_id) {
+            return p.id;
+        }
+        0
+    }
+
+    /// 窗口自己的活动文档（pending 的首帧期间取它将要拥有的那份）。
+    pub(crate) fn active_of(&self, id: u64) -> Option<u64> {
+        if id == 0 {
+            return None;
+        }
+        self.list
+            .iter()
+            .find(|w| w.id == id)
+            .and_then(|w| w.active)
+            .or_else(|| self.pending.iter().find(|p| p.id == id).map(|p| p.uid))
     }
 
     /// The window drawing now shows this file.
@@ -107,30 +147,43 @@ fn open_now(
         show: false,
         ..Default::default()
     };
-    let handle: AnyWindowHandle = match cx.open_window(options, |window, cx| {
+    // id 在开窗之前分配：`open_window` 返回前会同步跑一次首帧绘制，那帧里
+    // `bind_window_document` 就要用这个 id（见 `Pending`）。
+    let id = {
+        let mut w = windows.borrow_mut();
+        w.next_id += 1;
+        w.next_id
+    };
+    let build_windows = windows.clone();
+    let handle: AnyWindowHandle = match cx.open_window(options, move |window, cx| {
         crate::a11y::install(window, cx);
+        {
+            let mut w = build_windows.borrow_mut();
+            // 文档从其它窗口转过来：首帧之前完成转移，否则首帧里 `of(uid)` 还指向旧窗口，
+            // 新窗口绑不上自己的文档；旧窗口也会继续认领它。
+            for e in &mut w.list {
+                e.docs.retain(|u| *u != uid);
+                if e.active == Some(uid) {
+                    e.active = e.docs.first().copied();
+                }
+            }
+            w.pending.push(Pending { window_id: window.window_handle().window_id(), id, uid });
+        }
         root.clone()
     }) {
         Ok(h) => h.into(),
         Err(e) => {
             eprintln!("open_window: {e}");
+            windows.borrow_mut().pending.retain(|p| p.id != id);
             return;
         }
     };
     let window_id = handle.window_id();
     // 注意：`open_window` 的首次 draw 已经跑完（也读写过 `self.windows`），此刻才能借。
     let mut w = windows.borrow_mut();
-    for e in &mut w.list {
-        e.docs.retain(|u| *u != uid);
-        if e.active == Some(uid) {
-            e.active = e.docs.first().copied();
-        }
-    }
-    w.next_id += 1;
-    let id = w.next_id;
+    w.pending.retain(|p| p.id != id);
     w.list.push(Entry { id, window_id, handle, docs: vec![uid], active: Some(uid), title });
-    // 新窗口的首帧还没登记，会被当成主窗口、把 `main_active` 写成这个 uid；这里纠正，
-    // 否则主窗口会一直想显示一份它没有标签的文档。
+    // 首帧期间归属已经正确（pending），但主窗口若在这之前就被写脏，这里兜一次底。
     if w.main_active == Some(uid) {
         w.main_active = main_fallback;
     }

@@ -723,7 +723,7 @@ pub struct CanvasView {
 
 /// OS 窗口句柄 → 登记的窗口 id（还没登记的窗口当作主窗口 0）。
 fn window_id_of(windows: &windows::Windows, window: &Window) -> u64 {
-    windows.list.iter().find(|w| w.window_id == window.window_handle().window_id()).map_or(0, |w| w.id)
+    windows.id_for(window.window_handle().window_id())
 }
 
 impl CanvasView {
@@ -775,7 +775,7 @@ impl CanvasView {
         let wid = window_id_of(&wins, window);
         windows::set_current(wid);
         wins.current = wid;
-        let want = if wid == 0 { wins.main_active } else { wins.entry(wid).and_then(|w| w.active) };
+        let want = if wid == 0 { wins.main_active } else { wins.active_of(wid) };
         // ⛔ 只有**当前聚焦**的窗口能改全局 `session.active`：两个窗口共用一份 Session，
         // 每帧各自写一遍会让画布在两份文档之间来回切 → 「整个画布不停闪」（用户 2026-11-16）。
         // 非聚焦窗口只记录自己的 active，画面跟随聚焦窗口（稳定优先）。
@@ -4695,6 +4695,12 @@ impl Render for CanvasView {
         self.app.session.live_poll();
         // A21：上一帧的控件登记表成为这一帧的读屏树与 Tab 列表。
         a11y::begin_frame(cx);
+        // A16：窗口关掉后它的私有状态不该永久留在 `panes` 里（反复拖出 / 塞回会越积越多，
+        // 窗口 id 也不再复用）。`0` 是主窗口，恒存在。
+        {
+            let wins = self.windows.borrow();
+            self.panes.retain(|wid, _| wins.exists(*wid));
+        }
         // A16：绑定本窗口的文档（含 active 回写，见 bind_window_document）。
         self.bind_window_document(window, false);
         let a11y_focused = window.focused(cx);
