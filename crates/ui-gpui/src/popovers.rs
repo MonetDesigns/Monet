@@ -1460,10 +1460,12 @@ impl WindowState {
     /// 字体选择窗：列表每项显示字体名，并用该字体自身渲染（名字即预览）。
     pub(crate) fn font_picker(cmds: Cmds, cx: &mut App, current: Option<&str>, anchor: Point<Pixels>) -> Self {
         let mut w = Self::base(WindowKind::FontPicker, tr("Font family"), cmds, Open::Anchor(anchor));
-        w.surface = Surface::Menu;
-        w.width = 260.0;
-        w.height = 320.0;
-        w.pad = 8.0;
+        // Figma `typePanel.fontFamily.fontPickerWindow`：宽 `15rem`(=240)，窗口背景是
+        // `var(--color-bg)`（**面板色**，不是菜单色），body 内联高度 429px、内边距 0。
+        w.surface = Surface::Panel;
+        w.width = 240.0;
+        w.height = 429.0;
+        w.pad = 0.0;
         w.rows = figcraft_text::family_names()
             .into_iter()
             .map(|fam| {
@@ -2207,7 +2209,10 @@ impl WindowState {
 
     fn add_search(&mut self, cx: &mut App, hint: &str) {
         let query = self.query.clone();
-        let field = search_field(cx, self.width - 2.0 * self.pad, "", hint);
+        // 字体窗的搜索行自带 16/12 的左右内缩（Figma `fontPickerSearchRow`），字段要减掉，
+        // 否则固定宽度会把搜索框顶出卡片。
+        let inset = if self.kind == WindowKind::FontPicker { 16.0 + 12.0 } else { 2.0 * self.pad };
+        let field = search_field(cx, self.width - inset, "", hint);
         field.update(cx, move |tf, _| {
             tf.set_on_commit(move |text, _, _| *query.borrow_mut() = text.to_lowercase());
         });
@@ -2427,11 +2432,11 @@ impl WindowState {
         match self.kind {
             WindowKind::Color => self.color_body(cx),
             WindowKind::CornerSmoothing => self.corner_smoothing_body(),
-            WindowKind::FontPicker => self.list_element(cx),
+            WindowKind::FontPicker => self.list_element(cx, body_h),
             WindowKind::Layout | WindowKind::Stroke | WindowKind::TypeSettings | WindowKind::EffectSettings | WindowKind::StyleEditor => {
                 self.settings_element(cx)
             }
-            WindowKind::Variables | WindowKind::TextStyles => self.list_element(cx),
+            WindowKind::Variables | WindowKind::TextStyles => self.list_element(cx, body_h),
             WindowKind::VariablesTable => {
                 if self.editor.is_none() {
                     if let Some(data) = self.variables_data.take() {
@@ -3122,11 +3127,35 @@ impl WindowState {
         div().w(pt(240.0)).flex().flex_col().gap(pt(4.0)).child(ramp).child(stops).child(buttons)
     }
 
-    fn list_element(&self, cx: &mut App) -> AnyElement {
+    fn list_element(&self, cx: &mut App, body_h: f32) -> AnyElement {
         let t = tokens();
-        let mut col = div().w_full().flex().flex_col().gap(pt(2.0));
+        // 字体窗按 Figma `fontPicker*`：卡片内边距 0，搜索行 40（左 16 / 右 12 / 底 1px 线），
+        // 行高 28、左 12 / 右 18，**列表自身滚动**（`overflow-y:scroll`，`flex-grow:1`）。
+        // 其它列表窗（变量 / 样式）沿用原来的 8pt 内缩与 24pt 行，只加一个高度上限 + 滚动。
+        let fonts = self.kind == WindowKind::FontPicker;
+        let mut col = div().w_full().flex().flex_col();
+        if fonts {
+            // Figma 的 body 是固定 429px：搜索行与列表一起撑满，列表吃剩余高度。
+            col = col.h(pt(body_h));
+        }
         if let Some(search) = &self.search {
-            col = col.child(div().w_full().h(pt(28.0)).child(search.clone()));
+            let mut row = div().w_full().flex().items_center();
+            row = if fonts {
+                row.h(pt(40.0)).pl(pt(16.0)).pr(pt(12.0)).border_b_1().border_color(rgba(t.border))
+            } else {
+                row.h(pt(32.0)).pb(pt(4.0))
+            };
+            col = col.child(row.child(search.clone()));
+        }
+        let mut list = div().id("window-list").w_full().flex().flex_col().overflow_y_scroll();
+        list = if fonts {
+            list.flex_1().min_h(px(0.0))
+        } else {
+            // 其它列表：内容多时在 body 高度内滚动，内容少时仍然 hug（不撑高卡片）。
+            list.max_h(px((body_h - 32.0).max(80.0)))
+        };
+        if !fonts {
+            list = list.gap(pt(2.0));
         }
         let q = self.query.borrow().trim().to_lowercase();
         let mut shown = 0usize;
@@ -3137,7 +3166,7 @@ impl WindowState {
             }
             if row.group != last_group {
                 if let Some(g) = &row.group {
-                    col = col.child(div().mt(pt(4.0)).text_size(pt(9.0)).text_color(rgba(t.text_secondary)).child(g.clone()));
+                    list = list.child(div().mt(pt(4.0)).text_size(pt(9.0)).text_color(rgba(t.text_secondary)).child(g.clone()));
                 }
                 last_group = row.group.clone();
             }
@@ -3147,39 +3176,40 @@ impl WindowState {
             let trail = row.trail.clone();
             let font_family = row.font_family.clone();
             // A font-picker row renders its own name in that family — the item is its own preview.
+            // Figma `fontPickerItemRow` 的正文是 11px。
             let label_el = if let Some(fam) = font_family {
-                div().flex_1().min_w(pt(0.0)).overflow_hidden().text_size(pt(13.0)).font_family(SharedString::from(fam)).child(row.label.clone())
+                div().flex_1().min_w(pt(0.0)).overflow_hidden().text_size(pt(11.0)).font_family(SharedString::from(fam)).child(row.label.clone())
             } else {
                 div().flex_1().min_w(pt(0.0)).overflow_hidden().child(row.label.clone())
             };
             let row_h = if row.font_family.is_some() { pt(28.0) } else { pt(24.0) };
-            col = col.child(
-                div()
-                    .h(row_h)
-                    .w_full()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .px(pt(8.0))
-                    .rounded(pt(4.0))
-                    .text_size(pt(11.0))
-                    .text_color(rgba(t.menu_text))
-                    .hover(|s| s.bg(rgba(t.menu_hover)))
-                    .on_mouse_down(MouseButton::Left, move |_, _, _| {
-                        cmds.push(Cmd { id: cmd, params: Some(params.clone()) });
-                    })
-                    .child(label_el)
-                    .children(trail.map(|tr| div().text_color(rgba(t.menu_dim)).child(tr))),
-            );
+            // 字体行：`padding: 0 18px 0 12px`、悬停用面板 hover（不是菜单 hover）。
+            let mut row_el = div()
+                .h(row_h)
+                .w_full()
+                .flex()
+                .flex_row()
+                .items_center()
+                .text_size(pt(11.0))
+                .on_mouse_down(MouseButton::Left, move |_, _, _| {
+                    cmds.push(Cmd { id: cmd, params: Some(params.clone()) });
+                });
+            row_el = if fonts {
+                row_el.pl(pt(12.0)).pr(pt(18.0)).text_color(rgba(t.text)).hover(|s| s.bg(rgba(t.hover)))
+            } else {
+                row_el.px(pt(8.0)).rounded(pt(4.0)).text_color(rgba(t.menu_text)).hover(|s| s.bg(rgba(t.menu_hover)))
+            };
+            list = list.child(row_el.child(label_el).children(trail.map(|tr| {
+                div().text_color(rgba(if fonts { t.text_secondary } else { t.menu_dim })).child(tr)
+            })));
             shown += 1;
         }
         if shown == 0 {
-            col = col.child(div().py(pt(12.0)).text_size(pt(11.0)).text_color(rgba(t.menu_dim)).child(if self.rows.is_empty() {
-                "No items yet."
-            } else {
-                "No matching items"
-            }));
+            list = list.child(div().py(pt(12.0)).px(pt(12.0)).text_size(pt(11.0)).text_color(rgba(if fonts { t.text_secondary } else { t.menu_dim })).child(
+                if self.rows.is_empty() { "No items yet." } else { "No matching items" },
+            ));
         }
+        col = col.child(list);
         let _ = cx;
         col.into_any_element()
     }
