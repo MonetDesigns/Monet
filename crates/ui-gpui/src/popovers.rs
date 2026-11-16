@@ -4772,10 +4772,16 @@ pub(crate) fn bounds_probe(hit: Rc<Cell<Option<Bounds<Pixels>>>>) -> gpui::Div {
     ))
 }
 
-/// Attach a bounds probe to a trigger button without changing the widget itself (frozen).
-/// The cell holds the button's window-space `Bounds` after the first prepaint.
-pub(crate) fn with_button_bounds<E: IntoElement>(el: E, hit: Rc<Cell<Option<Bounds<Pixels>>>>) -> AnyElement {
-    div().relative().child(el).child(bounds_probe(hit)).into_any_element()
+/// Attach a bounds probe as a child of the trigger element itself. Never wrap in a new `div()`:
+/// a wrapper would collapse `w_full()` fields to their content width (the colour input shrank to
+/// a "lump"), and would steal the positioning context of `absolute` buttons. The probe is
+/// absolute/full-size, so it takes no space and only measures.
+pub(crate) fn with_button_bounds<E>(el: E, hit: Rc<Cell<Option<Bounds<Pixels>>>>) -> AnyElement
+where
+    E: IntoElement,
+    E::Element: ParentElement + Styled,
+{
+    el.into_element().relative().child(bounds_probe(hit)).into_any()
 }
 
 /// Exact button top for a window opened from `hit`, falling back to the press point when the
