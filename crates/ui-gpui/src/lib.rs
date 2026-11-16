@@ -4675,16 +4675,6 @@ impl Render for CanvasView {
             }
         }
 
-        // 按**触发按钮**而不是窗口种类写回：变量/取色器这类窗口有多个入口，按种类会让
-        // 所有同类按钮一起亮（用户 2026-11-16 指出）。
-        let current_trigger = match &self.popup {
-            Some(Popup::Window(w)) => w.trigger().cloned(),
-
-            _ => None,
-        };
-
-        popup_reqs.sync_open(current_trigger);
-
         // 右栏按钮把「要打开的窗口」放进共享槽，这里每帧取走。按钮因此不需要持有根视图
 
         // Entity，也就不会被 `let Some(root) = … else { return }` 静默吞掉。
@@ -4698,6 +4688,11 @@ impl Render for CanvasView {
 
             self.open_window(w, cx);
         }
+
+        // ⚠️ 必须在**消费完窗口请求之后**判断：写在前面的话，点开的那一帧 `self.popup`
+        // 还是旧的（`None`），按钮要等下一次重绘（鼠标移开触发 hover）才亮。
+        // 触发标识由 `toggle` 打开时写一次，这里只负责「窗口真的没了就清空」。
+        popup_reqs.sync_open(matches!(&self.popup, Some(Popup::Window(_))));
 
         let vp = window.viewport_size();
 

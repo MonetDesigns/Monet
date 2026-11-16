@@ -301,20 +301,25 @@ impl PopupReqs {
     }
 
     /// 打开 / 关闭同一个窗口：已开就关，未开就开。与 egui 面板里「再点一次收起」同义。
-    pub(crate) fn toggle(&self, trigger: impl Into<String>, mut w: crate::popovers::WindowState) {
+    ///
+    /// 触发标识**只在这里写一次**（打开时），根视图只负责在窗口真的关掉后清空——
+    /// 两处都写会导致同一件事写两遍（用户 2026-11-16 指出）。
+    pub(crate) fn toggle(&self, trigger: impl Into<String>, w: crate::popovers::WindowState) {
         let trigger = trigger.into();
         if self.is_open(&trigger) {
             self.close_req.set(true);
             self.cmds.wake();
         } else {
-            w.set_trigger(trigger);
+            *self.open_trigger.borrow_mut() = Some(trigger);
             self.request(w);
         }
     }
 
-    /// 根视图每帧写回当前打开窗口的触发标识。
-    pub(crate) fn sync_open(&self, current: Option<String>) {
-        *self.open_trigger.borrow_mut() = current;
+    /// 根视图每帧告诉这里「当前是否还开着 detached 窗口」；关掉时清空触发标识。
+    pub(crate) fn sync_open(&self, window_open: bool) {
+        if !window_open {
+            *self.open_trigger.borrow_mut() = None;
+        }
     }
 
     /// 根视图每帧消费一次「按钮请求关闭」。
