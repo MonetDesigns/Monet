@@ -32,6 +32,7 @@ pub trait WindowDragTarget: 'static + Sized {
 
 /// 通用窗口级拖拽层。无状态：真实拖拽状态由视图（`WindowDragTarget` 实现者）持有，
 /// 本结构只负责每帧在 Paint 阶段挂上三个窗口级监听并把事件转发到视图。
+#[derive(Clone)]
 pub struct WindowDragLayer;
 
 impl WindowDragLayer {

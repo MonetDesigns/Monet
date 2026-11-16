@@ -514,6 +514,7 @@ pub(crate) enum StyleProp {
 
 /// 样式编辑器正文（egui `style_picker::editor`）：Name / Description 两个输入框 + 属性行 +
 /// 是否有选区（决定要不要画 "Update from selection"）。全部照源码字段来。
+#[derive(Clone)]
 pub(crate) struct StyleEditState {
     pub id: String,
     pub has_selection: bool,
@@ -545,6 +546,7 @@ struct StyleSnap {
 }
 
 
+#[derive(Clone)]
 struct ColorState {
     /// Shared: picking anywhere in the picker must refresh the SV square, hue and alpha strips.
     current: Rc<Cell<Color32>>,
@@ -580,6 +582,7 @@ struct ColorState {
 
 /// Everything an open detached window needs. Kept as data on the root view (a retained tree), not
 /// rebuilt into a fresh element tree from a closure every frame.
+#[derive(Clone)]
 pub(crate) struct WindowState {
     kind: WindowKind,
     title: SharedString,

@@ -20,7 +20,9 @@ impl CanvasView {
         // The header's X leaves Motion mode; only the root view can resize the right panel.
         let close = acts.iter().any(|a| matches!(a, motion::Act::CloseMotion));
         acts.retain(|a| !matches!(a, motion::Act::CloseMotion));
-        if motion::apply(&mut self.app, &mut self.motion_ui, acts) {
+        // `self.app` 与 `self.pane` 是不同字段：第二个可变借用走 pane 路径。
+
+        if motion::apply(&mut self.app, &mut self.pane.motion_ui, acts) {
             cx.notify();
         }
         if close {
@@ -175,16 +177,18 @@ impl CanvasView {
         design_sections.extend(after);
         let root = cx.entity();
 
+        // 同一表达式里的多个字段统一走 pane 路径，才能同时借用。
+
         motion::inspector::panel(
             cx,
             &doc,
-            &mut self.motion_ui,
-            &self.motion_q,
-            &self.motion_fields,
+            &mut self.pane.motion_ui,
+            &self.pane.motion_q,
+            &self.pane.motion_fields,
             &selection,
             root,
             design_sections,
-            self.right_w,
+            self.pane.right_w,
             vp,
             window,
         )
@@ -200,7 +204,9 @@ impl CanvasView {
         // The bottom timeline belongs to the selected frame (one animation group), not the whole
         // page. `bar`'s `page` parameter is now this scope; build_rows still lists `selection`.
         let scope = motion::scope_of(&doc, &selection, self.app.session.ds().ok().map(|d| d.page).unwrap_or(figcraft_doc::NodeId(0)));
-        motion::timeline::bar(cx, &doc, &mut self.motion_ui, &self.motion_q, &selection, &self.motion_times, scope, width, window)
+        // 同上：可变 / 不可变字段并存，全部走 pane 路径。
+
+        motion::timeline::bar(cx, &doc, &mut self.pane.motion_ui, &self.pane.motion_q, &selection, &self.pane.motion_times, scope, width, window)
     }
 
     /// The clip settings floating window (a `Popover`), or nothing when closed.
@@ -211,13 +217,15 @@ impl CanvasView {
         // 那是渲染期，CanvasView 正被 update，再读自己会 panic
         // `cannot read CanvasView while it is already being updated`（entity_map.rs:138）。
         let right_w = self.right_w;
-        motion::clip_popover::panel(cx, &doc, &self.motion_ui, &self.motion_q, &mut self.motion_clip_fields, vp, root, right_w)
+        motion::clip_popover::panel(cx, &doc, &self.pane.motion_ui, &self.pane.motion_q, &mut self.pane.motion_clip_fields, vp, root, right_w)
     }
 
     /// Open / close Motion mode: widen the right panel to the inspector width and back.
     pub(crate) fn set_motion_open(&mut self, open: bool, cx: &mut Context<Self>) {
         let current = self.motion;
-        self.motion = motion::set_open(&mut self.motion_ui, &mut self.right_w, &mut self.motion_right_w, open, current);
+        // 三个可变字段同属 `pane`：直接字段路径可同时借用。
+
+        self.pane.motion = motion::set_open(&mut self.pane.motion_ui, &mut self.pane.right_w, &mut self.pane.motion_right_w, open, current);
         cx.notify();
     }
 

@@ -577,6 +577,7 @@ pub(crate) mod visibility {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct RightFields {
     /// Commands the panel raised this frame.
     cmds: Cmds,

@@ -1031,6 +1031,7 @@ fn collect_sources(sources: &[Source], cx: &App) -> Vec<(String, Value)> {
 }
 
 /// One open dialog. The root view holds `Option<DialogState>` and rebuilds only the element tree.
+#[derive(Clone)]
 pub(crate) struct DialogState {
     spec: Spec,
     kind: Kind,

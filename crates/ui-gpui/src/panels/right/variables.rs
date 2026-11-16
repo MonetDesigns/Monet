@@ -565,6 +565,7 @@ impl EditorState {
 pub type State = Rc<RefCell<EditorState>>;
 
 /// 完整的变量编辑器。`WindowState` 持有它，`render` 每帧调用。
+#[derive(Clone)]
 pub struct VariablesEditor {
     pub state: State,
     pub data: VariablesData,

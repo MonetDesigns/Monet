@@ -115,7 +115,7 @@ impl TabDragState {
 }
 
 /// 跨帧的标签条状态；`home` / `motion` / 拖拽都由 `CanvasView` 持有。
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct TabState {
     pub home: bool,
     pub motion: TabMotion,

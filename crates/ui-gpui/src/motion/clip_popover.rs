@@ -31,6 +31,7 @@ pub const WIDTH: f32 = 264.0;
 
 /// Seven retained numeric fields, paired on the unified grid (Delay | Duration,
 /// Amount | From X, From Y | To X, To Y | blank).
+#[derive(Clone)]
 pub struct ClipFields {
     fields: Vec<Entity<TextField>>,
     /// The clip as of this frame; a commit clones it, changes one value and pushes `SetClip`.

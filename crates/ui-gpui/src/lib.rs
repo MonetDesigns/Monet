@@ -349,6 +349,7 @@ pub(crate) enum ResizeSide {
 
 /// 闭包在 `render` 里每帧从数据重建（与 `menu.rs` 的 `menu_popup` 同源）。
 
+#[derive(Clone)]
 enum Popup {
     /// 下拉菜单：`anchor` 是触发控件的矩形（egui 的 `Response::rect`）——菜单位置取它的左下角，
 
@@ -456,47 +457,15 @@ enum InlineRenameTarget {
 /// 一个窗口**自己的** UI 状态（对应 EGUI `windows.rs::Pane`）。
 ///
 /// 所有 OS 窗口共用同一个 `CanvasView` 和一份 Session（文档内容共享），但「首页/弹层/页签/
-/// 面板宽度/指针」这些是窗口私有的。进入某个窗口的渲染或事件前 `enter_pane` 换入它的状态，
-/// 下次进入别的窗口时先把它换出——否则两个窗口共用一套状态（用户 2026-11-16：
-/// 「我切到首页，两个窗口同时切到首页」）。
-#[derive(Default)]
-struct PaneState {
-    left_w: f32,
-    right_w: f32,
-    popup: Option<Popup>,
-    motion: bool,
-    left_tab: u8,
-    left_collapsed: bool,
-    dialog: Option<dialogs::DialogState>,
-    home: bool,
-    /// 整块浮层（Home / Shortcuts / Versions / Dev compare / Assets）。`show_home` 会把
-    /// `home` 和 `extra` **一起**改，所以它必须跟着窗口走，否则「切首页」两个窗口一起切。
-    extra: Option<panels::extra::ExtraKind>,
-    pointer: Option<Pos2>,
-    mods: Modifiers,
-}
-
-/// 画布视图：引擎会话 + 画布状态 + 交互状态。
-
-pub struct CanvasView {
-    app: CanvasApp,
-
+/// 面板宽度/指针/拖拽」这些是窗口私有的。进入某个窗口的渲染或事件前 `enter_pane` 把整个
+/// `PaneState` 换入（等价 EGUI `exchange()` 的整块 swap），这样新增字段不可能漏。
+///
+/// 68 个窗口私有字段全部集中在这里；`CanvasView` 通过 `Deref/DerefMut` 保持 `self.popup`
+/// 这类访问不变。要加窗口私有状态，加在这个结构里，**不要**再加回 `CanvasView`。
+#[derive(Clone)]
+pub struct PaneState {
     /// 顶部 40pt 标签条的状态（Home / 开场动画 / 拖拽），P0-1。
     tabs: tabs_view::TabState,
-
-    worker: Worker,
-
-    /// 键盘焦点（空格平移、Z 缩放工具要收键盘事件）。
-    focus: FocusHandle,
-
-    /// A21：F6 / Shift+F6 的区域键盘导航状态（焦点环 + 方向键移动选区）。
-    a11y: a11y::KeyboardNav,
-    /// A21：F6 / Shift+F6 的区域键盘导航状态。
-    /// A16：本视图之外的 OS 窗口（共享同一会话）。
-    windows: std::rc::Rc<std::cell::RefCell<windows::Windows>>,
-    /// 每个窗口的私有 UI 状态（`PaneState`）；`pane_wid` 是当前换入的那个窗口。
-    panes: std::collections::HashMap<u64, PaneState>,
-    pane_wid: u64,
 
     /// 按下后正在拖拽（Move 事件只在拖拽时送给引擎）。
     dragging: bool,
@@ -505,7 +474,6 @@ pub struct CanvasView {
     pan: Option<(Pos2, f64, f64)>,
 
     /// 这次平移是 **Ctrl+右键** 发起的：`on_mouse_move` 必须把 `Right` 当成「仍按住」，
-
     /// 否则 `route_canvas_drag` 会按「窗口外松手」立刻收尾，右键根本拖不动。
     right_pan: bool,
 
@@ -529,9 +497,6 @@ pub struct CanvasView {
 
     /// 左键当前是否按下（光标要变握拳）。
     primary_down: bool,
-
-    /// 控制通道的请求队列（`--control <port>` 时由 [`control_server`] 往里塞）。
-    control_queue: control::Queue,
 
     /// 左 / 右面板宽度（240..=500，默认 280）。
     left_w: f32,
@@ -565,14 +530,11 @@ pub struct CanvasView {
     popup: Option<Popup>,
 
     /// 变量编辑器**独立于 `popup`**（egui 的 `app.ui.variables`：不是 dialog，与主菜单等并存）。
-
     /// 关掉时只把 `variables_open` 置 false、**保留实体**，这样 Full/Floating、窗口位置、
-
     /// 选中行、分组折叠都能跨开关记住；再点按钮直接复用，不重建 `WindowState`。
     variables_editor: Option<popovers::WindowState>,
 
     /// 变量面板是否打开 / 是否全屏（Full）。小窗(Floating)时左栏 Variables 按钮不显示选中；
-
     /// 全屏时 Variables 选中、File/Assets 取消选中（egui `layers.rs::variables_full` 的等价）。
     variables_open: bool,
 
@@ -599,7 +561,6 @@ pub struct CanvasView {
     draw_brush_ink: Option<[u8; 3]>,
 
     /// 画板的 Design 面板是否展开（`ui-egui` 的 `app.ui.board_panel`）。画板没有原型、也没有
-
     /// Dev Mode，右栏默认收起，工具栏最右的按钮 / `view.design` 是它的开关。
     board_panel: bool,
 
@@ -610,7 +571,6 @@ pub struct CanvasView {
     tool_last: Vec<(&'static str, figcraft_engine::ToolId)>,
 
     /// Motion 时间线是否展开（Animation 模式）。**默认收起** —— egui `FigApp::new` 是
-
     /// `motion_open: false`，而且打开任何文件都会把它关掉（用户 2026-11-10）。
     motion: bool,
 
@@ -672,7 +632,6 @@ pub struct CanvasView {
     left_collapsed: bool,
 
     /// 底部中间的一条临时提示（egui `app.toast`）：导入失败、拖入被拒这类话必须让用户看见，
-
     /// 不能像以前那样只在 `FC_DEBUG_CMDS` 下打到 stderr。
     toast_msg: Option<(String, std::time::Instant)>,
 
@@ -686,7 +645,6 @@ pub struct CanvasView {
     rename_cancel: bool,
 
     /// `TextEdit::set_on_commit` must not borrow the view back (commit_edits already holds
-
     /// `&mut CanvasView`). It only drops the result here; `render` drains it next frame.
     inline_rename_pending: std::rc::Rc<std::cell::RefCell<Option<(InlineRenameTarget, Vec<figcraft_doc::NodeId>, String)>>>,
 
@@ -713,16 +671,54 @@ pub struct CanvasView {
     layer_tree: layer_tree::LayerTreeState,
 
     /// 通用窗口级拖拽层（Kit 范式：`canvas` 覆盖层 + `window.on_mouse_event`）。
-
     /// 每帧在 Paint 阶段注册 move/up/down 三个窗口级监听，把跨元素 / 跨窗口的拖拽
-
     /// 统一收口到 `WindowDragTarget` 实现，指针移到哪一层拖拽都不中断。
     drag_layer: drag_manager::WindowDragLayer,
 
     /// 上一帧的 `on_mouse_up` 刚结束过一次拖拽（窗口级已收尾）。根 div 的 up handler
-
     /// 据此跳过 plain-click 的 guide 命中，避免拖拽收尾那一下重复触发命中逻辑。
     drag_just_ended: bool,
+}
+
+/// 窗口私有状态整体换入换出：`CanvasView` 上几百处 `self.popup` / `self.left_w` 保持不变，
+/// 真正读写的永远是**当前换入窗口**的那份 `PaneState`。
+impl std::ops::Deref for CanvasView {
+    type Target = PaneState;
+    fn deref(&self) -> &PaneState {
+        &self.pane
+    }
+}
+
+impl std::ops::DerefMut for CanvasView {
+    fn deref_mut(&mut self) -> &mut PaneState {
+        &mut self.pane
+    }
+}
+
+/// 画布视图：引擎会话 + 画布状态 + 交互状态。
+pub struct CanvasView {
+    app: CanvasApp,
+
+    worker: Worker,
+
+    /// 键盘焦点（空格平移、Z 缩放工具要收键盘事件）。
+    focus: FocusHandle,
+
+    /// A21：F6 / Shift+F6 的区域键盘导航状态（焦点环 + 方向键移动选区）。
+    a11y: a11y::KeyboardNav,
+
+    /// A16：本视图之外的 OS 窗口（共享同一会话）。
+    windows: std::rc::Rc<std::cell::RefCell<windows::Windows>>,
+
+    /// 每个窗口的私有 UI 状态（`PaneState`）；`pane_wid` 是当前换入的那个窗口。
+    panes: std::collections::HashMap<u64, PaneState>,
+    pane_wid: u64,
+
+    /// 控制通道的请求队列（`--control <port>` 时由 [`control_server`] 往里塞）。
+    control_queue: control::Queue,
+
+    /// **当前换入窗口**的私有 UI 状态（首页/弹层/页签/面板宽度/指针…）。
+    pane: PaneState,
 }
 
 impl CanvasView {
@@ -730,50 +726,29 @@ impl CanvasView {
     /// root entity is mounted in several OS windows, so `session.active` set by the last window to
     /// render is not necessarily the one an input event belongs to. Call this at the start of any
     /// handler that reads `app.session` (and from render).
-    /// 换入窗口 `wid` 的私有 UI 状态：先把当前窗口的状态存回 `panes`，再取目标窗口的。
-    /// 目标窗口第一次出现时只清掉「窗口私有」的东西（首页/弹层/指针），面板宽度沿用当前值。
+    /// 换入窗口 `wid` 的私有 UI 状态：整块 `PaneState` swap（等价 EGUI `exchange()`），
+    /// 而不是逐字段挑选——逐字段挑选正是「新增字段忘了搬」的根源。
+    /// 目标窗口第一次出现时沿用它上一次的壳层设置（面板宽度/页签），但清掉窗口私有的
+    /// 浮层与指针，避免新窗口一开就带着别的窗口的弹窗。
     fn enter_pane(&mut self, wid: u64) {
         if self.pane_wid == wid {
             return;
         }
         let old = self.pane_wid;
-        let snap = PaneState {
-            left_w: self.left_w,
-            right_w: self.right_w,
-            popup: self.popup.take(),
-            motion: self.motion,
-            left_tab: self.left_tab,
-            left_collapsed: self.left_collapsed,
-            dialog: self.dialog.take(),
-            home: std::mem::take(&mut self.tabs.home),
-            extra: self.extra.take(),
-            pointer: self.pointer,
-            mods: self.mods,
-        };
-        self.panes.insert(old, snap);
-        match self.panes.remove(&wid) {
-            Some(n) => {
-                self.left_w = n.left_w;
-                self.right_w = n.right_w;
-                self.popup = n.popup;
-                self.motion = n.motion;
-                self.left_tab = n.left_tab;
-                self.left_collapsed = n.left_collapsed;
-                self.dialog = n.dialog;
-                self.tabs.home = n.home;
-                self.extra = n.extra;
-                self.pointer = n.pointer;
-                self.mods = n.mods;
-            }
+        let next = match self.panes.remove(&wid) {
+            Some(n) => n,
             None => {
-                // 新窗口：从干净状态开始，别继承别的窗口的首页/弹层。
-                self.popup = None;
-                self.dialog = None;
-                self.tabs.home = false;
-                self.extra = None;
-                self.pointer = None;
+                let mut p = self.pane.clone();
+                p.popup = None;
+                p.dialog = None;
+                p.tabs.home = false;
+                p.extra = None;
+                p.pointer = None;
+                p
             }
-        }
+        };
+        let prev = std::mem::replace(&mut self.pane, next);
+        self.panes.insert(old, prev);
         self.pane_wid = wid;
     }
 
@@ -904,20 +879,8 @@ impl CanvasView {
 
         let extra_state = panels::extra::ExtraState::new(cx, &fields.queue());
 
-        let mut view = Self {
-            app,
-
+        let pane = PaneState {
             tabs: tabs_view::TabState::default(),
-
-            worker: Worker::new(wake),
-
-            focus: cx.focus_handle(),
-
-            a11y: a11y::KeyboardNav::default(),
-
-            windows: std::rc::Rc::new(std::cell::RefCell::new(windows::Windows::default())),
-            panes: std::collections::HashMap::new(),
-            pane_wid: 0,
 
             dragging: false,
 
@@ -938,8 +901,6 @@ impl CanvasView {
             last_down: None,
 
             primary_down: false,
-
-            control_queue: Arc::new(std::sync::Mutex::new(Vec::new())),
 
             left_w: panels::DEFAULT_LEFT_PANEL,
 
@@ -981,35 +942,12 @@ impl CanvasView {
 
             board_panel: false,
 
-            pages_open: std::rc::Rc::new(std::cell::RefCell::new(true)),
-
-            page_search: std::rc::Rc::new(std::cell::RefCell::new(false)),
-
-            page_filter: std::rc::Rc::new(std::cell::RefCell::new(String::new())),
-
-            file_name_field: widgets::TextField::build(cx, 180.0, |tf, _| {
-                tf.set_placeholder(tr("Untitled"));
-            }),
-
-            file_rename: std::rc::Rc::new(std::cell::RefCell::new(None)),
-
-            page_search_field: widgets::search_field(cx, 200.0, "", "Search pages"),
-
-            left_collapsed: false,
-
-            toast_msg: None,
-
-            file_name_seen: None,
-
             tpl_pics: std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new())),
 
             tool_last: {
                 // 每个组默认显示它的第一个工具（egui 的 `remembered(...).unwrap_or(first)`）。
-
                 // Keyed by group key — egui stores one `tb_last` per key, so a board's nine groups
-
                 // and a design file's six groups each remember their own tool.
-
                 let mut last: Vec<(&'static str, figcraft_engine::ToolId)> = Vec::new();
 
                 for g in toolbar::GROUPS.iter().chain(toolbar::BOARD_GROUPS) {
@@ -1047,6 +985,30 @@ impl CanvasView {
 
             palette_field,
 
+            extra: None,
+
+            extra_state,
+
+            left_tab: 0,
+
+            pages_open: std::rc::Rc::new(std::cell::RefCell::new(true)),
+
+            page_search: std::rc::Rc::new(std::cell::RefCell::new(false)),
+
+            page_filter: std::rc::Rc::new(std::cell::RefCell::new(String::new())),
+
+            file_name_field: widgets::TextField::build(cx, 180.0, |tf, _| {
+                tf.set_placeholder(tr("Untitled"));
+            }),
+
+            file_rename: std::rc::Rc::new(std::cell::RefCell::new(None)),
+
+            page_search_field: widgets::search_field(cx, 200.0, "", "Search pages"),
+
+            left_collapsed: false,
+
+            toast_msg: None,
+
             inline_rename: None,
 
             inline_rename_field,
@@ -1055,11 +1017,7 @@ impl CanvasView {
 
             inline_rename_pending: std::rc::Rc::new(std::cell::RefCell::new(None)),
 
-            extra: None,
-
-            extra_state,
-
-            left_tab: 0,
+            file_name_seen: None,
 
             board_shape_open: std::rc::Rc::new(std::cell::RefCell::new(false)),
 
@@ -1076,6 +1034,24 @@ impl CanvasView {
             drag_layer: drag_manager::WindowDragLayer::new(),
 
             drag_just_ended: false,
+        };
+
+        let mut view = Self {
+            app,
+
+            worker: Worker::new(wake),
+
+            focus: cx.focus_handle(),
+
+            a11y: a11y::KeyboardNav::default(),
+
+            windows: std::rc::Rc::new(std::cell::RefCell::new(windows::Windows::default())),
+            panes: std::collections::HashMap::new(),
+            pane_wid: 0,
+
+            control_queue: Arc::new(std::sync::Mutex::new(Vec::new())),
+
+            pane,
         };
 
         // 启动即 Motion 模式（egui `set_open(true)`）：右栏加宽到 inspector 的 413pt，
@@ -2237,7 +2213,9 @@ impl CanvasView {
         // 样式命令回写文档后，刷新打开中的同款样式编辑器正文（被删则关闭），否则点了按钮界面不变。
         if !style_targets.is_empty() {
             let mut deleted = false;
-            if let Some(Popup::Window(w)) = &mut self.popup {
+            // `popup` 走 Deref 会把 self 整体借走；用 pane 路径才能与 `self.app` 共存。
+
+            if let Some(Popup::Window(w)) = &mut self.pane.popup {
                 if w.kind() == popovers::WindowKind::StyleEditor
                     && w.style_id().as_deref().is_some_and(|id| style_targets.iter().any(|t| t == id))
                 {
@@ -3643,7 +3621,9 @@ impl CanvasView {
 
         let mut wait = None;
 
-        if let Some(Popup::MainMenu(m)) = &mut self.popup {
+        // `checked` 已借 `self.app`；`popup` 用 pane 路径才不会整体借走 self。
+
+        if let Some(Popup::MainMenu(m)) = &mut self.pane.popup {
             wait = m.hover(level, row, pointer, |prefix| main_menu::build_level(prefix, &checked));
         }
 
@@ -3659,7 +3639,9 @@ impl CanvasView {
 
         let mut wait = None;
 
-        if let Some(Popup::MainMenu(m)) = &mut self.popup {
+        // 同上：`checked` 借 `self.app`，`popup` 走 pane 路径。
+
+        if let Some(Popup::MainMenu(m)) = &mut self.pane.popup {
             wait = m.settle(|prefix| main_menu::build_level(prefix, &checked));
         }
 
@@ -3995,15 +3977,18 @@ impl CanvasView {
     /// `stop_propagation()`——表现就是「页面原本的拖动一塌糊涂」。所以这里必须看 `variables_open`。
 
     fn active_window_mut(&mut self) -> Option<&mut popovers::WindowState> {
-        if let Some(Popup::Window(w)) = &mut self.popup {
+        // 返回值直接借出 popup：走 pane 路径，后面读 `variables_open` / `variables_editor`
+        // 才是不同字段，不会撞上这次整块可变借用。
+
+        if let Some(Popup::Window(w)) = &mut self.pane.popup {
             return Some(w);
         }
 
-        if !self.variables_open {
+        if !self.pane.variables_open {
             return None;
         }
 
-        self.variables_editor.as_mut()
+        self.pane.variables_editor.as_mut()
     }
 
     fn active_window(&self) -> Option<&popovers::WindowState> {
@@ -4278,11 +4263,15 @@ impl CanvasView {
             }
 
             if self.app.selection_spacing.is_dragging() {
+                // `space` 先取 Copy 值：Deref 读字段会借整个 self。
+
+                let space = self.space;
+
                 let _ = canvas::selection_spacing::input(
                     &mut self.app,
                     Some(pos),
                     true,
-                    self.space,
+                    space,
                     false,
                     false,
                     true,
@@ -4380,7 +4369,11 @@ impl CanvasView {
         }
 
         if self.app.motion_gizmo.drag.is_some() {
-            let _ = canvas::motion_overlay::input(&mut self.app, pos, false, self.primary_down, false, e.modifiers.control);
+            // `primary_down` 先取 Copy 值，避免与 `&mut self.app` 冲突。
+
+            let primary_down = self.primary_down;
+
+            let _ = canvas::motion_overlay::input(&mut self.app, pos, false, primary_down, false, e.modifiers.control);
 
             cx.notify();
 
@@ -4396,13 +4389,19 @@ impl CanvasView {
         }
 
         if self.app.selection_spacing.is_dragging() {
+            // 同上：两个字段都先取 Copy 值。
+
+            let space = self.space;
+
+            let primary_down = self.primary_down;
+
             let _ = canvas::selection_spacing::input(
                 &mut self.app,
                 Some(pos),
                 true,
-                self.space,
+                space,
                 false,
-                self.primary_down,
+                primary_down,
                 false,
                 e.modifiers.platform || e.modifiers.control,
                 e.modifiers.alt,
@@ -4415,7 +4414,11 @@ impl CanvasView {
         }
 
         if self.app.handles.drag.is_some() {
-            let _ = canvas::handles::input(&mut self.app, pos, false, self.primary_down, false, e.modifiers.shift);
+            // `primary_down` 先取 Copy 值。
+
+            let primary_down = self.primary_down;
+
+            let _ = canvas::handles::input(&mut self.app, pos, false, primary_down, false, e.modifiers.shift);
 
             cx.notify();
 
@@ -5264,13 +5267,17 @@ impl Render for CanvasView {
 
                     // 多选间距/重排手柄：原文 `selection_spacing::input` 在 `handles::input` 之前。
 
+                    // `this.space` 走 Deref 会借整个 self，与 `&mut this.app` 冲突：先取 Copy 值。
+
+                    let space = this.space;
+
                     if !this.space
                         && !this.zoom_key
                         && canvas::selection_spacing::input(
                             &mut this.app,
                             Some(pos),
                             true,
-                            this.space,
+                            space,
                             true,
                             true,
                             false,
@@ -5400,14 +5407,20 @@ impl Render for CanvasView {
                     return;
                 }
 
+                // 同上：`space` / `primary_down` 先取 Copy 值，避免与 `&mut this.app` 冲突。
+
+                let space = this.space;
+
+                let primary_down = this.primary_down;
+
                 if !this.dragging
                     && canvas::selection_spacing::input(
                         &mut this.app,
                         Some(pos),
                         true,
-                        this.space,
+                        space,
                         false,
-                        this.primary_down,
+                        primary_down,
                         false,
                         e.modifiers.platform || e.modifiers.control,
                         e.modifiers.alt,
@@ -5419,13 +5432,13 @@ impl Render for CanvasView {
                     return;
                 }
 
-                if canvas::motion_overlay::input(&mut this.app, pos, false, this.primary_down, false, e.modifiers.control) {
+                if canvas::motion_overlay::input(&mut this.app, pos, false, primary_down, false, e.modifiers.control) {
                     cx.notify();
 
                     return;
                 }
 
-                if canvas::handles::input(&mut this.app, pos, false, this.primary_down, false, e.modifiers.shift) {
+                if canvas::handles::input(&mut this.app, pos, false, primary_down, false, e.modifiers.shift) {
                     cx.notify();
 
                     return;
@@ -5479,11 +5492,15 @@ impl Render for CanvasView {
                     }
 
                     if this.app.selection_spacing.is_dragging() {
+                        // `space` 先取 Copy 值：Deref 读字段会借整个 self。
+
+                        let space = this.space;
+
                         let _ = canvas::selection_spacing::input(
                             &mut this.app,
                             Some(pos),
                             true,
-                            this.space,
+                            space,
                             false,
                             false,
                             true,
@@ -5698,7 +5715,9 @@ impl Render for CanvasView {
                                 }
                             }
 
-                            let _ = crate::motion::apply(&mut this.app, &mut this.motion_ui, vec![crate::motion::Act::ClearSelection]);
+                            // `self.app` 与 `self.pane` 是不同字段：第二个可变借用走 pane 路径。
+
+                            let _ = crate::motion::apply(&mut this.app, &mut this.pane.motion_ui, vec![crate::motion::Act::ClearSelection]);
 
                             cx.stop_propagation();
 
@@ -6109,8 +6128,10 @@ impl Render for CanvasView {
 
                     let data = cv.panel_data();
 
-                    if let Some(win) = &mut cv.variables_editor {
-                        win.set_variables_full(cv.variables_full);
+                    // 两个字段都在 `cv.pane` 里：走直接字段路径才能同时可变借用。
+
+                    if let Some(win) = &mut cv.pane.variables_editor {
+                        win.set_variables_full(cv.pane.variables_full);
 
                         win.set_variables_data(data.variables);
                     }
@@ -6411,7 +6432,9 @@ impl Render for CanvasView {
 
         let tpl_pics = self.tpl_pics.clone();
 
-        if let Some(p) = &mut self.popup {
+        // `p` 借出的是 `self.pane.popup`：下面读 `self.app` / `self.pane` 的其它字段才不冲突。
+
+        if let Some(p) = &mut self.pane.popup {
             let me = cx.entity();
 
             let dismiss = std::rc::Rc::new({
@@ -6476,7 +6499,7 @@ impl Render for CanvasView {
 
             let canvas_h = self.app.canvas.rect.height();
 
-            let bar_w = toolbar::width(toolbar::groups(board), board, self.draw_mode);
+            let bar_w = toolbar::width(toolbar::groups(board), board, self.pane.draw_mode);
 
             // 画布原点 y = 标题栏高度；弹层挂在 root 上用窗口坐标，必须加回这个原点，
             // 否则 flyout / palette 整体上移 40pt。
@@ -6484,7 +6507,7 @@ impl Render for CanvasView {
 
             // The Design panel's left edge: the one x every detached window opens against.
 
-            let right_edge = px(vw - self.right_w);
+            let right_edge = px(vw - self.pane.right_w);
 
             // `ui-egui/src/popover.rs` Hold rule: the panel that opened the popover is held out,
 
@@ -6714,7 +6737,7 @@ impl Render for CanvasView {
 
                     let pill_left = canvas_left + (canvas_w - bar_w) / 2.0;
 
-                    let caret = toolbar::caret_left(toolbar::groups(board), *key, board, self.draw_mode).unwrap_or(0.0);
+                    let caret = toolbar::caret_left(toolbar::groups(board), *key, board, self.pane.draw_mode).unwrap_or(0.0);
 
                     let left = pill_left + caret;
 
@@ -7012,7 +7035,7 @@ impl Render for CanvasView {
         let variables_full = self.variables_open && self.variables_full;
 
         let variables_el: Vec<AnyElement> = if self.variables_open {
-            if let Some(w) = &mut self.variables_editor {
+            if let Some(w) = &mut self.pane.variables_editor {
                 // 每帧把最新文档快照写回编辑器。命令（新建集合 / 加 mode / 改名 / 删除 …）只改
 
                 // 文档，不刷新快照的话面板永远停在「打开那一刻」——按钮点了、命令也执行了，
@@ -7051,7 +7074,7 @@ impl Render for CanvasView {
 
                 let vp2 = window.viewport_size();
 
-                let edge = px(f32::from(vp2.width) - self.right_w);
+                let edge = px(f32::from(vp2.width) - self.pane.right_w);
 
                 w.render(cx, vp2, dismiss, drag_start, drag_move, edge)
             } else {
@@ -7696,11 +7719,15 @@ impl drag_manager::WindowDragTarget for CanvasView {
         }
 
         if self.app.selection_spacing.is_dragging() {
+            // `space` 先取 Copy 值：Deref 读字段会借整个 self。
+
+            let space = self.space;
+
             let _ = canvas::selection_spacing::input(
                 &mut self.app,
                 Some(pos),
                 true,
-                self.space,
+                space,
                 false,
                 false,
                 true,

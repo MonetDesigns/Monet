@@ -129,7 +129,7 @@ pub struct Preview {
 }
 
 /// Timeline state kept between frames (egui `MotionUi`, with egui types replaced by GPUI ones).
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct MotionUi {
     pub timeline_h: f32,
     pub playhead_ms: f64,
