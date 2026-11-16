@@ -904,6 +904,9 @@ impl RightFields {
             "up" | "down" => {
                 let n = st.rows.len();
                 let cur = st.sel.unwrap_or(0);
+                // 键盘导航一律落到样式行：清掉可能存在的「文件夹选中」，避免父深块与
+                // 样式行深块同时高亮（与鼠标点样式行清 sel_folder 的语义一致）。
+                st.sel_folder = None;
                 st.sel = Some(if key == "up" { cur.saturating_sub(1) } else { (cur + 1).min(n - 1) });
             }
             "enter" => {
@@ -960,6 +963,7 @@ impl RightFields {
             }
             "escape" => {
                 st.sel = None;
+                st.sel_folder = None;
                 return false;
             }
             _ => return false,
@@ -1082,7 +1086,7 @@ impl RightFields {
             local_style_renaming: local_style_renaming.clone(),
             local_style_rename_style: local_style_rename_style.clone(),
             local_style_rename_seen: std::rc::Rc::new(std::cell::RefCell::new(false)),
-            local_style_rename_input: InlineInput::build(cx, crate::inline_input::ROW_H, "", {
+            local_style_rename_input: InlineInput::build(cx, crate::inline_input::ROW_H, 0.0, "", {
                 let renaming = local_style_renaming.clone();
                 let renaming_style = local_style_rename_style.clone();
                 let cmds = cmds.clone();

@@ -92,7 +92,10 @@ pub fn draw(app: &CanvasApp, painter: &mut Painter, t: &Tokens, doc: &Document, 
             painter.galley(pos2(x, tl.y - 16.0), galley, col);
         }
         status_badge(painter, n, pos2(end + 6.0, tl.y - 9.0));
-        Rect::from_min_max(pos2(tl.x, tl.y - 18.0), pos2(end, tl.y - 16.0 + size.y.max(12.0)))
+        // 命中区/重命名框都从 `area.max.y - 16` 反推标签的文字顶，所以底边取 `tl.y`
+        // （= 文字顶 + 16），而不是 galley 的高：galley 高随字体变（11pt 量出来 13.75），
+        // 一旦 ≠ 16，反推出来的重命名框就和静态文字错位。
+        Rect::from_min_max(pos2(tl.x, tl.y - 18.0), pos2(end, tl.y))
     };
     if n.hides_contents() {
         let height = (p01 - p00).length();

@@ -2572,6 +2572,11 @@ const LS_DOUBLE_CLICK: std::time::Duration = std::time::Duration::from_millis(40
 /// How far a nesting level steps in: an icon box and its gap, so a child's icon sits under the
 /// folder's name.
 const LS_STEP: f32 = LS_ICON + LS_ICON_GAP;
+/// 每层的固定缩进起点（band 内坐标）：行基准 + depth * LS_STEP。
+/// 子项图标因此正好落在父项文字左边（用户 2026-11-15：每层按同一个固定值缩进）。
+fn ls_indent(depth: usize) -> f32 {
+    LS_PAD - LS_INSET + depth as f32 * LS_STEP
+}
 /// A folder's chevron, inside its 16 pt box.
 const LS_CHEVRON: f32 = 12.0;
 /// Gap above the first group's caption, and above every later one.
@@ -2590,6 +2595,8 @@ pub struct LsSlot {
     pub ty: &'static str,
     pub y0: f32,
     pub y1: f32,
+    /// 树深度：folder 行 depth=d，其下样式/子 folder 为 d+1（供「父选中带子高亮」用）。
+    pub depth: usize,
     pub kind: LsSlotKind,
 }
 
@@ -2655,6 +2662,9 @@ pub struct LocalStyleUi {
     pub rows: Vec<LocalStyleKeyRow>,
     /// 当前键盘选中的 `rows` 下标（`Tab` 聚焦列表后由方向键移动）。
     pub sel: Option<usize>,
+    /// 选中的文件夹 key = `"{ty}/{path}"`（与 `local_style_folder` 的折叠 key 一致）。
+    /// 与 `sel` 互斥：选中样式清空它，选中文件夹清空 `sel`。
+    pub sel_folder: Option<String>,
     /// 上一次左键按下的是哪一行、什么时候：双击判定（同一行 400ms 内再按 = 改名）。
     pub last_click: Option<(String, std::time::Instant)>,
     /// 复制下来的样式（`Ctrl/Cmd+C`）：粘贴时用它 `style.create` 出一份新样式。
@@ -2787,7 +2797,7 @@ fn local_styles_block(f: &RightFields, d: &PanelData, window: &mut Window, cx: &
             rows_in_group += 1;
             match line {
                 LsLine::Folder { path, label, depth } => {
-                    slots.push(LsSlot { ty, y0: y, y1: y + LS_FOLDER_H, kind: LsSlotKind::Header { path: path.clone() } });
+                    slots.push(LsSlot { ty, y0: y, y1: y + LS_FOLDER_H, depth, kind: LsSlotKind::Header { path: path.clone() } });
                     rows.push(local_style_folder(f, d, &label, &path, ty, depth, window, cx));
                     y += LS_FOLDER_H;
                 }
@@ -2799,6 +2809,7 @@ fn local_styles_block(f: &RightFields, d: &PanelData, window: &mut Window, cx: &
                         ty,
                         y0: y,
                         y1: y + LS_ROW_H,
+                        depth,
                         kind: LsSlotKind::Style { index: style_no, id: s.id.clone(), name: s.name.clone() },
                     });
                     key_rows.push(LocalStyleKeyRow {
@@ -2836,16 +2847,60 @@ fn local_styles_block(f: &RightFields, d: &PanelData, window: &mut Window, cx: &
     // `track_focus` 把整张列表放进 Tab 顺序；方向键 / Enter / Delete / Ctrl+D 由根视图
     // 的键盘链转发到 `RightFields::local_style_key`（GPUI 元素级按键只在命中元素内触发）。
     let mut root = div().relative().w_full().flex().flex_col().track_focus(&f.local_style_focus);
-    // 列表空白处点一下取消选中（行在它上面，点行不会落到底层）。
+    // 选中块必须先加：它是行的背景，后加会把整行内容盖住（用户 2026-11-15）。
+    {
+        let st = ui.borrow();
+        let band = |y0: f32, h: f32, c| {
+            div()
+                .absolute()
+                .left(pt(LS_INSET))
+                .right(pt(LS_INSET))
+                .top(pt(y0))
+                .h(pt(h))
+                .rounded(pt(5.0))
+                .bg(rgba(c))
+        };
+        // ① 选中单一样式行：深块。
+        if let Some(k) = st.sel
+            && let Some(r) = st.rows.get(k)
+        {
+            root = root.child(band(r.y0, LS_ROW_H, t.selected_row));
+        }
+        // ② 选中文件夹：父行深块 + 其子树浅块，连成一段（完全照左栏 marks 的
+        //    「Selected 父 + Child 后代」表现，用户 2026-11-15）。子树 = 紧跟其后、
+        //    depth 更深的连续行；遇到同级/更浅的行停止。
+        if let Some(ref key) = st.sel_folder {
+            if let Some(i) = st.slots.iter().position(|s| {
+                matches!(&s.kind, LsSlotKind::Header { path } if format!("{}/{}", s.ty, path) == *key)
+            }) {
+                let d = st.slots[i].depth;
+                let r = &st.slots[i];
+                root = root.child(band(r.y0, r.y1 - r.y0, t.selected_row));
+                for s in st.slots.iter().skip(i + 1) {
+                    if s.depth > d {
+                        root = root.child(band(s.y0, s.y1 - s.y0, t.selected_row_child));
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    root = root.children(rows);
+    // 行下面那段空白：点一下取消选中。它只占列表剩余高度，不覆盖任何行，
+    // 所以点行不会误清选中（用户 2026-11-15）。
     {
         let ui_blank = ui.clone();
         let wake_blank = wake.clone();
-        root = root.child(div().absolute().size_full().on_mouse_down(MouseButton::Left, move |_e, _, _cx| {
-            ui_blank.borrow_mut().sel = None;
-            wake_blank.wake();
+        root = root.child(div().flex_1().min_h(px(0.0)).on_mouse_down(MouseButton::Left, move |_e, _, _cx| {
+            let mut st = ui_blank.borrow_mut();
+            let had = st.sel.take().is_some() || st.sel_folder.take().is_some();
+            drop(st);
+            if had {
+                wake_blank.wake();
+            }
         }));
     }
-    root = root.children(rows);
     // 容器在窗口里的原点：prepaint 写入，下一帧的事件把指针换算成相对坐标。
     let ui_o = ui.clone();
     root = root.child(
@@ -2913,22 +2968,6 @@ fn local_styles_block(f: &RightFields, d: &PanelData, window: &mut Window, cx: &
     // 插入线（2 pt 强调色，左右通到 band 边缘）+ 跟随指针的名字标签（egui `drag_ghost`）。
     {
         let st = ui.borrow();
-        // 键盘焦点框：与行同高、左右内缩 LS_INSET，通到 band 边缘。
-        if let Some(k) = st.sel
-            && let Some(r) = st.rows.get(k)
-        {
-            root = root.child(
-                div()
-                    .absolute()
-                    .left(pt(LS_INSET))
-                    .right(pt(LS_INSET))
-                    .top(pt(r.y0))
-                    .h(pt(LS_ROW_H))
-                    .rounded(pt(5.0))
-                    // 与左栏图层行一致：选中是一块带颜色的高亮块，不是描边。
-                    .bg(rgba(t.selected_row)),
-            );
-        }
         if let Some(drag) = st.drag.as_ref().filter(|d| d.armed) {
             if let Some(ly) = drag.line_y {
                 root = root.child(
@@ -3121,10 +3160,14 @@ fn local_style_folder(
     let wake = f.cmds.clone();
 
     // 名称区：重命名时换成内联输入框；否则 chevron + 文件夹名，并挂折叠/右键菜单。
-    // 图标起点 = band 左边 + (LS_PAD - LS_INSET) + depth * LS_STEP；行尾给 16 pt `+`
-    // 留 LS_ICON + LS_ICON_GAP，名字不会被压到按钮下面（egui `text_r`）。
-    // lizard `local_styles`：文件夹行缩进只有 0 / 12（`if f.is_empty() { 0.0 } else { 12.0 }`）。
-    let name_inset = LS_PAD - LS_INSET + if depth == 0 { 0.0 } else { 12.0 };
+    // 图标起点 = band 左边 + ls_indent(depth)；每层缩进同一个固定值 LS_STEP（用户 2026-11-15），
+    // 子项图标正好对齐父项文字左边。行尾给 16 pt `+` 留 LS_ICON + LS_ICON_GAP，
+    // 名字不会被压到按钮下面（egui `text_r`）。
+    let name_inset = ls_indent(depth);
+    // 点名字区域选中本文件夹（父深块 + 子浅块，照左栏图层）；和样式行一样把焦点交给
+    // 列表，便于选中后直接用键盘。chevron 那一小块单独负责折叠（用户 2026-11-15）。
+    let ui = f.local_styles_ui.clone();
+    let focus = f.local_style_focus.clone();
     let name_area = if is_renaming {
         div()
             .w_full()
@@ -3148,22 +3191,24 @@ fn local_style_folder(
             .pl(pt(name_inset))
             .pr(pt(LS_ICON + LS_ICON_GAP))
             .cursor_pointer()
-            // ① 左键整行切换折叠（egui `resp.clicked()`）。
+            // ① 左键点「名字区域」= 选中文件夹（父深块 + 子浅块，照左栏图层）；
+            //    折叠只由 chevron 那一小块触发（用户 2026-11-15）。
             .on_mouse_down(MouseButton::Left, {
-                let folded = folded.clone();
+                let ui = ui.clone();
+                let focus = focus.clone();
                 let key = key.clone();
                 let wake = wake.clone();
-                move |_e, _w, _cx| {
-                    {
-                        let mut s = folded.borrow_mut();
-                        if s.contains(&key) {
-                            s.remove(&key);
-                        } else {
-                            s.insert(key.clone());
-                        }
+                move |_e, window, cx: &mut App| {
+                    window.focus(&focus);
+                    let mut st = ui.borrow_mut();
+                    // 已选中就不重复写，避免唤醒引起的视觉抖动（同左栏图层）。
+                    if st.sel_folder.as_deref() != Some(key.as_str()) || st.sel.is_some() {
+                        st.sel = None;
+                        st.sel_folder = Some(key.clone());
+                        drop(st);
+                        wake.wake();
                     }
-                    // 折叠态是渲染期读的状态，改完必须唤醒一次，否则 chevron 要等别的事件才更新。
-                    wake.wake();
+                    cx.stop_propagation();
                 }
             })
             // ③ 右键菜单 "Rename folder"（egui `context_popup`）。
@@ -3208,6 +3253,8 @@ fn local_style_folder(
                     });
                 }
             })
+            // ① 折叠只绑定在 chevron 这一小块上（用户 2026-11-15）。命中它时 stop，
+            //    不冒泡到父级的「选中文件夹」；命中名字区域则相反——只选中、不折叠。
             .child(
                 div()
                     .flex_none()
@@ -3215,6 +3262,25 @@ fn local_style_folder(
                     .flex()
                     .items_center()
                     .justify_center()
+                    .cursor_pointer()
+                    .on_mouse_down(MouseButton::Left, {
+                        let folded = folded.clone();
+                        let key = key.clone();
+                        let wake = wake.clone();
+                        move |_e, _w, cx: &mut App| {
+                            {
+                                let mut s = folded.borrow_mut();
+                                if s.contains(&key) {
+                                    s.remove(&key);
+                                } else {
+                                    s.insert(key.clone());
+                                }
+                            }
+                            cx.stop_propagation();
+                            // 折叠态是渲染期读的状态，改完必须唤醒一次，否则 chevron 要等别的事件才更新。
+                            wake.wake();
+                        }
+                    })
                     .child(crate::widgets::icon::paint(chevron, rgba(t.text_secondary), LS_CHEVRON)),
             )
             .child(
@@ -3486,10 +3552,9 @@ fn local_style_row(
         .flex_row()
         .items_center()
         .gap(pt(LS_ICON_GAP))
-        // lizard `local_styles`：`x = r.min.x + PAD + indent + 1`，图标 16×16 中心在 `x + 8`，
-        // 名字从 `x + 24`；`indent` 只有 0 / 12（文件夹内）。band 左内缩 8，故 pl = x - 8。
-        // lizard `x = r.min.x + PAD + indent + 1`；行尾给 24×24 设置按钮留 40 pt。
-        .pl(pt(LS_PAD - LS_INSET + 1.0 + if depth == 0 { 0.0 } else { 12.0 }))
+        // 每层缩进同一个固定值 LS_STEP（用户 2026-11-15）：图标起点 = 行基准 + depth * LS_STEP，
+        // 正好对齐上一层文件夹的文字左边。badge_hit 的 ml(-4) 与内部居中 +4 抵消，圆形视觉左边 = pl。
+        .pl(pt(ls_indent(depth)))
         .pr(pt(4.0))
         .cursor_pointer()
         // 左键：① 选中这一行（单击）；② 记拖动起点，越过死区才改成排序拖动；
@@ -3537,6 +3602,7 @@ fn local_style_row(
                 let dbl = {
                     let mut st = ui.borrow_mut();
                     st.sel = Some(flat);
+                    st.sel_folder = None;
                     let now = std::time::Instant::now();
                     let same = st.last_click.as_ref().is_some_and(|(k, at)| *k == id && now.duration_since(*at) < LS_DOUBLE_CLICK);
                     st.last_click = if same { None } else { Some((id.clone(), now)) };
@@ -3555,9 +3621,17 @@ fn local_style_row(
     // 名字占满中间，文本样式的 "32/Auto" 贴行尾（egui 的 meta 右对齐在 `r.max.x - LS_TRAIL`）。
     // 双击改名期间名字位换成内联输入框（与文件夹改名共用同一个控件实体）。
     body = if is_renaming {
-        body.child(div().flex_1().min_w(px(0.0)).child(f.local_style_rename_input.clone()))
+        body.child(div().flex_1().min_w(px(0.0)).h_full().flex().items_center().child(f.local_style_rename_input.clone()))
     } else {
-        let b = body.child(div().flex_1().min_w(px(0.0)).overflow_hidden().text_size(pt(11.0)).text_color(rgba(t.text)).child(name));
+        // 名字用 `static_text`（canvas + 与编辑态同一个居中式）绘制，不再是
+        // `div().child(name)`：两条渲染管线的行盒取整不同，切换编辑时会差 1 像素。
+        let b = body.child(
+            div().flex_1().min_w(px(0.0)).h_full().flex().items_center().overflow_hidden().child(crate::inline_input::static_text(
+                gpui::SharedString::from(name.clone()),
+                rgba(t.text).into(),
+                LS_ROW_H,
+            )),
+        );
         match &s.text_meta {
             Some(meta) => b.child(
                 div().flex_none().pl(pt(5.0)).text_size(pt(10.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(format!("· {meta}"))),
@@ -3620,26 +3694,33 @@ fn local_style_row(
         .w_full()
         .h(pt(LS_ROW_H))
         .px(pt(LS_INSET))
-        .flex()
-        .flex_row()
-        .items_center()
-        // 用户 2026-11-15：hover / 选中块满高 24 pt（原来上下各缩 2 → 20 pt）。
-        .child(div().flex_1().min_w(px(0.0)).h_full().rounded(pt(5.0)).hover(|s| s.bg(rgba(t.hover))).child(body))
-        // 设置按钮留在行内（flow），贴着这一行的右端；只在悬停或选中这一行时显示。
-        .child({
-            let open = open_editor.clone();
-            let group = row_group.clone();
+        // 整行一块背景（含行尾按钮），hover / 选中都是这一块变色。
+        .child(
             div()
-                .flex_none()
+                .w_full()
                 .h_full()
+                .rounded(pt(5.0))
                 .flex()
+                .flex_row()
                 .items_center()
-                .when(!selected, move |d| d.opacity(0.0).group_hover(group, |s| s.opacity(1.0)))
-                .child(IconButton::new(Icon::Settings).size(24.0).on_click(move |_e, window, cx| {
-                    cx.stop_propagation();
-                    open(window, cx);
-                }))
-        })
+                // 样式行不要悬停背景色块（用户 2026-11-15）；设置按钮仍靠 group_hover 显隐。
+                .child(div().flex_1().min_w(px(0.0)).h_full().child(body))
+                // 设置按钮在块内部右端；只在悬停或选中这一行时显示。
+                .child({
+                    let open = open_editor.clone();
+                    let group = row_group.clone();
+                    div()
+                        .flex_none()
+                        .h_full()
+                        .flex()
+                        .items_center()
+                        .when(!selected, move |d| d.opacity(0.0).group_hover(group, |s| s.opacity(1.0)))
+                        .child(IconButton::new(Icon::Settings).size(24.0).on_click(move |_e, window, cx| {
+                            cx.stop_propagation();
+                            open(window, cx);
+                        }))
+                }),
+        )
 }
 
 /// 空选区时的右栏：**两个独立小节**，各自一个 40 pt 标题：
@@ -3739,7 +3820,7 @@ mod local_styles_1to1_tests {
     }
 
     fn style(index: usize, id: &str, name: &str, y: f32) -> LsSlot {
-        LsSlot { ty: "paint", y0: y, y1: y + LS_ROW_H, kind: LsSlotKind::Style { index, id: id.into(), name: name.into() } }
+        LsSlot { ty: "paint", y0: y, y1: y + LS_ROW_H, depth: 0, kind: LsSlotKind::Style { index, id: id.into(), name: name.into() } }
     }
 
     /// egui `drop_move`：给出 `before`、跨文件夹时改名、落在原位不动、重名时编号。
