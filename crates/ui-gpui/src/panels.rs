@@ -2584,9 +2584,11 @@ pub(crate) fn auto_layout_section(
         });
         sec = sec.child(sublabel_row(tr("Padding")));
         if individual {
+            // egui `layout_panel.rs::spacing`：开关 `layout_button_at(padding_row, 0)` 贴在
+            // **第一行**的右侧 action 槽；展开后的第二行（R/B）没有开关。开关不能跟着行走。
             sec = sec
-                .child(field_row(vec![f.pad_l.clone(), f.pad_t.clone()], Vec::<IconButton>::new()))
-                .child(field_row(vec![f.pad_r.clone(), f.pad_b.clone()], vec![toggle]));
+                .child(field_row(vec![f.pad_l.clone(), f.pad_t.clone()], vec![toggle]))
+                .child(field_row(vec![f.pad_r.clone(), f.pad_b.clone()], Vec::<IconButton>::new()));
         } else {
             // 水平 / 垂直内边距同样可绑变量（`paddingHorizontal` / `paddingVertical`）。
             // 独立四边是「一个数组一起提交」，原版也没有逐边绑定，这里保持纯数值。

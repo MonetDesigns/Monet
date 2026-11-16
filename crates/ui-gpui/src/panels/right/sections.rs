@@ -1871,7 +1871,10 @@ pub(crate) fn appearance(
         let flag = f.corners_individual.clone();
         let cmds = f.cmds.clone();
         Some(IconButton::new(Icon::AbsolutePosition).size(24.0).active(indep_open).on_click(move |_e, _w, _cx| {
-            *flag.borrow_mut() = !*flag.borrow();
+            // ⛔ 不能写成 `*flag.borrow_mut() = !*flag.borrow()`：同一表达式里先可变借用再借用，
+            // RefCell 会直接 panic（点一下卡死）。与 padding 的 `pad_individual` 同样拆两句。
+            let next = !*flag.borrow();
+            *flag.borrow_mut() = next;
             cmds.wake();
         }))
     } else {
