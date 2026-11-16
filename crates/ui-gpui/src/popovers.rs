@@ -595,6 +595,10 @@ pub(crate) struct WindowState {
     measured_h: Rc<Cell<f32>>,
     /// `Some` once the header has been dragged (egui's `Place::At`).
     place: Option<Point<Pixels>>,
+    /// 已经完成过一次定位。`measured_h` 修正会改 `height`，若每帧都重新 `open_pos`/`clamp`，
+    /// 卡片会在「量到真实高度」的那一帧跳一下（用户 2026-11-16：Type settings 点开后
+    /// 移开鼠标才「刷新」）。定位一次后钉住原点，除非用户拖动。
+    placed_once: bool,
     /// Exact window-space **top** of the button that opened this card, when the trigger
     /// reported it. `anchored_open` uses this instead of guessing from the press point.
     /// `None` keeps the old pointer-minus-half-button fallback (keyboard / command opens).
@@ -749,6 +753,7 @@ impl WindowState {
             height: 240.0,
             measured_h: Rc::new(Cell::new(0.0)),
             place: None,
+            placed_once: false,
             exact_top: None,
             origin: Point { x: px(0.0), y: px(0.0) },
             viewport: size(px(0.0), px(0.0)),
@@ -4482,6 +4487,8 @@ impl WindowState {
         drag_move: Rc<dyn Fn(&MouseMoveEvent, &mut Window, &mut App)>,
         right_edge: Pixels,
     ) -> Vec<AnyElement> {
+        // 视口变了（窗口缩放）要重新夹取；否则定位一次后钉住原点。
+        let viewport_changed = self.viewport != viewport;
         self.viewport = viewport;
         // 变量编辑器把拖动绑在**自己的头部左侧**（不是整张卡片），所以要把回调传进 body。
         self.drag_start = Some(drag.clone());
@@ -4532,9 +4539,16 @@ impl WindowState {
         // 先算**当帧**卡片原点：面板内部右键菜单记的是窗口坐标，body_element 要用它换算成
         // 卡片局部坐标。origin() 只依赖 open/at/width/height/flush，可用一个 probe 提前求值，
         // 否则首帧或拖动后会差一帧。
+        // 定位只做一次：`measured_h` 会在下一帧把 `height` 修正成真实高度，若每帧重新
+        // `open_pos` / `clamp`，卡片就会在那一帧跳一下（鼠标一动才重绘 → 看起来像「刷新」）。
+        // 钉住原点，除非用户拖动（`at` = `place`）或视口尺寸变了。
+        let pinned = self.placed_once && at.is_none() && !viewport_changed;
+        let prev_origin = self.origin;
         let mut probe = popover_window(open).width(width).pad(pad).flush(full).height(height);
         if let Some(p) = at {
             probe = probe.at(p);
+        } else if pinned {
+            probe = probe.at(prev_origin);
         }
         self.origin = probe.origin(viewport);
         // 浮层内通用下拉的菜单每帧重建：先清空上一帧，body_element 里的 Dropdown 会重新登记。
@@ -4559,8 +4573,12 @@ impl WindowState {
         if let Some(p) = at {
             pop = pop.at(p);
         }
+        if pinned {
+            pop = pop.at(prev_origin);
+        }
         let (origin, card) = pop.show(viewport, dismiss);
         self.origin = origin;
+        self.placed_once = true;
         // 菜单卡片与浮层卡片同挂窗口根（els），所以菜单用窗口坐标，不被浮层的滚动裁剪。
         let mut els = vec![card];
         els.extend(self.overlays.borrow_mut().drain(..));
