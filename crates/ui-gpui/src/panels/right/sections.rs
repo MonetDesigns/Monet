@@ -405,7 +405,7 @@ pub(crate) fn bindable(
                 let list: Vec<String> = vars.to_vec();
                 let hit = Rc::new(Cell::new(None));
                 let hit_click = hit.clone();
-                cell = cell.child(crate::popovers::with_button_bounds(
+                cell = cell.child(crate::popovers::with_absolute_bounds(
                     div()
                         .absolute()
                         .right(px(0.0))
@@ -3734,6 +3734,7 @@ fn local_style_row(
     let mut body = div()
         .w_full()
         .h_full()
+        .relative()
         .flex()
         .flex_row()
         .items_center()

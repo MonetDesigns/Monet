@@ -4824,6 +4824,18 @@ where
     el.into_element().relative().child(bounds_probe(hit)).into_any()
 }
 
+/// Inject the probe into an element that is **already positioned** (typically `absolute`).
+/// Never call `.relative()` here: it would override `absolute` and drop the element into the
+/// normal flow — that is what broke the variable-binding button that sits at `right: 0` of its
+/// field. The probe itself is absolute/full-size and measures its nearest positioned ancestor.
+pub(crate) fn with_absolute_bounds<E>(el: E, hit: Rc<Cell<Option<Bounds<Pixels>>>>) -> AnyElement
+where
+    E: IntoElement,
+    E::Element: ParentElement,
+{
+    el.into_element().child(bounds_probe(hit)).into_any()
+}
+
 /// Exact button top for a window opened from `hit`, falling back to the press point when the
 /// probe has not run yet (e.g. a keyboard open on the first frame).
 pub(crate) fn button_top(hit: &Rc<Cell<Option<Bounds<Pixels>>>>, window: &Window) -> Pixels {
