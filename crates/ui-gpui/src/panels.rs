@@ -227,7 +227,10 @@ pub(crate) struct Cmd {
 /// its command executed on the next frame.
 #[derive(Clone)]
 pub(crate) struct CmdQueue {
-    items: std::rc::Rc<std::cell::RefCell<Vec<Cmd>>>,
+    /// `(发起该命令的窗口 id, 命令)`：多个 OS 窗口共用一个 `CanvasView` 和一份 Session，
+    /// 命令必须由**发起它的那个窗口**执行，否则「在第二个窗口点加页」会被先渲染的
+    /// 主窗口取走、加到主窗口的文档上（用户 2026-11-16 实测）。
+    items: std::rc::Rc<std::cell::RefCell<Vec<(u64, Cmd)>>>,
     wake: std::rc::Rc<dyn Fn()>,
     /// 出口改写：派生的队列（[`CmdQueue::mapped`]）在入队前先把命令改一遍。默认 `None`
     /// —— 也就是所有既有按钮的行为完全不变。
@@ -254,7 +257,8 @@ impl CmdQueue {
             Some(f) => f(cmd),
             None => cmd,
         };
-        self.items.borrow_mut().push(cmd);
+        let window = crate::windows::current();
+        self.items.borrow_mut().push((window, cmd));
         (self.wake)();
     }
 
@@ -263,8 +267,21 @@ impl CmdQueue {
         (self.wake)();
     }
 
+    /// 只取走**当前窗口**发起的命令；别的窗口的留在队列里等它们自己的那一帧。
     pub(crate) fn drain(&self) -> Vec<Cmd> {
-        self.items.borrow_mut().drain(..).collect()
+        let current = crate::windows::current();
+        let mut items = self.items.borrow_mut();
+        let mut out = Vec::new();
+        let mut keep = Vec::new();
+        for (window, cmd) in items.drain(..) {
+            if window == current {
+                out.push(cmd);
+            } else {
+                keep.push((window, cmd));
+            }
+        }
+        *items = keep;
+        out
     }
 
     /// Only for tests: how many commands are still waiting for a frame.
@@ -280,7 +297,9 @@ pub(crate) type Cmds = CmdQueue;
 /// swallowed by a missing `set_root`. `wake()` asks for that frame.
 #[derive(Clone)]
 pub(crate) struct PopupReqs {
-    slot: Rc<std::cell::RefCell<Option<crate::popovers::WindowState>>>,
+    /// `(发起窗口 id, 窗口状态)`：和命令队列一样按窗口隔离，否则主窗口会把第二个窗口
+    /// 请求的浮窗取走、画在自己的窗口里。
+    slot: Rc<std::cell::RefCell<Vec<(u64, crate::popovers::WindowState)>>>,
     cmds: Cmds,
     /// 当前打开窗口的**触发按钮标识**（根视图每帧 `sync_open` 写回）。按触发源而不是按
     /// `WindowKind` 判断：同一类窗口（变量、取色器…）有多个入口，按 kind 会让它们一起亮。
@@ -297,7 +316,7 @@ pub(crate) struct PopupReqs {
 
 impl PopupReqs {
     pub(crate) fn request(&self, w: crate::popovers::WindowState) {
-        *self.slot.borrow_mut() = Some(w);
+        self.slot.borrow_mut().push((crate::windows::current(), w));
         self.cmds.wake();
     }
 
@@ -711,7 +730,7 @@ pub(crate) struct RightFields {
     /// view takes it on the next frame. This deliberately does **not** go through
     /// `Entity<CanvasView>`: a `let Some(root) = ... else { return }` guard silently swallows the
     /// click whenever the one-shot `set_root` did not land, which is the "button does nothing" bug.
-    popup_slot: Rc<std::cell::RefCell<Option<crate::popovers::WindowState>>>,
+    popup_slot: Rc<std::cell::RefCell<Vec<(u64, crate::popovers::WindowState)>>>,
     /// 当前打开的窗口种类（根视图每帧写回）：触发按钮的选中态与「再点一次关闭」都读它。
     popup_open_trigger: Rc<std::cell::RefCell<Option<String>>>,
     /// 渲染帧号 + 上一次 toggle，见 `PopupReqs::toggle` 的同帧去重。
@@ -1290,7 +1309,7 @@ impl RightFields {
             blend_label: std::cell::RefCell::new(SharedString::from(tr("Normal"))),
             blend_open: std::rc::Rc::new(std::cell::RefCell::new(false)),
             root: None,
-            popup_slot: Rc::new(std::cell::RefCell::new(None)),
+            popup_slot: Rc::new(std::cell::RefCell::new(Vec::new())),
             popup_open_trigger: Rc::new(std::cell::RefCell::new(None)),
             popup_frame: Rc::new(std::cell::Cell::new(0)),
             popup_last_toggle: Rc::new(std::cell::RefCell::new((0, None))),
@@ -1636,7 +1655,10 @@ impl RightFields {
 
     /// Take the window a button requested; the root view checks this once per frame.
     pub(crate) fn take_window(&self) -> Option<crate::popovers::WindowState> {
-        self.popup_slot.borrow_mut().take()
+        let current = crate::windows::current();
+        let mut slot = self.popup_slot.borrow_mut();
+        let at = slot.iter().position(|(window, _)| *window == current)?;
+        Some(slot.remove(at).1)
     }
 
     /// Wire the popover-triggering slots. Called once after `CanvasView` exists, so the field

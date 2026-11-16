@@ -704,7 +704,10 @@ impl CanvasView {
     /// root entity is mounted in several OS windows, so `session.active` set by the last window to
     /// render is not necessarily the one an input event belongs to. Call this at the start of any
     /// handler that reads `app.session` (and from render).
-    fn bind_window_document(&mut self, window: &mut Window) {
+    /// `authoritative`：**事件**处理时为 true —— 事件来自哪个窗口，那个窗口的文档就必须成为
+    /// 全局 `session.active`，否则第二个窗口里点「加页」会加到第一个窗口的文档上
+    /// （用户 2026-11-16 实测）。渲染时为 false：只有聚焦窗口写，避免两个窗口每帧互相覆盖。
+    fn bind_window_document(&mut self, window: &mut Window, authoritative: bool) {
         let mut wins = self.windows.borrow_mut();
         let wid = wins.list.iter().find(|w| w.window_id == window.window_handle().window_id()).map_or(0, |w| w.id);
         windows::set_current(wid);
@@ -713,7 +716,12 @@ impl CanvasView {
         // ⛔ 只有**当前聚焦**的窗口能改全局 `session.active`：两个窗口共用一份 Session，
         // 每帧各自写一遍会让画布在两份文档之间来回切 → 「整个画布不停闪」（用户 2026-11-16）。
         // 非聚焦窗口只记录自己的 active，画面跟随聚焦窗口（稳定优先）。
-        let drives = wid == 0 || wins.focused == wid;
+        // 事件来自哪个窗口，它就成为「聚焦窗口」——否则 `focused` 永远停在上次新建的那个，
+        // 之后所有窗口的渲染都拿不到 active 写权限。
+        if authoritative {
+            wins.focused = wid;
+        }
+        let drives = authoritative || wid == 0 || wins.focused == wid;
         // 只能绑定**本窗口拥有**的文档：否则主窗口会把「已经被拖到别的窗口」的文档设成
         // 全局 active，画布显示一份它没有标签的文档（用户 2026-11-16：切不过去）。
         if drives
@@ -4499,7 +4507,7 @@ impl Render for CanvasView {
         // A21：上一帧的控件登记表成为这一帧的读屏树与 Tab 列表。
         a11y::begin_frame(cx);
         // A16：绑定本窗口的文档（含 active 回写，见 bind_window_document）。
-        self.bind_window_document(window);
+        self.bind_window_document(window, false);
         let a11y_focused = window.focused(cx);
         let a11y_scale = window.scale_factor();
         for (_, command) in a11y::commit_frame("Monet", a11y_focused.as_ref(), a11y_scale, window, cx) {
@@ -5105,7 +5113,7 @@ impl Render for CanvasView {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this: &mut CanvasView, e: &MouseDownEvent, window, cx| {
-                    this.bind_window_document(window);
+                    this.bind_window_document(window, true);
                     // 点画布 = 整窗失焦：先把右栏所有仍在编辑的草稿提交，再把焦点给画布。
 
                     // 只靠 TextEdit::render() 轮询 focus 会漏：GPUI 对未标脏的嵌套 Entity
@@ -5229,7 +5237,7 @@ impl Render for CanvasView {
             )
             // 移动：拖拽进度统一由共用窗口级路由接管；这里只做 hover 命中。
             .on_mouse_move(cx.listener(|this: &mut CanvasView, e: &MouseMoveEvent, window, cx| {
-                this.bind_window_document(window);
+                this.bind_window_document(window, true);
                 // 任何共用拖拽进行中，元素级 move 一律不重复推进：它只在指针悬停画布时
                 // 触发，指针移到别的面板就停发（用户 2026-11-13 指出的问题）。
                 if this.any_window_drag_active() {
@@ -5507,7 +5515,7 @@ impl Render for CanvasView {
             )
             // 键盘：空格 = 平移工具，Z = 缩放工具（Alt 缩小）。
             .on_key_down(cx.listener(|this: &mut CanvasView, e: &KeyDownEvent, window, cx| {
-                this.bind_window_document(window);
+                this.bind_window_document(window, true);
                 this.mods = e.keystroke.modifiers;
 
                 // R4/R5: Escape cancels an inline rename (egui `Rename` keeps the old name);
@@ -7164,7 +7172,7 @@ impl Render for CanvasView {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this: &mut CanvasView, _e: &MouseDownEvent, window, cx| {
-                    this.bind_window_document(window);
+                    this.bind_window_document(window, true);
                     // A21：鼠标一按就回到指针模式（焦点环消失，上游同义）。
                     if this.a11y.region.take().is_some() {
                         cx.notify();
@@ -7179,7 +7187,7 @@ impl Render for CanvasView {
             // 就成了死代码。这里只在列表真的拿到焦点时消费（`local_style_key` 自己判断），
             // 其它情况原样放行给内层控件与画布。
             .on_key_down(cx.listener(|this: &mut CanvasView, e: &KeyDownEvent, window, cx| {
-                this.bind_window_document(window);
+                this.bind_window_document(window, true);
                 let accel = e.keystroke.modifiers.platform || e.keystroke.modifiers.control;
 
                 // 撤销 / 重做必须在根节点兜底：GPUI 的按键沿**焦点链**派发，而整套命令快捷键
@@ -7306,7 +7314,7 @@ impl Render for CanvasView {
             )
             // 时间轴 hover 标记：与拖拽无关，但仍需每次 move 更新。
             .on_mouse_move(cx.listener(|this: &mut CanvasView, e: &MouseMoveEvent, window, _cx| {
-                this.bind_window_document(window);
+                this.bind_window_document(window, true);
                 let vh = f32::from(window.viewport_size().height);
                 crate::motion::timeline::set_pointer_in_bar(this.motion && f32::from(e.position.y) >= vh - this.motion_bar_h());
             }))
