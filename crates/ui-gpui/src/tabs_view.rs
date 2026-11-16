@@ -128,25 +128,9 @@ fn file_mark(board: bool) -> Icon {
     if board { Icon::ViewGrid } else { Icon::Pen }
 }
 
-/// GPUI 没有上游的 `bidi::paint_name`，按标签宽度做字符级省略（中文按全角计）。
-fn elide(name: &str, width: f32) -> String {
-    let budget = ((width - 72.0).max(0.0) / 7.2).floor() as usize;
-    if budget == 0 {
-        return String::new();
-    }
-    let units = |c: char| if c.is_ascii() { 1 } else { 2 };
-    let mut used = 0;
-    let mut out = String::new();
-    for c in name.chars() {
-        let u = units(c);
-        if used + u > budget {
-            out.push('…');
-            return out;
-        }
-        out.push(c);
-        used += u;
-    }
-    out
+/// 标签名字的宽度上限：可用宽度扣掉 72pt 的图标 / 间距留白（上游 `paint_name` 的 `max_w`）。
+fn name_width(width: f32) -> f32 {
+    (width - 72.0).max(0.0)
 }
 
 /// 标签条上的一次拖拽：注册到窗口级 `drag_router`（项目铁律：GPUI 0.2.1 无鼠标捕获，
@@ -225,6 +209,7 @@ fn bar_button(icon: Icon, t: crate::theme::Tokens, id: &'static str) -> Stateful
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn tab_strip(
     state: &mut TabState,
+    window: &Window,
     docs: &[TabDoc],
     active: usize,
     dark: bool,
@@ -310,7 +295,7 @@ pub(crate) fn tab_strip(
         let body_w = (w - 32.0).max(0.0);
         // 上游 `bidi::paint_name` 的可用宽度也要扣掉 live 标记与未保存点，否则名字会压到徽标上。
         let name_w = (w - if d.live.visible() { LIVE_MARK_WIDTH } else { 0.0 } - if d.dirty { 12.0 } else { 0.0 }).max(0.0);
-        let name = elide(&d.name, name_w);
+        let name = crate::bidi::fit(window, &d.name, 12.0, name_width(name_w));
         let badge = d.live;
 
         let body = div()

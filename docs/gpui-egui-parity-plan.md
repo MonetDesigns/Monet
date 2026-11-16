@@ -46,7 +46,7 @@
 | **A19** | **通用对话框框架**（数据驱动：标题 / 说明 / 字段 / 按钮 / 确认取消 / Escape / 遮罩） | `dialogs.rs`（579 行，`renderers()` 统一 About·Preferences·Shortcuts·Find·Rename·Variables·Export） | ✅ **2026-11-11 自检更正**：已落地 `dialogs.rs`（`Kind::ALL` 16 种 + `Spec` + `parity_contract` 双向比对）；原两处是 2026-11-10 扫描快照，现已过时 | **A6/A7/A8/A10/A11/A12/A13/A15/A17/A18 十个对话框的共同前置** | **P0** | 中 |
 | **A20** | **查找替换 Find and replace** | `dialogs.rs:368-404`（`edit.findReplace`） | ✅ **2026-11-11 自检更正**：已落地 `Kind::Find`（`edit.findReplace` / `dialog.find` → Spec + Find / Replace all 按钮 + 3 条测试），原「全 0 命中」是**判断失误** | ~~无法批量查找替换~~ 已可用（仍是居中对话框，非 EGUI 内联） | P1 | 小 |
 | **A21** | **无障碍 a11y**（AccessKit 树、F6/Shift+F6 区域切换、Tab 焦点环、方向键导航） | `a11y.rs`（1071 行，`focus.region` 请求） | `AccessKit` / `accesskit` / `focus_ring` / `Key::F6` 全 0；`tabs_view.rs:13` 自认「a11y（AccessKit，P4）」 | 键盘/读屏用户不可用 | P2 | 大 |
-| **A22** | **双向文字 + 界面缩放**（UAX#9 名称、阿拉伯连字、括号镜像；`pref.uiScale`） | `bidi.rs`（127 行）、`ui_scale.rs`（117 行） | `bidi` / `UAX` / `ui_scale` / `pixels_per_point` 全 0；`tabs_view.rs:134` 自认没有 `bidi::paint_name` | RTL 语言图层名错乱；界面大小不可调（A7 只以「等设置」带过） | P2 | 中 |
+| **A22** | **双向文字 + 界面缩放**（UAX#9 名称、阿拉伯连字、括号镜像；`pref.uiScale`） | `bidi.rs`（127 行）、`ui_scale.rs`（117 行） | 🔄 2026-11-16：`bidi.rs` 已落地（AC 节）——名称按实测宽度截断、省略号落在视觉末端；UAX#9 重排 / 阿拉伯连字 / 括号镜像由 GPUI 的平台塑形器（DirectWrite / Core Text / cosmic-text）完成，无需重写。**uiScale 未做**：GPUI 0.2 没有 zoom factor / `set_scale_factor` / 元素整体缩放接口，界面全用 `pt()`/`px()` 常量 | RTL 名称截断已正确；界面大小仍不可调（需框架支持或全量 UI 度量重构） | P2 | 中 |
 | **A23** | **平台服务层**（原生文件对话框 / 剪贴板 / `OPEN_EXTENSIONS` / 拖放进度卡片 / IME） | `services.rs`、`open.rs`、`pending_open.rs`、`app/ime.rs`、`app/clipboard.rs` | `pick_open` / `OPEN_EXTENSIONS` / `pending_open` 全 0；`context_menu.rs:44` 自认「clipboard and file dialogs — which this front-end does not have yet」 | 打开/另存/复制粘贴走不通原生路径 | P2 | 中 |
 | **A24** | **字段通用行为**（数字框 `+10/*2/50%` 相对运算、字体预览、实时文本提示、`menus/select_layer.rs`） | `widgets/field_math.rs`、`widgets/font_preview.rs`、`canvas/live_text.rs`、`menus/select_layer.rs` | `field_math` / `font_preview` / `editing_hint` / `select_layer` 全 0 | 数值/字体/文本编辑体验缺失（属通用行为，宜一次补齐给所有字段复用） | P3 | 中 |
 | **A25** | **插件 widget 悬浮栏** | `canvas/widget_bar.rs`（113 行，`widget.menu`） | ✅ `widget_bar.rs` 已移植（同一套 HEIGHT/CELL/SWATCH/GAP/PAD 与 `widget.menu` 载荷），`lib.rs:4750` 接入 | 无 | P2 | 小 |
@@ -995,7 +995,7 @@ R 节（17:0x 审计）把 R1/R2 标成「✅ 已实施」，但回源码核对�
 |---|---|---|---|
 | B8 Present 子模块 | ~2731 行 / 10 子模块 | `present.rs` ~488 行 | 逐项补全多页/链接/响应式/退出 |
 | A21 a11y | 1071 行 | 不存在 | 移植 AccessKit/F6/焦点环/方向键 |
-| A22 bidi/ui_scale | ~244 行 | 不存在 | 移植 UAX#9/RTL/pref.uiScale |
+| A22 bidi/ui_scale | ~244 行 | `bidi.rs` 已落地；`ui_scale` 无对应框架接口 | bidi 已按实测宽度截断（AC 节）；uiScale 等 GPUI 提供整体缩放或全量 UI 度量重构 |
 | A23 services | — | 不存在 | 原生文件对话框/剪贴板/OPEN_EXTENSIONS/IME |
 | A24 field_math | — | 不存在（冻结件，改前须确认） | 数字框相对运算/字体预览/实时提示/图层选择菜单 |
 | A16 多窗口 | — | 弹层非 OS 多窗口 | 需重构 `Session` 所有权共享（J 节已记） |
@@ -1126,7 +1126,36 @@ R 节（17:0x 审计）把 R1/R2 标成「✅ 已实施」，但回源码核对�
 
 **🔄 部分完成（有 UI，细节未齐）**：A11（About 贡献者表）、A12（引擎不发导入报告请求）、
 A15（SampledColor 仅提示窗）、A17（Link 已 1:1，Offset / Move to page 未搬）、B4（拖出成窗口）、
-B6 / B7 / B8 / B10。
+B6 / B7 / B8 / B10、**A22**（bidi 已落地，见 AC 节；uiScale 受 GPUI 0.2 无缩放接口限制）。
 
-**❌ 仍未开始**：A14（依赖 C2 升版）、A16 多窗口、A21 a11y、A22 bidi/ui_scale、A24 字段通用行为、
-A28 Live 协作前端、C2、C3（文案规范待全面对齐）。
+**❌ 仍未开始**：A14（依赖 C2 升版）、A16 多窗口、A21 a11y、A24 字段通用行为、A28 Live 协作前端、
+C2、C3（文案规范待全面对齐）。
+
+## AC. 双向文字（A22 bidi）已迁移（2026-11-16）
+
+**结论**：名称的 UAX#9 重排、阿拉伯连字、括号镜像**不需要自己实现**——GPUI 的文字排版在平台层
+完成（Windows 的 DirectWrite `IDWriteTextLayout`、macOS 的 Core Text、Linux 的 cosmic-text），
+`window.text_system().shape_line` 已按逻辑顺序输入、按视觉顺序输出字形，并保持「一个字形对应
+一个逻辑字符」，所以光标 / 选区 / 点击偏移仍是逻辑位置。`ui-egui/src/bidi.rs` 里真正需要移植的
+只有 `TextWrapping::truncate_at_width` 提供的**按实测宽度截断**。
+
+**落地**
+
+- 新增 `crates/ui-gpui/src/bidi.rs`：
+  - `fit_with(name, max_w, measure)`：纯逻辑，取能放进 `max_w` 的最长逻辑前缀并补 `…`；
+    连省略号都放不下时返回空串。4 条测试覆盖「放得下 / 超长截断 / RTL 逻辑前缀 / 无空间」。
+  - `fit(window, name, font_size, max_w)`：用 `shape_line` 实测宽度驱动 `fit_with`，字体取自
+    `window.text_style().font()`，与 `inline_input` / 输入框同一来源。
+- `tabs_view.rs`：删掉按字符数估算的 `elide`（原来 ASCII 记 1、非 ASCII 记 2），标签名改为
+  `bidi::fit(window, &d.name, 12.0, name_width(name_w))`；`tab_strip` 多收一个 `&Window`。
+- `inline_input.rs::static_text`：静态名字（Pages / Layers / 画布标签）在 prepaint 里按**格子实测
+  宽度**截断后再塑形，长名称不再被 `overflow_hidden` 硬切、省略号落在视觉末端。
+
+**uiScale 未做（框架限制）**：GPUI 0.2 没有 zoom factor / `set_scale_factor` / 元素整体变换接口，
+`Window::set_rem_size` 只影响 `rem` 单位，而本界面全部用 `pt()`/`px()` 常量。要做只能解冻
+`widgets/mod.rs` 让 `pt()` 乘全局缩放因子，并把 UI 里约 700 处 `px()` 字面量一起改走缩放，
+属于独立的大改动；本轮按用户决定只做 bidi，`pref.uiScale` 仍由引擎保存、Preference 命令仍可调，
+界面暂不缩放。
+
+**验证**：`cargo check -p figcraft-ui-gpui` 通过；`bidi`（4）、`tabs`（11）、`inline`（7）测试全绿。
+
