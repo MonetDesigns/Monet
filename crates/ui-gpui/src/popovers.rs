@@ -32,6 +32,10 @@ use std::rc::Rc;
 /// button's top (`ui-egui/src/popover.rs`: "its top on `y` (the button's top)").
 const BUTTON_HALF: f32 = 12.0;
 
+/// 变量 / 文本样式列表的最大可见高度（超出滚动）。必须是常量：从 `body_h` 派生会被
+/// `measured_h` 的「量到多少就多高」反馈放大，每帧长一截。
+const LIST_MAX_H: f32 = 320.0;
+
 /// 样式编辑器属性行里那颗左侧 `Dropdown` 的宽度：卡片 304 − 左缩进 `PAD` 16 − 右缩进
 /// `PAD_RIGHT` 8 − 尾部两颗 24 pt 图标按钮 48。与右栏 `field_row_full_trailing` 的字段列同宽，
 /// 这样两个面板里同一行的内缩与图标位置完全一致。
@@ -725,6 +729,12 @@ impl WindowState {
     /// 供根视图判断当前是否是某个特定窗口（例如变量面板已开时再点按钮就不要二次弹出）。
     pub(crate) fn kind(&self) -> WindowKind {
         self.kind
+    }
+
+    /// 高度由设计稿**固定**、不随内容测量的窗口。它们不吃 `measured_h` 回写，否则
+    /// 「body 高度 = height + 列表 flex_1 撑满」会每帧把卡片顶高 40pt（越滚越大）。
+    fn fixed_height(&self) -> bool {
+        matches!(self.kind, WindowKind::FontPicker)
     }
 
     /// Base state; the five constructors below fill in the body model.
@@ -3151,8 +3161,9 @@ impl WindowState {
         list = if fonts {
             list.flex_1().min_h(px(0.0))
         } else {
-            // 其它列表：内容多时在 body 高度内滚动，内容少时仍然 hug（不撑高卡片）。
-            list.max_h(px((body_h - 32.0).max(80.0)))
+            // 其它列表：内容多时滚动，内容少时仍 hug。上限必须是**常量**——若用 `body_h`
+            // 派生，`measured_h` 会把它连同卡片高度一起每帧撑大（同样的「越滚越大」）。
+            list.max_h(px(LIST_MAX_H))
         };
         if !fonts {
             list = list.gap(pt(2.0));
@@ -4472,7 +4483,11 @@ impl WindowState {
         // 构造期的 `height` 只是估算（取色器估成 532，实际约 307）：估算偏大时 `clamp` 会把
         // 卡片顶在上边界、怎么拖都不动。上一帧量到过真实高度就用它（变量表有自己的尺寸，
         // 由 `editor.size()` 决定，不参与）。
-        if self.editor.is_none() {
+        //
+        // ⛔ 固定高度的窗口（字体窗：body 恒 429）绝不能吃这个回写：body 高度 = `height`、
+        // 列表又 `flex_1` 撑满，于是「量到 469 → height=469 → 卡片 509 → 再量 509…」每帧
+        // 长 40pt，表现为「越滚越大」。固定高的窗口自己说了算。
+        if self.editor.is_none() && !self.fixed_height() {
             let real = self.measured_h.get();
             if real > 0.0 {
                 self.height = real;
