@@ -21,6 +21,8 @@ pub mod overlays;
 pub mod painter;
 /// Prototype 连线叠加层（原型连线 / 「+」手柄 / Manual overlay ghost）。
 pub mod proto_canvas;
+/// A27：画板自动连线（照 `ui-egui/src/canvas/board_connect.rs`）。
+pub mod board_connect;
 pub mod render;
 pub mod render_worker;
 pub mod rulers;
@@ -526,6 +528,10 @@ pub(crate) fn draw_overlays(app: &mut CanvasApp, painter: &mut Painter, t: &Toke
     handles::draw(app, painter, app.pointer);
     // 多选间距/重排手柄（原 `canvas.rs` 在 `handles::draw` 之后调 `selection_spacing::draw`）。
     selection_spacing::draw(app, painter);
+    // A27：画板自动连线的「+」手柄、悬停落点与拖动预览（egui `board_connect::draw`）。
+    board_connect::draw(app, painter);
+    // A27：投票徽标（egui `board_facilitate::badges`）。
+    crate::board_facilitate::badges(app, painter);
     // 标尺（View ▸ Rulers）。
     if app.session.ds().map(|d| d.view.rulers).unwrap_or(true) {
         rulers::rulers(app, painter, t, doc.as_ref(), &sel);

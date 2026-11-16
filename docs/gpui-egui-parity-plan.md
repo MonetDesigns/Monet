@@ -48,7 +48,7 @@
 | **A24** | **字段通用行为**（数字框 `+10/*2/50%` 相对运算、字体预览、实时文本提示、`menus/select_layer.rs`） | `widgets/field_math.rs`、`widgets/font_preview.rs`、`canvas/live_text.rs`、`menus/select_layer.rs` | `field_math` / `font_preview` / `editing_hint` / `select_layer` 全 0 | 数值/字体/文本编辑体验缺失（属通用行为，宜一次补齐给所有字段复用） | P3 | 中 |
 | **A25** | **插件 widget 悬浮栏** | `canvas/widget_bar.rs`（113 行，`widget.menu`） | `widget.menu` / `widget_bar` 0 命中；A4 只提了插件面板 | 画布上的插件小工具入口缺失 | P2 | 小 |
 | **A26** | **原型画布连线**（noodles、「+」拖拽手柄、overlay ghost） | `canvas/proto_canvas.rs`（341 行）+ `canvas/proto_canvas/overlay_ghost.rs` | `proto_canvas` / `noodle` / `overlay_ghost` 全 0；只有右栏属性 `panels/right/proto.rs` | 原型交互只能在属性面板配，画布上连不了线 | P2 | 中 |
-| **A27** | **画板协作小工具**（计时器 / 投票 / 自动连接 / 模板与表格行列选择器） | `canvas/board_facilitate.rs`（340 行）、`canvas/board_connect.rs`（255 行）、`widgets/board_picker.rs`（163 行） | `board.timer` / `board.vote` / `addConnected` / `connected_place` / `BoardTimer` 全 0 | A2 只点了工具条，实际还差整块画板交互 | P2 | 中 |
+| **A27** | **画板协作小工具**（计时器 / 投票 / 自动连接 / 模板与表格行列选择器） | `canvas/board_facilitate.rs`（340 行）、`canvas/board_connect.rs`（255 行）、`widgets/board_picker.rs`（163 行） | **2026-11-16 已落地**：`board_facilitate.rs`（药丸 + 计时器/投票/结果弹层 + 票数徽标）、`canvas/board_connect.rs`（四向「+」、悬停落点、拖动建/连线）；模板选择器此前已在 `board_picker.rs` | 已可用（实机视觉冒烟待跑） | P2 | 中 |
 | **A28** | **Live 协作前端整块**（光标 / 聊天 / spotlight / 共享 / 加入 / 断连标记） | `live.rs`（1571 行）+ `live/agent.rs`（101 行） | `find crates/ui-gpui/src -iname '*live*' -o -iname '*collab*'` = **0 文件**；`tabs_view.rs:13` 自认「live/断连标记（P0-2）」未做 | 原 B5 写成「26 个文件规模、需逐项比对」，实际 GPUI 完全没有；应归到「完全缺失」 | P1 | 大 |
 
 ---
@@ -1043,8 +1043,8 @@ R 节（17:0x 审计）把 R1/R2 标成「✅ 已实施」，但回源码核对�
   语义，本轮未接（按钮提交已可用）；接它需要确认冻结件的焦点事件。
 - **select_all_on_focus**：egui 两个输入框聚焦时全选，冻结 `TextField` 无此钩子，未做。
 - **实机视觉验证**：像素级比对与双击打字冒烟需跑 GUI，单测不能替代。
-- ImportReport（引擎捕获导入 warnings）、Link 的 Offset/移动到页、A4 Browse 联网、
-  A27 计时器/投票仍是 X.1 的后续批次。
+- ImportReport（引擎捕获导入 warnings）、Link 的 Offset/移动到页、A4 Browse 联网仍是 X.1
+  的后续批次（A27 计时器/投票已迁，见 AA）。
 - A26 原型连线已迁（见 Z）；其中 ghost 的缩略图铺底依赖资产缩略图管线（A4），暂走 egui
   缩略图缺失时的 12% accent 填充分支。
 
@@ -1070,3 +1070,23 @@ R 节（17:0x 审计）把 R1/R2 标成「✅ 已实施」，但回源码核对�
 - **验收**：`cargo check -p figcraft-ui-gpui` 通过；
   `cargo test -p figcraft-ui-gpui --lib --features test-support proto_canvas` 2/2 通过。
   实机视觉冒烟（连线/手柄/ghost 拖动）仍需跑 GUI。
+
+## AA. 画板协作（A27）已迁移（2026-11-16）
+
+照 `ui-egui/src/canvas/board_facilitate.rs` 与 `board_connect.rs` 1:1 移植：
+
+- **协作条**（`ui-gpui/src/board_facilitate.rs`）：画布右上角药丸 —— 计时器（预设 1/3/5/10/15
+  分钟、自定义分钟步进、开始/暂停/继续/加 1 分钟/停止、完成转红）＋ 分隔线 ＋ 投票（每人票数、
+  范围 All / Sticky notes / Selection、开始/剩余票数/结束、结果翻页与 Clear / Delete）。全部走
+  `board.timer` / `board.vote`；结果行点击 `select.set`。药丸只出现在画板上。
+- **票数徽标**：`badges` 在 `draw_overlays` 末尾按对象画 accent 圆 + 白圈 + 票数（投票中显示
+  自己的票，结束后显示统计），与 egui `BADGE_PX` / `facilitate::badge` 同算法。
+- **自动连线**（`ui-gpui/src/canvas/board_connect.rs`）：单个选中的便签/形状四边 `REACH=36`
+  处画「+」；悬停显示该侧下一个对象的虚线落点与连线；按下起拖，拖动中选中条让开、预览跟指针，
+  松手在空白处 `board.addConnected {at}`、在别的便签/形状（section/frame 内亦可）上
+  `board.connector`，出画布或落在底部工具栏上什么也不做；点击与拖动的区分用 4px 阈值。
+- **输入优先级**：画布按下先跑「+」手柄，再走参考线/手柄；拖动接入窗口级移动与抬起；换选后
+  拖动自动作废。计时器在走时每帧续帧（`board_facilitate::ticking`）。
+- **验收**：`cargo check -p figcraft-ui-gpui` 通过；
+  `cargo test -p figcraft-ui-gpui --lib --features test-support board_connect` 6/6、
+  `board_facilitate` 3/3 通过；`parity_contract` 4/4 通过。实机视觉冒烟仍待跑 GUI。

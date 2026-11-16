@@ -105,6 +105,8 @@ mod icons_panel;
 
 mod board_bar;
 
+mod board_facilitate;
+
 mod board_picker;
 
 mod open;
@@ -649,6 +651,9 @@ pub struct CanvasView {
     /// B3: which connector popover is open: 0 none, 1 start cap, 2 end cap, 3 line style.
     board_line_open: std::rc::Rc<std::cell::RefCell<u8>>,
 
+    /// A27: the board facility pill's (timer / vote) popovers and their inputs.
+    board_fac: std::rc::Rc<std::cell::RefCell<board_facilitate::State>>,
+
     /// 当前打开的通用对话框（A19）。所有对话框共用 `dialogs::DialogState`，这里只存「有没有、
     /// 是哪一个」，控件状态由它自己保留。
     dialog: Option<dialogs::DialogState>,
@@ -905,6 +910,8 @@ impl CanvasView {
             board_shape_open: std::rc::Rc::new(std::cell::RefCell::new(false)),
 
             board_line_open: std::rc::Rc::new(std::cell::RefCell::new(0u8)),
+
+            board_fac: std::rc::Rc::new(std::cell::RefCell::new(board_facilitate::State::default())),
 
             dialog: None,
 
@@ -3885,7 +3892,8 @@ impl CanvasView {
             || self.app.motion_gizmo.drag.is_some()
             || self.app.guides.drag.is_some()
             || self.app.proto.drag.is_some()
-            || self.app.proto.ghost.is_some();
+            || self.app.proto.ghost.is_some()
+            || self.app.connect.drag.is_some();
 
         if !active {
             return false;
@@ -3954,6 +3962,11 @@ impl CanvasView {
                 self.guide_input(pos, false, true, e.modifiers.alt);
             }
 
+            // A27：画板自动连线松手（点击新建 / 拖到对象上接连线 / 空白处新建）。
+            if self.app.connect.drag.is_some() {
+                canvas::board_connect::drag_end(&mut self.app);
+            }
+
             // 原型：ghost 拖动落成一步撤销；连接拖到别的 frame 上新建交互并打开编辑器。
             canvas::proto_canvas::end_ghost(&mut self.app);
 
@@ -3982,6 +3995,13 @@ impl CanvasView {
         }
 
         if canvas::proto_canvas::drag_move(&mut self.app, pos) {
+            cx.notify();
+
+            return true;
+        }
+
+        // A27：画板自动连线的拖动预览跟随指针。
+        if canvas::board_connect::drag_move(&mut self.app, pos) {
             cx.notify();
 
             return true;
@@ -4680,6 +4700,9 @@ impl Render for CanvasView {
             false
         };
 
+        // A27：画板计时器在走，每秒续一帧。
+        let fac_ticking = board_facilitate::ticking(&self.app);
+
         let shapes = gpui::canvas(
             |_, _, _| (),
             move |b, _, window, cx| {
@@ -4713,7 +4736,7 @@ impl Render for CanvasView {
 
                 // 播放中同样要续帧：动画的每一帧都是新的一帧画面。
 
-                if in_flight || motion_playing || present_playing || duration_ticking {
+                if in_flight || motion_playing || present_playing || duration_ticking || fac_ticking {
                     window.request_animation_frame();
                 }
             },
@@ -4731,6 +4754,11 @@ impl Render for CanvasView {
         // B3: the board selection's bar (colours first), above the selected board objects.
         if let Some(bar) = board_bar::bar(&self.app, self.fields.queue(), &self.board_shape_open, &self.board_line_open) {
             layers.push(bar);
+        }
+
+        // A27: the board facility pill (timer / vote) in the canvas's top-right corner.
+        if let Some(pill) = board_facilitate::pill(&self.app, self.fields.queue(), &self.board_fac) {
+            layers.push(pill);
         }
 
         // 文字层：GPUI 矢量文本，位置/居中由标签矩形决定。
@@ -4857,6 +4885,13 @@ impl Render for CanvasView {
 
                             canvas::proto_canvas::Press::Ignored => {}
                         }
+                    }
+
+                    // A27：画板自动连线的「+」手柄，优先于参考线/手柄。
+                    if !this.space && !this.zoom_key && canvas::board_connect::press(&mut this.app, pos) {
+                        cx.notify();
+
+                        return;
                     }
 
                     if !this.space && !this.zoom_key && this.guide_input(pos, true, false, e.modifiers.alt) {

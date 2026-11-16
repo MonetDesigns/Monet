@@ -382,6 +382,10 @@ pub(crate) fn bar(app: &crate::CanvasApp, cmds: Cmds, shape_open: &Rc<RefCell<bo
     if app.session.tool.busy() || app.session.active_read_only().is_some() {
         return None;
     }
+    // A27：从「+」拖连线时选中条让开，别挡住落点预览。
+    if crate::canvas::board_connect::dragging(app) {
+        return None;
+    }
     if !app.session.doc().is_ok_and(figcraft_engine::board::is_board) {
         return None;
     }
