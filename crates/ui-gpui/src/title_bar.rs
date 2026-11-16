@@ -51,7 +51,12 @@ pub fn title_bar_options() -> TitlebarOptions {
 /// 深色 #2C2C2C、浅色 #F5F5F5；亮主题下 `panel` 是纯白，标题栏会和内容糊在一起。
 fn bar_gray() -> crate::canvas::geom::Color32 {
     let t = tokens();
-    if t.dark { t.panel } else { t.canvas }
+    // 浅色标题栏固定 #E9E9E9（用户 2026-11-16 指定）；深色沿用面板灰。
+    if t.dark {
+        t.panel
+    } else {
+        crate::canvas::geom::Color32::from_rgb(0xE9, 0xE9, 0xE9)
+    }
 }
 
 /// 标题栏里留给 TabBar 内容的宽度：窗口宽 − 左留白 − 三个窗口控制按钮。

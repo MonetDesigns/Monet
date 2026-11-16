@@ -89,6 +89,8 @@ struct DragInner {
     /// 本帧算出的落点（最终文档下标），松手时**原样提交**：判定与画面必须同源，
     /// 否则「看到了让位、松手却回原位」。
     to: Option<usize>,
+    /// 本帧被拖标签是否已整体拖出标签条（左右越界）→ 松手变成新窗口。
+    detach: bool,
 }
 
 struct TabDrag {
@@ -101,14 +103,21 @@ struct TabDrag {
 
 impl TabDragState {
     fn begin(&self, from: usize, at: Point<Pixels>) {
-        *self.0.borrow_mut() =
-            DragInner { current: Some(TabDrag { from, start: at, pointer: at, moved: false }), visible: Vec::new(), to: None };
+        *self.0.borrow_mut() = DragInner {
+            current: Some(TabDrag { from, start: at, pointer: at, moved: false }),
+            visible: Vec::new(),
+            to: None,
+            detach: false,
+        };
     }
     fn set_visible(&self, visible: Vec<VisibleTab>) {
         self.0.borrow_mut().visible = visible;
     }
     fn set_to(&self, to: Option<usize>) {
         self.0.borrow_mut().to = to;
+    }
+    fn set_detach(&self, detach: bool) {
+        self.0.borrow_mut().detach = detach;
     }
     /// 拖拽中的 `(被拖文档, 指针相对按下点的 x 位移, 指针 x)`；没超过 3pt 死区时是 `None`
     /// （这时仍然是「点击切换」而不是拖拽）。
@@ -169,14 +178,15 @@ fn begin_tab_drag(state: &TabDragState, cmds: &Cmds, from: usize, at: Point<Pixe
             wake.wake();
         },
         move |_window, _cx| {
-            let (from, pointer_y, to, moved) = {
+            let (from, pointer_y, to, detach, moved) = {
                 let b = on_end.0.borrow();
                 let Some(d) = b.current.as_ref() else { return };
-                (d.from, f32::from(d.pointer.y), b.to, d.moved)
+                (d.from, f32::from(d.pointer.y), b.to, b.detach, d.moved)
             };
             on_end.0.borrow_mut().current = None;
-            // A16：标签拖出标签条下方 2 行即脱离成独立 OS 窗口（egui 的 detach 判定）。
-            if moved && pointer_y > HEIGHT * 3.0 {
+            // A16：标签拖出标签条下方 2 行，或**左右整体拖出标签条**，都脱离成独立 OS 窗口
+            // （用户 2026-11-16：向左/向右超出范围也要变新窗口）。
+            if moved && (pointer_y > HEIGHT * 3.0 || detach) {
                 wake_end.push(Cmd { id: "window.new", params: Some(json!({ "index": from })) });
                 wake_end.wake();
                 return;
@@ -321,8 +331,8 @@ pub(crate) fn tab_strip(
     state.drag.set_visible(visible.clone());
 
     // 拖拽中：被拖的标签跟着指针走，其余标签按「插槽」依次让位（用户 2026-11-16）。
-    // 判定用**幽灵标签的中心**和其它标签的中点比较：被拖标签盖住邻居一半时就换位，
-    // 与画面完全一致（之前用指针 x 判定，手感要拖得更远才换位）。
+    // 判定口径：向右拖时看被拖标签的**左边缘**是否盖住邻居的中点（盖住一半就让位），
+    // 向左拖时对称地用右边缘。用中心判定要盖得更多才换位，用户实测手感不对。
     // 松手时提交的就是这里算出的 `to`（见 `begin_tab_drag` 的 on_end）。
     let (dragged, ghost_x, display_x) = match state.drag.offset() {
         Some((from, dx, _)) if natural.iter().any(|(i, _, _)| *i == from) => {
@@ -331,9 +341,11 @@ pub(crate) fn tab_strip(
             let others: Vec<(usize, f32, f32)> = natural.iter().copied().filter(|(i, _, _)| *i != from).collect();
             // 不再把幽灵夹在标签条内：夹住会让第一/最后一项在两端「拖不动」。
             let ghost = natural_x + dx;
-            let ghost_center = ghost + drag_w / 2.0;
-            let slot = others.partition_point(|(_, x0, w)| x0 + w / 2.0 < ghost_center);
-            state.drag.set_to(tab_drop_position(&visible, from, ghost_center).map(|(to, _)| to));
+            let edge = if dx >= 0.0 { ghost } else { ghost + drag_w };
+            let slot = others.partition_point(|(_, x0, w)| x0 + w / 2.0 < edge);
+            state.drag.set_to(tab_drop_position(&visible, from, edge).map(|(to, _)| to));
+            // 整个标签左右拖出标签条 → 松手脱离成新窗口（用户 2026-11-16）。
+            state.drag.set_detach(ghost + drag_w < tabs_x0 || ghost > tabs_x0 + tabs_w);
             let mut display: Vec<(usize, f32)> = Vec::with_capacity(natural.len());
             let mut pos = tabs_x0;
             for (i, (index, _, w)) in others.iter().enumerate() {
@@ -352,6 +364,7 @@ pub(crate) fn tab_strip(
         }
         _ => {
             state.drag.set_to(None);
+            state.drag.set_detach(false);
             (None, 0.0, natural.iter().map(|(i, x0, _)| (*i, *x0)).collect())
         }
     };
