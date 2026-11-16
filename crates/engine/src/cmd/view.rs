@@ -505,6 +505,20 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(json!({"language": s.prefs.language}))
             }
         ),
+        spec!(
+            "pref.accent",
+            "Theme colour",
+            "{accent: blue|green|yellow|pink}",
+            false,
+            |s, p| {
+                let accent = req_string("pref.accent", p, "accent")?.trim().to_ascii_lowercase();
+                if !matches!(accent.as_str(), "blue" | "green" | "yellow" | "pink") {
+                    return Err(bad("pref.accent", format!("`{accent}` is not an accent colour")));
+                }
+                s.prefs.accent = accent;
+                Ok(json!({"accent": s.prefs.accent}))
+            }
+        ),
         spec!("app.preferences", "Preferences", "{}", false, |s, _| ui(s, "dialog.preferences")),
         spec!("app.actions", "Actions", "{}", false, |s, _| ui(s, "palette.actions")),
         spec!("help.shortcuts", "Keyboard shortcuts", "{}", false, |s, _| ui(s, "panel.shortcuts")),

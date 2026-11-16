@@ -2225,8 +2225,13 @@ impl WindowState {
         // 否则固定宽度会把搜索框顶出卡片。
         let inset = if self.kind == WindowKind::FontPicker { 16.0 + 12.0 } else { 2.0 * self.pad };
         let field = search_field(cx, self.width - inset, "", hint);
+        // 边打边过滤（`on_change`），不是回车才生效。
+        let wake = self.cmds.clone();
         field.update(cx, move |tf, _| {
-            tf.set_on_commit(move |text, _, _| *query.borrow_mut() = text.to_lowercase());
+            tf.set_on_change(move |text, _, _| {
+                *query.borrow_mut() = text.to_lowercase();
+                wake.wake();
+            });
         });
         self.search = Some(field);
     }

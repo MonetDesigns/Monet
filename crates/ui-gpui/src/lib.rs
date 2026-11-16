@@ -228,7 +228,7 @@ const DOUBLE_CLICK_SLOP: f32 = 4.0;
 const PALETTE_H: f32 = 450.0;
 
 /// 动作库每行的行高（egui `draw_row` 的 34 pt；菜单卡默认 24 太挤）。
-const PALETTE_ROW_H: f32 = 34.0;
+const PALETTE_ROW_H: f32 = 32.0;
 
 /// 主菜单的目录、几何与外观都在 `main_menu` 模块里（照 `ui-egui/src/menus/tree.rs`）。
 
@@ -1736,7 +1736,7 @@ impl CanvasView {
                     "auto_save": p.auto_save, "start_on_home": p.start_on_home,
                     "user_name": p.user_name, "publish_server": p.publish_server,
                     "nudge_small": p.nudge_small, "nudge_big": p.nudge_big,
-                    "theme": p.theme, "language": p.language,
+                    "theme": p.theme, "language": p.language, "accent": p.accent,
                 }}))
             }
             dialogs::Kind::Plugins => {
@@ -6772,7 +6772,10 @@ impl Render for CanvasView {
                         vh,
                     );
 
-                    let list = div().id("palette-list").flex_1().min_h(px(0.0)).w_full().mx(widgets::pt(8.0)).overflow_y_scroll().children(if palette_count == 0 {
+                    // 行内已经有 8pt 左内缩，卡片自身再 8pt：文字左边 = 卡片边 + 16（egui
+                    // `Surface::palette` 的 8 内边距 + 行 `rect.left() + 8`）。列表**不再**额外
+                    // `mx(8)`，否则文字被推到 +24，右侧也少 8（用户 2026-11-16 指出间距不对）。
+                    let list = div().id("palette-list").flex_1().min_h(px(0.0)).w_full().overflow_y_scroll().children(if palette_count == 0 {
                         vec![
                             div()
                                 .p(widgets::pt(8.0))
