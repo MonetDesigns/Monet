@@ -58,6 +58,8 @@ pub(crate) enum WindowKind {
     StyleEditor,
     /// 平滑圆角小窗：右栏 Appearance 圆角行旁的小按钮打开，正文只有一条通用滑条。
     CornerSmoothing,
+    /// 字体选择窗：Typography 的字体族控件打开，列表每项用它自己的字体渲染名称做预览。
+    FontPicker,
 }
 
 /// One clickable row of a list window (a variable, a style, a create action).
@@ -68,11 +70,18 @@ pub(crate) struct Row {
     pub trail: Option<SharedString>,
     pub cmd: &'static str,
     pub params: Value,
+    /// Font-picker rows render their label in this family, so the item name doubles as a live
+    /// preview of the font's own style. `None` for ordinary list windows.
+    pub font_family: Option<String>,
 }
 
 impl Row {
     pub fn new(label: impl Into<SharedString>, cmd: &'static str, params: Value) -> Self {
-        Self { group: None, label: label.into(), trail: None, cmd, params }
+        Self { group: None, label: label.into(), trail: None, cmd, params, font_family: None }
+    }
+    pub fn font_family(mut self, family: impl Into<String>) -> Self {
+        self.font_family = Some(family.into());
+        self
     }
     pub fn group(mut self, name: impl Into<SharedString>) -> Self {
         self.group = Some(name.into());
@@ -1448,6 +1457,28 @@ impl WindowState {
         w
     }
 
+    /// 字体选择窗：列表每项显示字体名，并用该字体自身渲染（名字即预览）。
+    pub(crate) fn font_picker(cmds: Cmds, cx: &mut App, current: Option<&str>, anchor: Point<Pixels>) -> Self {
+        let mut w = Self::base(WindowKind::FontPicker, tr("Font family"), cmds, Open::Anchor(anchor));
+        w.surface = Surface::Menu;
+        w.width = 260.0;
+        w.height = 320.0;
+        w.pad = 8.0;
+        w.rows = figcraft_text::family_names()
+            .into_iter()
+            .map(|fam| {
+                let params = json!({ "props": { "fontFamily": fam.clone() } });
+                let mut row = Row::new(fam.clone(), "node.set", params).font_family(fam.clone());
+                if Some(fam.as_str()) == current {
+                    row = row.trail("✓");
+                }
+                row
+            })
+            .collect();
+        w.add_search(cx, "Search fonts");
+        w
+    }
+
     /// 正文：标题在通用窗口头部，这里只有一条滑条（右侧百分比数值由 `Slider` 自己画）。
     fn corner_smoothing_body(&self) -> AnyElement {
         let value = self.smoothing.as_ref().map(|c| c.get()).unwrap_or(0.0);
@@ -2323,7 +2354,7 @@ impl WindowState {
             }
             // 变量编辑器把「标题 + 计数」画进自己的工具条：整窗一个插槽，顶部只有一行。
             WindowKind::VariablesTable => div().into_any_element(),
-            WindowKind::Layout | WindowKind::Stroke | WindowKind::EffectSettings | WindowKind::StyleEditor | WindowKind::CornerSmoothing => {
+            WindowKind::Layout | WindowKind::Stroke | WindowKind::EffectSettings | WindowKind::StyleEditor | WindowKind::CornerSmoothing | WindowKind::FontPicker => {
                 title_text(self.title.clone()).into_any_element()
             }
             // Type settings 的标题栏就是三页签（截图顶部没有单独的 "Type settings" 标题文字），
@@ -2396,6 +2427,7 @@ impl WindowState {
         match self.kind {
             WindowKind::Color => self.color_body(cx),
             WindowKind::CornerSmoothing => self.corner_smoothing_body(),
+            WindowKind::FontPicker => self.list_element(cx),
             WindowKind::Layout | WindowKind::Stroke | WindowKind::TypeSettings | WindowKind::EffectSettings | WindowKind::StyleEditor => {
                 self.settings_element(cx)
             }
@@ -3113,9 +3145,17 @@ impl WindowState {
             let cmd = row.cmd;
             let params = row.params.clone();
             let trail = row.trail.clone();
+            let font_family = row.font_family.clone();
+            // A font-picker row renders its own name in that family — the item is its own preview.
+            let label_el = if let Some(fam) = font_family {
+                div().flex_1().min_w(pt(0.0)).overflow_hidden().text_size(pt(13.0)).font_family(SharedString::from(fam)).child(row.label.clone())
+            } else {
+                div().flex_1().min_w(pt(0.0)).overflow_hidden().child(row.label.clone())
+            };
+            let row_h = if row.font_family.is_some() { pt(28.0) } else { pt(24.0) };
             col = col.child(
                 div()
-                    .h(pt(24.0))
+                    .h(row_h)
                     .w_full()
                     .flex()
                     .flex_row()
@@ -3128,7 +3168,7 @@ impl WindowState {
                     .on_mouse_down(MouseButton::Left, move |_, _, _| {
                         cmds.push(Cmd { id: cmd, params: Some(params.clone()) });
                     })
-                    .child(div().flex_1().min_w(pt(0.0)).overflow_hidden().child(row.label.clone()))
+                    .child(label_el)
                     .children(trail.map(|tr| div().text_color(rgba(t.menu_dim)).child(tr))),
             );
             shown += 1;

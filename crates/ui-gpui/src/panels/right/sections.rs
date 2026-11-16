@@ -106,6 +106,18 @@ pub(crate) fn pick_dropdown(f: &RightFields, label: impl Into<SharedString>, wid
     d
 }
 
+/// 字体族选择按钮：外观沿用 `Dropdown`，但点击打开一个带字体预览的窗口（每项用它自己的
+/// 字体渲染名称），而不是纯文本菜单。
+fn font_picker_button(f: &RightFields, label: impl Into<SharedString>, width: f32, current: Option<String>) -> Dropdown {
+    let popups = f.popups();
+    let queue = f.queue();
+    let mut d = Dropdown::new(label, width, None).fill();
+    d = d.on_click(move |anchor: Bounds<Pixels>, _window, cx: &mut App| {
+        popups.request(crate::popovers::WindowState::font_picker(queue.clone(), cx, current.as_deref(), anchor.origin));
+    });
+    d
+}
+
 /// Zoom / Show 菜单的一行：显示/隐藏开关带 `menu_check` 的勾选列，分组用分隔线。
 #[derive(Clone)]
 struct ViewMenuRow {
@@ -1873,15 +1885,23 @@ pub(crate) fn appearance(
             ],
             trail,
         ));
-    // 仅当 header 的 blend 开关打开时才显示 blend-mode 下拉行（egui `blend_open`）。
-    if *f.blend_open.borrow() {
-        // 显示走 `tr`，**写回值必须是英文 serde 名**（`blend` 只认 `Normal` / `Multiply` …）。
+    // 用户：外观的混合模式是一个「选了才加进来的条目」——header 图标点开先给下拉选，
+    // 选中后出现一行 dropdown + 右侧 24pt 网格里的减号，减号清除回 Normal 并收起这一行。
+    let blend_label = f.blend_label.borrow().clone();
+    if *f.blend_open.borrow() || blend_label != SharedString::from(tr("Normal")) {
+        // 写回值用英文 serde 名（`blend` 只认 `Normal` / `Multiply` …）。
         let rows: Vec<(String, &'static str, Value)> = crate::panels::blend_rows()
             .into_iter()
             .map(|r| (tr(&r.label).to_string(), "node.set", json!({ "props": { "blend": r.label } })))
             .collect();
-        let shown = tr(&f.blend_label.borrow()).to_string();
-        sec = sec.child(field_row_full(pick_dropdown(f, shown, row_w, rows)));
+        let shown = tr(&blend_label).to_string();
+        let minus_cmds = f.cmds.clone();
+        let minus_open = f.blend_open.clone();
+        let minus = IconButton::new(Icon::Minus).size(24.0).on_click(move |_e, _w, _cx| {
+            minus_cmds.push(Cmd { id: "node.set", params: Some(json!({ "props": { "blend": "Normal" } })) });
+            *minus_open.borrow_mut() = false;
+        });
+        sec = sec.child(field_row_full_trailing(pick_dropdown(f, shown, row_w, rows), vec![minus]));
     }
     sec
 }
@@ -1917,15 +1937,8 @@ pub(crate) fn typography(f: &RightFields, d: &PanelData) -> PanelSection {
     );
     let mut sec = PanelSection::new(tr("Typography")).header_trail(icon_row(vec![var, style_menu(f, d, "text", None, Icon::Dot)]));
 
-    // ── 字体族（整行）──
-    let families: Vec<(String, &'static str, Value)> = figcraft_text::family_names()
-        .into_iter()
-        .map(|fam| {
-            let q = json!({ "props": { "fontFamily": fam.clone() } });
-            (fam, "node.set", q)
-        })
-        .collect();
-    sec = sec.child(field_row_full(pick_dropdown(f, t.font_family.clone().unwrap_or_else(|| tr("Mixed").into()), 240.0, families)));
+    // ── 字体族（整行）── 打开带预览的选择窗（每项用它自己的字体渲染名称）。
+    sec = sec.child(field_row_full(font_picker_button(f, t.font_family.clone().unwrap_or_else(|| tr("Mixed").into()), 240.0, t.font_family.clone())));
 
     // ── 字重 / 样式 + 字号 ──
     // 样式列表取决于字体族（egui `family_styles(fam)`）；没选族时 egui 提示 "Pick one font
