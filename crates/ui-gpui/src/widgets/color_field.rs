@@ -105,6 +105,43 @@ pub struct ColorField {
 }
 
 impl ColorField {
+    /// 透明度编辑器的**唯一**配置（Fill 行 / 样式编辑器共用）。
+    /// 以前只在 `RightFields::row_field` 里配，样式编辑器自己 `TextEdit::build` 了一个
+    /// `readonly` 且没有数值行为的框，于是「%」拖不动、数字也改不了（用户 2026-11-15）。
+    /// 缺 `set_numeric` 时 `scrub_by` 会直接 return，缺 `set_range` 时数值不夹到 0..100。
+    pub fn configure_opacity_editor(te: &mut TextEdit, value: &str) {
+        te.set_readonly(false);
+        te.set_align(crate::widgets::input::TextAlign::Right);
+        te.set_right_pad(0.0);
+        te.set_numeric("", 1.0);
+        te.set_range(Some(0.0), Some(100.0));
+        te.set_value(value);
+    }
+
+    /// 颜色行（右栏 Fill / 样式编辑器 / 以后任何颜色编辑界面）的两个裸编辑器。
+    /// 控件自己负责 hex 与百分比的初值、只读状态、数值行为（拖「%」）、0..100 夹紧和解析，
+    /// 调用方只提供「把值写回文档/选区」的两个回调。以后加功能只改这一处。
+    pub fn color_row_editors(
+        cx: &mut App,
+        hex: &str,
+        opacity_pct: i64,
+        on_hex: impl Fn(&str, &mut Window, &mut App) + 'static,
+        on_opacity: impl Fn(f64, &mut Window, &mut App) + 'static,
+    ) -> (Entity<TextEdit>, Entity<TextEdit>) {
+        let hex_ed = TextEdit::build(cx, |te, _| {
+            te.set_value(hex);
+            te.set_on_commit(move |text, window, cx| on_hex(text, window, cx));
+        });
+        let opacity_ed = TextEdit::build(cx, |te, _| {
+            Self::configure_opacity_editor(te, &format!("{}", opacity_pct));
+            te.set_on_commit(move |text, window, cx| {
+                let Ok(v) = text.trim().parse::<f64>() else { return };
+                on_opacity(v, window, cx);
+            });
+        });
+        (hex_ed, opacity_ed)
+    }
+
     /// `hex` and `opacity` are **editors**, not fields: the row draws the one shell they live in.
     ///
     /// `ui-egui`'s `paint_alpha`: the opacity's number is right-aligned in its 44 pt cell with
@@ -172,9 +209,9 @@ impl IntoElement for ColorField {
 
         // ── lead: the 16 pt swatch centred in its 24 pt cell (`slot_swatch`) ───────────────
         let paint = self.paint.clone();
-        let swatch = div()
-            .size(pt(SWATCH_W))
-            .child(gpui::canvas(|_bounds, _window, _cx| {}, move |bounds, _, window, cx| paint_swatch(window, bounds, &paint, cx)).size_full());
+        // 与 Local styles / 取色器共用同一个通用色块元素（原生圆角背景 + 描边），
+        // 不再在 canvas 里自绘，方形的四个圆角也不会溢出杂色。
+        let swatch = crate::widgets::swatch::swatch(paint, SWATCH_W);
         let mut lead = div().size_full().flex().items_center().justify_center().child(swatch);
         if !bound {
             if let Some(f) = self.on_swatch {

@@ -508,6 +508,38 @@ pub fn paint_tool(icon: Icon, color: impl Into<gpui::Rgba>) -> impl IntoElement 
     svg().path(path).w(px(s)).h(px(s)).flex_none().text_color(Hsla::from(rgba))
 }
 
+/// Figma 的四个 24×24 描边图标（用户 2026-11-15）：加号 / 减号 / 叉号 / 下拉小箭头。
+/// **网格和路径坐标保持原样**，只有显示尺寸会等比缩放；`__STROKE__` 由
+/// [`ICON_STROKE`] 按缩放比反算注入，缩放后视觉线宽恒为 1 pt。
+const FIGMA_UI_ICONS: [(Icon, &str); 7] = [
+    (Icon::Plus, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M12 6.5V12M12 12V17.5M12 12H6.5M12 12H17.5" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/></svg>"#),
+    (Icon::Minus, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M6.5 12H17.5" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/></svg>"#),
+    (Icon::Close, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M6.5 6.5L12 12M12 12L17.5 17.5M12 12L6.50003 17.5M12 12L13.6109 10.3891L17.5 6.50006" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/></svg>"#),
+    (Icon::ChevronDown, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M8.99994 11L12 14L14.9999 11" stroke="black" stroke-width="__STROKE__" stroke-linecap="round" stroke-linejoin="round"/></svg>"#),
+    // 其余三个方向都是同一个小箭头**旋转**出来的（用户 2026-11-15）：
+    // 向下箭头顺时针 90° = 向左；逆时针 90° = 向右；180° = 向上。路径坐标不动。
+    (Icon::ChevronLeft, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><g transform="rotate(90 12 12)"><path d="M8.99994 11L12 14L14.9999 11" stroke="black" stroke-width="__STROKE__" stroke-linecap="round" stroke-linejoin="round"/></g></svg>"#),
+    (Icon::ChevronRight, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><g transform="rotate(-90 12 12)"><path d="M8.99994 11L12 14L14.9999 11" stroke="black" stroke-width="__STROKE__" stroke-linecap="round" stroke-linejoin="round"/></g></svg>"#),
+    (Icon::ChevronUp, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><g transform="rotate(180 12 12)"><path d="M8.99994 11L12 14L14.9999 11" stroke="black" stroke-width="__STROKE__" stroke-linecap="round" stroke-linejoin="round"/></g></svg>"#),
+];
+
+/// `size` 是最终显示的点数：24 网格等比缩到 `size` 时把描边反向放大 `24/size`，
+/// 于是缩放后的线宽仍精确等于 [`ICON_STROKE`]。
+fn figma_ui_icon(icon: Icon, size: f32) -> Option<Vec<u8>> {
+    let (_, src) = FIGMA_UI_ICONS.iter().find(|(i, _)| *i == icon)?;
+    let width = ICON_STROKE * 24.0 / size.max(0.001);
+    Some(src.replace("__STROKE__", &format!("{}", width)).into_bytes())
+}
+
+/// 四个 Figma 图标按显示尺寸各有一个资源路径（`icons/<name>@<size>.svg`）。
+fn figma_ui_icon_path(icon: Icon, size: f32) -> Option<SharedString> {
+    if FIGMA_UI_ICONS.iter().any(|(i, _)| *i == icon) {
+        Some(SharedString::from(format!("icons/{}@{}.svg", icon.asset_name(), size)))
+    } else {
+        None
+    }
+}
+
 /// 只在首次访问时把 79 个图标编译成 SVG；之后 `AssetSource::load()` 零拷贝返回。
 static TABLE: OnceLock<Vec<IconAsset>> = OnceLock::new();
 
@@ -527,7 +559,7 @@ fn table() -> &'static Vec<IconAsset> {
                 }
                 let name = icon.asset_name();
                 let path = SharedString::from(format!("icons/{name}.svg"));
-                let svg = svg_canvas(icon).to_svg().into_bytes();
+                let svg = figma_ui_icon(icon, 24.0).unwrap_or_else(|| svg_canvas(icon).to_svg().into_bytes());
                 IconAsset { icon, name, path, svg }
             })
             .collect()
@@ -544,6 +576,16 @@ pub struct IconAssets;
 
 impl AssetSource for IconAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+        // 24×24 的 Figma 图标：按显示尺寸等比缩放，stroke-width 反向补偿，线宽不变。
+        if let Some(rest) = path.strip_prefix("icons/").and_then(|p| p.strip_suffix(".svg")) {
+            if let Some((name, sz)) = rest.rsplit_once('@') {
+                if let Ok(size) = sz.parse::<f32>() {
+                    if let Some((icon, _)) = FIGMA_UI_ICONS.iter().find(|(i, _)| i.asset_name() == name) {
+                        return Ok(figma_ui_icon(*icon, size).map(Cow::Owned));
+                    }
+                }
+            }
+        }
         // The shape-tool marks keep their own 24x24 viewBox and one shared stroke width.
         if let Some(stem) = path.strip_prefix("tools/").and_then(|p| p.strip_suffix(".svg")) {
             return Ok(tool_bytes(stem).map(|bytes| Cow::Owned(normalise_stroke(bytes))));
@@ -1267,7 +1309,8 @@ fn ring(p: &mut SvgCanvas, ox: f32, oy: f32, s: f32, cx: f32, cy: f32, r: f32, w
 /// 调用点（`icon::paint(icon, rgba(t.icon), 14.0)`）一行都不用改。
 pub fn paint(icon: Icon, color: impl Into<gpui::Rgba>, size: f32) -> impl IntoElement {
     let rgba: gpui::Rgba = color.into();
-    svg().path(icon.asset_path()).w(px(size)).h(px(size)).flex_none().text_color(Hsla::from(rgba))
+    let path = figma_ui_icon_path(icon, size).unwrap_or_else(|| icon.asset_path());
+    svg().path(path).w(px(size)).h(px(size)).flex_none().text_color(Hsla::from(rgba))
 }
 
 #[cfg(test)]
@@ -1335,6 +1378,18 @@ mod tests {
             assert!(usvg::Tree::from_data(&bytes, &usvg::Options::default()).is_ok(), "{stem}");
             let got = IconAssets.load(&format!("tools/{stem}.svg")).unwrap().unwrap();
             assert_eq!(&*got, bytes.as_slice(), "{stem} resolves");
+        }
+    }
+
+    #[test]
+    fn figma_ui_icons_keep_their_grid_and_stroke_width() {
+        for icon in [Icon::Plus, Icon::Minus, Icon::Close, Icon::ChevronDown] {
+            let full = String::from_utf8(figma_ui_icon(icon, 24.0).unwrap()).unwrap();
+            assert!(full.contains("viewBox=\"0 0 24 24\""), "{icon:?} grid changed");
+            assert!(full.contains(&format!("stroke-width=\"{}\"", ICON_STROKE)), "{icon:?} stroke not bound");
+            // 缩到 12pt 时描边先放大两倍，等比缩放回去后视觉线宽仍是 ICON_STROKE。
+            let half = String::from_utf8(figma_ui_icon(icon, 12.0).unwrap()).unwrap();
+            assert!(half.contains(&format!("stroke-width=\"{}\"", ICON_STROKE * 2.0)), "{icon:?} stroke scaled");
         }
     }
 
