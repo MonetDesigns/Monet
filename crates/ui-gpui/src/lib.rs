@@ -213,7 +213,7 @@ use canvas::geom::*;
 
 use canvas::render_worker::Worker;
 
-use canvas::{CanvasOutput, Painter};
+use canvas::{CanvasOutput, CanvasState, Painter};
 
 /// 连击判定：两次按下之间不超过这个时间、且几乎没移动，就算双击。
 
@@ -695,11 +695,29 @@ impl std::ops::DerefMut for CanvasView {
     }
 }
 
+/// 每个窗口自己的画布：贴图 / 视图缓存 + 该窗口的渲染线程。
+///
+/// 这是 EGUI `Pane` 里 `canvas` + `worker` 两个字段的对应物。两者**必须**按窗口隔离：
+/// - `CanvasState` 只有一份贴图。共用时两个窗口每帧各自 `canvas::show` 一次，同一张贴图在
+///   两份文档之间来回改 → 画布疯狂闪烁；
+/// - [`Worker::poll`] 一次取走「最新的一张」并**丢弃其余**。共用时窗口 A 会把窗口 B 的完成图
+///   吃掉，B 永远拿不到自己的图，只能无限重提 → 不仅是闪烁，还一直烧 CPU。
+struct CanvasPane {
+    canvas: CanvasState,
+    worker: Worker,
+}
+
 /// 画布视图：引擎会话 + 画布状态 + 交互状态。
 pub struct CanvasView {
     app: CanvasApp,
 
     worker: Worker,
+
+    /// 每个窗口的画布状态与渲染线程；当前换入窗口的那份在 `app.canvas` / `worker` 上。
+    canvases: std::collections::HashMap<u64, CanvasPane>,
+
+    /// 新建窗口时给它的 worker 用的唤醒器（与主窗口同一个）。
+    canvas_wake: Arc<dyn Fn() + Send + Sync>,
 
     /// 键盘焦点（空格平移、Z 缩放工具要收键盘事件）。
     focus: FocusHandle,
@@ -754,6 +772,14 @@ impl CanvasView {
         };
         let prev = std::mem::replace(&mut self.pane, next);
         self.panes.insert(old, prev);
+        // 画布状态与渲染线程同样按窗口整块换：只隔离 UI 字段不够（见 `CanvasPane`）。
+        let mut next_canvas = self
+            .canvases
+            .remove(&wid)
+            .unwrap_or_else(|| CanvasPane { canvas: CanvasState::default(), worker: Worker::new(self.canvas_wake.clone()) });
+        std::mem::swap(&mut self.app.canvas, &mut next_canvas.canvas);
+        std::mem::swap(&mut self.worker, &mut next_canvas.worker);
+        self.canvases.insert(old, next_canvas);
         self.pane_wid = wid;
     }
 
@@ -1071,7 +1097,11 @@ impl CanvasView {
         let mut view = Self {
             app,
 
-            worker: Worker::new(wake),
+            worker: Worker::new(wake.clone()),
+
+            canvases: std::collections::HashMap::new(),
+
+            canvas_wake: wake,
 
             focus: cx.focus_handle(),
 
@@ -4700,6 +4730,7 @@ impl Render for CanvasView {
         {
             let wins = self.windows.borrow();
             self.panes.retain(|wid, _| wins.exists(*wid));
+            self.canvases.retain(|wid, _| wins.exists(*wid));
         }
         // A16：绑定本窗口的文档（含 active 回写，见 bind_window_document）。
         self.bind_window_document(window, false);
