@@ -1193,4 +1193,26 @@ C2、C3（文案规范待全面对齐）。
 不是会话文档时直接返回；`render` 每帧调 `Session::live_poll`，presence 到达后同一帧就画出来）。
 `context_menu::items` 现在多一个 `layers` 参数，右栏「More actions」传空列表保持不变。
 
+## AE. 通用滑条 + 右栏 Frame/平滑圆角 + 缺失字体窗 + 工具组飞出（2026-11-16）
+
+- **通用滑条** `widgets/slider.rs`（用户明确授权新增，`widgets/mod.rs` 已登记）：胶囊轨道 + 圆形
+  滑块，按下 / 拖动把 x 映射成值，`step` / `width` / `show_value` / `suffix` / `precision`，
+  `paint_track` 可整条替换轨道视觉（渐变 / 棋盘）。交互挂在包住 `canvas` 的 `div` 上（GPUI
+  `Canvas` 本身没有鼠标事件）。
+- **颜色弹窗**（`popovers.rs`）：色相 0–360 与透明度 0–1 两条滑轨改用通用 `Slider`，
+  色相用 6 段 60° 渐变、透明度用棋盘 + 透明→不透明渐变（`paint_track`）；删掉两份手写命中矩形。
+- **字体排版弹窗**（`WindowKind::TypeSettings`）：`Setting::Slider` 行接通用滑条，可变字体轴用真实
+  `axis.min/max`，拖动推 `node.set {props.variationSettings.<tag>}`。
+- **右栏裁剪内容**：`panels::sel.all_frame` 时插入「Frame」分节，通用 `Checkbox` → `node.set
+  {"props":{"clipsContent":…}}`；数据侧 `PanelData::clip` 由 `Node::clip` 读出。
+- **右栏平滑圆角**：`Appearance` 圆角行尾 24 pt 小按钮（类型支持 + 圆角 ≠ 0 才出现）打开
+  `WindowKind::CornerSmoothing`（复用通用 `WindowState` 弹窗卡），正文是 0–100% 滑条 → `node.set
+  {"props":{"cornerSmoothing": v/100}}`。
+- **缺失字体窗**（A13）：`text.missingFonts` 现在把 `families` 随 UI 请求带给前端；`Kind::MissingFonts`
+  改成说明 + 逐族行（族名 / 使用层数 / 有来源的族给 `font.download` 按钮）+ Close，空清单显示
+  「全部已安装」。
+- **工具组飞出**：`Popup::Flyout` 的卡片宽度改为工具栏宽度（`toolbar::width`），左边与 pill 左缘
+  对齐；行内 `w_full` 铺满整宽。
+
+
 

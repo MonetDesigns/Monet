@@ -173,7 +173,8 @@ fn refit_text(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn missing_fonts(s: &mut Session, _: &Value) -> Result<Value> {
     let families: Vec<Value> = missing(s.doc()?).into_iter().map(|m| json!({"family": m.family, "layers": m.layers, "source": m.source})).collect();
-    s.request_ui("dialog.missingFonts", json!({}));
+    // 缺失字体窗口要直接渲染这份清单（族名 / 使用层数 / 可下载来源），所以随 UI 请求一起带给前端。
+    s.request_ui("dialog.missingFonts", json!({"families": families.clone()}));
     Ok(json!({"families": families}))
 }
 

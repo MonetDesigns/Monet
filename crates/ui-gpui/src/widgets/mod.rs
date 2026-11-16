@@ -40,6 +40,9 @@ pub mod section_header;
 /// 新增通用控件（2026-11-11）：多选器 `Segmented`，按设计文件里的 `Segmented` 组件集重做，
 /// 带「有选中 / 无选中」两种状态，图标格与文字格共用一套几何。
 pub mod segmented;
+/// 新增通用控件（2026-11-16 用户明确要求）：一条胶囊轨道 + 圆形滑块的通用滑条，
+/// 颜色弹窗、字体排版弹窗与平滑圆角窗口共用。只新增文件，未改动任何已冻结控件的行为。
+pub mod slider;
 pub mod swatch;
 /// 排版对话框字形（照 lizard `typ-*.svg` 1:1 移植）。独立的 `typ:` 资产前缀，
 /// 冻结的 `Icon` 枚举不动；与 `Segmented` 共用 `svg().path().text_color()` 管线。
@@ -72,6 +75,7 @@ pub use popover::{
 };
 pub use section_header::{SectionHeader, SectionHeaderVariant};
 pub use segmented::{SegItem, Segmented};
+pub use slider::Slider;
 
 /// The panel's left inset: 16 pt.
 pub const PAD: f32 = 16.0;

@@ -15,9 +15,9 @@ use crate::picker_icons::{self, PickerIcon};
 use crate::panels::right::variables::{self, VariablesData, VariablesEditor};
 use crate::panels::{Cmd, Cmds};
 use crate::widgets::menu::menu_popup_in;
-use crate::widgets::popover::{self, HEADER_H, Open, Surface, WIDTH, popover_window, title_text};
+use crate::widgets::popover::{self, HEADER_H, Open, Surface, WIDTH, popover_body, popover_window, title_text};
 use crate::widgets::typ_icons::TypIcon;
-use crate::widgets::{Icon, IconButton, SegItem, Segmented, Slot, TextEdit, TextField, number_field, pt, rgba, search_field, tokens};
+use crate::widgets::{Icon, IconButton, SegItem, Segmented, Slot, Slider, TextEdit, TextField, number_field, pt, rgba, search_field, tokens};
 use crate::widgets::{MenuRow, dropdown};
 use figcraft_i18n::tr;
 use gpui::{
@@ -56,6 +56,8 @@ pub(crate) enum WindowKind {
     /// 本地样式编辑器（egui `style_picker::editor`）：与上面几个设置窗共用
     /// `WindowState` 通用弹窗卡 + `Setting` 通用行，只是分派标识不同，不是另一套弹窗实现。
     StyleEditor,
+    /// 平滑圆角小窗：右栏 Appearance 圆角行旁的小按钮打开，正文只有一条通用滑条。
+    CornerSmoothing,
 }
 
 /// One clickable row of a list window (a variable, a style, a create action).
@@ -160,6 +162,19 @@ pub(crate) enum Setting {
         tab: u8,
         label: SharedString,
         field: Entity<TextField>,
+    },
+    /// 一条滑条行（Type settings 的可变字体轴）：左标签 + 右侧通用 `Slider`。
+    /// `on_change` 在拖动时连续回调，直接往命令队列推命令（同一条命令会被队列合并）。
+    Slider {
+        tab: u8,
+        label: SharedString,
+        value: f32,
+        min: f32,
+        max: f32,
+        step: f32,
+        suffix: SharedString,
+        #[allow(clippy::type_complexity)]
+        on_change: Rc<dyn Fn(f32, &mut gpui::Window, &mut gpui::App)>,
     },
     /// 颜色属性行（Figma `styles_properties_form`）：16×16 色板 + 名称。空 label 时就是
     /// 那个独立预览块。
@@ -582,6 +597,8 @@ pub(crate) struct WindowState {
     cmds: Cmds,
     rows: Vec<Row>,
     settings: Rc<RefCell<Vec<Setting>>>,
+    /// 平滑圆角小窗的当前值（0..1，拖动时由通用滑条写回）；`Some` 时才画那条滑条。
+    smoothing: Option<Rc<Cell<f32>>>,
     tabs: Option<(Vec<SharedString>, Rc<RefCell<u8>>)>,
     search: Option<Entity<TextField>>,
     query: Rc<RefCell<String>>,
@@ -712,6 +729,7 @@ impl WindowState {
             cmds,
             rows: Vec::new(),
             settings: Rc::new(RefCell::new(Vec::new())),
+            smoothing: None,
             tabs: None,
             search: None,
             query: Rc::new(RefCell::new(String::new())),
@@ -1185,18 +1203,23 @@ impl WindowState {
 
         // ── Variable（只有可变字体才有这一页）──────────────────────────────────────────
         for axis in t.axes.iter() {
-            let field = number_field(cx, 72.0, Some(axis.value), "", 1.0, Slot::None);
             let tag = axis.tag.clone();
             let cmds = w.cmds.clone();
-            field.update(cx, move |tf, _| {
-                let tag = tag.clone();
-                tf.set_on_commit(move |text, _, _| {
-                    if let Ok(v) = text.trim().parse::<f64>() {
-                        cmds.push(Cmd { id: "node.set", params: Some(json!({ "props": { "variationSettings": { tag.clone(): v } } })) });
-                    }
-                });
+            // 轴区间取字体 fvar 表的真实 min/max；退化区间（min >= max）用 0..1000 兜底。
+            let (min, max) =
+                if axis.min.is_finite() && axis.max.is_finite() && axis.max > axis.min { (axis.min as f32, axis.max as f32) } else { (0.0, 1000.0) };
+            settings.push(Setting::Slider {
+                tab: 2,
+                label: axis.name.clone().into(),
+                value: axis.value as f32,
+                min,
+                max,
+                step: 1.0,
+                suffix: "".into(),
+                on_change: Rc::new(move |v, _, _| {
+                    cmds.push(Cmd { id: "node.set", params: Some(json!({ "props": { "variationSettings": { tag.clone(): f64::from(v) } } })) });
+                }),
             });
-            settings.push(Setting::Number { tab: 2, label: axis.name.clone().into(), field });
         }
         if has_variable {
             settings.push(Setting::Options {
@@ -1400,6 +1423,40 @@ impl WindowState {
     /// resize handle 优先：按下落在边缘时，不让整卡拖动抢走这次手势。
     pub(crate) fn variables_resizing(&self) -> bool {
         self.editor.as_ref().is_some_and(|e| e.resizing())
+    }
+
+    /// 打开「Corner smoothing」小窗：一条 0..100% 的通用滑条，拖动写回 `node.set`。
+    ///
+    /// 与 Layout / 描边 / 效果设置共用同一张 `WindowState` 通用弹窗卡（header + 关闭 + 拖动），
+    /// 只是正文换成滑条，没有另造一套窗口框架。
+    pub(crate) fn corner_smoothing(cmds: Cmds, value: f32, anchor: Point<Pixels>) -> Self {
+        let mut w = Self::base(WindowKind::CornerSmoothing, tr("Corner smoothing"), cmds, Open::Anchor(anchor));
+        w.width = 220.0;
+        w.pad = 12.0;
+        // 40 头部 + 24 滑条 + 上下各 12 内边距（真实高度由 `on_measure` 回写）。
+        w.height = HEADER_H + 24.0 + 24.0;
+        w.smoothing = Some(Rc::new(Cell::new(value.clamp(0.0, 1.0))));
+        w
+    }
+
+    /// 正文：标题在通用窗口头部，这里只有一条滑条（右侧百分比数值由 `Slider` 自己画）。
+    fn corner_smoothing_body(&self) -> AnyElement {
+        let value = self.smoothing.as_ref().map(|c| c.get()).unwrap_or(0.0);
+        let cell = self.smoothing.clone();
+        let cmds = self.cmds.clone();
+        let slider = Slider::new(value * 100.0, 0.0, 100.0)
+            .step(1.0)
+            .show_value()
+            .suffix("%")
+            .precision(0)
+            .on_change(move |pct, _w, _cx| {
+                let v = (pct / 100.0).clamp(0.0, 1.0);
+                if let Some(c) = &cell {
+                    c.set(v);
+                }
+                cmds.push(Cmd { id: "node.set", params: Some(json!({ "props": { "cornerSmoothing": v } })) });
+            });
+        popover_body().child(slider.render()).into_any_element()
     }
 
     /// 由根视图用**窗口坐标**推进变量窗口的所有拖拽：resize 改 `size`，整卡移动改 `place`。
@@ -2257,7 +2314,7 @@ impl WindowState {
             }
             // 变量编辑器把「标题 + 计数」画进自己的工具条：整窗一个插槽，顶部只有一行。
             WindowKind::VariablesTable => div().into_any_element(),
-            WindowKind::Layout | WindowKind::Stroke | WindowKind::EffectSettings | WindowKind::StyleEditor => {
+            WindowKind::Layout | WindowKind::Stroke | WindowKind::EffectSettings | WindowKind::StyleEditor | WindowKind::CornerSmoothing => {
                 title_text(self.title.clone()).into_any_element()
             }
             // Type settings 的标题栏就是三页签（截图顶部没有单独的 "Type settings" 标题文字），
@@ -2329,6 +2386,7 @@ impl WindowState {
     fn body_element(&mut self, cx: &mut App, body_h: f32, card_w: f32, viewport: Size<Pixels>) -> AnyElement {
         match self.kind {
             WindowKind::Color => self.color_body(cx),
+            WindowKind::CornerSmoothing => self.corner_smoothing_body(),
             WindowKind::Layout | WindowKind::Stroke | WindowKind::TypeSettings | WindowKind::EffectSettings | WindowKind::StyleEditor => {
                 self.settings_element(cx)
             }
@@ -2455,112 +2513,53 @@ impl WindowState {
             // 环外还有一圈 1 px `controlknoboffoutline`（这里用 18 pt 半透明底托出来）。
             .child(picker_knob(hsb.s * SPECTRUM, (1.0 - hsb.b) * SPECTRUM, current.with_alpha(255)));
 
-        // ② 色相滑轨：16 高、全圆角；轨道左右各外扩 8（Figma 的 `::before{inset:0 -8px}`），
-        //    滑块在 0% / 100% 时正好压在轨道端盖上，而不是被端盖切掉。
-        let hue_hit: Rc<std::cell::Cell<Option<Bounds<Pixels>>>> = Rc::new(std::cell::Cell::new(None));
-        let hue_probe = hue_hit.clone();
-        let hue_click = hue_hit.clone();
+        // ② 色相滑轨：通用 `Slider`（受控：拖动回调写回颜色，下一帧按新色相重算位置），
+        //    轨道整条自绘成 6 段 60° 线性渐变。
         let hue_pick = pick.clone();
-        let hue_slider = div()
-            .w_full()
-            .h(pt(16.0))
-            .relative()
-            .child(bounds_probe(hue_probe))
-            .child(
-                div()
-                    .absolute()
-                    .left(px(-8.0))
-                    .right(px(-8.0))
-                    .top_0()
-                    .h(pt(16.0))
-                    .rounded_full()
-                    .border_1()
-                    .border_color(rgba(Color32::from_black_alpha(51)))
-                    .overflow_hidden()
-                    .child(
-                        gpui::canvas(
-                            |_, _, _| {},
-                            move |bounds, _, window, _| {
-                                let x0 = f32::from(bounds.origin.x);
-                                let y0 = f32::from(bounds.origin.y);
-                                let w = f32::from(bounds.size.width).max(1.0);
-                                let h = f32::from(bounds.size.height).max(1.0);
-                                for i in 0..6 {
-                                    let a = hsb_color(i as f32 * 60.0, 1.0, 1.0);
-                                    let b = hsb_color((i + 1) as f32 * 60.0, 1.0, 1.0);
-                                    window.paint_quad(gpui::fill(
-                                        Bounds {
-                                            origin: point(px(x0 + w * i as f32 / 6.0), px(y0)),
-                                            size: size(px(w / 6.0 + 0.5), px(h)),
-                                        },
-                                        gpui::linear_gradient(
-                                            90.0,
-                                            gpui::linear_color_stop(gpui::Hsla::from(rgba(a)), 0.0),
-                                            gpui::linear_color_stop(gpui::Hsla::from(rgba(b)), 1.0),
-                                        ),
-                                    ));
-                                }
-                            },
-                        )
-                        .size_full(),
-                    ),
-            )
-            .child(picker_knob(hue / 360.0 * SLIDER_W, 0.0, hue_c))
-            .on_mouse_down(MouseButton::Left, move |e, window, cx| {
-                let Some(b) = hue_click.get() else { return };
-                let f = ((f32::from(e.position.x) - f32::from(b.origin.x)) / f32::from(b.size.width).max(1.0)).clamp(0.0, 1.0);
-                hue_pick(hsb_color(f * 360.0, 1.0, 1.0), window, cx);
-            });
-
-        // ③ 透明度滑轨：棋盘 + 透明→当前色 的水平渐变。
-        let alpha_hit: Rc<std::cell::Cell<Option<Bounds<Pixels>>>> = Rc::new(std::cell::Cell::new(None));
-        let alpha_probe = alpha_hit.clone();
-        let alpha_click = alpha_hit.clone();
-        let opaque = current.with_alpha(255);
-        let alpha_slider = div()
-            .w_full()
-            .h(pt(16.0))
-            .relative()
-            .child(bounds_probe(alpha_probe))
-            .child(
-                div()
-                    .absolute()
-                    .left(px(-8.0))
-                    .right(px(-8.0))
-                    .top_0()
-                    .h(pt(16.0))
-                    .rounded_full()
-                    .border_1()
-                    .border_color(rgba(Color32::from_black_alpha(51)))
-                    .overflow_hidden()
-                    .child(
-                        gpui::canvas(
-                            |_, _, _| {},
-                            move |bounds, _, window, _| {
-                                crate::widgets::swatch::checker(window, bounds, 4.0);
-                                window.paint_quad(gpui::fill(
-                                    bounds,
-                                    gpui::linear_gradient(
-                                        90.0,
-                                        gpui::linear_color_stop(gpui::transparent_black(), 0.0),
-                                        gpui::linear_color_stop(gpui::Hsla::from(rgba(opaque)), 1.0),
-                                    ),
-                                ));
-                            },
-                        )
-                        .size_full(),
-                    ),
-            )
-            .child(picker_knob(alpha * SLIDER_W, 0.0, opaque))
-            .on_mouse_down(MouseButton::Left, {
-                let p = pick.clone();
-                let opaque = opaque;
-                move |e, window, cx| {
-                    let Some(b) = alpha_click.get() else { return };
-                    let a = ((f32::from(e.position.x) - f32::from(b.origin.x)) / f32::from(b.size.width).max(1.0)).clamp(0.0, 1.0);
-                    p(opaque.with_alpha((a * 255.0).round() as u8), window, cx);
+        let hue_slider = crate::widgets::Slider::new(hue, 0.0, 360.0)
+            .step(1.0)
+            .paint_track(|window, bounds, _| {
+                let x0 = f32::from(bounds.origin.x);
+                let y0 = f32::from(bounds.origin.y);
+                let w = f32::from(bounds.size.width).max(1.0);
+                let h = f32::from(bounds.size.height).max(1.0);
+                for i in 0..6 {
+                    let a = hsb_color(i as f32 * 60.0, 1.0, 1.0);
+                    let b = hsb_color((i + 1) as f32 * 60.0, 1.0, 1.0);
+                    window.paint_quad(gpui::fill(
+                        Bounds {
+                            origin: point(px(x0 + w * i as f32 / 6.0), px(y0)),
+                            size: size(px(w / 6.0 + 0.5), px(h)),
+                        },
+                        gpui::linear_gradient(
+                            90.0,
+                            gpui::linear_color_stop(gpui::Hsla::from(rgba(a)), 0.0),
+                            gpui::linear_color_stop(gpui::Hsla::from(rgba(b)), 1.0),
+                        ),
+                    ));
                 }
-            });
+            })
+            .on_change(move |v, window, cx| hue_pick(hsb_color(v, 1.0, 1.0), window, cx))
+            .render();
+
+        // ③ 透明度滑轨：同样用 `Slider`，轨道先棋盘再叠透明→当前色的水平渐变。
+        let alpha_pick = pick.clone();
+        let opaque = current.with_alpha(255);
+        let alpha_slider = crate::widgets::Slider::new(alpha, 0.0, 1.0)
+            .step(1.0 / 255.0)
+            .paint_track(move |window, bounds, _| {
+                crate::widgets::swatch::checker(window, bounds, 4.0);
+                window.paint_quad(gpui::fill(
+                    bounds,
+                    gpui::linear_gradient(
+                        90.0,
+                        gpui::linear_color_stop(gpui::transparent_black(), 0.0),
+                        gpui::linear_color_stop(gpui::Hsla::from(rgba(opaque)), 1.0),
+                    ),
+                ));
+            })
+            .on_change(move |v, window, cx| alpha_pick(opaque.with_alpha((v * 255.0).round() as u8), window, cx))
+            .render();
 
         // ④ 数值行：格式下拉 56 + 三个通道字段（1fr）+ 不透明度 54，字段高 24。
         let model_name = COLOR_MODELS.get(model).copied().unwrap_or("Hex");
@@ -2738,11 +2737,10 @@ impl WindowState {
                     div()
                         .flex_1()
                         .min_w(pt(0.0))
-                        .h(pt(44.0))
+                        .h(pt(48.0))
                         .flex()
                         .flex_col()
                         .justify_between()
-                        .gap(pt(12.0))
                         .child(hue_slider)
                         .child(alpha_slider),
                 ),
@@ -3492,6 +3490,23 @@ impl WindowState {
                             .into_any_element(),
                     )
                 }
+            }
+            Setting::Slider { tab: st, label, value, min, max, step, suffix, on_change } => {
+                if *st != tab {
+                    return None;
+                }
+                // 与 `Setting::Number` 的 Type settings 分支同一行样式：左标签 + 右控件。
+                let cb = on_change.clone();
+                let control = crate::widgets::Slider::new(*value, *min, *max)
+                    .step(*step)
+                    .width(120.0)
+                    .show_value()
+                    .precision(0)
+                    .suffix(suffix.clone())
+                    .on_change(move |v, window, cx| cb(v, window, cx))
+                    .render()
+                    .into_any_element();
+                Some(type_row(label, &t, control))
             }
             Setting::Options { tab: st, label, active, options } => {
                 if *st != tab {
@@ -4687,8 +4702,6 @@ fn hsb_color(h: f32, s: f32, b: f32) -> Color32 {
 const PANEL_W: f32 = 240.0;
 /// 色域方块边长（208 = 240 − 16×2）。
 const SPECTRUM: f32 = 208.0;
-/// 滑轨宽度（208 − 吸管 24 − gap 12）。
-const SLIDER_W: f32 = 172.0;
 /// 色块边长与节奏（16 + 8）。
 const CHIT: f32 = 16.0;
 const CHIT_PITCH: f32 = 24.0;
