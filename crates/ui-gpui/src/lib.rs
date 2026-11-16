@@ -52,6 +52,9 @@ mod render_stack;
 /// 双向文字里的名称（A22）：RTL / 混排脚本的标签名按实测宽度截断，省略号落在视觉末端。
 mod bidi;
 
+/// 数字框里输入的算术 / 单位 / 相对编辑（`+10`、`*2`、`50%`），移植自 EGUI 的 `field_math`。
+mod field_math;
+
 /// 通用尺寸拖动状态机：左面板宽度 / 底部时间轴高度共用（thread_local + 窗口轴相对位移）。
 mod resize_drag;
 
