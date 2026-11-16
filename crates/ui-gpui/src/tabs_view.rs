@@ -48,11 +48,17 @@ pub(crate) struct TabDoc {
     pub live: LiveBadge,
 }
 
-pub(crate) fn read_docs(session: &figcraft_engine::Session) -> Vec<TabDoc> {
+/// 这个窗口该显示的文档：**按 `Windows` 归属过滤**（A16）。
+///
+/// 每个 OS 窗口挂同一个 `CanvasView`，所以「有哪些文档」是共享的，但「这个窗口显示哪几个」
+/// 由 `windows.of(uid)` 决定：主窗口显示不属于任何额外窗口的文档，额外窗口只显示自己 `docs`
+/// 里的。拖出标签后归属立刻变化，于是**原窗口的标签消失、新窗口只有那一个**。
+pub(crate) fn read_docs(session: &figcraft_engine::Session, windows: &crate::windows::Windows, current: u64) -> Vec<TabDoc> {
     session
         .docs
         .iter()
         .enumerate()
+        .filter(|(_, d)| windows.of(d.uid) == current)
         .map(|(index, d)| {
             // `live_of` 给的是「这个 uid 的会话」，但会话还带着它同步的 `doc_uid`；
             // 两个条件都满足才在标签上画徽标（上游 tabs.rs:688/694 的 filter）。

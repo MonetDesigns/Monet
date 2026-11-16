@@ -599,6 +599,10 @@ pub(crate) struct WindowState {
     /// reported it. `anchored_open` uses this instead of guessing from the press point.
     /// `None` keeps the old pointer-minus-half-button fallback (keyboard / command opens).
     exact_top: Option<Pixels>,
+    /// 打开这张卡的那个**触发按钮**的唯一标识（`"fill-var-3"`、`"appearance-var"` …）。
+    /// 按钮的选中态与「再点一次关闭」都按它判断——只按 `WindowKind` 会让同类窗口的
+    /// 所有按钮一起亮（用户 2026-11-16：点填充的变量按钮，别处的也亮了）。
+    trigger: Option<String>,
     origin: Point<Pixels>,
     /// Last viewport the card was laid out in. A drag clamps every step to it, exactly like
     /// egui's `clamp(at - grab, size, screen)`, so a pointer leaving the window cannot park the
@@ -726,6 +730,16 @@ impl WindowState {
         self.exact_top = Some(top);
     }
 
+    /// 记下打开这张卡的触发按钮标识（按钮据此显示选中态）。
+    pub(crate) fn set_trigger(&mut self, trigger: impl Into<String>) {
+        self.trigger = Some(trigger.into());
+    }
+
+    /// 这张卡是由哪个触发按钮打开的。
+    pub(crate) fn trigger(&self) -> Option<&String> {
+        self.trigger.as_ref()
+    }
+
     /// 供根视图判断当前是否是某个特定窗口（例如变量面板已开时再点按钮就不要二次弹出）。
     pub(crate) fn kind(&self) -> WindowKind {
         self.kind
@@ -750,6 +764,7 @@ impl WindowState {
             measured_h: Rc::new(Cell::new(0.0)),
             place: None,
             exact_top: None,
+            trigger: None,
             origin: Point { x: px(0.0), y: px(0.0) },
             viewport: size(px(0.0), px(0.0)),
             hold: crate::hold_drag::HoldDrag::default(),

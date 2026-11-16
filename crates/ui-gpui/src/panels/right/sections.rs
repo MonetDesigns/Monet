@@ -115,7 +115,7 @@ fn font_picker_button(f: &RightFields, label: impl Into<SharedString>, width: f3
     d = d.on_click(move |anchor: Bounds<Pixels>, _window, cx: &mut App| {
         let mut w = crate::popovers::WindowState::font_picker(queue.clone(), cx, current.as_deref(), anchor.origin);
         w.anchor_to_button_top(anchor.origin.y);
-        popups.toggle(crate::popovers::WindowKind::FontPicker, w);
+        popups.toggle("font-picker", w);
     });
     d
 }
@@ -370,6 +370,7 @@ pub(crate) fn bindable(
                         cx,
                         window.mouse_position(),
                         Some(top),
+                        format!("bind-{field}"),
                         ListWindow::Variables,
                         SharedString::from(tr("Variables")),
                         rows,
@@ -429,6 +430,7 @@ pub(crate) fn bindable(
                                 cx,
                                 window.mouse_position(),
                                 Some(top),
+                                format!("bind-{field}"),
                                 ListWindow::Variables,
                                 SharedString::from(tr("Variables")),
                                 rows,
@@ -621,11 +623,12 @@ fn open_list_window(
     queue: crate::panels::Cmds,
     cx: &mut App,
     anchor: Point<Pixels>,
+    trigger: String,
     kind: ListWindow,
     title: SharedString,
     rows: Vec<(String, &'static str, Value)>,
 ) {
-    open_list_window_at(popups, queue, cx, anchor, None, kind, title, rows);
+    open_list_window_at(popups, queue, cx, anchor, None, trigger, kind, title, rows);
 }
 
 /// Same as [`open_list_window`] with the trigger's exact top (when it reported one).
@@ -635,6 +638,7 @@ fn open_list_window_at(
     cx: &mut App,
     anchor: Point<Pixels>,
     exact_top: Option<Pixels>,
+    trigger: String,
     kind: ListWindow,
     title: SharedString,
     rows: Vec<(String, &'static str, Value)>,
@@ -652,22 +656,23 @@ fn open_list_window_at(
     if let Some(top) = exact_top {
         w.anchor_to_button_top(top);
     }
-    // 同一个按钮再点一次 = 收起（`toggle` 读根视图写回的真实窗口种类），不是重新弹一张。
-    let kind_w = match kind {
-        ListWindow::Variables => crate::popovers::WindowKind::Variables,
-        ListWindow::Styles => crate::popovers::WindowKind::TextStyles,
-    };
+    // 同一个按钮再点一次 = 收起（`toggle` 按**触发按钮**判断），不是重新弹一张。
     // No `Entity<CanvasView>` guard: the root view drains the slot on its next frame.
-    popups.toggle(kind_w, w);
+    popups.toggle(trigger, w);
 }
 
 /// A header icon that opens the detached Variables window (egui `variable_ui::picker`) instead
 /// of a little dropdown. These are the visible buttons in the Appearance / Typography headers —
 /// wiring the window only to the small in-row binding button left them looking unconnected.
-fn variables_window_button(f: &RightFields, icon: Icon, rows: Vec<(String, &'static str, Value)>) -> gpui::AnyElement {
+fn variables_window_button(
+    f: &RightFields,
+    trigger: &'static str,
+    icon: Icon,
+    rows: Vec<(String, &'static str, Value)>,
+) -> gpui::AnyElement {
     let root = f.popups();
     let queue = f.queue();
-    let active = root.is_open(crate::popovers::WindowKind::Variables);
+    let active = root.is_open(trigger);
     let hit = Rc::new(Cell::new(None));
     let hit_click = hit.clone();
     crate::popovers::with_button_bounds(
@@ -679,6 +684,7 @@ fn variables_window_button(f: &RightFields, icon: Icon, rows: Vec<(String, &'sta
                 cx,
                 window.mouse_position(),
                 Some(top),
+                trigger.to_string(),
                 ListWindow::Variables,
                 SharedString::from(tr("Variables")),
                 rows.clone(),
@@ -724,7 +730,8 @@ fn style_menu(f: &RightFields, d: &PanelData, ty: &'static str, target: Option<&
     };
     let root = f.popups();
     let queue = f.queue();
-    let active = root.is_open(crate::popovers::WindowKind::TextStyles);
+    let trigger = format!("styles-{ty}");
+    let active = root.is_open(&trigger);
     let hit = Rc::new(Cell::new(None));
     let hit_click = hit.clone();
     crate::popovers::with_button_bounds(
@@ -736,6 +743,7 @@ fn style_menu(f: &RightFields, d: &PanelData, ty: &'static str, target: Option<&
                 cx,
                 window.mouse_position(),
                 Some(top),
+                trigger.clone(),
                 ListWindow::Styles,
                 SharedString::from(title),
                 rows.clone(),
@@ -801,7 +809,7 @@ fn bound_color_field(
                 }
             })
             .collect();
-        open_list_window(root.clone(), queue.clone(), cx, pos, ListWindow::Variables, SharedString::from(tr("Variables")), rows);
+        open_list_window(root.clone(), queue.clone(), cx, pos, format!("bind-{field}"), ListWindow::Variables, SharedString::from(tr("Variables")), rows);
     })
     .on_detach(move |_window, _cx| {
         cmds.push(Cmd { id: detach.0, params: Some(detach.1.clone()) });
@@ -842,6 +850,7 @@ fn selection_bind(f: &RightFields, row: &super::data::SelectionColorRow, d: &Pan
                 queue.clone(),
                 cx,
                 window.mouse_position(),
+                format!("sel-bind-{targets}"),
                 ListWindow::Variables,
                 SharedString::from(tr("Variables")),
                 rows.clone(),
@@ -861,6 +870,7 @@ fn color_pick(
     params: Value,
     key: &'static str,
     base_paint: Option<Value>,
+    trigger: String,
 ) -> (ColorField, Rc<Cell<Option<Bounds<Pixels>>>>) {
     let popups = f.popups();
     let cmds = f.cmds.clone();
@@ -904,7 +914,7 @@ fn color_pick(
         // `cx.spawn(...).detach()` delayed the picker by a frame and could be dropped entirely.
         let mut w = crate::popovers::WindowState::color(cx, pos, current, picker, on_pick, cmds.clone());
         w.anchor_to_button_top(top);
-        popups.toggle(crate::popovers::WindowKind::Color, w);
+        popups.toggle(trigger.clone(), w);
     });
     (cf, hit)
 }
@@ -913,7 +923,7 @@ fn color_pick(
 fn paint_swatch(f: &RightFields, row: &PaintRow, cf: ColorField) -> (ColorField, Rc<Cell<Option<Bounds<Pixels>>>>) {
     let current = row.paint.solid_color().map(crate::widgets::swatch::color32).unwrap_or(Color32::BLACK);
     let cmd = if row.fills { "fill.set" } else { "stroke.set" };
-    color_pick(f, cf, current, cmd, json!({ "index": row.index }), "color", None)
+    color_pick(f, cf, current, cmd, json!({ "index": row.index }), "color", None, format!("color-paint-{}", row.index))
 }
 
 // ───────────────────────────────────────────────────────────────────────────────────────────────
@@ -1095,13 +1105,13 @@ pub(crate) fn paints(
             let dots = crate::popovers::with_button_bounds(
                 IconButton::new(Icon::Menu)
                     .size(24.0)
-                    .active(popups.is_open(crate::popovers::WindowKind::Stroke))
+                    .active(popups.is_open("stroke"))
                     .on_click(move |_e, window, cx: &mut App| {
                         let anchor = window.mouse_position();
                         let top = crate::popovers::button_top(&dots_click, window);
                         let mut w = crate::popovers::WindowState::stroke(stroke_queue.clone(), &stroke_data, cx, anchor);
                         w.anchor_to_button_top(top);
-                        popups.toggle(crate::popovers::WindowKind::Stroke, w);
+                        popups.toggle("stroke", w);
                     }),
                 dots_hit,
             );
@@ -1244,7 +1254,7 @@ fn effect_settings_button(f: &RightFields, row: &EffectRow, col: f32) -> Dropdow
             effect.clone(),
         );
         w.anchor_to_button_top(bounds.origin.y);
-        popups.toggle(crate::popovers::WindowKind::EffectSettings, w);
+        popups.toggle(format!("effect-{index}"), w);
     })
 }
 
@@ -1542,7 +1552,8 @@ pub(crate) fn selection_colors(
         let current = paint.solid_color().map(crate::widgets::swatch::color32).unwrap_or(Color32::BLACK);
         let cf = ColorField::new(cx, paint, text, row_w, hex_ed, op_ed);
         // swatch 点击开取色器（`selection_colors.rs::toggle`）：`selection.setPaint` 用 `paint` 键。
-        let (cf, swatch_hit) = color_pick(f, cf, current, "selection.setPaint", json!({ "targets": targets }), "paint", Some(row.paint.clone()));
+        let (cf, swatch_hit) =
+            color_pick(f, cf, current, "selection.setPaint", json!({ "targets": targets }), "paint", Some(row.paint.clone()), format!("color-sel-{targets}"));
         // 选区颜色组绑定到变量时同样走 `Field-color / Disabled`：整框可点换绑，24 pt
         // 尾插槽换成解绑按钮（`selection.detachColor`）。换绑菜单只列这组作用域内的变量。
         let var_names: Vec<String> = row.variables.iter().map(|(name, _)| name.clone()).collect();
@@ -1821,7 +1832,7 @@ fn corner_smoothing_button(f: &RightFields, d: &PanelData) -> gpui::AnyElement {
     let popups = f.popups();
     let queue = f.queue();
     let value = d.corner_smoothing.unwrap_or(0.0) as f32;
-    let open = popups.is_open(crate::popovers::WindowKind::CornerSmoothing);
+    let open = popups.is_open("corner-smoothing");
     let hit = Rc::new(Cell::new(None));
     let hit_click = hit.clone();
     crate::popovers::with_button_bounds(
@@ -1841,7 +1852,7 @@ fn corner_smoothing_button(f: &RightFields, d: &PanelData) -> gpui::AnyElement {
                 let top = crate::popovers::button_top(&hit_click, window);
                 let mut w = crate::popovers::WindowState::corner_smoothing(queue.clone(), value, window.mouse_position());
                 w.anchor_to_button_top(top);
-                popups.toggle(crate::popovers::WindowKind::CornerSmoothing, w);
+                popups.toggle("corner-smoothing", w);
             })
             .child("◇"),
         hit,
@@ -1858,11 +1869,9 @@ pub(crate) fn appearance(
 ) -> PanelSection {
     let visible = d.visible.unwrap_or(true);
     let eye = icon_cmd(if visible { Icon::Eye } else { Icon::EyeOff }, "object.toggleVisible", json!({}), f, false);
-    let bind = variables_window_button(
-        f,
-        Icon::Variable,
-        d.bool_variables.iter().map(|v| (v.clone(), "variable.bind", json!({ "field": "visible", "variable": v }))).collect(),
-    );
+    // ⛔ 这里**没有**变量按钮：egui `right.rs::appearance_header` 只有两颗 —— Show/Hide 与
+    // Blend mode（`buttons = [(0, 1, …), (1, 0, …)]`）。之前多画了一颗 `variables_window_button`，
+    // 用户 2026-11-16 指出「原版设计里没有这个东西」。
     // egui `paints.rs::appearance`：blend 按钮（索引 2）**不推命令**——它只翻转本地 `blend_open`
     // 标记来展开/收起下方的 blend-mode 下拉行；blend 值由那一行里的下拉选定（→ `node.set`）。
     // GPUI 必须一致：点这个按钮只是切换显隐，而不是直接弹 `node.set` 菜单。
@@ -1893,7 +1902,7 @@ pub(crate) fn appearance(
         None
     };
     let mut sec = PanelSection::new(tr("Appearance"))
-        .header_trail(icon_row(vec![eye.into_any_element(), bind, blend.into_any_element()]));
+        .header_trail(icon_row(vec![eye.into_any_element(), blend.into_any_element()]));
     let corner_row_trail: Vec<gpui::AnyElement> = indep_toggle.map(|b| b.into_any_element()).into_iter().collect();
     sec = sec
         .child(sublabel_row2(tr("Opacity"), tr("Corner radius")))
@@ -1965,6 +1974,7 @@ pub(crate) fn typography(f: &RightFields, d: &PanelData) -> PanelSection {
     let t = d.text.clone().unwrap_or_default();
     let var = variables_window_button(
         f,
+        "typography-var",
         Icon::Variable,
         d.text_variables.iter().map(|v| (v.clone(), "variable.bind", json!({ "field": "characters", "variable": v }))).collect(),
     );
@@ -2054,7 +2064,7 @@ fn type_settings_button(f: &RightFields, d: &PanelData) -> gpui::AnyElement {
     let popups = f.popups();
     let queue = f.queue();
     let text = d.text.clone().unwrap_or_default();
-    let open = popups.is_open(crate::popovers::WindowKind::TypeSettings);
+    let open = popups.is_open("type-settings");
     let hit = Rc::new(Cell::new(None));
     let hit_click = hit.clone();
     crate::popovers::with_button_bounds(
@@ -2062,7 +2072,7 @@ fn type_settings_button(f: &RightFields, d: &PanelData) -> gpui::AnyElement {
             let top = crate::popovers::button_top(&hit_click, window);
             let mut w = crate::popovers::WindowState::type_settings(queue.clone(), &text, cx, window.mouse_position());
             w.anchor_to_button_top(top);
-            popups.toggle(crate::popovers::WindowKind::TypeSettings, w);
+            popups.toggle("type-settings", w);
         }),
         hit,
     )
@@ -3707,7 +3717,7 @@ fn local_style_row(
             if let Some(top) = hit.get().map(|b| b.origin.y) {
                 w.anchor_to_button_top(top);
             }
-            popups.toggle(crate::popovers::WindowKind::StyleEditor, w);
+            popups.toggle(format!("style-editor-{id}"), w);
         })
     };
     // 左侧徽标（egui `paint_dot` / "Ag" / `slot.icon()`）。
@@ -3995,7 +4005,8 @@ pub(crate) fn page(f: &RightFields, d: &PanelData, row_w: f32, n: &mut usize, wi
     let color = figcraft_color::Color::from_hex(&p.background).unwrap_or(figcraft_color::Color::WHITE);
     let cf = ColorField::new(cx, figcraft_color::Paint::solid(color), ColorText::Hex(SharedString::from(p.background.clone())), row_w, hex_ed, op_ed);
     // swatch → picker (`toggle_picker(PickerTarget::PageBackground)`).
-    let (cf, swatch_hit) = color_pick(f, cf, Color32::from_hex(&p.background).unwrap_or(Color32::WHITE), "page.setBackground", json!({}), "color", None);
+    let (cf, swatch_hit) =
+        color_pick(f, cf, Color32::from_hex(&p.background).unwrap_or(Color32::WHITE), "page.setBackground", json!({}), "color", None, "color-page".to_string());
     sec = sec.child(field_row_full(crate::popovers::with_button_bounds(cf, swatch_hit)));
     // egui keeps this as local UI state and opens a dialog; GPUI has no dialog yet, so the
     // engine's `file.colorProfile` command is the equivalent. `node.set {"colorProfile": …}`

@@ -282,9 +282,9 @@ pub(crate) type Cmds = CmdQueue;
 pub(crate) struct PopupReqs {
     slot: Rc<std::cell::RefCell<Option<crate::popovers::WindowState>>>,
     cmds: Cmds,
-    /// 当前真正打开的窗口种类（根视图每帧 `sync_open` 写回）。触发按钮据此显示选中态，
-    /// 并实现「再点一次 = 关闭」——状态来自**真实 popup**，backdrop / Esc / X 关窗后自动熄灭。
-    open_kind: Rc<std::cell::Cell<Option<crate::popovers::WindowKind>>>,
+    /// 当前打开窗口的**触发按钮标识**（根视图每帧 `sync_open` 写回）。按触发源而不是按
+    /// `WindowKind` 判断：同一类窗口（变量、取色器…）有多个入口，按 kind 会让它们一起亮。
+    open_trigger: Rc<std::cell::RefCell<Option<String>>>,
     /// 按钮请求关闭当前窗口；根视图每帧 `take_close` 消费一次。
     close_req: Rc<std::cell::Cell<bool>>,
 }
@@ -295,24 +295,26 @@ impl PopupReqs {
         self.cmds.wake();
     }
 
-    /// 这个触发按钮对应的窗口现在是否开着（用于 `.active(...)`）。
-    pub(crate) fn is_open(&self, kind: crate::popovers::WindowKind) -> bool {
-        self.open_kind.get() == Some(kind)
+    /// 这个触发按钮打开的窗口现在是否开着（用于 `.active(...)`）。
+    pub(crate) fn is_open(&self, trigger: &str) -> bool {
+        self.open_trigger.borrow().as_deref() == Some(trigger)
     }
 
     /// 打开 / 关闭同一个窗口：已开就关，未开就开。与 egui 面板里「再点一次收起」同义。
-    pub(crate) fn toggle(&self, kind: crate::popovers::WindowKind, w: crate::popovers::WindowState) {
-        if self.is_open(kind) {
+    pub(crate) fn toggle(&self, trigger: impl Into<String>, mut w: crate::popovers::WindowState) {
+        let trigger = trigger.into();
+        if self.is_open(&trigger) {
             self.close_req.set(true);
             self.cmds.wake();
         } else {
+            w.set_trigger(trigger);
             self.request(w);
         }
     }
 
-    /// 根视图每帧写回当前打开的窗口种类。
-    pub(crate) fn sync_open(&self, current: Option<crate::popovers::WindowKind>) {
-        self.open_kind.set(current);
+    /// 根视图每帧写回当前打开窗口的触发标识。
+    pub(crate) fn sync_open(&self, current: Option<String>) {
+        *self.open_trigger.borrow_mut() = current;
     }
 
     /// 根视图每帧消费一次「按钮请求关闭」。
@@ -690,7 +692,7 @@ pub(crate) struct RightFields {
     /// click whenever the one-shot `set_root` did not land, which is the "button does nothing" bug.
     popup_slot: Rc<std::cell::RefCell<Option<crate::popovers::WindowState>>>,
     /// 当前打开的窗口种类（根视图每帧写回）：触发按钮的选中态与「再点一次关闭」都读它。
-    popup_open_kind: Rc<std::cell::Cell<Option<crate::popovers::WindowKind>>>,
+    popup_open_trigger: Rc<std::cell::RefCell<Option<String>>>,
     /// 触发按钮请求关闭当前窗口（根视图每帧消费）。
     popup_close_req: Rc<std::cell::Cell<bool>>,
     /// 全部编辑器实体（含所有 TextField 的内层 editor、颜色行 editor、列表行池）。
@@ -1265,7 +1267,7 @@ impl RightFields {
             blend_open: std::rc::Rc::new(std::cell::RefCell::new(false)),
             root: None,
             popup_slot: Rc::new(std::cell::RefCell::new(None)),
-            popup_open_kind: Rc::new(std::cell::Cell::new(None)),
+            popup_open_trigger: Rc::new(std::cell::RefCell::new(None)),
             popup_close_req: Rc::new(std::cell::Cell::new(false)),
             last_fill: std::cell::RefCell::new(None),
             last_stroke: std::cell::RefCell::new(None),
@@ -1599,7 +1601,7 @@ impl RightFields {
         PopupReqs {
             slot: self.popup_slot.clone(),
             cmds: self.cmds.clone(),
-            open_kind: self.popup_open_kind.clone(),
+            open_trigger: self.popup_open_trigger.clone(),
             close_req: self.popup_close_req.clone(),
         }
     }
@@ -2591,7 +2593,7 @@ pub(crate) fn auto_layout_section(
             IconButton::new(Icon::Menu)
                 .id("layout-settings-dots")
                 .size(24.0)
-                .active(popups.is_open(crate::popovers::WindowKind::Layout))
+                .active(popups.is_open("layout"))
                 .on_click(move |_e, window, cx: &mut App| {
                     if std::env::var_os("FC_DEBUG_POPUP_BTN").is_some() {
                         eprintln!("[popup-btn] layout dots clicked");
@@ -2600,7 +2602,7 @@ pub(crate) fn auto_layout_section(
                     let top = crate::popovers::button_top(&dots_click, window);
                     let mut w = crate::popovers::WindowState::layout(settings_queue.clone(), &settings_data, cx, anchor);
                     w.anchor_to_button_top(top);
-                    popups.toggle(crate::popovers::WindowKind::Layout, w);
+                    popups.toggle("layout", w);
                 }),
             dots_hit,
         );

@@ -4675,13 +4675,15 @@ impl Render for CanvasView {
             }
         }
 
-        let current_kind = match &self.popup {
-            Some(Popup::Window(w)) => Some(w.kind()),
+        // 按**触发按钮**而不是窗口种类写回：变量/取色器这类窗口有多个入口，按种类会让
+        // 所有同类按钮一起亮（用户 2026-11-16 指出）。
+        let current_trigger = match &self.popup {
+            Some(Popup::Window(w)) => w.trigger().cloned(),
 
-            _ => self.variables_open.then_some(popovers::WindowKind::VariablesTable),
+            _ => None,
         };
 
-        popup_reqs.sync_open(current_kind);
+        popup_reqs.sync_open(current_trigger);
 
         // 右栏按钮把「要打开的窗口」放进共享槽，这里每帧取走。按钮因此不需要持有根视图
 
@@ -6200,7 +6202,10 @@ impl Render for CanvasView {
         // ── 系统级窗口标题区域（kit `TitleBar::new().child(TabBar)`）────────────────────
         // 标签条塞在标题栏里，不是画布里的一条；标题栏是 Root 的第一个 child，
         // 客户区（Dock）从 y = TITLE_H 起，几何由 dock::DockLayout 统一推导。
-        let tab_docs = tabs_view::read_docs(&self.app.session);
+        let tab_docs = {
+            let wins = self.windows.borrow();
+            tabs_view::read_docs(&self.app.session, &wins, wins.current)
+        };
         let tabs_active = self.app.session.active;
         let tabs_dark = self.app.theme.dark;
         let tabs_reduce_motion = self.app.session.prefs.reduce_motion;

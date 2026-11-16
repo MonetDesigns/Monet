@@ -175,6 +175,13 @@ pub(crate) fn requests(
                 None => open_doc(session, path)?,
             };
             let title = title_of(session.docs.iter().find(|d| d.uid == uid).map(|d| d.doc.name.to_string()).as_deref());
+            // 被拖出去的文档如果正是当前活动文档，把活动项挪到另一个文档：否则原窗口会
+            // 显示「没有任何标签高亮」（它的标签已经过滤掉了）。
+            if session.docs.get(session.active).map(|d| d.uid) == Some(uid)
+                && let Some(i) = session.docs.iter().position(|d| d.uid != uid)
+            {
+                session.active = i;
+            }
             // 建窗必须推迟到本次更新之后（见 `open_now` 的说明）。
             let wins = windows.clone();
             cx.defer(move |cx| open_now(&wins, cx, root, uid, title));
