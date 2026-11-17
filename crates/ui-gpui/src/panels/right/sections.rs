@@ -2800,15 +2800,12 @@ pub(crate) fn header(f: &RightFields, d: &PanelData, col: f32) -> Option<gpui::D
             Some(figcraft_doc::BoolOp::Exclude) => Icon::Exclude,
             _ => Icon::Union,
         };
-        actions.push(
-            if visibility::bool_union_enabled(h.count) {
-                icon_cmd(bool_icon, "bool.union", json!({}), f, false)
-            } else {
-                // lizard：少于两个图层时点了也不执行，按钮只是当前运算的状态图标。
-                IconButton::new(bool_icon)
-            }
-            .into_any_element(),
-        );
+        let bool_button = if visibility::bool_union_enabled(h.count) {
+            icon_cmd(bool_icon, "bool.union", json!({}), f, false)
+        } else {
+            // lizard：少于两个图层时点了也不执行，按钮只是当前运算的状态图标。
+            IconButton::new(bool_icon)
+        };
         let cur = h.bool_op.map(|o| o.label());
         let mut bool_rows: Vec<HeadRow> = Vec::new();
         for (label, cmd) in
@@ -2827,7 +2824,18 @@ pub(crate) fn header(f: &RightFields, d: &PanelData, col: f32) -> Option<gpui::D
             HeadRow::plain(tr("Flatten"), "vector.flatten", json!({}))
         };
         bool_rows.push(flatten.sep());
-        actions.push(head_menu_button(f, Icon::ChevronDown, 16.0, 180.0, bool_rows).into_any_element());
+        // 布尔方式 = 通用 24 图标 + 16 宽下拉箭头、两者间距 0（用户规则）。
+        // 下拉箭头宽 16（不是图标 size16），高 24；整体 40 宽作为一个 action。
+        let bool_menu = head_menu_button(f, Icon::ChevronDown, 24.0, 180.0, bool_rows);
+        actions.push(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .child(bool_button.into_any_element())
+                .child(div().w(pt(16.0)).h(pt(24.0)).flex().items_center().justify_center().child(bool_menu.into_any_element()))
+                .into_any_element(),
+        );
         if a.edit_object {
             actions.push(icon_cmd(Icon::Pen, "vector.edit.begin", json!({}), f, false).into_any_element());
         }
