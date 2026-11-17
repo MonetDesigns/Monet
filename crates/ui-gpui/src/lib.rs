@@ -1027,7 +1027,7 @@ impl CanvasView {
                 "variables_table" | "variables_table_full" => {
                     let t = if data.variables.collections.is_empty() { crate::panels::right::variables::sample() } else { data.variables.clone() };
 
-                    Some(popovers::WindowState::variables_table(queue.clone(), anchor, t))
+                    Some(popovers::WindowState::variables_table(queue.clone(), anchor, t, Some(view.fields.popups())))
                 }
 
                 "color" => {
@@ -1630,7 +1630,12 @@ impl CanvasView {
                     if on && !self.variables_open {
                         let data = self.panel_data();
 
-                        let win = popovers::WindowState::variables_table(self.fields.queue(), Point { x: px(0.0), y: px(100.0) }, data.variables);
+                        let win = popovers::WindowState::variables_table(
+                            self.fields.queue(),
+                            Point { x: px(0.0), y: px(100.0) },
+                            data.variables,
+                            Some(self.fields.popups()),
+                        );
 
                         self.open_window(win, cx);
                     } else if !on && self.variables_open {
@@ -4337,7 +4342,7 @@ impl CanvasView {
 
         let anchor = Point::new(px(100.0), px(100.0));
 
-        let win = popovers::WindowState::variables_table(self.fields.queue(), anchor, data);
+        let win = popovers::WindowState::variables_table(self.fields.queue(), anchor, data, Some(self.fields.popups()));
 
         self.open_window(win, cx);
     }
@@ -5985,7 +5990,7 @@ impl Render for CanvasView {
 
                 let data = cv.panel_data();
 
-                let win = popovers::WindowState::variables_table(cv.fields.queue(), Point { x: px(0.0), y }, data.variables);
+                let win = popovers::WindowState::variables_table(cv.fields.queue(), Point { x: px(0.0), y }, data.variables, Some(cv.fields.popups()));
 
                 // 不再强制 `variables_full = false`：会话记住上次是 Full 还是 Floating。
 

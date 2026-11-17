@@ -438,13 +438,30 @@ struct RowCaches {
     value_editors: HashMap<String, Entity<TextField>>,
     /// 颜色值格用通用 `ColorField`：它的 hex / alpha 是裸 `TextEdit`，按 key 缓存以保住焦点。
     color_editors: HashMap<String, (Entity<crate::widgets::input::TextEdit>, Entity<crate::widgets::input::TextEdit>)>,
+    /// 打开取色器用的请求队列（由 `WindowState` 注入；独立渲染测试里可能没有）。
+    popups: Option<crate::panels::PopupReqs>,
 }
 
 /// 虚拟列表中的「条目」：分组间隔、分组标题、或一条变量行。
 enum RowItem {
     Gap,
-    GroupHeader { name: String },
+    /// 分组标题。`first` 是该组第一个变量：拖拽落在这里 = 移到该组**上方**（组外），
+    /// 提交时用它当 `before` 并显式 `group: ""`。
+    GroupHeader { name: String, first: String },
     Row { index: usize, row: VarRow },
+}
+
+/// 拖拽行里的分组标题锚点前缀：`\u{1}g\u{1}{组名}\u{1}{组首变量 id}`。
+const DRAG_GROUP: &str = "\u{1}g\u{1}";
+
+/// 分组标题锚点的字符串键（不会与变量 id 或名字撞）。
+fn drag_group_key(group: &str, first: &str) -> String {
+    format!("{DRAG_GROUP}{group}\u{1}{first}")
+}
+
+/// 从锚点键里取出「组首变量 id」；普通变量 id 返回 `None`。
+fn drag_group_first(key: &str) -> Option<&str> {
+    key.strip_prefix(DRAG_GROUP)?.split_once('\u{1}').map(|(_, first)| first)
 }
 impl RowItem {
     fn height(&self) -> f32 {
@@ -608,7 +625,14 @@ fn group_header_div(name: &str) -> Div {
 }
 
 impl VariablesEditor {
-    pub fn new(cmds: Cmds, data: VariablesData, cx: &mut App, on_full: Rc<dyn Fn(bool, &mut App)>, on_close: Rc<dyn Fn(&mut App)>) -> Self {
+    pub fn new(
+        cmds: Cmds,
+        data: VariablesData,
+        cx: &mut App,
+        popups: Option<crate::panels::PopupReqs>,
+        on_full: Rc<dyn Fn(bool, &mut App)>,
+        on_close: Rc<dyn Fn(&mut App)>,
+    ) -> Self {
         let state: State = Rc::new(RefCell::new(EditorState::new()));
         let search = search_field(cx, SEARCH_W, "", "Search variables");
         let q = state.clone();
@@ -619,6 +643,7 @@ impl VariablesEditor {
         // 否则会沿用上一次的草稿，并让 start_*_rename 的旧提交写到新目标上。
         let mut caches = RowCaches::default();
         caches.group_rename_members = Rc::new(RefCell::new(Vec::new()));
+        caches.popups = popups;
         Self { state, data, cmds, search, row_caches: Rc::new(RefCell::new(caches)), details_fields: HashMap::new(), on_full, on_close }
     }
 
@@ -1040,15 +1065,19 @@ impl VariablesEditor {
             })
             .cloned()
             .collect();
+        // 顺序：**无组变量在前**（按文档顺序），组在它们后面（按 `group_order`）。
+        // 新建变量没有组、引擎追加在集合末尾，以前会落到某个组后面，看起来像「进了组」；
+        // 用户 2026-11-17：新变量应排在组前面，组只排在无组变量之后。
         list.sort_by(|a, b| {
-            let pa = st.group_order.iter().position(|g| g == &a.group);
-            let pb = st.group_order.iter().position(|g| g == &b.group);
-            match (pa, pb) {
-                (Some(i), Some(j)) => i.cmp(&j),
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => a.group.cmp(&b.group),
-            }
+            let key = |r: &VarRow| {
+                if r.group.is_empty() {
+                    (0usize, 0usize)
+                } else {
+                    (1, st.group_order.iter().position(|g| g == &r.group).unwrap_or(usize::MAX))
+                }
+            };
+            // `sort_by` 是稳定排序：同 key 保持引擎里的原始顺序。
+            key(a).cmp(&key(b))
         });
         list
     }
@@ -2178,10 +2207,7 @@ impl VariablesEditor {
                 Some(name_w + pos)
             })
         };
-        if let Some(x) = mode_line_x {
-            // 与 `cell` 右缘的 1pt 网格线同一条缝：线左缘 = 缝左缘，2pt 向表格内延伸。
-            col = col.child(div().absolute().left(pt(x - 1.0)).top_0().bottom_0().w(pt(2.0)).bg(rgba(t.accent)));
-        }
+        // mode 列插入线在函数末尾画：必须盖在行区与其 1pt 竖分隔线之上（用户 2026-11-17）。
 
         // notice_row：库集合只读 / 扩展集合提示（egui `notice_row`）。
         if !c.editable || c.extends.is_some() {
@@ -2233,35 +2259,44 @@ impl VariablesEditor {
         let mut items: Vec<RowItem> = Vec::new();
         let mut prev_group: Option<String> = None;
         let mut skip = false;
-        let mut shown = 0usize;
+        // 拖拽行下标（分组标题与变量行共用一条序列）。
+        let mut drag_index = 0usize;
         for r in &visible {
             if prev_group.as_deref() != Some(&r.group) {
                 prev_group = Some(r.group.clone());
                 skip = collapsed.contains(&r.group);
                 if !r.group.is_empty() {
                     items.push(RowItem::Gap);
-                    items.push(RowItem::GroupHeader { name: r.group.clone() });
+                    // 分组标题也要进拖拽序列：否则「组上方」没有任何缝，行只能落进组里。
+                    items.push(RowItem::GroupHeader { name: r.group.clone(), first: r.id.clone() });
+                    drag_index += 1;
                 }
             }
             if skip {
                 continue;
             }
-            // `index` 是**已渲染**行的序号（折叠分组里的行不参与拖动）。
-            items.push(RowItem::Row { index: shown, row: r.clone() });
-            shown += 1;
+            items.push(RowItem::Row { index: drag_index, row: r.clone() });
+            drag_index += 1;
         }
 
-        // 已渲染变量行的 id 与「内容坐标」顶边，两者下标一致、且与 `items` 的实际高度推进
-        // 完全同步。拖动重建矩形必须用这份**过滤后**的列表：把折叠分组里没画出来的行也塞
-        // 进去，它们会全落在 y=0，`resolve` 的插入缝就会跳到最上面（用户 2026-11-17）。
-        let mut drag_ids: Vec<String> = Vec::with_capacity(shown);
-        let mut drag_tops: Vec<f32> = Vec::with_capacity(shown);
+        // 已渲染行（含分组标题）的拖拽键与「内容坐标」顶边，两者下标一致、且与 `items`
+        // 的实际高度推进完全同步。拖动重建矩形必须用这份**过滤后**的列表：把折叠分组里没画
+        // 出来的行也塞进去，它们会全落在 y=0，`resolve` 的插入缝就会跳到最上面（用户 2026-11-17）。
+        let mut drag_ids: Vec<String> = Vec::with_capacity(drag_index);
+        let mut drag_tops: Vec<f32> = Vec::with_capacity(drag_index);
         {
             let mut y = 0.0f32;
             for it in &items {
-                if let RowItem::Row { row, .. } = it {
-                    drag_ids.push(row.id.clone());
-                    drag_tops.push(y);
+                match it {
+                    RowItem::GroupHeader { name, first, .. } => {
+                        drag_ids.push(drag_group_key(name, first));
+                        drag_tops.push(y);
+                    }
+                    RowItem::Row { row, .. } => {
+                        drag_ids.push(row.id.clone());
+                        drag_tops.push(y);
+                    }
+                    RowItem::Gap => {}
                 }
                 y += it.height();
             }
@@ -2298,7 +2333,7 @@ impl VariablesEditor {
                     let Some(item) = items.get(ix) else { continue };
                     let el: AnyElement = match item {
                         RowItem::Gap => div().flex_none().w(px(table_w)).h(px(GROUP_GAP)).into_any_element(),
-                        RowItem::GroupHeader { name } => group_header_div(name).w(px(table_w)).into_any_element(),
+                        RowItem::GroupHeader { name, .. } => group_header_div(name).w(px(table_w)).into_any_element(),
                         RowItem::Row { index, row } => {
                             VariablesEditor::var_row(&st2, &cmds2, &caches2, &c2, row, *index, &ids2, row_tops.clone(), name_eff, modes_room, sx, cx)
                                 .w(px(table_w))
@@ -2348,6 +2383,10 @@ impl VariablesEditor {
             .child(
                 div().absolute().left(pt(track_start + thumb_x)).top(pt(4.0)).w(pt(thumb_w)).h(pt(4.0)).rounded(pt(2.0)).bg(rgba(t.border_strong)),
             );
+        // mode 列拖动的竖插入线：最后画，盖在行区与每格右缘的 1pt 竖分隔线之上。
+        if let Some(x) = mode_line_x {
+            col = col.child(div().absolute().left(pt(x - 1.0)).top_0().bottom_0().w(pt(2.0)).bg(rgba(t.accent)));
+        }
         div().id("vars-table").flex_1().min_w(pt(0.0)).h_full().flex().flex_col().child(col).child(bar)
     }
 
@@ -2385,7 +2424,10 @@ impl VariablesEditor {
 
         // 行选择 / 双击改名 / 右键菜单 / 拖拽
         let rid = r.id.clone();
-        let rname = r.name.clone();
+        // 改名输入框里必须是**完整名（含组前缀）**：只给叶子名时，再打一个斜杠会把原有组
+        // 替换掉而不是挂到它下面；输入与原名相同的「组/叶」还会被引擎当成无变化跳过。
+        // 用户 2026-11-17：打斜杠要能加入已有组 / 在组下再加一级。
+        let rname = r.full_name.clone();
         row = row
             .on_mouse_down(MouseButton::Left, {
                 let st = st.clone();
@@ -2713,7 +2755,7 @@ impl VariablesEditor {
                     caches.borrow_mut().color_editors.insert(ckey, (h.clone(), o.clone()));
                     (h, o)
                 };
-                let cf = crate::widgets::ColorField::new(
+                let mut cf = crate::widgets::ColorField::new(
                     cx,
                     figcraft_color::Paint::solid(figcraft_color::Color::from_rgba8(color.0[0], color.0[1], color.0[2], color.0[3])),
                     crate::widgets::ColorText::Hex(SharedString::from(hex.clone())),
@@ -2721,6 +2763,33 @@ impl VariablesEditor {
                     hex_ed,
                     op_ed,
                 );
+                // 点 swatch 打开通用取色器，选色直接写回变量（用户 2026-11-17：颜色值格
+                // 以前只是静态色块，点了没反应）。取色器走 `WindowState::color`，与右栏 Fill 同源。
+                if let Some(popups) = caches.borrow().popups.clone() {
+                    let vid = r.id.clone();
+                    let mid = m.id.clone();
+                    let cmds_pick = cmds.clone();
+                    let current = *color;
+                    cf = cf.on_swatch(move |pos: Point<Pixels>, _w, cx: &mut App| {
+                        let on_pick: Rc<dyn Fn(Color32, &mut Window, &mut App)> = Rc::new({
+                            let cmds_pick = cmds_pick.clone();
+                            let vid = vid.clone();
+                            let mid = mid.clone();
+                            move |c: Color32, _w, _cx| {
+                                // `Color32::to_hex()` 自带 `#`，再拼一个就是 `##RRGGBB`，
+                                // 引擎解析失败 → 颜色永远写不回去（用户 2026-11-17）。
+                                // `to_hex_alpha()` 带上透明度，色板里的 alpha 才不会丢。
+                                let hex = c.to_hex_alpha();
+                                cmds_pick.push(Cmd {
+                                    id: "variable.set",
+                                    params: Some(json!({ "variable": vid, "mode": mid, "value": json!(hex) })),
+                                });
+                            }
+                        });
+                        let w = crate::popovers::WindowState::color(cx, pos, current, None, on_pick, cmds_pick.clone());
+                        popups.request(w);
+                    });
+                }
                 cf.into_any_element()
             }
             VarCell::Bool(b) => {
@@ -3112,8 +3181,21 @@ impl VariablesEditor {
             DragList::Variables => {
                 let from = d.ids.get(d.from).cloned().unwrap_or_default();
                 let mut p = json!({ "variable": from });
-                if let Some(b) = before {
+                // 落点是分组标题锚点 = 插到该组**上方**（组外）：`before` 用组首变量，
+                // 并显式 `group: ""`，否则引擎会按 `before` 所在文件夹把行放进组里。
+                let mut out_of_group = false;
+                let before_id = before.as_deref().map(|b| match drag_group_first(b) {
+                    Some(first) => {
+                        out_of_group = true;
+                        first.to_string()
+                    }
+                    None => b.to_string(),
+                });
+                if let Some(b) = before_id {
                     p["before"] = json!(b);
+                }
+                if out_of_group {
+                    p["group"] = json!("");
                 }
                 cmds.push(Cmd { id: "variable.move", params: Some(p) });
             }

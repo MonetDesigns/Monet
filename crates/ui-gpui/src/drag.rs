@@ -173,7 +173,13 @@ pub fn resolve(rows: &[Row], from: usize, pointer: Point<Pixels>, cfg: Config) -
             let y0 = f32::from(r.rect.origin.y);
             py >= y0 && py < y0 + f32::from(r.rect.size.height)
         })
-        .unwrap_or(if py < top { 0 } else { rows.len() - 1 });
+        // 落在行间（变量表的分组间隔是 16pt 的空白）/ 上下 slack 时，取**下方最近**的一行：
+        // `rel` 会钳成 0（Above），`gap` 正好是这道缝。取最后一行会让缝跳到列表末尾。
+        .unwrap_or_else(|| {
+            rows.iter()
+                .position(|r| f32::from(r.rect.origin.y) + f32::from(r.rect.size.height) > py)
+                .unwrap_or(rows.len() - 1)
+        });
     let at_bottom = py >= bottom;
     let ar = &rows[hit];
     let anchor_level = ar.level();

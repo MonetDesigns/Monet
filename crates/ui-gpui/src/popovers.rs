@@ -614,6 +614,8 @@ pub(crate) struct WindowState {
     editor_full: Option<bool>,
     var_on_full: Rc<dyn Fn(bool, &mut App)>,
     var_on_close: Rc<dyn Fn(&mut App)>,
+    /// 变量面板里点颜色 swatch 时，通过它向根视图请求通用取色器窗口。
+    var_popups: Option<crate::panels::PopupReqs>,
     /// 浮层内通用下拉的菜单卡片（窗口坐标，作为 `render()` 的兄弟元素返回）。每帧清空重建。
     overlays: Rc<RefCell<Vec<AnyElement>>>,
     /// 当前浮层的关闭回调（`render()` 每帧写入），供菜单 `dismiss` 之外复用。
@@ -740,6 +742,7 @@ impl WindowState {
             editor_full: None,
             var_on_full: Rc::new(|_, _| {}),
             var_on_close: Rc::new(|_| {}),
+            var_popups: None,
             overlays: Rc::new(RefCell::new(Vec::new())),
             dismiss: Rc::new(RefCell::new(None)),
         }
@@ -1316,13 +1319,19 @@ impl WindowState {
     // ── ⑥ 变量编辑器右侧列表（egui `dialogs/variables_panel.rs::table()`）─────────────────
     // 只搬右边的表格：左侧集合/分组 sidebar、顶部搜索、编辑与拖拽都还没做。
     // 标题用集合名（egui 的浮动面板标题），右侧放变量总数的计数 chip。
-    pub(crate) fn variables_table(cmds: Cmds, anchor: Point<Pixels>, data: VariablesData) -> Self {
+    pub(crate) fn variables_table(
+        cmds: Cmds,
+        anchor: Point<Pixels>,
+        data: VariablesData,
+        popups: Option<crate::panels::PopupReqs>,
+    ) -> Self {
         let mut w = Self::base(WindowKind::VariablesTable, tr("Variables"), cmds, Open::Anchor(anchor));
         w.width = variables::WINDOW_W;
         w.height = variables::WINDOW_H;
         // 表格自己控制左右 inset，卡片 body 不再加通用 16 pt 内边距。
         w.pad = 0.0;
         w.variables_data = Some(data);
+        w.var_popups = popups;
         w
     }
 
@@ -2077,14 +2086,39 @@ impl WindowState {
         let model = Rc::new(Cell::new(0usize));
         let model_anchor = Rc::new(Cell::new(None::<Bounds<Pixels>>));
         let shown = Rc::new(Cell::new((usize::MAX, [0u8; 4])));
+        // 样式属性行用的是 `PaintPicker.on_write`（整份 paint 写回 `style.update`），
+        // 而纯色/色相/透明度拖动只走 `pick`。这里必须把选中的颜色也揉进 paint 再调用
+        // `on_write`，否则「样式列表的取色器选完颜色什么都不发生」（用户 2026-11-17）。
+        let paint_write = paint.as_ref().map(|p| p.on_write.clone());
         // Every pick updates the shared colour first, so the SV square / hue / alpha strips
         // repaint from the new value instead of staying frozen at the colour they opened with.
         // Picks also feed the session-wide "Recent" row (ui-egui `remember_recent`).
         let pick: Rc<dyn Fn(Color32, &mut Window, &mut App)> = {
             let cur = cur.clone();
+            let paint_state = paint_state.clone();
+            let grad_sel = grad_sel.clone();
             Rc::new(move |c: Color32, window: &mut Window, cx: &mut App| {
                 cur.set(c);
                 remember_recent(c);
+                if let (Some(state), Some(write)) = (&paint_state, &paint_write) {
+                    let mut np = state.borrow().clone();
+                    match &mut np.kind {
+                        figcraft_color::PaintKind::Solid { color } => {
+                            // 透明度和 `Paint::solid` 同一约定：色值本身不透明，opacity 承担 alpha。
+                            *color = picker_color(c).with_alpha(1.0);
+                            np.opacity = f32::from(c.0[3]) / 255.0;
+                            np.color_alpha = np.opacity;
+                        }
+                        figcraft_color::PaintKind::Gradient(g) => {
+                            let i = grad_sel.get().min(g.stops.len().saturating_sub(1));
+                            if let Some(s) = g.stops.get_mut(i) {
+                                s.color = picker_color(c);
+                            }
+                        }
+                        _ => {}
+                    }
+                    write(np, window, cx);
+                }
                 on_pick(c, window, cx);
             })
         };
@@ -2394,7 +2428,14 @@ impl WindowState {
             WindowKind::VariablesTable => {
                 if self.editor.is_none() {
                     if let Some(data) = self.variables_data.take() {
-                        let editor = VariablesEditor::new(self.cmds.clone(), data, cx, self.var_on_full.clone(), self.var_on_close.clone());
+                        let editor = VariablesEditor::new(
+                            self.cmds.clone(),
+                            data,
+                            cx,
+                            self.var_popups.clone(),
+                            self.var_on_full.clone(),
+                            self.var_on_close.clone(),
+                        );
                         // 把在 editor 建立之前就收到的 Full/Floating 记住值灌进去。
                         if let Some(full) = self.editor_full {
                             editor.set_full(full);
@@ -4845,6 +4886,7 @@ mod tests {
             Cmds::new(&wake),
             Point { x: px(100.0), y: px(100.0) },
             VariablesData { collections: Vec::new(), libraries: Vec::new() },
+            None,
         );
         w.viewport = size(px(1280.0), px(860.0));
         w.origin = Point { x: px(100.0), y: px(100.0) };
