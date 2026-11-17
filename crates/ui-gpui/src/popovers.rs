@@ -4417,13 +4417,20 @@ impl WindowState {
         // 浮层内通用下拉的菜单每帧重建：先清空上一帧，body_element 里的 Dropdown 会重新登记。
         self.overlays.borrow_mut().clear();
         *self.dismiss.borrow_mut() = Some(dismiss.clone());
+        let no_header = full && self.kind == WindowKind::VariablesTable;
         let mut pop = popover_window(open)
             .width(width)
             .pad(pad)
             .flush(full)
             .surface(self.surface)
-            .height(height)
-            .title(self.title_slot())
+            .height(height);
+        // 用户：变量表 full 模式下侧栏被「外层空头部 + 内层真头部」双层夹住、头部内容整体下移。
+        // 内层 VariablesEditor::header 已经是完整工具条（标题/计数/Import/Export/搜索），外层
+        // title_slot 对这个 kind 返回空 div，只多出一条 40pt 空栏。full 时不挂它，X 仍浮在右上角。
+        if !no_header {
+            pop = pop.title(self.title_slot());
+        }
+        pop = pop
             .body(self.body_element(cx, body_h.max(120.0), width, viewport))
             .on_drag_start(move |e, window, cx| drag(e, window, cx))
             .on_drag_move(move |e, window, cx| drag_move(e, window, cx))

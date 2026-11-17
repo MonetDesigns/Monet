@@ -326,19 +326,22 @@ pub(crate) fn bindable(
             let queue = f.queue();
             let list: Vec<String> = vars.to_vec();
             let cmds = f.cmds.clone();
-            let mut chip = div()
-                .w_full()
+            // 用户：中间是一块「输入框样式」的白块（内退 2pt、field_hover_border 同色描边、
+            // 文字左对齐居中、超出省略号），尾部 24pt 槽放解绑图标。
+            let block = div()
+                .flex_1()
+                .min_w(px(0.0))
                 .h(pt(crate::widgets::FIELD_H))
+                .mx(pt(2.0)) // 内退 2pt；块最大宽度 = 区域 - 2，填满并留边距
                 .rounded(pt(4.0))
-                .bg(rgba(t.hover))
+                .bg(rgba(Color32::WHITE))
                 .border_1()
-                .border_color(rgba(t.border))
+                .border_color(rgba(t.field_hover_border))
                 .flex()
                 .flex_row()
                 .items_center()
                 .overflow_hidden()
-                .pl(pt(8.0))
-                .pr(pt(4.0))
+                .px(pt(6.0))
                 .text_size(pt(crate::widgets::TEXT_PT))
                 .text_color(rgba(t.text))
                 .cursor_pointer()
@@ -357,11 +360,19 @@ pub(crate) fn bindable(
                         rows,
                     );
                 })
-                .child(div().flex_1().min_w(px(0.0)).overflow_hidden().child(short));
+                .child(div().flex_1().min_w(px(0.0)).text_left().text_ellipsis().whitespace_nowrap().child(short));
+            let mut chip = div()
+                .w_full()
+                .h(pt(crate::widgets::FIELD_H))
+                .flex()
+                .flex_row()
+                .items_center()
+                .pr(pt(2.0))
+                .child(block);
             if hovered {
                 chip = chip.child(
                     div()
-                        .size(pt(18.0))
+                        .size(pt(24.0))
                         .flex_none()
                         .flex()
                         .items_center()
@@ -373,7 +384,7 @@ pub(crate) fn bindable(
                             cx.stop_propagation();
                             cmds.push(Cmd { id: "variable.bind", params: Some(json!({ "field": field, "variable": Value::Null })) });
                         })
-                        .child(crate::widgets::icon::paint(Icon::Detach, rgba(t.text_secondary), 12.0)),
+                        .child(crate::widgets::icon::paint(Icon::Detach, rgba(t.text_secondary), 16.0)),
                 );
             }
             chip.into_any_element()

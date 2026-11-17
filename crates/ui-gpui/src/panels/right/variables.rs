@@ -1700,7 +1700,8 @@ impl VariablesEditor {
                 .overflow_hidden()
                 .text_size(pt(11.0))
                 .text_color(rgba(if is_sel { t.text } else { t.text_secondary }))
-                .bg(rgba(if is_sel { t.hover } else { t.panel }));
+                // 列选中与行选中同一底色（原来是 t.hover，比行选中浅）。
+                .bg(rgba(if is_sel { t.selected_row } else { t.panel }));
             cell = if renaming {
                 cell.child(VariablesEditor::ensure_mode_rename_field(&self.row_caches, &self.cmds, cx, &m.name, st, &c.id, &m.id))
             } else {
@@ -2002,9 +2003,15 @@ impl VariablesEditor {
         cx: &mut App,
     ) -> Div {
         let t = tokens();
-        let (selected, renaming, mode_ws, has_clip) = {
+        let (selected, renaming, mode_ws, has_clip, selected_mode) = {
             let s = st.borrow();
-            (s.selected.as_deref() == Some(r.id.as_str()), s.rename.as_deref() == Some(r.id.as_str()), s.mode_ws.clone(), s.clipboard.is_some())
+            (
+                s.selected.as_deref() == Some(r.id.as_str()),
+                s.rename.as_deref() == Some(r.id.as_str()),
+                s.mode_ws.clone(),
+                s.clipboard.is_some(),
+                s.selected_mode.clone(),
+            )
         };
         // 库变量 / 扩展集合里继承来的变量：不可拖拽、改名、删除。
         let movable = c.editable && !r.inherited;
@@ -2092,6 +2099,10 @@ impl VariablesEditor {
             let overridden = r.overrides.get(mi).copied().unwrap_or(false);
             let cw = mode_ws.get(mi).copied().unwrap_or(MODE_W);
             let mut cellbox = div().relative().flex_none().w(pt(cw)).h_full().flex().flex_row().items_center().gap(pt(4.0)).pl(pt(4.0)).pr(pt(8.0));
+            // 用户：列选中样式和行一样 —— 选中整列时，每行的值格都用 selected_row 底色。
+            if selected_mode.as_deref() == Some(m.id.as_str()) {
+                cellbox = cellbox.bg(rgba(t.selected_row));
+            }
             if overridden {
                 cellbox = cellbox.child(div().absolute().left(pt(4.0)).top(pt(8.0)).w(pt(2.0)).h(pt(24.0)).bg(rgba(t.accent)));
             }
@@ -2143,6 +2154,8 @@ impl VariablesEditor {
         let st = st.clone();
         let rid = rid.to_string();
         f.update(cx, move |tf, _| {
+            // 用户：变量名称/模式名称用无边框输入框。
+            tf.set_bare(true);
             tf.set_on_commit(move |text, _, _| {
                 let name = text.trim();
                 if !name.is_empty() {
@@ -2180,6 +2193,8 @@ impl VariablesEditor {
         let cid = cid.to_string();
         let mid = mid.to_string();
         f.update(cx, move |tf, _| {
+            // 用户：模式名称用无边框输入框。
+            tf.set_bare(true);
             tf.set_on_commit(move |text, _, _| {
                 let name = text.trim();
                 if !name.is_empty() {
@@ -2974,7 +2989,8 @@ fn kind_glyph(r: &VarRow) -> AnyElement {
                     _ => None,
                 })
                 .unwrap_or(Color32::GRAY);
-            div().flex_none().size(pt(14.0)).rounded(pt(3.0)).bg(rgba(c)).border_1().border_color(rgba(t.border)).into_any_element()
+            // 用户要求：变量名前的颜色图标用圆形（原来是小圆角方块）。
+            div().flex_none().size(pt(14.0)).rounded_full().bg(rgba(c)).border_1().border_color(rgba(t.border)).into_any_element()
         }
         VarKind::Number => div()
             .flex_none()
