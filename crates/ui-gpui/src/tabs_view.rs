@@ -242,6 +242,8 @@ pub(crate) fn tab_strip(
     window: &Window,
     docs: &[TabDoc],
     active: usize,
+    // 演示标签（eGUI `app.ui.presents`）：`(id, 显示名, 是否在屏)`，画在文件 tab 之后。
+    present_tabs: &[(u64, String, bool)],
     dark: bool,
     reduce_motion: bool,
     // 标题栏壳留给 TabBar 内容的宽度（已扣掉左留白与右侧窗口按钮）。
@@ -270,9 +272,16 @@ pub(crate) fn tab_strip(
     // 上游 `room = rect.max.x - buttons_w - 70 - x - 34`；`content_w` 已扣掉壳的两侧，
     // 于是等价 `content_w - 70 - home_w - 34`（新标签 / 主题 / 空白区留位）。
     let room = (content_w - 70.0 - home_w - 34.0).max(0.0);
+    // eGUI `tabs.rs:134-144`：present tabs 先分走 room（有文件 tab 时最多一半），
+    // 文件 tab 用剩下的 available。present tab 的排布独立算（active 是 present_active）。
+    let present_pref: Vec<f32> = present_tabs.iter().map(|(_, name, _)| crate::present::present_tab_width(name)).collect();
+    let present_room = present_pref.iter().sum::<f32>().min(if docs.is_empty() { room } else { room / 2.0 });
+    let present_layout = tab_layout(&present_pref, present_room, present_tabs.iter().position(|(_, _, on)| *on));
+    let present_used = present_layout.widths.iter().sum::<f32>() + if present_layout.overflow { OVERFLOW_WIDTH } else { 0.0 };
+    let available = (room - present_used).max(0.0);
     let preferred: Vec<f32> = docs.iter().map(|d| preferred_width(&d.name, d.live.visible(), d.dirty)).collect();
     let active_tab = docs.iter().position(|d| d.index == active);
-    let layout = tab_layout(&preferred, room, active_tab);
+    let layout = tab_layout(&preferred, available, active_tab);
 
     // Home 键（active / hover 底色 + 32pt 图标：图标本身等比放大，线宽在 SVG 里按比例
     // 退回去保持视觉粗细不变，用户 2026-11-16）。
@@ -518,8 +527,89 @@ pub(crate) fn tab_strip(
     for (_, el) in elements {
         layer = layer.child(el);
     }
+
+    // ── 演示标签（eGUI `tabs.rs:228-244`）：与文件标签同一套 body/close 结构，
+    // 画在同一个 `layer` 容器内、跟在文件标签之后（absolute left 相对 layer）。
+    {
+        let active_bg = if t.dark { t.hover } else { t.panel };
+        let mut px0 = tabs_x0 + tabs_w;
+        for (slot, &w) in present_layout.widths.iter().enumerate() {
+            let Some((tid, name, on_screen)) = present_tabs.get(present_layout.first + slot) else { break };
+            let (tid, name, on_screen) = (*tid, name.clone(), *on_screen);
+            let body_w = (w - 32.0 - 1.0).max(0.0);
+            let name = crate::bidi::fit(window, &name, 12.0, name_width(body_w));
+            let left = px0 - tabs_x0;
+
+            let me_switch = me.clone();
+            let body = div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .h_full()
+                .w(pt(body_w))
+                .min_w(pt(0.0))
+                .pl(pt(10.0))
+                .gap(pt(6.0))
+                .overflow_hidden()
+                .on_mouse_down(MouseButton::Left, move |_: &MouseDownEvent, _window, cx: &mut App| {
+                    me_switch.update(cx, |cv, cx| {
+                        cv.switch_present_tab(tid);
+                        cx.notify();
+                    });
+                })
+                .child(icon::paint(Icon::Play, rgba(t.accent), BAR_ICON))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(pt(0.0))
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_size(pt(12.0))
+                        .text_color(rgba(if on_screen { t.text } else { t.text_secondary }))
+                        .child(SharedString::from(name)),
+                );
+
+            let me_close = me.clone();
+            let close = div()
+                .flex_none()
+                .w(pt(32.0))
+                .h_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .hover(move |s| s.bg(rgba(t.pressed)))
+                .on_mouse_down(MouseButton::Left, move |_: &MouseDownEvent, _window, cx: &mut App| {
+                    me_close.update(cx, |cv, cx| {
+                        cv.close_present_tab(tid);
+                        cx.notify();
+                    });
+                    cx.stop_propagation();
+                })
+                .child(icon::paint(Icon::Close, rgba(t.text_secondary), CLOSE_ICON));
+
+            let hover = t.hover;
+            let tab = div()
+                .absolute()
+                .left(px(left))
+                .top(pt(0.0))
+                .w(pt(w))
+                .h_full()
+                .flex()
+                .flex_row()
+                .items_center()
+                .border_r_1()
+                .border_color(rgba(t.border))
+                .when(on_screen, move |d| d.bg(rgba(active_bg)))
+                .when(!on_screen, move |d| d.hover(move |s| s.bg(rgba(hover))))
+                .child(body)
+                .child(close);
+            layer = layer.child(tab);
+            px0 += w;
+        }
+    }
+
     strip = strip.child(layer);
-    x = tabs_x0 + tabs_w;
+    x = tabs_x0 + tabs_w + present_used;
 
     // 溢出 chevron + 菜单（菜单的防溢出 / 400pt 内部滚动由通用 `menu_popup_in` 负责）。
     if layout.overflow {

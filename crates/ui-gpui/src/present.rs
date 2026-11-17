@@ -47,6 +47,30 @@ fn apply_animation_op(op: AnimationOp, cur: MotionClock, at_ms: f64, dur_ms: f64
     }
 }
 
+/// 编辑器标签栏里的演示标签（eGUI `present::chrome::PresentTab`）：每个演示独占一个 tab，
+/// 切回设计文件保留播放器状态。GPUI 侧只保留标签栏所需的元数据，播放器状态在 `PresentState`。
+#[derive(Clone, Debug)]
+pub struct PresentTab {
+    pub id: u64,
+    pub uid: u64,
+    pub path: Option<String>,
+    pub page: NodeId,
+    pub file: String,
+    pub page_name: String,
+}
+
+impl PresentTab {
+    /// `file - page`，页面无名时只用文件名（eGUI `present_tab_name`）。
+    pub fn name(&self) -> String {
+        if self.page_name.is_empty() { self.file.clone() } else { format!("{} - {}", self.file, self.page_name) }
+    }
+}
+
+/// 标签宽度：`clamp(140, 260)`（eGUI `present_tab_width` 的 GPUI 近似，12pt 字）。
+pub fn present_tab_width(name: &str) -> f32 {
+    (12.0 * 0.6 * name.chars().count() as f32 + 64.0).clamp(140.0, 260.0)
+}
+
 /// 一次演示的运行时状态。
 #[derive(Clone, Debug)]
 pub struct PresentState {
@@ -449,7 +473,14 @@ pub fn render(app: &CanvasApp, state: &PresentState) -> Stateful<Div> {
             .text_size(pt(12.0))
             .text_color(rgba(if enabled { t.text } else { t.text_secondary }))
             .cursor_pointer()
-            .on_mouse_down(MouseButton::Left, move |_, _, _| if enabled { ACTION.with(|a| a.set(action)) })
+            .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                // nav 是 stage 的子元素：不拦冒泡就会被 stage 当成"点画面"执行热点交互
+                // （表现：点上一帧/下一帧却弹出画布上的工具栏）。
+                cx.stop_propagation();
+                if enabled {
+                    ACTION.with(|a| a.set(action));
+                }
+            })
             .child(label)
     };
     let nav = if state.hide_ui {
@@ -476,6 +507,7 @@ pub fn render(app: &CanvasApp, state: &PresentState) -> Stateful<Div> {
                     .bg(rgba(t.panel))
                     .border_1()
                     .border_color(rgba(t.border))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .child(nav_btn(SharedString::from("‹"), 8, has_prev))
                     .child(
                         div()

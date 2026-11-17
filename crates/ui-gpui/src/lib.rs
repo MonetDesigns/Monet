@@ -666,6 +666,12 @@ pub struct PaneState {
 
     /// 原型演示（None = 未打开）。
     present: Option<present::PresentState>,
+    /// 演示标签栏（eGUI `app.ui.presents`）：每个演示一个 tab，切回设计保留播放器状态。
+    present_tabs: Vec<present::PresentTab>,
+    /// 当前在屏的演示 tab id。
+    present_active: Option<u64>,
+    /// 下一个演示 tab id（单调递增，不自增复用 eGUI `present_next`）。
+    present_next: u64,
 
     /// 左面板控件树（Layers）的展开 / 选中 / 拖动状态。
     layer_tree: layer_tree::LayerTreeState,
@@ -1169,6 +1175,9 @@ impl CanvasView {
             dialog: None,
 
             present: None,
+            present_tabs: Vec::new(),
+            present_active: None,
+            present_next: 1,
 
             layer_tree: layer_tree::LayerTreeState::default(),
 
@@ -1924,11 +1933,40 @@ impl CanvasView {
                     let id = start.or_else(|| self.app.session.ds().ok().and_then(|ds| ds.doc.top_frames(ds.page).into_iter().next()));
 
                     if let Some(id) = id {
+                        // eGUI `present::chrome::open_present`：同 page 的 tab 复用，否则新建一个，
+                        // 名字取 `file - page`。切回设计（present=None）时 tab 仍在标签栏。
+                        let (uid, path, file, page, page_name) = self
+                            .app
+                            .session
+                            .ds()
+                            .map(|ds| {
+                                let page = ds.doc.page_of(id).unwrap_or(ds.page);
+                                let page_name = ds.doc.node(page).map(|n| n.name.clone()).unwrap_or_default();
+                                (ds.uid, ds.path.clone(), ds.doc.name.clone(), page, page_name)
+                            })
+                            .unwrap_or((0, None, String::new(), id, String::new()));
+                        let same = self
+                            .present_tabs
+                            .iter()
+                            .find(|t| t.page == page && (t.uid == uid || (path.is_some() && t.path == path)))
+                            .map(|t| t.id);
+                        let tab_id = if let Some(tid) = same {
+                            tid
+                        } else {
+                            let tid = self.present_next;
+                            self.present_next += 1;
+                            self.present_tabs.push(present::PresentTab { id: tid, uid, path, page, file, page_name });
+                            tid
+                        };
+                        self.present_active = Some(tab_id);
                         self.present = Some(present::PresentState::new(id, preview));
                     }
                 }
 
-                panels::extra::UiAction::PreviewClose => self.present = None,
+                panels::extra::UiAction::PreviewClose => {
+                    // eGUI：退出演示只把播放器收起来，tab 保留在标签栏（下次点它恢复）。
+                    self.present = None;
+                }
             }
         }
     }
@@ -2077,6 +2115,29 @@ impl CanvasView {
     }
 
     /// Show the Home screen (the tab strip's Home button): the Home panel plus the tab state.
+    /// 点演示 tab：切到该演示（eGUI `show_present`）。播放器状态在切走时收进 tab，切回时恢复。
+    pub(crate) fn switch_present_tab(&mut self, id: u64) {
+        if self.present_active == Some(id) {
+            return;
+        }
+        self.present_active = Some(id);
+        self.tabs.home = false;
+        // GPUI 侧只保留一个在屏播放器：切 tab 时用它重建，保留 tab 上的页面（暂不保留播放头）。
+        if let Some(tab) = self.present_tabs.iter().find(|t| t.id == id) {
+            let start = tab.page;
+            self.present = Some(present::PresentState::new(start, false));
+        }
+    }
+
+    /// 关演示 tab：从标签栏移除；若关的是在屏的，退出演示（eGUI `close_present`）。
+    pub(crate) fn close_present_tab(&mut self, id: u64) {
+        self.present_tabs.retain(|t| t.id != id);
+        if self.present_active == Some(id) {
+            self.present = None;
+            self.present_active = self.present_tabs.last().map(|t| t.id);
+        }
+    }
+
     pub(crate) fn show_home(&mut self) {
         self.tabs.home = true;
 
@@ -6600,12 +6661,29 @@ impl Render for CanvasView {
         let tabs_active = self.app.session.active;
         let tabs_dark = self.app.theme.dark;
         let tabs_reduce_motion = self.app.session.prefs.reduce_motion;
+        // 演示 tab（eGUI `app.ui.presents`）：`(id, file - page, 是否在屏)`。
+        let present_tabs: Vec<(u64, String, bool)> = self
+            .present_tabs
+            .iter()
+            .map(|t| (t.id, t.name(), Some(t.id) == self.present_active && self.present.is_some()))
+            .collect();
         let viewport_w = f32::from(vp.width);
         let content_w = title_bar::content_width(viewport_w);
         let tabs_cmds = self.fields.queue();
         let tabs_me = cx.entity();
         let tab_bar = title_bar::title_bar(
-            tabs_view::tab_strip(&mut self.tabs, window, &tab_docs, tabs_active, tabs_dark, tabs_reduce_motion, content_w, &tabs_cmds, &tabs_me),
+            tabs_view::tab_strip(
+                &mut self.tabs,
+                window,
+                &tab_docs,
+                tabs_active,
+                &present_tabs,
+                tabs_dark,
+                tabs_reduce_motion,
+                content_w,
+                &tabs_cmds,
+                &tabs_me,
+            ),
             window.is_maximized(),
         );
 
