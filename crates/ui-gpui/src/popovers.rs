@@ -4603,10 +4603,10 @@ impl WindowState {
         self.viewport = viewport;
         // 变量编辑器把拖动绑在**自己的头部左侧**（不是整张卡片），所以要把回调传进 body。
         self.drag_start = Some(drag.clone());
-        let open = anchored_open(self.open, right_edge, self.exact_top);
         // Full 呈现：egui 的 `variables_panel::full(panel)` —— 只占「面板 + 画布」那块（左侧 rail
         // 保留），`Frame::NONE` 贴边铺满；Floating 用构造时的宽高与拖拽位置。
         let full = self.kind == WindowKind::VariablesTable && self.variables_full();
+        let open = anchored_open(self.open, right_edge, self.exact_top);
         // 取色器的高度跟着内容走（纯色 ↔ 渐变、色板行数）。必须在读 `self.height` 之前算，
         // 否则切换模式的当帧卡片会短一截、下一帧才补上。
         if self.kind == WindowKind::Color {
@@ -4661,8 +4661,25 @@ impl WindowState {
         // 定位只做一次：`measured_h` 会在下一帧把 `height` 修正成真实高度，若每帧重新
         // `open_pos` / `clamp`，卡片就会在那一帧跳一下（鼠标一动才重绘 → 看起来像「刷新」）。
         // 钉住原点，除非用户拖动（`at` = `place`）或视口尺寸变了。
-        let pinned = self.placed_once && at.is_none() && !viewport_changed;
+        //
+        // ⚠️ 但要等**真实高度量到之后**才能钉：首帧 `height` 还是构造期估算（样式窗估 320，
+        // 实际约 150），拿它去 `open_pos` 判断「底部溢出」会误判 → 窗口被抬到按钮上方；
+        // 若这一帧就 pin 住，错误位置就永久固化。固定高的窗口（字体窗）`height` 本身就是
+        // 真值，不受此约束。量到真高后 `height` 已是真实值，此时钉住才正确。
+        let height_measured = self.fixed_height() || self.measured_h.get() > 0.0;
+        let pinned = self.placed_once && at.is_none() && !viewport_changed && height_measured;
         let prev_origin = self.origin;
+        // 首帧还没量到真实高度：不要用估算高度走 `open_pos` 的溢出抬升（会把卡片冤枉地
+        // 顶到按钮上方）。直接把卡片右上角放在锚点上 —— 顶部严格对齐按钮、右缘贴面板，
+        // 与 EGUI「top on y, right edge on x」一致；是否真的溢出留给量到真高后判断。
+        let open = if at.is_none() && !self.fixed_height() && self.measured_h.get() <= 0.0 {
+            match open {
+                Open::Anchor(a) => Open::At(Point { x: px(f32::from(a.x) - width), y: a.y }),
+                other => other,
+            }
+        } else {
+            open
+        };
         let mut probe = popover_window(open).width(width).pad(pad).flush(full).height(height);
         if let Some(p) = at {
             probe = probe.at(p);
@@ -4705,7 +4722,8 @@ impl WindowState {
         }
         let (origin, card) = pop.show(viewport, dismiss);
         self.origin = origin;
-        self.placed_once = true;
+        // 只有拿真实高度定位过，才算「定位完成」可以钉住；首帧用估算高度的位置不能钉。
+        self.placed_once = height_measured;
         // 菜单卡片与浮层卡片同挂窗口根（els），所以菜单用窗口坐标，不被浮层的滚动裁剪。
         let mut els = vec![card];
         els.extend(self.overlays.borrow_mut().drain(..));
