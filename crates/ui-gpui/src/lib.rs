@@ -1247,7 +1247,7 @@ impl CanvasView {
 
                 "variables" => Some(popovers::WindowState::variables(queue, cx, anchor, rows)),
 
-                "styles" => Some(popovers::WindowState::styles(queue, cx, anchor, tr("Text styles"), rows)),
+                "styles" => Some(popovers::WindowState::styles(queue, cx, anchor, tr("Text styles"), "text", rows)),
 
                 // 变量编辑器右侧列表：文档里没有变量时用合成数据，方便核对表格外观。
                 "variables_table" | "variables_table_full" => {

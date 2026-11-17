@@ -340,8 +340,9 @@ pub(crate) fn bindable(
             let queue = f.queue();
             let list: Vec<String> = vars.to_vec();
             let cmds = f.cmds.clone();
-            let hit = Rc::new(Cell::new(None));
-            let hit_click = hit.clone();
+            let bind_key = format!("bind-{field}");
+            let hit = crate::popovers::window_trigger_top(&bind_key);
+            let anchor_key = bind_key.clone();
             let mut chip = div()
                 .w_full()
                 .h(pt(crate::widgets::FIELD_H))
@@ -363,14 +364,14 @@ pub(crate) fn bindable(
                         .iter()
                         .map(|v| (v.clone(), "variable.bind", json!({ "field": field, "variable": v })))
                         .collect::<Vec<(String, &'static str, Value)>>();
-                    let top = crate::popovers::button_top(&hit_click, window);
+                    let top = crate::popovers::anchored_top(&anchor_key, window);
                     open_list_window_at(
                         popups.clone(),
                         queue.clone(),
                         cx,
                         window.mouse_position(),
                         Some(top),
-                        format!("bind-{field}"),
+                        bind_key.clone(),
                         ListWindow::Variables,
                         SharedString::from(tr("Variables")),
                         rows,
@@ -404,8 +405,9 @@ pub(crate) fn bindable(
                 let popups = f.popups();
                 let queue = f.queue();
                 let list: Vec<String> = vars.to_vec();
-                let hit = Rc::new(Cell::new(None));
-                let hit_click = hit.clone();
+                let bind_key = format!("bind-{field}");
+                let hit = crate::popovers::window_trigger_top(&bind_key);
+                let anchor_key = bind_key.clone();
                 cell = cell.child(crate::popovers::with_absolute_bounds(
                     div()
                         .absolute()
@@ -423,14 +425,14 @@ pub(crate) fn bindable(
                                 .iter()
                                 .map(|v| (v.clone(), "variable.bind", json!({ "field": field, "variable": v })))
                                 .collect::<Vec<(String, &'static str, Value)>>();
-                            let top = crate::popovers::button_top(&hit_click, window);
+                            let top = crate::popovers::anchored_top(&anchor_key, window);
                             open_list_window_at(
                                 popups.clone(),
                                 queue.clone(),
                                 cx,
                                 window.mouse_position(),
                                 Some(top),
-                                format!("bind-{field}"),
+                                bind_key.clone(),
                                 ListWindow::Variables,
                                 SharedString::from(tr("Variables")),
                                 rows,
@@ -649,7 +651,9 @@ pub(crate) fn open_detached(
 #[derive(Clone, Copy)]
 enum ListWindow {
     Variables,
-    Styles,
+    /// 样式窗口：携带 slot 类型（`text`/`paint`/`effect`/`grid`），决定标题栏「新建样式」
+    /// 推的 `style.create {type}` 与默认名（egui `StyleSlot::create_type/default_name`）。
+    Styles(&'static str),
 }
 
 fn open_list_window(
@@ -679,7 +683,7 @@ fn open_list_window_at(
 ) {
     let trail = match kind {
         ListWindow::Variables => tr("Variable"),
-        ListWindow::Styles => tr("Style"),
+        ListWindow::Styles(_) => tr("Style"),
     };
     let list: Vec<crate::popovers::Row> =
         rows.into_iter().map(|(label, cmd, params)| crate::popovers::Row::new(label, cmd, params).group(tr("This file")).trail(trail)).collect();
@@ -689,7 +693,9 @@ fn open_list_window_at(
     let top = exact_top.or(Some(anchor.y));
     open_detached_with(popups, trigger, top, cx, |anchor, cx| match kind {
         ListWindow::Variables => crate::popovers::WindowState::variables(queue, cx, anchor, list),
-        ListWindow::Styles => crate::popovers::WindowState::styles(queue, cx, anchor, title, list),
+        // 四类样式窗口（Color/Effect/Grid/Text）是**同一类**弹窗（egui `style_picker::open`），
+        // 只有 slot 类型不同；它决定标题栏「新建样式」的 `style.create {type}` 与默认名。
+        ListWindow::Styles(ty) => crate::popovers::WindowState::styles(queue, cx, anchor, title, ty, list),
     });
 }
 
@@ -705,11 +711,9 @@ fn variables_window_button(
     let root = f.popups();
     let queue = f.queue();
     let active = root.is_open(trigger);
-    let hit = Rc::new(Cell::new(None));
-    let hit_click = hit.clone();
-    crate::popovers::with_button_bounds(
+    crate::popovers::with_window_trigger(
         IconButton::new(icon).size(24.0).active(active).on_click(move |_e, window, cx: &mut App| {
-            let top = crate::popovers::button_top(&hit_click, window);
+            let top = crate::popovers::anchored_top(trigger, window);
             open_list_window_at(
                 root.clone(),
                 queue.clone(),
@@ -722,7 +726,7 @@ fn variables_window_button(
                 rows.clone(),
             );
         }),
-        hit,
+        trigger,
     )
 }
 
@@ -769,11 +773,10 @@ fn style_menu(f: &RightFields, d: &PanelData, ty: &'static str, target: Option<&
         None => format!("styles-{ty}"),
     };
     let active = root.is_open(&trigger);
-    let hit = Rc::new(Cell::new(None));
-    let hit_click = hit.clone();
-    crate::popovers::with_button_bounds(
+    let probe_key = trigger.clone();
+    crate::popovers::with_window_trigger(
         IconButton::new(icon).size(24.0).active(active).on_click(move |_e, window, cx: &mut App| {
-            let top = crate::popovers::button_top(&hit_click, window);
+            let top = crate::popovers::anchored_top(&trigger, window);
             open_list_window_at(
                 root.clone(),
                 queue.clone(),
@@ -781,12 +784,12 @@ fn style_menu(f: &RightFields, d: &PanelData, ty: &'static str, target: Option<&
                 window.mouse_position(),
                 Some(top),
                 trigger.clone(),
-                ListWindow::Styles,
+                ListWindow::Styles(ty),
                 SharedString::from(title),
                 rows.clone(),
             );
         }),
-        hit,
+        &probe_key,
     )
 }
 
@@ -911,10 +914,11 @@ fn color_pick(
 ) -> (ColorField, Rc<Cell<Option<Bounds<Pixels>>>>) {
     let popups = f.popups();
     let cmds = f.cmds.clone();
-    let hit = Rc::new(Cell::new(None));
-    let hit_click = hit.clone();
+    // 跨帧稳定探针：色块每帧重建，cell 必须按 trigger 存活，否则点下去那一帧量不到顶部。
+    let hit = crate::popovers::window_trigger_top(&trigger);
+    let anchor_key = trigger.clone();
     let cf = cf.on_swatch(move |pos: Point<Pixels>, window, cx: &mut App| {
-        let top = crate::popovers::button_top(&hit_click, window);
+        let top = crate::popovers::anchored_top(&anchor_key, window);
         let on_pick = Rc::new({
             let cmds = cmds.clone();
             let params = params.clone();
@@ -1149,19 +1153,17 @@ pub(crate) fn paints(
             let popups = f.popups();
             let stroke_queue = f.queue();
             let stroke_data = d.clone();
-            let dots_hit = Rc::new(Cell::new(None));
-            let dots_click = dots_hit.clone();
-            let dots = crate::popovers::with_button_bounds(
+            let dots = crate::popovers::with_window_trigger(
                 IconButton::new(Icon::Menu)
                     .size(24.0)
                     .active(popups.is_open("stroke"))
                     .on_click(move |_e, window, cx: &mut App| {
-                        let top = crate::popovers::button_top(&dots_click, window);
+                        let top = crate::popovers::anchored_top("stroke", window);
                         open_detached_with(popups.clone(), "stroke", Some(top), cx, |anchor, cx| {
                             crate::popovers::WindowState::stroke(stroke_queue.clone(), &stroke_data, cx, anchor)
                         });
                     }),
-                dots_hit,
+                "stroke",
             );
             // 第二行 = 描边对齐下拉 + **线宽字段** + 独立边宽 + 高级描边（egui `paints.rs`:
             // `dropdown(align, half)` 之后紧跟 `number_field_mixed("strokeWeight", …, weight_w)`）。
@@ -1857,46 +1859,35 @@ pub(crate) fn clip_content(f: &RightFields, d: &PanelData) -> crate::widgets::pa
     field_row_full(cb)
 }
 
-/// 「Corner smoothing」入口的显隐规则：只取决于类型是否支持。
-/// 用户反馈：圆角为 0 时这颗 ◇ 被隐藏，「平滑圆角的设置跑哪去了 / 圆角半径展不开」。
-/// 现在只要类型支持就常显，圆角为 0 也能先设好平滑值。
+/// 圆角展开区的显隐规则（egui `paints.rs::appearance`：`smooth_ok && indep_corners_open`）：
+/// 只看类型是否支持平滑圆角（`smooth_ok`），与半径数值无关 —— 半径为 0 也能先设平滑值。
+/// 注意**折叠态不显示展开区**——这正是「圆角折叠时不该显示平滑按钮」的修复点。
 pub(crate) fn shows_corner_smoothing(supported: bool, _radius: f64) -> bool {
     supported
 }
 
-/// 圆角行尾的「Corner smoothing」小按钮：打开 `WindowState::corner_smoothing` 小窗。
+/// 圆角展开区里的「Corner smoothing」按钮：打开 `WindowState::corner_smoothing` 小窗。
 ///
-/// 冻结的 `Icon` 集里没有平滑圆角字形（Type settings 的同类入口也因缺图标改用 `Icon::Menu`），
-/// 这里按约定用文本字形 `◇` 自绘一个 24 pt 小按钮，不新增图标、不另造控件。
+/// 这是通用 24×24 图标按钮（与右栏其它开窗按钮完全同款），不再手写 `◇` div + 自绘背景；
+/// 锚点走 [`crate::popovers::with_window_trigger`] 的跨帧探针，按下即与按钮顶部对齐。
+/// 冻结的 `Icon` 集没有平滑圆角字形（type settings 的同类入口也因缺图标用 `Icon::Menu`），
+/// 故沿用同一个约定用 `Icon::Menu`，不新增字形、不另造控件。
 fn corner_smoothing_button(f: &RightFields, d: &PanelData) -> gpui::AnyElement {
-    let t = tokens();
     let popups = f.popups();
     let queue = f.queue();
     let value = d.corner_smoothing.unwrap_or(0.0) as f32;
     let open = popups.is_open("corner-smoothing");
-    let hit = Rc::new(Cell::new(None));
-    let hit_click = hit.clone();
-    crate::popovers::with_button_bounds(
-        div()
-            .size(pt(24.0))
-            .flex_none()
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(pt(4.0))
-            .text_size(pt(12.0))
-            .text_color(rgba(if open { t.accent } else { t.text_secondary }))
-            .when(open, |d| d.bg(rgba(t.selected_row)))
-            .cursor_pointer()
-            .hover(|s| s.bg(rgba(t.hover)))
-            .on_mouse_down(MouseButton::Left, move |_e: &MouseDownEvent, window, cx: &mut App| {
-                let top = crate::popovers::button_top(&hit_click, window);
+    crate::popovers::with_window_trigger(
+        IconButton::new(Icon::Menu)
+            .size(24.0)
+            .active(open)
+            .on_click(move |_e, window, cx: &mut App| {
+                let top = crate::popovers::anchored_top("corner-smoothing", window);
                 open_detached_with(popups.clone(), "corner-smoothing", Some(top), cx, |anchor, _cx| {
                     crate::popovers::WindowState::corner_smoothing(queue.clone(), value, anchor)
                 });
-            })
-            .child("◇"),
-        hit,
+            }),
+        "corner-smoothing",
     )
 }
 
@@ -1928,8 +1919,13 @@ pub(crate) fn appearance(
     // egui `right.rs::appearance`：Opacity 与 Corner radius 同一行；圆角字段**后面**紧跟一颗
     // 24 pt「Individual corners」开关（`indep_ok` 才出现），展开后是两行四个独立圆角字段，
     // 第二行行尾才是「Corner smoothing」按钮（点开通用小窗）。
+    // egui `paints.rs::appearance`：圆角行尾那颗 24 pt 开关的条件是 `smooth_ok`（不是 indep_ok），
+    // 点它翻转 `indep_corners` 展开态；展开区才画四个独立圆角字段与 Corner smoothing。
+    // 之前这里用 `corners_independent` 当条件，又给 Polygon/Star 在折叠态补画一颗平滑按钮，
+    // 于是「折叠时平滑按钮还在」——改成一颗通用按钮控制展开，按钮本身不打开任何弹窗。
+    let smooth_ok = shows_corner_smoothing(d.corner_smoothing_supported, d.corner_radius);
     let indep_open = *f.corners_individual.borrow();
-    let indep_toggle = if d.corners_independent {
+    let indep_toggle = if smooth_ok {
         let flag = f.corners_individual.clone();
         let cmds = f.cmds.clone();
         Some(IconButton::new(Icon::AbsolutePosition).size(24.0).active(indep_open).on_click(move |_e, _w, _cx| {
@@ -1956,22 +1952,17 @@ pub(crate) fn appearance(
             ],
             corner_row_trail,
         ));
-    // 展开态：TL/TR 一行，BL/BR 一行；平滑圆角按钮在第二行行尾（egui 同序）。
-    if indep_open && d.corners_independent {
-        sec = sec
-            .child(field_row(vec![f.corner_tl.clone(), f.corner_tr.clone()], Vec::<IconButton>::new()))
-            .child(field_row(vec![f.corner_bl.clone(), f.corner_br.clone()], {
-                let mut trail: Vec<gpui::AnyElement> = Vec::new();
-                if shows_corner_smoothing(d.corner_smoothing_supported, d.corner_radius) {
-                    trail.push(corner_smoothing_button(f, d));
-                }
-                trail
-            }));
-    } else if shows_corner_smoothing(d.corner_smoothing_supported, d.corner_radius) {
-        // Polygon / Star 支持圆角平滑但 `corners_independent == false`，矩形也要展开独立
-        // 圆角才有那一行。此前 smoothing 按钮被 `indep_open && corners_independent` 整个
-        // guard 挡住，这些类型永远点不到（CodeRabbit PR#28）。收起态单独给它一行。
-        sec = sec.child(field_row(Vec::<gpui::AnyElement>::new(), vec![corner_smoothing_button(f, d).into_any_element()]));
+    // 展开区（egui 同序）：四个独立圆角字段（仅 indep_ok 的类型画，egui 的
+    // `chunks(2).filter(|_| indep_ok)`）+ 平滑圆角按钮。折叠时整块不画——平滑按钮随之隐藏。
+    if indep_open && smooth_ok {
+        if d.corners_independent {
+            sec = sec
+                .child(field_row(vec![f.corner_tl.clone(), f.corner_tr.clone()], Vec::<IconButton>::new()))
+                .child(field_row(vec![f.corner_bl.clone(), f.corner_br.clone()], vec![corner_smoothing_button(f, d).into_any_element()]));
+        } else {
+            // Polygon / Star 支持平滑但没有四个独立圆角字段：展开区里只留一行平滑按钮。
+            sec = sec.child(field_row(Vec::<gpui::AnyElement>::new(), vec![corner_smoothing_button(f, d).into_any_element()]));
+        }
     }
     // 用户：外观的混合模式是一个「选了才加进来的条目」——header 图标点开先给下拉选，
     // 选中后出现一行 dropdown + 右侧 24pt 网格里的减号，减号清除回 Normal 并收起这一行。
@@ -2111,16 +2102,14 @@ fn type_settings_button(f: &RightFields, d: &PanelData) -> gpui::AnyElement {
     let queue = f.queue();
     let text = d.text.clone().unwrap_or_default();
     let open = popups.is_open("type-settings");
-    let hit = Rc::new(Cell::new(None));
-    let hit_click = hit.clone();
-    crate::popovers::with_button_bounds(
+    crate::popovers::with_window_trigger(
         IconButton::new(Icon::Menu).size(24.0).active(open).on_click(move |_e, window, cx: &mut App| {
-            let top = crate::popovers::button_top(&hit_click, window);
+            let top = crate::popovers::anchored_top("type-settings", window);
             open_detached_with(popups.clone(), "type-settings", Some(top), cx, |anchor, cx| {
                 crate::popovers::WindowState::type_settings(queue.clone(), &text, cx, anchor)
             });
         }),
-        hit,
+        "type-settings",
     )
 }
 
@@ -3775,23 +3764,25 @@ fn local_style_row(
         "effect" => tr("Edit effect style"),
         _ => tr("Edit grid style"),
     });
-    // 触发按钮在 prepaint 把自身 top 写进这个 cell；右键菜单那条路径没有按钮，留空走旧近似。
-    let editor_hit: Rc<Cell<Option<Bounds<Pixels>>>> = Rc::new(Cell::new(None));
+    // 跨帧稳定探针：触发按钮在 prepaint 把自身 top 写进这个 cell；右键菜单那条路径没有按钮，
+    // 留空走旧近似（anchored_top 的兜底）。
+    let editor_trigger = format!("style-editor-{}", s.id);
+    let editor_hit: Rc<Cell<Option<Bounds<Pixels>>>> = crate::popovers::window_trigger_top(&editor_trigger);
     let open_editor: Rc<dyn Fn(&mut Window, &mut App)> = {
         let popups = f.popups();
         let cmds = cmds.clone();
         let title = edit_title.clone();
+        let editor_key = editor_trigger.clone();
         let (id, full, desc) = (s.id.clone(), s.name.clone(), s.description.clone());
         let props = s.properties.clone();
         let ps = s.paints.clone();
         let stext = s.text.clone();
         let seff = s.effects.clone();
         let sgrid = s.grids.clone();
-        let hit = editor_hit.clone();
-        Rc::new(move |_window: &mut Window, cx: &mut App| {
-            // 统一入口：精确顶部（探针）+ 触发标识 + 再点关闭。
-            let top = hit.get().map(|b| b.origin.y);
-            open_detached_with(popups.clone(), format!("style-editor-{id}"), top, cx, |anchor, cx| {
+        Rc::new(move |window: &mut Window, cx: &mut App| {
+            // 统一入口：跨帧探针精确顶部 + 触发标识 + 再点关闭。
+            let top = crate::popovers::anchored_top(&editor_key, window);
+            open_detached_with(popups.clone(), editor_trigger.clone(), Some(top), cx, |anchor, cx| {
                 crate::popovers::WindowState::style_editor(
                     cmds.clone(),
                     cx,

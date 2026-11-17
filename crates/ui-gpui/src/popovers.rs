@@ -26,11 +26,39 @@ use gpui::{
 };
 use serde_json::{Value, json};
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 /// Half of a 24 pt icon button. Callers hand us the press point; the placement rule wants the
 /// button's top (`ui-egui/src/popover.rs`: "its top on `y` (the button's top)").
 const BUTTON_HALF: f32 = 12.0;
+
+thread_local! {
+    /// 开窗触发按钮的**跨帧稳定**矩形（与 `widgets::dropdown::ANCHORS` 同构）。
+    ///
+    /// 右栏每帧重建元素树，按钮上挂的 `bounds_probe` cell 也每帧新建。于是「点下去那一帧」
+    /// 读到的往往是**还没被 prepaint 写入的空 cell**，`button_top` 只能退回鼠标位置 − 12：
+    /// 这就是「第一次打开窗口顶部没对齐按钮、鼠标移开刷新后才到位」的根因。
+    ///
+    /// 按稳定 key 注册：按钮每帧 prepaint 写同一个 cell，点击时读到的永远是**上一帧量到的
+    /// 真实按钮顶部**。键用触发按钮的 trigger（每个开窗按钮唯一且跨帧不变）。
+    static WINDOW_TRIGGER_TOPS: RefCell<HashMap<String, Rc<Cell<Option<Bounds<Pixels>>>>>> =
+        RefCell::new(HashMap::new());
+}
+
+/// 取（或建）某开窗触发按钮的跨帧矩形句柄。同一 key 永远返回同一个 `Rc<Cell>`。
+pub(crate) fn window_trigger_top(key: &str) -> Rc<Cell<Option<Bounds<Pixels>>>> {
+    WINDOW_TRIGGER_TOPS.with(|m| m.borrow_mut().entry(key.to_string()).or_insert_with(|| Rc::new(Cell::new(None))).clone())
+}
+
+/// 开窗触发按钮**此刻**的窗口 y 顶部。优先用跨帧探针量到的真实矩形；首次绘制前探针为空时
+/// 才退回按点按位置估算（这是最后一帧兜底，正常情况下永远走不到）。
+///
+/// 所有右栏开窗按钮都通过这里取顶部 —— 这是唯一入口，所以「按下即对位」是全局保证，
+/// 不再需要「同一帧禁掉第二次刷新」这种掩盖症状的 hack。
+pub(crate) fn anchored_top(key: &str, window: &Window) -> Pixels {
+    window_trigger_top(key).get().map(|b| b.origin.y).unwrap_or_else(|| window.mouse_position().y - px(BUTTON_HALF))
+}
 
 /// 变量 / 文本样式列表的最大可见高度（超出滚动）。必须是常量：从 `body_h` 派生会被
 /// `measured_h` 的「量到多少就多高」反馈放大，每帧长一截。
@@ -629,6 +657,10 @@ pub(crate) struct WindowState {
     color: Option<ColorState>,
     /// 本地样式编辑器（egui `style_picker::editor`）的正文状态：两个输入框 + 属性行。
     style_edit: Option<StyleEditState>,
+    /// 样式选择窗口（WindowKind::TextStyles）的 slot 类型：`text`/`paint`/`effect`/`grid`。
+    /// 标题栏「+」按它推 `style.create {type}` 与默认名 —— egui `StyleSlot::create_type/default_name`。
+    /// 四类样式窗口是同一类弹窗，只有这个值不同。
+    style_create_ty: &'static str,
     /// 完整变量编辑器（只有 `VariablesTable` 用）：持有只读快照 + retained 交互状态。
     /// 延迟到 `body_element` 才创建 —— 那里才拿得到 `&mut App` 来建搜索框 / 值输入框。
     editor: Option<VariablesEditor>,
@@ -773,6 +805,7 @@ impl WindowState {
             query: Rc::new(RefCell::new(String::new())),
             color: None,
             style_edit: None,
+            style_create_ty: "text",
             editor: None,
             variables_data: None,
             editor_full: None,
@@ -1581,13 +1614,23 @@ impl WindowState {
         self.editor.as_ref().is_some_and(|e| e.key(key, accel))
     }
 
-    // ── ⑥ 文本样式选择弹窗（egui `widgets/style_picker.rs`, 标题 "Text styles"）───────────────
-    pub(crate) fn styles(cmds: Cmds, cx: &mut App, anchor: Point<Pixels>, title: impl Into<SharedString>, rows: Vec<Row>) -> Self {
+    // ── ⑥ 样式选择弹窗（egui `widgets/style_picker.rs`：Color/Effect/Grid/Text 共用一类窗口）──
+    /// `ty` 是 slot 类型（`text`/`paint`/`effect`/`grid`），只影响标题栏「新建样式」推的
+    /// `style.create {type}` 与默认名；四类窗口的正文（搜索 + 列表 + 筛选）完全一致。
+    pub(crate) fn styles(
+        cmds: Cmds,
+        cx: &mut App,
+        anchor: Point<Pixels>,
+        title: impl Into<SharedString>,
+        ty: &'static str,
+        rows: Vec<Row>,
+    ) -> Self {
         let mut w = Self::base(WindowKind::TextStyles, title, cmds, Open::Anchor(anchor));
         w.surface = Surface::Menu;
         w.pad = 8.0;
         w.height = 320.0;
         w.rows = rows;
+        w.style_create_ty = ty;
         w.add_search(cx, "Search styles");
         w
     }
@@ -2379,8 +2422,20 @@ impl WindowState {
                     .into_any_element()
             }
             // A custom title with a live control: create a style straight from the header.
+            // egui `style_picker::open`：四个 slot 共用一类窗口，「+」按 slot 决定 create_type
+            // 与默认名（StyleSlot::create_type/default_name）。之前硬编码 text，导致填充/描边/
+            // 效果/网格窗口里点「+」都建成文本样式 —— 这里按 slot 恢复各自的类型。
             WindowKind::TextStyles => {
                 let cmds = self.cmds.clone();
+                let ty = self.style_create_ty;
+                // 默认名沿用 EGUI `StyleSlot::default_name` 的基础词；这些键 i18n 已存在，
+                // 引擎会在同名时自动加序号（Color 1 / Color 2…）。
+                let (create_type, default_name) = match ty {
+                    "paint" => ("paint", tr("Color")),
+                    "effect" => ("effect", tr("Effect styles")),
+                    "grid" => ("grid", tr("Grid")),
+                    _ => ("text", tr("Text")),
+                };
                 div()
                     .w_full()
                     .flex()
@@ -2389,7 +2444,10 @@ impl WindowState {
                     .gap(pt(4.0))
                     .child(div().flex_1().child(title_text(self.title.clone())))
                     .child(IconButton::new(Icon::Plus).size(20.0).on_click(move |_, _, _| {
-                        cmds.push(Cmd { id: "style.create", params: Some(json!({ "type": "text", "name": tr("Text style") })) });
+                        cmds.push(Cmd {
+                            id: "style.create",
+                            params: Some(json!({ "type": create_type, "name": default_name })),
+                        });
                     }))
                     .into_any_element()
             }
@@ -3544,12 +3602,14 @@ impl WindowState {
                     let pick = PaintPicker { paint: paint.clone(), on_write: write };
                     let on_pick: Rc<dyn Fn(crate::canvas::geom::Color32, &mut Window, &mut App)> = Rc::new(|_, _, _| {});
                     let open_cmds = self.cmds.clone();
-                    let hit = Rc::new(Cell::new(None));
-                    let hit_click = hit.clone();
+                    // 跨帧稳定探针：与右栏色块同一机制，按下即量到真实顶部。
+                    let anchor_key = format!("style-editor-paint-{}", sid);
+                    let hit = window_trigger_top(&anchor_key);
+                    let anchored_key = anchor_key.clone();
                     cf = cf.on_swatch(move |pos: Point<Pixels>, window, cx: &mut App| {
                         // 往**左**让 8 pt：取色器右缘贴着面板左缘排开（`open_pos` 会把它放在
                         // 锚点左侧），两个卡片并排而不是一开一关。
-                        let top = button_top(&hit_click, window);
+                        let top = anchored_top(&anchored_key, window);
                         let anchor = Point { x: pos.x - px(8.0), y: pos.y };
                         let mut child = Self::color(cx, anchor, current, Some(pick.clone()), on_pick.clone(), open_cmds.clone());
                         child.anchor_to_button_top(top);
@@ -4973,6 +5033,19 @@ where
     E::Element: ParentElement + Styled,
 {
     el.into_element().relative().child(bounds_probe(hit)).into_any()
+}
+
+/// 开窗按钮的统一封装：探针写进按 `key` 跨帧稳定的 cell，点击时由 [`anchored_top`] 读同一个
+/// cell。右栏每个打开 detached 窗口的按钮都用它 —— 这是「按钮顶部精确对位」的唯一复用件。
+///
+/// 与裸 `with_button_bounds` 的区别只在 cell 的来源：裸版本每帧新建 cell，点击当帧探针还没
+/// 写入，`button_top` 只能退回鼠标位置（错）；这里 cell 跨帧存活，永远量得到真实按钮顶部。
+pub(crate) fn with_window_trigger<E>(el: E, key: &str) -> AnyElement
+where
+    E: IntoElement,
+    E::Element: ParentElement + Styled,
+{
+    with_button_bounds(el, window_trigger_top(key))
 }
 
 /// Inject the probe into an element that is **already positioned** (typically `absolute`).
