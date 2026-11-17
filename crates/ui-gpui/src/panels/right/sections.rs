@@ -2638,8 +2638,6 @@ const LS_ICON_GAP: f32 = 8.0;
 /// The hit area of a row's leading icon: the icon draws at 16, but the click target is 24×24 —
 /// the same size as the trailing settings button (用户 2026-11-15：只有点这两个图标才弹设置页)。
 const LS_ICON_HIT: f32 = 24.0;
-/// A second press on the same row within this window counts as a double click (rename).
-const LS_DOUBLE_CLICK: std::time::Duration = std::time::Duration::from_millis(400);
 /// How far a nesting level steps in: an icon box and its gap, so a child's icon sits under the
 /// folder's name.
 const LS_STEP: f32 = LS_ICON + LS_ICON_GAP;
@@ -2736,8 +2734,6 @@ pub struct LocalStyleUi {
     /// 选中的文件夹 key = `"{ty}/{path}"`（与 `local_style_folder` 的折叠 key 一致）。
     /// 与 `sel` 互斥：选中样式清空它，选中文件夹清空 `sel`。
     pub sel_folder: Option<String>,
-    /// 上一次左键按下的是哪一行、什么时候：双击判定（同一行 400ms 内再按 = 改名）。
-    pub last_click: Option<(String, std::time::Instant)>,
     /// 复制下来的样式（`Ctrl/Cmd+C`）：粘贴时用它 `style.create` 出一份新样式。
     pub clip: Option<LocalStyleKeyRow>,
 }
@@ -3173,6 +3169,51 @@ fn local_style_caption(title: SharedString, plus: IconButton) -> Div {
         .child(plus)
 }
 
+/// 新建一个 Local styles 改名输入框，并替换掉上一次的实体。
+///
+/// **每次进入改名都新建**（与左栏 Pages / Layers 同款）：`InlineInput` 复用会留下上次草稿，
+/// 且在按下事件里 `begin_edit` 会让同一次手势的抬起吃掉 `select_all_pending`，表现为
+/// 双击后没有全选、要再点才能全选（用户 2026-11-17：要点三次）。焦点与全选由渲染期
+/// `poll_active` 完成。
+fn ls_start_rename(
+    slot: &Rc<RefCell<Option<gpui::Entity<crate::inline_input::InlineInput>>>>,
+    renaming: &Rc<RefCell<Option<(String, String)>>>,
+    renaming_style: &Rc<RefCell<Option<(String, String, String, Option<String>)>>>,
+    cmds: &crate::panels::Cmds,
+    value: String,
+    cx: &mut App,
+) {
+    let renaming = renaming.clone();
+    let renaming_style = renaming_style.clone();
+    let cmds = cmds.clone();
+    let input = crate::inline_input::InlineInput::build(cx, LS_ROW_H, 0.0, value, move |text: &str, _window, _cx| {
+        let name = text.trim().to_string();
+        // ① 样式行双击改名：提交 `style.move {styles:[id], name:"<folder>/<新名>"}`。
+        //    名字是全名，文件夹前缀必须保留，否则会把样式挪出文件夹。
+        if let Some((_ty, id, folder, before)) = renaming_style.borrow_mut().take() {
+            if name.is_empty() {
+                return;
+            }
+            let full = if folder.is_empty() { name } else { format!("{folder}/{name}") };
+            // 不带 `before` 会把样式挪到列表末尾（引擎语义），这里带上原来的位置锚点。
+            let mut params = serde_json::json!({ "styles": [id], "name": full });
+            if let Some(b) = before {
+                params["before"] = serde_json::Value::String(b);
+            }
+            cmds.push(Cmd { id: "style.move", params: Some(params) });
+            return;
+        }
+        // ② 文件夹改名：状态是 (类型, 路径)：类型必须传给引擎，否则同名文件夹下
+        //    其它类型的样式会被一起改名。
+        let Some((ty, folder)) = renaming.borrow_mut().take() else { return };
+        if name.is_empty() || name == folder {
+            return;
+        }
+        cmds.push(Cmd { id: "style.renameFolder", params: Some(serde_json::json!({ "folder": folder, "name": name, "type": ty })) });
+    });
+    *slot.borrow_mut() = Some(input);
+}
+
 /// 文件夹头行（egui `local_styles` 的 Folder 行：chevron + 文件夹名，按层级缩进）。
 /// 与 egui 一一对应地补齐三件事：① 左键整行切换折叠/展开（chevron 随之翻转）；
 /// ② 行尾 `+` 在该文件夹内新建同类型样式（`style.create {type, name:"<folder>/<default>", value}`，
@@ -3196,18 +3237,20 @@ fn local_style_folder(
     let mut is_renaming = f.local_style_renaming.borrow().as_ref().is_some_and(|k| *k == rename_key);
     // 编辑结束（Enter 提交、失焦提交、或 Esc 取消）时把状态收掉：`TextEdit::on_commit` 只在
     // **值变了**才回调，Esc 与「没改就离开」都不会回调，状态不清就会一直卡在改名态。
-    // egui `rename_field` 用返回的 `open` 决定：不 open 即关闭。
-    // 用「曾经激活过」守卫：刚打开的那一帧焦点可能还没落上，不能据此就关掉。
+    // 焦点 / 全选 / 结束判定全部交给 `InlineInput::poll_active`（与左栏 Pages / Layers 同源），
+    // 不再用「曾经激活过」的外部 seen 标记。
     if is_renaming {
-        let active = crate::inline_input::InlineInput::is_active(&f.local_style_rename_input, window, cx);
-        let mut seen = f.local_style_rename_seen.borrow_mut();
-        if active {
-            *seen = true;
-        } else if *seen {
-            drop(seen);
-            f.local_style_renaming.borrow_mut().take();
-            *f.local_style_rename_seen.borrow_mut() = false;
-            is_renaming = false;
+        match f.local_style_rename_input.borrow().clone() {
+            Some(input) => {
+                if input.update(cx, |f, cx| f.poll_active(window, cx)) == crate::inline_input::EditState::Ended {
+                    f.local_style_renaming.borrow_mut().take();
+                    is_renaming = false;
+                }
+            }
+            None => {
+                f.local_style_renaming.borrow_mut().take();
+                is_renaming = false;
+            }
         }
     }
 
@@ -3228,8 +3271,9 @@ fn local_style_folder(
     let renaming_r = f.local_style_renaming.clone();
     let rename_key_r = rename_key.clone();
     let path_r = path.to_string();
-    let rename_input = f.local_style_rename_input.clone();
-    let seen_r = f.local_style_rename_seen.clone();
+    let rename_slot = f.local_style_rename_input.clone();
+    let rename_style_slot = f.local_style_rename_style.clone();
+    let cmds_r = f.cmds.clone();
     let wake = f.cmds.clone();
 
     // 名称区：重命名时换成内联输入框；否则 chevron + 文件夹名，并挂折叠/右键菜单。
@@ -3251,7 +3295,7 @@ fn local_style_folder(
             .gap(pt(LS_ICON_GAP))
             .pl(pt(name_inset))
             .pr(pt(LS_ICON + LS_ICON_GAP))
-            .child(rename_input)
+            .children(f.local_style_rename_input.borrow().clone())
     } else {
         let chevron = if open { Icon::ChevronDown } else { Icon::ChevronRight };
         div()
@@ -3290,16 +3334,18 @@ fn local_style_folder(
                 let renaming_r = renaming_r.clone();
                 let rename_key_r = rename_key_r.clone();
                 let path_r = path_r.clone();
-                let rename_input = rename_input.clone();
-                let seen_r = seen_r.clone();
+                let rename_slot = rename_slot.clone();
+                let rename_style_slot = rename_style_slot.clone();
+                let cmds_r = cmds_r.clone();
                 let wake = wake.clone();
                 move |e: &gpui::MouseDownEvent, _w, cx: &mut App| {
                     let root = root.clone();
                     let renaming_r = renaming_r.clone();
                     let rename_key_r = rename_key_r.clone();
                     let path_r = path_r.clone();
-                    let rename_input = rename_input.clone();
-                    let seen_r = seen_r.clone();
+                    let rename_slot = rename_slot.clone();
+                    let rename_style_slot = rename_style_slot.clone();
+                    let cmds_r = cmds_r.clone();
                     let wake = wake.clone();
                     let rows = vec![MenuRow::new("Rename folder")];
                     let Some(root) = root else { return };
@@ -3312,12 +3358,10 @@ fn local_style_folder(
                             Rc::new(move |label: &str, window, cx| {
                                 if label == "Rename folder" {
                                     renaming_r.borrow_mut().replace(rename_key_r.clone());
-                                    *seen_r.borrow_mut() = false;
-                                    // 先写值、再进编辑态（`TextEdit::set_value` 在编辑中会保留草稿，
-                                    // 顺序反了输入框会是空的）。聚焦由 egui `rename_field(start=true)`
-                                    // 的 select-all 语义对齐。
-                                    crate::inline_input::InlineInput::begin_edit(&rename_input, path_r.clone(), window, cx);
-                                    // 改名态同样是渲染期读的：不唤醒就不会出现内联输入框。
+                                    // 每次改名新建输入框；焦点与全选由渲染期 `poll_active` 完成
+                                    // （在按下事件里 begin_edit 会被同一次手势的抬起吃掉全选）。
+                                    ls_start_rename(&rename_slot, &renaming_r, &rename_style_slot, &cmds_r, path_r.clone(), cx);
+                                    // 改名态是渲染期读的：不唤醒就不会出现内联输入框。
                                     wake.wake();
                                 }
                             }),
@@ -3515,18 +3559,19 @@ fn local_style_row(
     };
     // 双击改名的内联输入框状态（与文件夹改名共用同一个控件实体）。
     let mut is_renaming = f.local_style_rename_style.borrow().as_ref().is_some_and(|k| k.0 == ty && k.1 == s.id);
-    // 编辑结束（Enter 提交 / Esc / 失焦）时收掉改名态。`TextEdit::on_commit` 只在**值变了**才
-    // 回调，Esc 与「没改就走」都不会回调，所以用「曾经激活过」守卫，与文件夹改名同一套。
+    // 编辑结束（Enter 提交 / Esc / 失焦）时收掉改名态，判定与文件夹改名同源（`poll_active`）。
     if is_renaming {
-        let active = crate::inline_input::InlineInput::is_active(&f.local_style_rename_input, window, cx);
-        let mut seen = f.local_style_rename_seen.borrow_mut();
-        if active {
-            *seen = true;
-        } else if *seen {
-            drop(seen);
-            f.local_style_rename_style.borrow_mut().take();
-            *f.local_style_rename_seen.borrow_mut() = false;
-            is_renaming = false;
+        match f.local_style_rename_input.borrow().clone() {
+            Some(input) => {
+                if input.update(cx, |f, cx| f.poll_active(window, cx)) == crate::inline_input::EditState::Ended {
+                    f.local_style_rename_style.borrow_mut().take();
+                    is_renaming = false;
+                }
+            }
+            None => {
+                f.local_style_rename_style.borrow_mut().take();
+                is_renaming = false;
+            }
         }
     }
     // 打开这个样式的设置页：前面 24×24 图标、行尾 24×24 设置按钮、右键「Edit style」三处共用。
@@ -3645,14 +3690,32 @@ fn local_style_row(
             let effects = s.effects.clone();
             let grids = s.grids.clone();
             let renaming = f.local_style_rename_style.clone();
-            let rename_input = f.local_style_rename_input.clone();
-            let seen = f.local_style_rename_seen.clone();
+            let folder_renaming = f.local_style_renaming.clone();
+            let rename_slot = f.local_style_rename_input.clone();
+            let cmds_r = cmds.clone();
             let focus = f.local_style_focus.clone();
             let folder = ls_folder(&s.name);
             move |e: &MouseDownEvent, window, cx: &mut App| {
                 // 键盘操作（↑↓ / Enter / Delete / Ctrl+D / Ctrl+C / Ctrl+V）都挂在列表的焦点上：
                 // 点行即把焦点交给列表，选完立刻就能用键盘，不用先按一次 Tab。
                 window.focus(&focus);
+                {
+                    let mut st = ui.borrow_mut();
+                    st.sel = Some(flat);
+                    st.sel_folder = None;
+                }
+                // 双击（原生 `click_count`，与左栏 Layers / 变量表一致）进入改名：
+                // 这一下拦住冒泡，否则根视图「点别处就提交」会把刚打开的输入框收掉；
+                // 也不再在按下事件里 `begin_edit` —— 焦点与全选交给渲染期 `poll_active`，
+                // 否则同一次手势的抬起会把全选吃掉，表现为要点三次才全选。
+                if e.click_count >= 2 {
+                    cx.stop_propagation();
+                    renaming.borrow_mut().replace((ty.to_string(), id.clone(), folder.clone(), rename_before.clone()));
+                    ls_start_rename(&rename_slot, &folder_renaming, &renaming, &cmds_r, label.clone(), cx);
+                    wake.wake();
+                    return;
+                }
+                // 单击：记拖动起点，越过死区才改成排序拖动。
                 ui.borrow_mut().drag = Some(LocalStyleDrag {
                     ty,
                     from: style_no,
@@ -3671,22 +3734,6 @@ fn local_style_row(
                     line_y: None,
                     query: None,
                 });
-                // 选中 + 双击判定（同一行、400ms 内）。
-                let dbl = {
-                    let mut st = ui.borrow_mut();
-                    st.sel = Some(flat);
-                    st.sel_folder = None;
-                    let now = std::time::Instant::now();
-                    let same = st.last_click.as_ref().is_some_and(|(k, at)| *k == id && now.duration_since(*at) < LS_DOUBLE_CLICK);
-                    st.last_click = if same { None } else { Some((id.clone(), now)) };
-                    same
-                };
-                if dbl {
-                    // 双击：进入内联改名。先写值再进编辑态（`set_value` 在编辑中会保留草稿）。
-                    renaming.borrow_mut().replace((ty.to_string(), id.clone(), folder.clone(), rename_before.clone()));
-                    *seen.borrow_mut() = false;
-                    crate::inline_input::InlineInput::begin_edit(&rename_input, label.clone(), window, cx);
-                }
                 wake.wake();
             }
         })
@@ -3694,7 +3741,15 @@ fn local_style_row(
     // 名字占满中间，文本样式的 "32/Auto" 贴行尾（egui 的 meta 右对齐在 `r.max.x - LS_TRAIL`）。
     // 双击改名期间名字位换成内联输入框（与文件夹改名共用同一个控件实体）。
     body = if is_renaming {
-        body.child(div().flex_1().min_w(px(0.0)).h_full().flex().items_center().child(f.local_style_rename_input.clone()))
+        body.child(
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .h_full()
+                .flex()
+                .items_center()
+                .children(f.local_style_rename_input.borrow().clone()),
+        )
     } else {
         // 名字用 `static_text`（canvas + 与编辑态同一个居中式）绘制，不再是
         // `div().child(name)`：两条渲染管线的行盒取整不同，切换编辑时会差 1 像素。

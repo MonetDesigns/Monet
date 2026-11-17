@@ -4396,14 +4396,17 @@ impl WindowState {
         let (base_w, base_h) = self.editor.as_ref().and_then(|e| e.size()).unwrap_or((self.width, self.height));
         // Full 从左侧 rail 的右缘开始，宽 = 视口 − rail，这样左栏图标不会消失。
         let rail = if full { crate::panels::RAIL_W } else { 0.0 };
+        // 全屏只在「面板 + 画布」区，不能盖住顶部自定义标题栏（`TITLE_H`）——
+        // 用户 2026-11-17：全屏会侵入标题栏。高度与原点一起扣掉标题栏。
+        let title_h = if full { crate::title_bar::TITLE_H } else { 0.0 };
         let width = if full { (f32::from(viewport.width) - rail).max(1.0) } else { base_w };
-        let height = if full { f32::from(viewport.height) } else { base_h };
+        let height = if full { (f32::from(viewport.height) - title_h).max(1.0) } else { base_h };
         // Full 是 `Frame::NONE`：内边距 0、无圆角/阴影；Floating 保留通用 16（变量表构造时是 0）。
         let pad = if full { 0.0 } else { self.pad };
-        let body_h = if full { f32::from(viewport.height) } else { height - 2.0 * self.pad };
+        let body_h = if full { height } else { height - 2.0 * self.pad };
         let at = if full {
-            // 贴着 rail 右缘，保留左侧图标栏（egui 的 full 就是「面板+画布」那块）。
-            Some(Point { x: px(rail), y: px(0.0) })
+            // 贴着 rail 右缘、标题栏下缘，保留左侧图标栏（egui 的 full 就是「面板+画布」那块）。
+            Some(Point { x: px(rail), y: px(title_h) })
         } else {
             self.place
         };

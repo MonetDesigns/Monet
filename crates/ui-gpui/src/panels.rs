@@ -557,10 +557,10 @@ pub(crate) struct RightFields {
     local_style_rename_style: std::rc::Rc<std::cell::RefCell<Option<(String, String, String, Option<String>)>>>,
     /// Local styles 行 / 文件夹内联重命名输入框：**无边框无底色**的通用 `InlineInput`
     /// （用户 2026-11-15：原来套了带边框底色的 `TextField`，和 Pages / Layers 的裸输入框不一致）。
-    local_style_rename_input: Entity<InlineInput>,
-    /// 重命名输入框是否**曾经**进入过编辑态。用来区分「刚打开、焦点还没生效」与「编辑真的
-    /// 结束了」：只有后者才清 `local_style_renaming`（否则会在打开的第一帧就自己关掉）。
-    local_style_rename_seen: std::rc::Rc<std::cell::RefCell<bool>>,
+    /// **每次进入改名都新建一个**（与左栏 Pages / Layers 同款）：复用同一个 `TextEdit`
+    /// 会留下上次草稿，且按下时 `begin_edit` 会被同一次手势的抬起吃掉全选，表现为
+    /// 「要点三次才进全选」（用户 2026-11-17）。
+    local_style_rename_input: std::rc::Rc<std::cell::RefCell<Option<Entity<InlineInput>>>>,
     /// Local styles 文件夹的折叠态（egui `folded_id`）：键为 `"<type>/<folder path>"`。
     local_style_folded: std::rc::Rc<std::cell::RefCell<std::collections::HashSet<String>>>,
     /// Local styles 列表的拖动排序状态（egui `ListDrag::in_order` + `drop_move` → `style.move`）：
@@ -864,7 +864,7 @@ impl RightFields {
             // 先清状态：通用 TextEdit 随后的失焦 `on_commit` 会因 `renaming` 已空直接返回，
             // 草稿不会被写成 `style.renameFolder`（egui `a11y::spend_escape` 同款）。
             self.local_style_renaming.borrow_mut().take();
-            *self.local_style_rename_seen.borrow_mut() = false;
+            *self.local_style_rename_input.borrow_mut() = None;
             self.cmds.wake();
             return true;
         }
@@ -872,7 +872,7 @@ impl RightFields {
         // 把它撤掉，否则输入框一直挂着（`TextEdit` 自己不处理 Escape，只靠这条）。
         if self.local_style_rename_style.borrow().is_some() {
             self.local_style_rename_style.borrow_mut().take();
-            *self.local_style_rename_seen.borrow_mut() = false;
+            *self.local_style_rename_input.borrow_mut() = None;
             self.cmds.wake();
             return true;
         }
@@ -1093,37 +1093,7 @@ impl RightFields {
             right_tab: std::rc::Rc::new(std::cell::RefCell::new(0u8)),
             local_style_renaming: local_style_renaming.clone(),
             local_style_rename_style: local_style_rename_style.clone(),
-            local_style_rename_seen: std::rc::Rc::new(std::cell::RefCell::new(false)),
-            local_style_rename_input: InlineInput::build(cx, crate::inline_input::ROW_H, 0.0, "", {
-                let renaming = local_style_renaming.clone();
-                let renaming_style = local_style_rename_style.clone();
-                let cmds = cmds.clone();
-                move |text: &str, _window: &mut Window, _cx: &mut App| {
-                    let name = text.trim().to_string();
-                    // ① 样式行双击改名：提交 `style.move {styles:[id], name:"<folder>/<新名>"}`。
-                    //    名字是全名，文件夹前缀必须保留，否则会把样式挪出文件夹。
-                    if let Some((_ty, id, folder, before)) = renaming_style.borrow_mut().take() {
-                        if name.is_empty() {
-                            return;
-                        }
-                        let full = if folder.is_empty() { name } else { format!("{folder}/{name}") };
-                        // 不带 `before` 会把样式挪到列表末尾（引擎语义），这里带上原来的位置锚点。
-                        let mut params = serde_json::json!({ "styles": [id], "name": full });
-                        if let Some(b) = before {
-                            params["before"] = serde_json::Value::String(b);
-                        }
-                        cmds.push(Cmd { id: "style.move", params: Some(params) });
-                        return;
-                    }
-                    // ② 文件夹改名：状态是 (类型, 路径)：类型必须传给引擎，否则同名文件夹下
-                    //    其它类型的样式会被一起改名。
-                    let Some((ty, folder)) = renaming.borrow_mut().take() else { return };
-                    if name.is_empty() || name == folder {
-                        return;
-                    }
-                    cmds.push(Cmd { id: "style.renameFolder", params: Some(serde_json::json!({ "folder": folder, "name": name, "type": ty })) });
-                }
-            }),
+            local_style_rename_input: std::rc::Rc::new(std::cell::RefCell::new(None)),
             local_style_folded: std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashSet::new())),
             local_styles_ui: std::rc::Rc::new(std::cell::RefCell::new(
                 crate::panels::right::sections::LocalStyleUi::default(),
