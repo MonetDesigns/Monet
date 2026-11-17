@@ -266,16 +266,17 @@ pub(crate) fn view_bar(f: &RightFields, d: &PanelData, motion: bool) -> gpui::Di
             .text_color(rgba(t.text))
             .child(s)
     };
+    // 相邻控件间距统一 4 pt（Figma 参考 Frame 38：Design → Prototype = 4 pt）。
     let tabs = if motion {
-        div().flex().flex_row().items_center().gap(pt(2.0)).child(mode_label("动画"))
+        div().flex().flex_row().items_center().gap(pt(crate::panels::HEADER_GAP)).child(mode_label("动画"))
     } else if f.right_tab() == 2 {
-        div().flex().flex_row().items_center().gap(pt(2.0)).child(mode_label("开发"))
+        div().flex().flex_row().items_center().gap(pt(crate::panels::HEADER_GAP)).child(mode_label("开发"))
     } else {
         div()
             .flex()
             .flex_row()
             .items_center()
-            .gap(pt(2.0))
+            .gap(pt(crate::panels::HEADER_GAP))
             // 标签文案仍由 naming::right_tab_label 统一提供（a11y / 命名回归测试继续用它）。
             .child(tab(tr(crate::naming::right_tab_label(0)), 0))
             .child(tab(tr(crate::naming::right_tab_label(1)), 1))

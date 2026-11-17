@@ -132,6 +132,11 @@ pub(crate) const DEFAULT_PANEL: f32 = 280.0;
 pub(crate) const DEFAULT_LEFT_PANEL: f32 = 421.0;
 pub(crate) const DEFAULT_RIGHT_PANEL: f32 = 374.0;
 
+/// 左右栏头部区域相邻控件的**统一间距**（Figma 参考 `Figma (7).fig` 的
+/// Frame 182 左栏头部 / Frame 38 右栏头部：文字→chevron、Design→Prototype、
+/// 头像组→按钮组→Share 全部 4 pt）。所有头部控件间距都引用它，不再各写各的。
+pub(crate) const HEADER_GAP: f32 = 4.0;
+
 /// A right-panel field that writes back to the selected node via `node.set`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Prop {

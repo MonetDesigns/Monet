@@ -47,14 +47,15 @@ pub(crate) fn top_bar(f: &RightFields, d: &PanelData) -> Div {
         .flex()
         .flex_row()
         .items_center()
-        .pl(pt(14.0))
-        .pr(pt(14.0))
+        // 左右内边距 8 pt（Figma 参考 Frame 38：头像 x1208 − 面板 x1200 = 8）。
+        .pl(pt(8.0))
+        .pr(pt(8.0))
         // 左：people（你 + 别人 + 人数菜单）。
         .child(people(f, &d.live))
-        // 右：Present + Share。
+        // 右：Present + Share。相邻控件间距统一 4 pt（Figma 参考 Frame 38）。
         .child(div().flex_1())
         .child(present(f))
-        .child(div().w(pt(8.0)))
+        .child(div().w(pt(crate::panels::HEADER_GAP)))
         .child(share_button(f, &d.live, &t))
 }
 

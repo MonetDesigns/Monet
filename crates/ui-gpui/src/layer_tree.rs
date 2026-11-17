@@ -311,11 +311,13 @@ impl CanvasView {
             .h(pt(64.0))
             .flex()
             .flex_col()
-            .px(pt(14.0))
-            .pt(pt(12.0))
+            // 头部内边距：左右 12 / 上 8（Figma 参考 Frame 182：3577−3565=12，2287−2279=8）。
+            .px(pt(12.0))
+            .pt(pt(8.0))
             .border_b_1()
             .border_color(rgba(t.border))
-            .child(div().flex().flex_row().items_center().gap(pt(6.0)).child(div().flex_1().min_w(px(0.0)).child(field)).child(
+            // 头部相邻控件间距统一 4 pt（Figma 参考 Frame 182：文件名 → chevron = 4 pt）。
+            .child(div().flex().flex_row().items_center().gap(pt(crate::panels::HEADER_GAP)).child(div().flex_1().min_w(px(0.0)).child(field)).child(
                 IconButton::new(Icon::Panels).size(24.0).on_click(move |_e, _w, cx| {
                     me.update(cx, |cv, cx| {
                         cv.left_collapsed = true;
@@ -323,7 +325,8 @@ impl CanvasView {
                     });
                 }),
             ))
-            .child(div().mt(pt(2.0)).text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(tr("Drafts")))
+            // 行2 紧贴行1（Figma 参考 Frame 182：行1 y2287 h32 → 行2 y2319，间距 0）。
+            .child(div().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(tr("Drafts")))
     }
 
     /// Pages section: a 40 pt header (title, search, add) followed by the page rows.
