@@ -161,11 +161,11 @@ fn zoom_button(f: &RightFields, label: String, rows: Vec<ViewMenuRow>) -> gpui::
         .collect();
     let hit = Rc::new(Cell::new(None));
     let hit_click = hit.clone();
+    // 文字与 chevron 间距 0（用户：缩放时若留间隙会出问题）。间距靠 icon 自身字形留白。
     let mut el = div()
         .flex()
         .flex_row()
         .items_center()
-        .gap(pt(4.0))
         .cursor_pointer()
         .text_size(pt(crate::widgets::TEXT_PT))
         .text_color(rgba(tokens().text))

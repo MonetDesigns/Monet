@@ -138,7 +138,7 @@ pub(crate) const DEFAULT_RIGHT_PANEL: f32 = 374.0;
 /// Frame 38 右栏头部：
 ///   Frame 38   Vertical  gap=0   pad=[T8,R8,B8,L8]
 ///   ├ Frame 82 Horizontal gap=4  main=Max  cross=Center  （头像组 → ▶▾ → 分享）
-///   │  └ Frame 83 Horizontal gap=1  （▶ 与 ▾ 之间）
+///   │  └ Frame 83 Horizontal        （▶ 通用24图标 + ▾ 16 宽，距离 0——用户指定覆盖参考的 gap=1）
 ///   └ Frame 79 Horizontal cross=Center                    （tab组 ←弹簧→ zoom 靠右，宽度由内容定）
 ///      └ Frame 78 Horizontal gap=4                        （Design ↔ Prototype）
 /// Frame 182 左栏头部：
@@ -151,7 +151,6 @@ pub(crate) const HEADER_PAD_V: f32 = 8.0;   // Frame 38 / 182 的 T/B padding
 pub(crate) const HEADER_PAD_H: f32 = 8.0;   // Frame 38 的 L/R padding
 pub(crate) const LEFT_HEADER_PAD_H: f32 = 12.0; // Frame 182 的 L/R padding
 pub(crate) const HEADER_GAP: f32 = 4.0;     // 头像组→按钮→分享 / Design↔Prototype / 文件名→chevron
-pub(crate) const PRESENT_GAP: f32 = 1.0;    // Frame 83：▶ 与 ▾ 之间
 
 /// UI 字体（MiSans）字重映射，按用户 2026-11-17 给定：
 /// 普通=NORMAL(305)，粗体=REGULAR(330)。MiSans 这两档字形名与常见字体相反

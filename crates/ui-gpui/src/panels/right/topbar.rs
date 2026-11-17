@@ -175,31 +175,23 @@ fn avatar(name: &str, fill: Color32, ring: Option<Color32>) -> Div {
 }
 
 /// Present：▶（`proto.present`）+ ▾（Present / Preview / Close preview）。
-fn present(f: &RightFields) -> Div {
+fn present(f: &RightFields) -> AnyElement {
     let t = tokens();
     let play_cmds = f.cmds.clone();
-    // 尺寸 1:1（Figma 参考 Frame 38：Frame84 ▶ = 32×32）。
-    let play = div()
+    // ▶ 是通用 24 pt 图标按钮（用户：图标是通用的控件24），命令 proto.present。
+    let play = IconButton::new(Icon::Play)
         .id("right-present-play")
-        .w(pt(32.0))
-        .h(pt(32.0))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(pt(5.0))
-        .cursor_pointer()
-        .hover(|s| s.bg(rgba(t.hover)))
-        .on_mouse_down(MouseButton::Left, move |_: &MouseDownEvent, _w, _cx| {
+        .size(24.0)
+        .on_click(move |_e, _w, _cx| {
             play_cmds.push(Cmd { id: "proto.present", params: Some(json!({})) });
-        })
-        .child(play_glyph(14.0, t.icon));
+        });
     let menu_cmds = f.cmds.clone();
     let root = f.root.clone();
-    // 尺寸 1:1（Figma 参考 Frame 38：Frame58 ▾ = 16×32）。
+    // ▾ 下拉宽 16（用户指定）；与前面 ▶ 图标距离 0。
     let menu = div()
         .id("right-present-menu")
         .w(pt(16.0))
-        .h(pt(32.0))
+        .h(pt(24.0))
         .flex()
         .items_center()
         .justify_center()
@@ -229,8 +221,8 @@ fn present(f: &RightFields) -> Div {
             root.update(cx, |cv, cx| cv.open_menu(anchor, Some(200.0), rows, on_pick, cx));
         })
         .child(crate::widgets::icon::paint(Icon::ChevronDown, rgba(t.text_secondary), 10.0));
-    // Figma 参考 Frame 83 AutoLayout：gap=1（▶ 32 与 ▾ 16 之间）。
-    div().flex().flex_row().items_center().gap(pt(crate::panels::PRESENT_GAP)).child(play).child(menu)
+    // ▶ 与 ▾ 距离 0（用户指定：带下拉时下拉与前面图标距离 0）。
+    div().flex().flex_row().items_center().child(play.into_any_element()).child(menu).into_any_element()
 }
 
 /// Share 按钮：强调色、32 pt 高、圆角 6，宽度跟着文字（egui 同款）。
