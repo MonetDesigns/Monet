@@ -2118,11 +2118,33 @@ impl CanvasView {
         let doc = self.app.session.doc().ok().cloned();
 
         if let (Some(st), Some(doc)) = (self.present.as_mut(), doc.as_ref()) {
+            // ACTION 对齐 eGUI `present::chrome::BarAction` 的接线：
+            // 1=播放/暂停 2=后退 3=退出(上面已处理) 4=Restart 5=Comments 6=Inspect
+            // 7=HideUi 8=上一帧 9=下一帧。
             match action {
                 1 => st.playing = !st.playing,
-
                 2 => st.back(),
-
+                4 => {
+                    st.time_ms = 0.0;
+                    st.current = st.start;
+                    st.history.clear();
+                    st.from = None;
+                    st.playing = false;
+                }
+                5 => st.comments = !st.comments,
+                6 => st.inspect = !st.inspect,
+                7 => st.hide_ui = !st.hide_ui,
+                8 | 9 => {
+                    // 真帧导航：top_frames(page) 的相邻帧，走 go() 保留过渡语义。
+                    let page = doc.page_of(st.current).unwrap_or(st.current);
+                    let frames = doc.top_frames(page);
+                    if let Some(i) = frames.iter().position(|f| *f == st.current) {
+                        let next = if action == 8 { i.checked_sub(1) } else { Some(i + 1) };
+                        if let Some(id) = next.and_then(|n| frames.get(n)).copied() {
+                            st.go(id);
+                        }
+                    }
+                }
                 _ => {}
             }
 

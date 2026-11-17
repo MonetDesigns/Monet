@@ -65,6 +65,12 @@ pub struct PresentState {
     /// hotspot 提示（点空白处闪一下可点区域）——这里简化为顶栏开关。
     pub hints: bool,
     pub preview: bool,
+    /// 演示外壳（对齐 eGUI `present::chrome`）：左右面板、设备、缩放、隐藏 UI。
+    pub comments: bool,
+    pub inspect: bool,
+    pub hide_ui: bool,
+    pub device: String,
+    pub scale: f32,
     /// 非 current 画框各自的挂起时钟；导航离开 / 进入时存取，落实「画框之间独立」。
     clocks: BTreeMap<NodeId, MotionClock>,
 }
@@ -84,6 +90,11 @@ impl PresentState {
             transition: Transition::Instant,
             hints: true,
             preview,
+            comments: false,
+            inspect: false,
+            hide_ui: false,
+            device: String::new(),
+            scale: 1.0,
             clocks: BTreeMap::new(),
         }
     }
@@ -180,6 +191,21 @@ impl PresentState {
             let next = apply_animation_op(op, cur, cur.base_ms, dur);
             self.clocks.insert(scope, next);
         }
+    }
+
+    /// 导航条切到相邻帧（eGUI `Presenter::go(id, Instant, …)`）：存当前时钟、进历史、
+    /// 恢复目标帧的挂起时钟。Instant 过渡，不叠淡入。
+    pub fn go(&mut self, next: NodeId) {
+        if next == self.current {
+            return;
+        }
+        self.clocks.insert(self.current, MotionClock { playing: self.playing, base_ms: self.time_ms });
+        self.history.push(self.current);
+        self.from = None;
+        self.current = next;
+        let c = self.clocks.get(&next).copied().unwrap_or(MotionClock { playing: false, base_ms: 0.0 });
+        self.time_ms = c.base_ms;
+        self.playing = c.playing;
     }
 
     pub fn back(&mut self) {
@@ -323,48 +349,181 @@ pub fn render(app: &CanvasApp, state: &PresentState) -> Stateful<Div> {
         }
     }
 
-    let mut bar = div()
+    // ── 顶栏：eGUI `present::player::top_bar` 的 GPUI 等价 ──────────────────────────
+    // 配色逐字对齐 eGUI：`fill=t.panel`、`text=t.text`、`dim=t.text_secondary`、`hover=t.hover`，
+    // 激活按钮 `t.accent`/`t.accent_on`。左侧 flow 名 semibold 11.5、帧名 regular 11.5。
+    // 右侧全窗口按钮（右到左）：Close / Restart / Options / Comments / Inspect。
+    let flow_name = doc
+        .page_of(state.start)
+        .and_then(|pg| doc.node(pg))
+        .and_then(|n| match &n.kind {
+            figcraft_doc::NodeKind::Page { flows, .. } => flows.iter().find(|f| f.start == state.start).map(|f| f.name.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| tr("Flows").to_string());
+    let title_button = |label: SharedString, action: u8, on: bool| {
+        div()
+            .h(px(24.0))
+            .px(pt(8.0))
+            .flex()
+            .items_center()
+            .rounded(pt(5.0))
+            .bg(rgba(if on { t.accent } else { t.hover }))
+            .text_size(pt(11.5))
+            .font_weight(crate::panels::UI_FONT_REGULAR)
+            .text_color(rgba(if on { t.accent_on } else { t.text }))
+            .cursor_pointer()
+            .on_mouse_down(MouseButton::Left, move |_, _, _| ACTION.with(|a| a.set(action)))
+            .child(label)
+    };
+    let bar = div()
+        .id("present-bar")
         .flex_none()
         .h(px(BAR_H as f32))
         .w_full()
         .flex()
         .flex_row()
         .items_center()
-        .gap(pt(8.0))
-        .px(pt(16.0))
+        .gap(pt(6.0))
+        .px(pt(12.0))
         .bg(rgba(t.panel))
         .border_b_1()
-        .border_color(rgba(t.border));
-    let play = IconButton::new(if state.playing { Icon::Check } else { Icon::ChevronRight }).on_click(|_, _, _| ACTION.with(|a| a.set(1)));
-    let back = IconButton::new(Icon::ChevronLeft).on_click(|_, _, _| ACTION.with(|a| a.set(2)));
-    let exit = IconButton::new(Icon::Close).on_click(|_, _, _| ACTION.with(|a| a.set(3)));
-    bar = bar
-        .child(play)
-        .child(back)
+        .border_color(rgba(t.border))
+        // 左：flow 名（semibold）+ / + 帧名（regular）
         .child(
             div()
                 .flex_1()
                 .min_w(px(0.0))
-                .text_size(pt(11.0))
-                .font_weight(crate::panels::UI_FONT_REGULAR)
-                .text_color(rgba(t.text))
-                .child(SharedString::from(name)),
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(pt(8.0))
+                .overflow_hidden()
+                .child(
+                    div()
+                        .text_size(pt(11.5))
+                        .font_weight(crate::panels::UI_FONT_REGULAR)
+                        .text_color(rgba(t.text))
+                        .child(SharedString::from(flow_name)),
+                )
+                .child(div().text_size(pt(11.5)).text_color(rgba(t.text_secondary)).child("/"))
+                .child(
+                    div()
+                        .text_size(pt(11.5))
+                        .font_weight(crate::panels::UI_FONT_REGULAR)
+                        .text_color(rgba(t.text))
+                        .child(SharedString::from(name)),
+                ),
         )
-        .child(div().text_size(pt(10.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(format!("{:.2}s", state.time_ms / 1000.0))))
-        .child(exit);
+        // 右：文字按钮（eGUI 全窗口模式用 regular 11.5 文字）
+        .child(title_button(tr("Inspect").into(), 6, state.inspect))
+        .child(title_button(tr("Comments").into(), 5, state.comments))
+        .child(title_button(tr("Options").into(), 10, false))
+        .child(title_button(tr("Restart").into(), 4, false))
+        .child(title_button(tr("Close").into(), 3, false));
 
-    div().id("present-layer").absolute().top(px(0.0)).left(px(0.0)).size_full().flex().flex_col().bg(gpui::rgb(0x141414)).child(bar).child(
-        stage.on_mouse_down(MouseButton::Left, |e, window, _cx| {
-            // 记下点击的窗口点与视口尺寸；sync 帧据此反算 page 坐标并做子图层命中。
-            // 顶栏 `h(pt(40))`：本项目的 `pt(p)=px(p)`，即 1pt=1px，故物理高就是 40px。
-            let vp = window.viewport_size();
-            let pos = (f64::from(e.position.x), f64::from(e.position.y));
-            let vp = (f64::from(vp.width), f64::from(vp.height));
-            let bar_h = BAR_H;
-            CLICK_POS.with(|c| c.set(Some((pos, vp, bar_h))));
-            CLICK.with(|c| c.set(true));
-        }),
-    )
+    // ── 底部导航条：eGUI `present::chrome::navigation_bar` ──────────────────────
+    // 上一帧 / 下一帧走真实 `top_frames`，计数 index/N，设备名来自 page_settings。
+    let page = doc.page_of(state.current).unwrap_or(state.current);
+    let frames = doc.top_frames(page);
+    let index = frames.iter().position(|f| *f == state.current);
+    let has_prev = index.and_then(|i| i.checked_sub(1)).is_some();
+    let has_next = index.and_then(|i| frames.get(i + 1)).is_some();
+    let device = doc
+        .page_of(state.current)
+        .and_then(|pg| doc.node(pg))
+        .and_then(|n| match &n.kind {
+            figcraft_doc::NodeKind::Page { prototype, .. } => Some(prototype.device.clone()),
+            _ => None,
+        })
+        .unwrap_or_default();
+    let device_label: SharedString = if device.is_empty() || device == "None" { tr("No device").into() } else { device.into() };
+    let nav_btn = |label: SharedString, action: u8, enabled: bool| {
+        div()
+            .h(px(24.0))
+            .w(px(26.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(pt(4.0))
+            .text_size(pt(12.0))
+            .text_color(rgba(if enabled { t.text } else { t.text_secondary }))
+            .cursor_pointer()
+            .on_mouse_down(MouseButton::Left, move |_, _, _| if enabled { ACTION.with(|a| a.set(action)) })
+            .child(label)
+    };
+    let nav = if state.hide_ui {
+        div()
+    } else {
+        div()
+            .absolute()
+            .bottom(px(18.0))
+            .left(px(0.0))
+            .right(px(0.0))
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_center()
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(pt(6.0))
+                    .px(pt(8.0))
+                    .py(pt(5.0))
+                    .rounded(pt(9.0))
+                    .bg(rgba(t.panel))
+                    .border_1()
+                    .border_color(rgba(t.border))
+                    .child(nav_btn(SharedString::from("‹"), 8, has_prev))
+                    .child(
+                        div()
+                            .text_size(pt(11.0))
+                            .text_color(rgba(t.text))
+                            .child(SharedString::from(format!("{} / {}", index.map_or(0, |i| i + 1), frames.len()))),
+                    )
+                    .child(nav_btn(SharedString::from("›"), 9, has_next))
+                    .child(div().w(px(1.0)).h(px(16.0)).bg(rgba(t.border)))
+                    .child(
+                        div()
+                            .h(px(24.0))
+                            .px(pt(8.0))
+                            .flex()
+                            .items_center()
+                            .text_size(pt(11.0))
+                            .text_color(rgba(t.text))
+                            .child(device_label),
+                    ),
+            )
+    };
+
+    // eGUI 的演示覆盖 CentralPanel，标题栏（含 tab strip 的 PresentTab）仍显示在上方。
+    // GPUI 这里从 TITLE_H 起铺，别把标签栏盖掉（用户 2026-11-17：标签栏搞丢了）。
+    div()
+        .id("present-layer")
+        .absolute()
+        .top(px(crate::title_bar::TITLE_H))
+        .left(px(0.0))
+        .right(px(0.0))
+        .bottom(px(0.0))
+        .flex()
+        .flex_col()
+        .bg(rgba(t.canvas))
+        .child(bar)
+        .child(
+            stage
+                .relative()
+                .on_mouse_down(MouseButton::Left, |e, window, _cx| {
+                    // 记下点击的窗口点与视口尺寸；sync 帧据此反算 page 坐标并做子图层命中。
+                    let vp = window.viewport_size();
+                    let pos = (f64::from(e.position.x), f64::from(e.position.y));
+                    let vp = (f64::from(vp.width), f64::from(vp.height));
+                    CLICK_POS.with(|c| c.set(Some((pos, vp, BAR_H))));
+                    CLICK.with(|c| c.set(true));
+                })
+                .child(nav),
+        )
 }
 
 thread_local! {
