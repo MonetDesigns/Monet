@@ -1362,7 +1362,6 @@ impl RightFields {
         f.right_tab = Default::default();
         f.local_style_renaming = Default::default();
         f.local_style_rename_style = Default::default();
-        f.local_style_rename_seen = Default::default();
         f.local_style_folded = Default::default();
         f.local_styles_ui = Default::default();
         f.comment_ui = Default::default();
@@ -1370,17 +1369,20 @@ impl RightFields {
         f.inspect_fmt = Default::default();
         f.inspect_rem = Default::default();
         f.proto_open = Default::default();
-        f.wgsl_param_ctx = Default::default();
+        // ⛔ 不要把 row_ctx / wgsl_param_ctx / scale_ctx / pad 换成新的空 Rc：
+        // 这些 editor 实体是 clone 的（共享），回调在 new 时捕获的是**原** context Rc。
+        // 一旦换成空 Rc，新窗口的行编辑提交时 get_mut(slot) 读不到、直接 return —— 编辑
+        // 完全失效（CodeRabbit PR#28「produce no command」）。让回调和渲染写入共用同一
+        // 份 context（逐窗口渲染时每次重写当前槽位），编辑才能落到正确的命令上。
+        // 彻底隔离需要连 editor 实体一起重建（需 cx + 整套构造逻辑），代价过大。
         f.dev_filter = Default::default();
         f.dev_cat_filter = Default::default();
         f.dev_res_add = Default::default();
         f.dev_res_edit = Default::default();
         f.asset_fmt = Default::default();
-        f.scale_ctx = Default::default();
-        f.pad = Default::default();
+        // scale_ctx / pad 同理保留共享（见上方注释），不重置。
         f.pad_individual = Default::default();
         f.corners_individual = Default::default();
-        f.row_ctx = Default::default();
         f.limit_open = Default::default();
         f.bind_hover = Default::default();
         f.blend_open = Default::default();

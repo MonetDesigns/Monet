@@ -684,7 +684,10 @@ fn open_list_window_at(
     let list: Vec<crate::popovers::Row> =
         rows.into_iter().map(|(label, cmd, params)| crate::popovers::Row::new(label, cmd, params).group(tr("This file")).trail(trail)).collect();
     // 统一入口：精确顶部 + 选中态 + 再点关闭全部由 `open_detached_with` 处理。
-    open_detached_with(popups, trigger, exact_top, cx, |anchor, cx| match kind {
+    // 没有精确顶部时用传入 anchor 的 y，否则 `open_detached_with` 会把窗口放到视口顶
+    // （选中色绑定点 y=500 却弹在 y=0，CodeRabbit PR#28）。measured-top 路径不变。
+    let top = exact_top.or(Some(anchor.y));
+    open_detached_with(popups, trigger, top, cx, |anchor, cx| match kind {
         ListWindow::Variables => crate::popovers::WindowState::variables(queue, cx, anchor, list),
         ListWindow::Styles => crate::popovers::WindowState::styles(queue, cx, anchor, title, list),
     });
@@ -759,7 +762,12 @@ fn style_menu(f: &RightFields, d: &PanelData, ty: &'static str, target: Option<&
     };
     let root = f.popups();
     let queue = f.queue();
-    let trigger = format!("styles-{ty}");
+    // Fill / Stroke 两个样式按钮不能共用 trigger，否则点 Stroke 只会关掉已开的 Fill 窗口、
+    // 两个按钮还同时亮（CodeRabbit PR#28）。paint 菜单的 trigger 带上 target 区分。
+    let trigger = match target {
+        Some(t) => format!("styles-{ty}-{t}"),
+        None => format!("styles-{ty}"),
+    };
     let active = root.is_open(&trigger);
     let hit = Rc::new(Cell::new(None));
     let hit_click = hit.clone();
@@ -952,7 +960,19 @@ fn color_pick(
 fn paint_swatch(f: &RightFields, row: &PaintRow, cf: ColorField) -> (ColorField, Rc<Cell<Option<Bounds<Pixels>>>>) {
     let current = row.paint.solid_color().map(crate::widgets::swatch::color32).unwrap_or(Color32::BLACK);
     let cmd = if row.fills { "fill.set" } else { "stroke.set" };
-    color_pick(f, cf, current, cmd, json!({ "index": row.index }), "color", None, format!("color-paint-{}", row.index))
+    // Fill / Stroke 同 index 的两行不能共用取色器 trigger，否则点开一个会关掉另一个
+    // （CodeRabbit PR#28）。trigger 里带上 paint 侧。
+    let side = if row.fills { "fill" } else { "stroke" };
+    color_pick(
+        f,
+        cf,
+        current,
+        cmd,
+        json!({ "index": row.index }),
+        "color",
+        None,
+        format!("color-{side}-{}", row.index),
+    )
 }
 
 // ───────────────────────────────────────────────────────────────────────────────────────────────
@@ -1936,7 +1956,7 @@ pub(crate) fn appearance(
             ],
             corner_row_trail,
         ));
-    // 展开态：TL/TR 一行，BL/BR 一行；平滑圆角按钮只在第二行行尾（egui 同序）。
+    // 展开态：TL/TR 一行，BL/BR 一行；平滑圆角按钮在第二行行尾（egui 同序）。
     if indep_open && d.corners_independent {
         sec = sec
             .child(field_row(vec![f.corner_tl.clone(), f.corner_tr.clone()], Vec::<IconButton>::new()))
@@ -1947,6 +1967,11 @@ pub(crate) fn appearance(
                 }
                 trail
             }));
+    } else if shows_corner_smoothing(d.corner_smoothing_supported, d.corner_radius) {
+        // Polygon / Star 支持圆角平滑但 `corners_independent == false`，矩形也要展开独立
+        // 圆角才有那一行。此前 smoothing 按钮被 `indep_open && corners_independent` 整个
+        // guard 挡住，这些类型永远点不到（CodeRabbit PR#28）。收起态单独给它一行。
+        sec = sec.child(field_row(Vec::<gpui::AnyElement>::new(), vec![corner_smoothing_button(f, d).into_any_element()]));
     }
     // 用户：外观的混合模式是一个「选了才加进来的条目」——header 图标点开先给下拉选，
     // 选中后出现一行 dropdown + 右侧 24pt 网格里的减号，减号清除回 Normal 并收起这一行。

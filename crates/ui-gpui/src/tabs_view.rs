@@ -210,7 +210,7 @@ fn open_overflow_menu(me: &Entity<CanvasView>, _cmds: &Cmds, docs: &[TabDoc], ac
         let Some((_, _, uid)) = labels.iter().find(|(l, _, _)| l == label) else { return };
         let uid = *uid;
         me_pick.update(cx, |cv, cx| {
-            cv.bind_window_document(window, true);
+            cv.bind_window_document(window, true, cx);
             cv.select_doc(uid, cx);
         });
     });
@@ -294,7 +294,7 @@ pub(crate) fn tab_strip(
             me_home.update(cx, |cv, cx| {
                 // ⛔ 先绑定本窗口：`show_home` 改的是**窗口私有**状态，不绑定就会写进
                 // 另一个窗口的 pane（用户 2026-11-16：两个窗口一起切首页）。
-                cv.bind_window_document(window, true);
+                cv.bind_window_document(window, true, cx);
                 cv.show_home();
                 cx.notify();
             });
@@ -409,7 +409,7 @@ pub(crate) fn tab_strip(
                 // 用 render 时记下的 `index` 排队会被判成别的窗口的文档而丢弃 ——
                 // 表现就是「点标签切不过去」（用户 2026-11-16）。
                 me_switch.update(cx, |cv, cx| {
-                    cv.bind_window_document(window, true);
+                    cv.bind_window_document(window, true, cx);
                     cv.select_doc(uid, cx);
                 });
             })
@@ -552,7 +552,7 @@ pub(crate) fn tab_strip(
         move |_e: &ClickEvent, window, cx: &mut App| {
             // 新标签属于**当前窗口**：`file.new` 之后由 `sync_panel` 把新文档并入发起窗口，
             // 不先绑定窗口的话它会按「最后渲染的窗口」归属（点 + 加到别的窗口里）。
-            me_new.update(cx, |cv, _| cv.bind_window_document(window, true));
+            me_new.update(cx, |cv, cx| cv.bind_window_document(window, true, cx));
             cmds_new.push(Cmd { id: "file.new", params: Some(json!({})) });
             me_new.update(cx, |cv, _| cv.close_home());
         },

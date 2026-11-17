@@ -20,7 +20,7 @@
 
 pub(crate) use crate::widgets::Width;
 use crate::widgets::icon::{Icon, paint as paint_icon};
-use crate::widgets::{MENU_TRAIL_GAP, TEXT_PT, pt, rgba, tokens};
+use crate::widgets::{MENU_TRAIL_GAP, pt, rgba, tokens};
 use gpui::prelude::*;
 use gpui::{AnyElement, App, MouseButton, MouseDownEvent, SharedString, TextRun, Window, div};
 use std::rc::Rc;
@@ -144,7 +144,9 @@ fn widest(items: &[Item], has_check: bool, window: &Window) -> f32 {
             underline: None,
             strikethrough: None,
         };
-        f32::from(window.text_system().shape_line(s.clone(), pt(TEXT_PT), &[run], None).width)
+        // 测量必须和渲染用同一个字号（渲染是 PALETTE_TEXT_PT=13）：旧代码用 TEXT_PT=11
+        // 量，长标签会把卡片算窄、文字被裁（CodeRabbit PR#28）。
+        f32::from(window.text_system().shape_line(s.clone(), pt(PALETTE_TEXT_PT), &[run], None).width)
     };
     items
         .iter()
@@ -182,6 +184,9 @@ pub(crate) fn rows(
     // 悬停某一行时回调（`MenuAim` 的输入）：子菜单的展开 / 收起由通用状态机裁决，
     // 不再靠点击切换。工具栏飞出 / palette 传空闭包即可。
     on_hover: OnSub,
+    // true = 行画在深色菜单表面上（右键菜单/工具栏飞出，用 t.menu_text）；
+    // false = 画在面板底的动作库 palette（用 t.text）。
+    menu_surface: bool,
     window: &Window,
     vh: f32,
 ) -> (Vec<AnyElement>, Vec<AnyElement>) {
@@ -210,10 +215,11 @@ pub(crate) fn rows(
             .rounded(pt(ITEM_RADIUS))
             .pl(pt(inset))
             .pr(pt(8.0))
-            // egui `MenuItem::show_palette`：动作库（palette）是**面板底**上的 32pt 行，
-            // 墨色用 `t.text`（不是菜单的白 90%），字号 13，悬停/高亮填 `t.field`。
+            // 菜单表面是深底（t.menu，通主题 #1E1E1E），文字必须用 t.menu_text（白）；
+            // 只有面板底的动作库 palette 才用 t.text（亮主题深墨）。此前两者都用 t.text，
+            // 亮主题下菜单文字和菜单底同色、整行消失（CodeRabbit PR#28）。
             .text_size(pt(PALETTE_TEXT_PT))
-            .text_color(rgba(t.text))
+            .text_color(rgba(if menu_surface { t.menu_text } else { t.text }))
             .when(item.disabled, |d| d.opacity(0.4));
         if !item.disabled {
             row = row.hover(|s| s.bg(rgba(t.field))).cursor_pointer();
@@ -322,7 +328,7 @@ pub(crate) fn card(
         Width::Min(f) => (content_w + 2.0 * PAD).max(f),
         Width::Anchor => (content_w + 2.0 * PAD).max(48.0),
     };
-    let (row_els, sub_els) = rows(items, row_h, has_check, open_sub, None, left, top, w, on_pick, on_sub, on_hover, window, vh);
+    let (row_els, sub_els) = rows(items, row_h, has_check, open_sub, None, left, top, w, on_pick, on_sub, on_hover, true, window, vh);
     // 唯一的浮层控件：宽度三档、锚点跟随、上下防溢出与滚动全在 `Menu::show` 里。
     crate::widgets::menu(crate::widgets::at_point(left, top))
         .gap(0.0)

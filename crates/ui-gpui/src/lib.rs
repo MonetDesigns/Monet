@@ -753,7 +753,7 @@ impl CanvasView {
     /// 而不是逐字段挑选——逐字段挑选正是「新增字段忘了搬」的根源。
     /// 目标窗口第一次出现时沿用它上一次的壳层设置（面板宽度/页签），但清掉窗口私有的
     /// 浮层与指针，避免新窗口一开就带着别的窗口的弹窗。
-    fn enter_pane(&mut self, wid: u64) {
+    fn enter_pane(&mut self, wid: u64, cx: &mut App) {
         if self.pane_wid == wid {
             return;
         }
@@ -767,6 +767,16 @@ impl CanvasView {
                 p.tabs.home = false;
                 p.extra = None;
                 p.pointer = None;
+                // TabDragState 包着 Rc<RefCell<_>>：clone 会和源窗口共享拖拽记录，
+                // 另一个窗口的标签渲染会把本窗口正在拖的目标清掉（CodeRabbit PR#27/#28）。
+                p.tabs.drag = Default::default();
+                // motion::Queue 也是 Rc<RefCell<_>>：clone 共享 action vector，两个窗口
+                // 会 drain 彼此的动作、editors 也会 push 进旧窗口的 queue（CodeRabbit PR#28）。
+                // 换新 queue 并用它重建 editors，让新窗口的 Motion 编辑留在本窗口。
+                p.motion_q = p.motion_q.detached();
+                p.motion_fields = motion::keyframe_field::KeyframeFields::new(cx, 0.0, &p.motion_q);
+                p.motion_clip_fields = motion::clip_popover::ClipFields::new(cx, &p.motion_q);
+                p.motion_times = motion::timeline::TimeFields::new(cx, &p.motion_q);
                 // `clone()` 只复制了 `Rc` 指针：右栏的折叠 / 展开 / 过滤面板会和别的窗口
                 // 共享同一块内存，一处折叠处处折叠（用户 2026-11-16 实测）。
                 p.fields = p.fields.detached();
@@ -784,22 +794,70 @@ impl CanvasView {
         std::mem::swap(&mut self.worker, &mut next_canvas.worker);
         self.canvases.insert(old, next_canvas);
         self.pane_wid = wid;
+        // display_doc 是跨窗口共享的，只在渲染时由 sync_motion 写。换入新 pane 后必须
+        // 按这份 pane 的 motion 状态刷新，否则一个窗口的运动预览会被另一个窗口的
+        // 命中几何使用（点击落空 / 选错对象，CodeRabbit PR#28）。
+        self.app.session.display_doc = if self.pane.motion && !self.pane.motion_ui.playing {
+            self.pane.motion_ui.preview_doc.clone()
+        } else {
+            None
+        };
+        self.app.display_doc = self.pane.motion_ui.preview_doc.clone();
     }
 
     /// 只换入窗口 `wid` 的私有 UI 状态，不动 `session.active`。窗口级 Capture 监听用它：
     /// 鼠标移动 / 抬起 / 滚轮一进入窗口，后续所有 handler 读到的 `self.popup` /
     /// `self.left_w` / `self.pointer` 就都是**这个窗口**的那份，而不是最后渲染的那个窗口的。
-    pub(crate) fn enter_window(&mut self, window: &mut Window) {
+    pub(crate) fn enter_window(&mut self, window: &mut Window, cx: &mut App) {
         let wid = window_id_of(&self.windows.borrow(), window);
         windows::set_current(wid);
         self.windows.borrow_mut().current = wid;
-        self.enter_pane(wid);
+        self.enter_pane(wid, cx);
+    }
+
+    /// `file.new` / `file.open` 成功后，把新文档登记到**发起命令的窗口**。
+    ///
+    /// `session.active` 是全局共享的，归属却按窗口记在 `Windows` 里。菜单、快捷键、
+    /// 文件选择器、拖放、右栏「+」走的是不同执行路径，只在 `sync_panel` 里登记会漏掉
+    /// 其余路径（结果：在第二个窗口打开的文件跑到了第一个窗口的标签栏）。这里用
+    /// 命令前后的 `docs` uid-diff 统一登记，并且不抢走已经属于别的窗口的文档。
+    /// `before` 是命令执行前的 uid 快照。
+    fn adopt_opened_doc(&mut self, command: &str, before: &[u64]) {
+        if command != "file.new" && command != "file.open" {
+            return;
+        }
+        let after: Vec<u64> = self.app.session.docs.iter().map(|d| d.uid).collect();
+        let active = self.app.session.ds().ok().map(|d| d.uid);
+        // 新出现的 uid 一定属于发起窗口；再带上当前活动文档，覆盖「打开一个已存在的文档」。
+        let mut candidates: Vec<u64> = after.iter().copied().filter(|u| !before.contains(u)).collect();
+        if let Some(a) = active
+            && !candidates.contains(&a)
+        {
+            candidates.push(a);
+        }
+        let wid = crate::windows::current();
+        let mut wins = self.windows.borrow_mut();
+        for uid in candidates {
+            // 已被其它窗口拥有的文档不登记到本窗口（file.open 本来在别处打开）。
+            let owner = wins.of(uid);
+            if owner != 0 && owner != wid {
+                continue;
+            }
+            if wid == 0 {
+                wins.main_active = Some(uid);
+            } else if let Some(e) = wins.entry_mut(wid) {
+                if !e.docs.contains(&uid) {
+                    e.docs.push(uid);
+                }
+                e.active = Some(uid);
+            }
+        }
     }
 
     /// `authoritative`：**事件**处理时为 true —— 事件来自哪个窗口，那个窗口的文档就必须成为
     /// 全局 `session.active`，否则第二个窗口里点「加页」会加到第一个窗口的文档上
     /// （用户 2026-11-16 实测）。渲染时为 false：只有聚焦窗口写，避免两个窗口每帧互相覆盖。
-    pub(crate) fn bind_window_document(&mut self, window: &mut Window, authoritative: bool) {
+    pub(crate) fn bind_window_document(&mut self, window: &mut Window, authoritative: bool, cx: &mut App) {
         let doc_uids: Vec<u64> = self.app.session.docs.iter().map(|d| d.uid).collect();
         let mut wins = self.windows.borrow_mut();
         let wid = window_id_of(&wins, window);
@@ -851,7 +909,7 @@ impl CanvasView {
         }
         drop(wins);
         // 进入这个窗口的上下文：换入它自己的 UI 状态（首页 / 弹层 / 面板宽度 / 指针 …）。
-        self.enter_pane(wid);
+        self.enter_pane(wid, cx);
     }
 
     /// 标签点击：按 **uid** 当场切文档。
@@ -1644,7 +1702,7 @@ impl CanvasView {
             match r.kind.as_str() {
                 // A21：F6 / Shift+F6 的区域移动由 UI 侧维护（引擎只发 `step`）。
                 // A16：File ▸ New window / Open in new window / 拖出成窗口都走 window.new。
-                "window.new" | "window.focus" => {
+                "window.new" | "window.focus" | "window.merge" => {
                     let root = cx.entity();
                     // 这里在 `render` 的 `&mut self` 里：把 `windows` 与 `app.session` 两个字段
                     // 分别借出去，绝不能再 `root.read/update`（会 double-lease panic）。
@@ -2275,26 +2333,16 @@ impl CanvasView {
 
                 let params = panels::cmd_params(&ids, c.params);
 
+                // 命令前的 uid 快照：成功后用 uid-diff 把新文档登记到发起窗口（见 adopt_opened_doc）。
+                let docs_before: Vec<u64> = self.app.session.docs.iter().map(|d| d.uid).collect();
+
                 match self.app.session.execute(c.id, &params) {
                     Ok(result) => {
                         self.capture_import_report(c.id, &params, &result, cx);
 
                         // 新建 / 打开出来的文档属于**发起命令的那个窗口**：否则点第二个窗口的
                         // 「+」会在第一个窗口里多一个标签页（用户 2026-11-16 实测）。
-                        if matches!(c.id, "file.new" | "file.open")
-                            && let Ok(ds) = self.app.session.ds()
-                        {
-                            let uid = ds.uid;
-                            let wid = crate::windows::current();
-                            if wid != 0
-                                && let Some(e) = self.windows.borrow_mut().entry_mut(wid)
-                            {
-                                if !e.docs.contains(&uid) {
-                                    e.docs.push(uid);
-                                }
-                                e.active = Some(uid);
-                            }
-                        }
+                        self.adopt_opened_doc(c.id, &docs_before);
 
                         // A23：导出命令没给路径时引擎只回 base64，UI 负责弹保存对话框落盘。
                         self.deliver_download(c.id, &result, cx);
@@ -2919,8 +2967,12 @@ impl CanvasView {
             return;
         }
 
+        let docs_before: Vec<u64> = self.app.session.docs.iter().map(|d| d.uid).collect();
         match self.app.session.execute(id, &params) {
-            Ok(result) => self.capture_import_report(id, &params, &result, cx),
+            Ok(result) => {
+                self.capture_import_report(id, &params, &result, cx);
+                self.adopt_opened_doc(id, &docs_before);
+            }
 
             Err(e) => {
                 // 不做无声吞掉：`FC_DEBUG_CMDS=1` 时把 id / 参数 / 错误打出来（同右栏那条通道）。
@@ -3059,9 +3111,12 @@ impl CanvasView {
     /// 判定完全读结果里的 `warnings` / `summary`，与 `ui-egui` 的 `Report::from_result` 同源）。
 
     fn execute_reporting(&mut self, id: &str, params: serde_json::Value, cx: &mut Context<Self>) -> Option<serde_json::Value> {
+        let docs_before: Vec<u64> = self.app.session.docs.iter().map(|d| d.uid).collect();
         match self.app.session.execute(id, &params) {
             Ok(result) => {
                 self.capture_import_report(id, &params, &result, cx);
+                // 文件选择器 / 拖放也经这里打开文档：登记到发起窗口（见 adopt_opened_doc）。
+                self.adopt_opened_doc(id, &docs_before);
 
                 Some(result)
             }
@@ -3987,8 +4042,12 @@ impl CanvasView {
             return;
         }
 
-        if let Err(e) = self.app.session.execute(cmd, &params) {
-            eprintln!("[menu] {cmd}: {e}");
+        let docs_before: Vec<u64> = self.app.session.docs.iter().map(|d| d.uid).collect();
+        if self.app.session.execute(cmd, &params).is_ok() {
+            // 主菜单里的 New / Open 也要把文档登记到发起窗口（见 adopt_opened_doc）。
+            self.adopt_opened_doc(cmd, &docs_before);
+        } else {
+            eprintln!("[menu] {cmd}: failed");
         }
 
         self.close_popup(cx);
@@ -4724,7 +4783,7 @@ impl CanvasView {
                         return;
                     }
                     if let Some(me) = me.upgrade() {
-                        me.update(cx, |this, _cx| this.bind_window_document(window, true));
+                        me.update(cx, |this, _cx| this.bind_window_document(window, true, _cx));
                     }
                 });
                 let me = moved.clone();
@@ -4733,7 +4792,7 @@ impl CanvasView {
                         return;
                     }
                     if let Some(me) = me.upgrade() {
-                        me.update(cx, |this, _cx| this.enter_window(window));
+                        me.update(cx, |this, _cx| this.bind_window_document(window, true, _cx));
                     }
                 });
                 let me = up.clone();
@@ -4742,7 +4801,7 @@ impl CanvasView {
                         return;
                     }
                     if let Some(me) = me.upgrade() {
-                        me.update(cx, |this, _cx| this.enter_window(window));
+                        me.update(cx, |this, _cx| this.bind_window_document(window, true, _cx));
                     }
                 });
                 let me = scroll.clone();
@@ -4751,7 +4810,7 @@ impl CanvasView {
                         return;
                     }
                     if let Some(me) = me.upgrade() {
-                        me.update(cx, |this, _cx| this.enter_window(window));
+                        me.update(cx, |this, _cx| this.bind_window_document(window, true, _cx));
                     }
                 });
             },
@@ -4780,7 +4839,7 @@ impl Render for CanvasView {
             self.canvases.retain(|wid, _| wins.exists(*wid));
         }
         // A16：绑定本窗口的文档（含 active 回写，见 bind_window_document）。
-        self.bind_window_document(window, false);
+        self.bind_window_document(window, false, cx);
         let a11y_focused = window.focused(cx);
         let a11y_scale = window.scale_factor();
         for (_, command) in a11y::commit_frame("Monet", a11y_focused.as_ref(), a11y_scale, window, cx) {
@@ -5386,7 +5445,7 @@ impl Render for CanvasView {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this: &mut CanvasView, e: &MouseDownEvent, window, cx| {
-                    this.bind_window_document(window, true);
+                    this.bind_window_document(window, true, cx);
                     // 点画布 = 整窗失焦：先把右栏所有仍在编辑的草稿提交，再把焦点给画布。
 
                     // 只靠 TextEdit::render() 轮询 focus 会漏：GPUI 对未标脏的嵌套 Entity
@@ -5514,7 +5573,7 @@ impl Render for CanvasView {
             )
             // 移动：拖拽进度统一由共用窗口级路由接管；这里只做 hover 命中。
             .on_mouse_move(cx.listener(|this: &mut CanvasView, e: &MouseMoveEvent, window, cx| {
-                this.bind_window_document(window, true);
+                this.bind_window_document(window, true, cx);
                 // 任何共用拖拽进行中，元素级 move 一律不重复推进：它只在指针悬停画布时
                 // 触发，指针移到别的面板就停发（用户 2026-11-13 指出的问题）。
                 if this.any_window_drag_active() {
@@ -5802,7 +5861,7 @@ impl Render for CanvasView {
             )
             // 键盘：空格 = 平移工具，Z = 缩放工具（Alt 缩小）。
             .on_key_down(cx.listener(|this: &mut CanvasView, e: &KeyDownEvent, window, cx| {
-                this.bind_window_document(window, true);
+                this.bind_window_document(window, true, cx);
                 this.mods = e.keystroke.modifiers;
 
                 // R4/R5: Escape cancels an inline rename (egui `Rename` keeps the old name);
@@ -5921,7 +5980,9 @@ impl Render for CanvasView {
 
                         if w.variables_key(&e.keystroke.key, m.platform || m.control) {
                             cx.notify();
-
+                            // 面板已消费这次按键：不再冒泡到 root 的 on_key_down，
+                            // 否则同一次 Ctrl/Cmd+V 会粘贴两次（CodeRabbit PR#29）。
+                            cx.stop_propagation();
                             return;
                         }
                     }
@@ -7106,6 +7167,7 @@ impl Render for CanvasView {
                         pick,
                         hover,
                         std::rc::Rc::new(|_, _, _| {}),
+                        false, // palette 画在面板底，用 t.text（menu_surface=true 才用 t.menu_text）
                         window,
                         vh,
                     );
@@ -7468,7 +7530,7 @@ impl Render for CanvasView {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this: &mut CanvasView, _e: &MouseDownEvent, window, cx| {
-                    this.bind_window_document(window, true);
+                    this.bind_window_document(window, true, cx);
                     // A21：鼠标一按就回到指针模式（焦点环消失，上游同义）。
                     if this.a11y.region.take().is_some() {
                         cx.notify();
@@ -7479,8 +7541,8 @@ impl Render for CanvasView {
             )
             // Capture 阶段的按键：早于焦点链上的每个控件 handler，先把本窗口换入并绑定
             // 本窗口的文档（Bubble 里的根节点 handler 太晚，输入框已经按别的窗口的文档处理过）。
-            .capture_key_down(cx.listener(|this: &mut CanvasView, _e: &KeyDownEvent, window, _cx| {
-                this.bind_window_document(window, true);
+            .capture_key_down(cx.listener(|this: &mut CanvasView, _e: &KeyDownEvent, window, cx| {
+                this.bind_window_document(window, true, cx);
             }))
             // Local styles 列表的键盘（↑/↓ / Enter / Delete / Ctrl+C / Ctrl+V / Ctrl+D）。
             // 必须挂在**根节点**上：GPUI 的按键沿焦点链派发（root → 焦点节点），而画布那个
@@ -7492,7 +7554,7 @@ impl Render for CanvasView {
             // 用户几乎总是刚点完输入框/菜单，这里先截一步，保证 Ctrl+Z / Shift+Ctrl+Z /
             // Ctrl+Y 一律进文档历史（用户 2026-11-17）。
             .capture_key_down(cx.listener(|this: &mut CanvasView, e: &KeyDownEvent, window, cx| {
-                this.bind_window_document(window);
+                this.bind_window_document(window, true, cx);
                 if !this.variables_open {
                     return;
                 }
@@ -7532,7 +7594,7 @@ impl Render for CanvasView {
                 }
             }))
             .on_key_down(cx.listener(|this: &mut CanvasView, e: &KeyDownEvent, window, cx| {
-                this.bind_window_document(window, true);
+                this.bind_window_document(window, true, cx);
                 let accel = e.keystroke.modifiers.platform || e.keystroke.modifiers.control;
 
                 // 撤销 / 重做必须在根节点兜底：GPUI 的按键沿**焦点链**派发，而整套命令快捷键
@@ -7671,8 +7733,8 @@ impl Render for CanvasView {
                 .h(px(1.0)),
             )
             // 时间轴 hover 标记：与拖拽无关，但仍需每次 move 更新。
-            .on_mouse_move(cx.listener(|this: &mut CanvasView, e: &MouseMoveEvent, window, _cx| {
-                this.bind_window_document(window, true);
+            .on_mouse_move(cx.listener(|this: &mut CanvasView, e: &MouseMoveEvent, window, cx| {
+                this.bind_window_document(window, true, cx);
                 let vh = f32::from(window.viewport_size().height);
                 crate::motion::timeline::set_pointer_in_bar(this.motion && f32::from(e.position.y) >= vh - this.motion_bar_h());
             }))

@@ -25,7 +25,7 @@ use gpui::{
     Stateful, Window, div, point, prelude::*, px, size,
 };
 use serde_json::{Value, json};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeSet, HashMap};
 use std::rc::Rc;
 use std::time::Instant;
@@ -472,6 +472,9 @@ struct RowCaches {
     value_editors: HashMap<String, Entity<TextField>>,
     /// 颜色值格用通用 `ColorField`：它的 hex / alpha 是裸 `TextEdit`，按 key 缓存以保住焦点。
     color_editors: HashMap<String, (Entity<crate::widgets::input::TextEdit>, Entity<crate::widgets::input::TextEdit>)>,
+    /// 颜色格最新 RGB（alpha 由 opacity 输入框给）：缓存 editor 的 opacity 回调读这里，
+    /// 否则取色器把红改成蓝后，改透明度会把旧红色写回去（CodeRabbit PR#29）。
+    color_rgb: HashMap<String, Rc<Cell<[u8; 4]>>>,
     /// 打开取色器用的请求队列（由 `WindowState` 注入；独立渲染测试里可能没有）。
     popups: Option<crate::panels::PopupReqs>,
 }
@@ -567,6 +570,9 @@ pub struct EditorState {
     pub details_pos: Option<Point<Pixels>>,
     /// 浮层标题栏拖动中：按下点相对卡片原点的偏移。
     pub details_drag: Option<Point<Pixels>>,
+    /// 「Edit variable」浮层上一帧量到的真实高度：clamp 用它而非默认 72pt，
+    /// 否则拖到视口底部时下方控件出屏（CodeRabbit PR#29）。
+    pub details_h: Option<f32>,
     /// 用户拖出来的窗口尺寸（None = 默认 FLOAT_W/FLOAT_H）。
     pub size: Option<(f32, f32)>,
     /// resize 拖动中：`(方向位, 按下 x, 按下 y, 起始宽, 起始高)`。
@@ -623,6 +629,7 @@ impl EditorState {
             details: None,
             details_pos: None,
             details_drag: None,
+            details_h: None,
             add_anchor: None,
             filter_anchor: None,
             size: None,
@@ -821,11 +828,18 @@ impl VariablesEditor {
                 if let Some(old) = old {
                     if !name.is_empty() && name != old {
                         // 整组改名是**一个手势**：合成一步撤销（`command.batch`）。
+                        // `old` 是完整组路径（如 `Brand/Buttons`），编辑器里只有短名。
+                        // 改名的只是最后一段，父路径必须原样保留（否则 `Brand/Buttons`
+                        // 改成 `Controls` 会把成员移出 `Brand`，CodeRabbit PR#29 折叠项）。
+                        let parent = match old.rsplit_once('/') {
+                            Some((p, _)) => format!("{p}/"),
+                            None => String::new(),
+                        };
                         let steps: Vec<Value> = gm
                             .borrow()
                             .iter()
                             .map(|(id, rest)| {
-                                json!({ "command": "variable.update", "params": { "variable": id, "name": format!("{name}/{rest}") } })
+                                json!({ "command": "variable.update", "params": { "variable": id, "name": format!("{parent}{name}/{rest}") } })
                             })
                             .collect();
                         if !steps.is_empty() {
@@ -1020,7 +1034,7 @@ impl VariablesEditor {
                     Self::copy_row(&self.state, &self.data);
                 }
             } else if let Some(m) = mode {
-                Self::paste_column(&self.state, &self.cmds, &m);
+                Self::paste_column(&self.state, &self.cmds, &self.data, &m);
             } else {
                 Self::paste_row(&self.state, &self.data, &self.cmds);
             }
@@ -1105,10 +1119,16 @@ impl VariablesEditor {
 
     /// 粘贴整列到目标 mode。一次粘贴是**一个手势**，走 `command.batch` 合成一步撤销
     /// （用户 2026-11-17：所有行为都要可逆、进撤销重做栈）。
-    fn paste_column(st: &State, cmds: &Cmds, mode: &str) {
+    fn paste_column(st: &State, cmds: &Cmds, data: &VariablesData, mode: &str) {
         let Some(vals) = st.borrow().clipboard_column.clone() else { return };
+        // 剪贴板里可能还留着已删除的变量：variable.set 会拒绝它，整批 command.batch
+        // 因此回滚，连有效的那几格也贴不进去（CodeRabbit PR#29）。先按当前集合过滤。
+        let list = Self::collections(st, data);
+        let ci = st.borrow().collection.min(list.len().saturating_sub(1));
+        let live: std::collections::HashSet<&str> = list.get(ci).map(|c| c.rows.iter().map(|r| r.id.as_str()).collect()).unwrap_or_default();
         let steps: Vec<Value> = vals
             .iter()
+            .filter(|(vid, _)| live.contains(vid.as_str()))
             .filter_map(|(vid, cell)| {
                 cell_value(cell).map(|v| json!({ "command": "variable.set", "params": { "variable": vid, "mode": mode, "value": v } }))
             })
@@ -1995,11 +2015,39 @@ impl VariablesEditor {
                         let hover = t.hover;
                         inner = inner.hover(move |s| s.bg(rgba(hover)));
                     }
-                    inner = inner.child(div().flex_none().w(pt(24.0)).h_full().flex().items_center().justify_center().child(if gr.has_children {
-                        paint_icon(if gr.is_collapsed { Icon::ChevronRight } else { Icon::ChevronDown }, rgba(t.text_secondary), 12.0).into_any_element()
-                    } else {
-                        div().into_any_element()
-                    }));
+                    // Chevron 自己吞掉按下并切换折叠；否则这次按下会落到整行的 handler
+                    // 上变成「选中 + 开始拖动」，用户根本无法折叠/展开嵌套组
+                    // （CodeRabbit PR#29）。wake 下一帧用新的 collapsed 重绘图标。
+                    let st_chev = st2.clone();
+                    let g_chev = g.clone();
+                    let has_children = gr.has_children;
+                    let chev_wake = cmds.clone();
+                    inner = inner.child(
+                        div()
+                            .flex_none()
+                            .w(pt(24.0))
+                            .h_full()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .on_mouse_down(MouseButton::Left, move |_e, _window, cx| {
+                                if has_children {
+                                    let mut s = st_chev.borrow_mut();
+                                    if s.collapsed.contains(&g_chev) {
+                                        s.collapsed.remove(&g_chev);
+                                    } else {
+                                        s.collapsed.insert(g_chev.clone());
+                                    }
+                                }
+                                cx.stop_propagation();
+                                chev_wake.wake();
+                            })
+                            .child(if gr.has_children {
+                                paint_icon(if gr.is_collapsed { Icon::ChevronRight } else { Icon::ChevronDown }, rgba(t.text_secondary), 12.0).into_any_element()
+                            } else {
+                                div().into_any_element()
+                            }),
+                    );
                     inner = if renaming_r.as_deref() == Some(g.as_str()) {
                         if let Some(input) = caches.borrow().group_rename_input.clone() {
                             // 提交时要用组内成员：这里先把 (变量 id, 组内剩余名) 填进缓存。
@@ -2931,6 +2979,13 @@ impl VariablesEditor {
                 // 复用通用 `ColorField`（与右栏 Fill 行同源）：swatch / hex / alpha 全由控件画，
                 // 不再手写绝对定位的几个输入框。
                 let ckey = format!("{}/{}:color", r.id, m.id);
+                // 最新 RGB 放在共享 Cell 里：每帧刷新，opacity 回调读它而不是创建时
+                // 捕获的旧值（取色器改色后再改透明度不能把旧色写回，CodeRabbit PR#29）。
+                let rgb_cell = {
+                    let mut c = caches.borrow_mut();
+                    c.color_rgb.entry(ckey.clone()).or_insert_with(|| Rc::new(Cell::new([color.0[0], color.0[1], color.0[2], color.0[3]]))).clone()
+                };
+                rgb_cell.set([color.0[0], color.0[1], color.0[2], color.0[3]]);
                 let (hex_ed, op_ed) = if let Some(e) = caches.borrow().color_editors.get(&ckey) {
                     e.clone()
                 } else {
@@ -2938,7 +2993,7 @@ impl VariablesEditor {
                     let mid = m.id.clone();
                     let cmds_h = cmds.clone();
                     let cmds_a = cmds.clone();
-                    let base = *color;
+                    let rgb_for_alpha = rgb_cell.clone();
                     let (h, o) = crate::widgets::ColorField::color_row_editors(
                         cx,
                         hex,
@@ -2952,7 +3007,8 @@ impl VariablesEditor {
                             let mid = m.id.clone();
                             move |pct, _, _| {
                                 let a8 = (pct.clamp(0.0, 100.0) / 100.0 * 255.0).round() as u8;
-                                let hex = format!("#{:02X}{:02X}{:02X}{:02X}", base.0[0], base.0[1], base.0[2], a8);
+                                let rgb = rgb_for_alpha.get();
+                                let hex = format!("#{:02X}{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2], a8);
                                 cmds_a.push(Cmd { id: "variable.set", params: Some(json!({ "variable": vid, "mode": mid, "value": json!(hex) })) });
                             }
                         },
@@ -3251,7 +3307,7 @@ impl VariablesEditor {
                             }
                             "ui.pasteColumn" => {
                                 if let Some(m) = params["mode"].as_str() {
-                                    Self::paste_column(&state, &cmds, m);
+                                    Self::paste_column(&state, &cmds, &data, m);
                                 }
                             }
                             "ui.deleteGroup" => {
@@ -3259,9 +3315,19 @@ impl VariablesEditor {
                                     .as_array()
                                     .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
                                     .unwrap_or_default();
+                                // 扩展集合里组可能同时有 inherited 与本地成员。引擎拒绝删
+                                // inherited，整批 command.batch 会因此回滚、本地成员也删不掉
+                                // （CodeRabbit PR#29）：只把本地（非继承）成员放进批次。
+                                let colls = Self::collections(&state, &data);
+                                let ci = state.borrow().collection.min(colls.len().saturating_sub(1));
+                                let deletable: std::collections::HashSet<&str> = colls
+                                    .get(ci)
+                                    .map(|c| c.rows.iter().filter(|r| !r.inherited).map(|r| r.id.as_str()).collect())
+                                    .unwrap_or_default();
                                 // 删整组 = 一个手势 = 一步撤销，而不是每个变量一步。
                                 let steps: Vec<Value> = ids
                                     .iter()
+                                    .filter(|id| deletable.contains(id.as_str()))
                                     .map(|id| json!({ "command": "variable.delete", "params": { "variable": id } }))
                                     .collect();
                                 if !steps.is_empty() {
@@ -3578,8 +3644,18 @@ impl VariablesEditor {
         // 与其它弹窗一样由标题栏拖动：按下时记录抓取偏移，后续移动经根视图的窗口级
         // 路由推进（`internal_drag()` 已包含 `details_drag`），指针移出卡片也不会断。
         let at = st.borrow().details_pos.unwrap_or(point(px(300.0), px(60.0)));
+        // clamp / origin 要用这张卡片的真实高度，默认 72pt 会让详情底部控件出屏。
+        // 首帧按内容给个估算，之后用 on_measure 回写的实测值（CodeRabbit PR#29）。
+        let est_h = st.borrow().details_h.unwrap_or_else(|| {
+            let code_rows = row.code.len() as f32 * 40.0;
+            let scope_rows = row.scopes.as_ref().map(|s| s.len() as f32).unwrap_or(0.0) * 22.0;
+            40.0 + 22.0 + 40.0 + 22.0 + 40.0 + 32.0 + 22.0 + code_rows + 22.0 + 32.0 + scope_rows + 32.0
+        });
+        let measure_st = st.clone();
         let pop = popover_window(PopoverOpen::At(at))
             .width(280.0)
+            .height(est_h)
+            .on_measure(move |h: Pixels| measure_st.borrow_mut().details_h = Some(f32::from(h)))
             .pad(16.0)
             .surface(Surface::Panel)
             .title(title_text(tr("Edit variable")));
@@ -3627,7 +3703,22 @@ impl VariablesEditor {
 /// 分组的「树序」权重：按 `/` 路径逐段取它在 `group_order` 里的位置。
 /// 父组永远排在自己的子组之前（`"A"` 是 `[i]`，`"A/B"` 是 `[i, j]`，前缀相同则短的在前），
 /// 因此表格与侧栏都是「一级组 → 它的二级组 → 三级组 → 下一个一级组」。
+///
+/// 未列进 `group_order` 的段不能统一给 `usize::MAX`：那样 `A/one, B/two, A/three` 的
+/// 两个 `A` 之间夹着 `B`，稳定排序也救不回来，表格渲染出两段 `A`（CodeRabbit PR#29
+/// 折叠项）。这里给未列出段一个**由段名确定性算出的 rank**，排在列出项之后：同名段
+/// 同 rank → 连续；字典序仍保证父在子前；组内文档顺序由稳定排序保留。
 fn group_rank(group: &str, order: &[String]) -> Vec<usize> {
+    const UNLISTED_BASE: usize = 1 << 20;
+    // FNV-1a：确定性、同名同值，映射进 [0, 1<<20) 避免和列出的 position 撞。
+    let segment_rank = |seg: &str| -> usize {
+        let mut h: u64 = 0xcbf29ce484222325;
+        for b in seg.as_bytes() {
+            h ^= *b as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+        UNLISTED_BASE + (h as usize % UNLISTED_BASE)
+    };
     let mut out = Vec::new();
     let mut acc = String::new();
     for seg in group.split('/') {
@@ -3635,7 +3726,7 @@ fn group_rank(group: &str, order: &[String]) -> Vec<usize> {
             acc.push('/');
         }
         acc.push_str(seg);
-        out.push(order.iter().position(|g| g == &acc).unwrap_or(usize::MAX));
+        out.push(order.iter().position(|g| g == &acc).unwrap_or_else(|| segment_rank(&acc)));
     }
     out
 }

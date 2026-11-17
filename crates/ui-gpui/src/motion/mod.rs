@@ -314,6 +314,14 @@ impl Queue {
         Self { items: Rc::new(RefCell::new(Vec::new())), wake }
     }
 
+    /// 新窗口的 pane 用一份**独立**的 action vector，但共享同一个 wake。
+    /// `Clone` 会复制 `Rc<RefCell<Vec<Act>>>`，于是两个窗口 drain 同一批动作、一个窗口
+    /// 的编辑会应用到另一个窗口（CodeRabbit PR#27/#28）。旧 pane 保留原 queue，
+    /// 新 pane 拿这份 detached 的，并据此重建 editors。
+    pub fn detached(&self) -> Self {
+        Self { items: Rc::new(RefCell::new(Vec::new())), wake: self.wake.clone() }
+    }
+
     pub fn push(&self, act: Act) {
         self.items.borrow_mut().push(act);
         (self.wake)();

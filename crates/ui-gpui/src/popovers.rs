@@ -2816,7 +2816,7 @@ impl WindowState {
             };
             if let Some(g) = grad {
                 col = col.child(div().px(pt(16.0)).pt(pt(4.0)).child(self.gradient_kind_row(p, state)));
-                col = col.child(div().px(pt(16.0)).pt(pt(8.0)).child(self.gradient_stops(p, state, g, c.grad_sel.clone())));
+                col = col.child(div().px(pt(16.0)).pt(pt(8.0)).child(self.gradient_stops(p, state, g, c.grad_sel.clone(), c.current.clone())));
             }
         }
         col = col.child(contrast_row);
@@ -3074,6 +3074,7 @@ impl WindowState {
         state: &Rc<RefCell<figcraft_color::Paint>>,
         g: figcraft_color::Gradient,
         sel: Rc<Cell<usize>>,
+        current: Rc<Cell<Color32>>,
     ) -> gpui::Div {
         let t = tokens();
         let write = p.on_write.clone();
@@ -3105,6 +3106,10 @@ impl WindowState {
             let x = (s.position as f32 * 208.0 - 6.0).clamp(-2.0, 194.0);
             let sel_c = sel.clone();
             let drag_c = drag.clone();
+            // 选中 stop 时把 picker 的 current 同步到该 stop 的颜色：否则选了蓝色 stop
+            // 后改 alpha，会把之前留在 picker 里的黑色写回去（CodeRabbit PR#29）。
+            let cur_c = current.clone();
+            let stop_color = s.color;
             stops = stops.child(
                 div()
                     .absolute()
@@ -3120,6 +3125,7 @@ impl WindowState {
                     .on_mouse_down(MouseButton::Left, move |_, _, _| {
                         sel_c.set(i);
                         drag_c.set(Some(i));
+                        cur_c.set(picker_c32(stop_color));
                     }),
             );
         }
