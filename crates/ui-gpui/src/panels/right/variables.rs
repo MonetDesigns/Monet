@@ -610,7 +610,7 @@ impl VariablesEditor {
             tf.set_on_commit(move |text, _, _| q.borrow_mut().query = text.trim().to_lowercase());
         });
         // 改名用共享 InlineInput（和左栏样式重命名同源）：双击 begin_edit 自动聚焦+全选。
-        let rename_input = crate::inline_input::InlineInput::build(cx, crate::inline_input::ROW_H, 0.0, "", {
+        let rename_input = crate::inline_input::InlineInput::build(cx, ROW_H, 0.0, "", {
             let q = state.clone();
             let c = cmds.clone();
             move |text: &str, _, _| {
@@ -623,7 +623,7 @@ impl VariablesEditor {
                 }
             }
         });
-        let mode_rename_input = crate::inline_input::InlineInput::build(cx, crate::inline_input::ROW_H, 0.0, "", {
+        let mode_rename_input = crate::inline_input::InlineInput::build(cx, HEAD_ROW_H, 0.0, "", {
             let q = state.clone();
             let c = cmds.clone();
             move |text: &str, _, _| {
@@ -639,7 +639,7 @@ impl VariablesEditor {
                 }
             }
         });
-        let collection_rename_input = crate::inline_input::InlineInput::build(cx, crate::inline_input::ROW_H, 0.0, "", {
+        let collection_rename_input = crate::inline_input::InlineInput::build(cx, 24.0, 0.0, "", {
             let q = state.clone();
             let c = cmds.clone();
             move |text: &str, _, _| {
@@ -653,7 +653,7 @@ impl VariablesEditor {
             }
         });
         let group_members: Rc<RefCell<Vec<(String, String)>>> = Rc::new(RefCell::new(Vec::new()));
-        let group_rename_input = crate::inline_input::InlineInput::build(cx, crate::inline_input::ROW_H, 0.0, "", {
+        let group_rename_input = crate::inline_input::InlineInput::build(cx, SIDE_ROW_H, 0.0, "", {
             let q = state.clone();
             let c = cmds.clone();
             let gm = group_members.clone();
@@ -967,6 +967,34 @@ impl VariablesEditor {
         // 表格可用宽度 = **卡片宽度**（不是窗口宽度）减去侧栏与其 1pt 分隔线。
         // 以前误用 `viewport.width`，导致表格/滚动条按整窗宽算，列宽和滚动条全错。
         let table_w = (card_w - if sidebar { sidebar_w + 1.0 } else { 0.0 }).max(120.0);
+
+        // 改名焦点由 InlineInput 自己管：每帧 poll 一次「正在改名」的那个，Ended（失焦/提交）
+        // 就把对应状态收掉 —— 这一步同时负责首帧抢焦点+全选、以及点空白取消。
+        {
+            let mut s = st.borrow_mut();
+            if let Some(input) = self.row_caches.borrow().rename_input.clone() {
+                if s.rename.is_some() && input.update(cx, |f, cx| f.poll_active(window, cx)) == crate::inline_input::EditState::Ended {
+                    s.rename = None;
+                }
+            }
+            if let Some(input) = self.row_caches.borrow().mode_rename_input.clone() {
+                if s.rename_mode.is_some() && input.update(cx, |f, cx| f.poll_active(window, cx)) == crate::inline_input::EditState::Ended {
+                    s.rename_mode = None;
+                }
+            }
+            if let Some(input) = self.row_caches.borrow().collection_rename_input.clone() {
+                if s.rename_collection.is_some()
+                    && input.update(cx, |f, cx| f.poll_active(window, cx)) == crate::inline_input::EditState::Ended
+                {
+                    s.rename_collection = None;
+                }
+            }
+            if let Some(input) = self.row_caches.borrow().group_rename_input.clone() {
+                if s.rename_group.is_some() && input.update(cx, |f, cx| f.poll_active(window, cx)) == crate::inline_input::EditState::Ended {
+                    s.rename_group = None;
+                }
+            }
+        }
 
         // 根：按下任意处关掉内联菜单；松开时提交拖拽。
         // ⛔ 这里**不要**铺一块矩形 `bg(t.panel)`：`variables_table` 的卡片 `pad = 0`，这块矩形会
