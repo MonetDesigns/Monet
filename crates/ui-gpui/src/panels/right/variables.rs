@@ -16,12 +16,12 @@ use crate::panels::right::virtual_list::{VirtualListScrollHandle, v_virtual_list
 use crate::panels::{Cmd, Cmds};
 use crate::widgets::icon::paint as paint_icon;
 use crate::widgets::{
-    Icon, IconButton, PopoverOpen, Slot, Surface, TextField, number_field, popover_window, pt, rgba, search_field, text_field, title_text, tokens,
+    Checkbox, Icon, IconButton, PopoverOpen, Slot, Surface, TextField, number_field, popover_window, pt, rgba, search_field, text_field, title_text, tokens,
 };
 use figcraft_i18n::tr;
 use figcraft_i18n::tr_noop;
 use gpui::{
-    AnyElement, App, Bounds, Div, Entity, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle, SharedString, Size,
+    AnyElement, App, Bounds, CursorStyle, Div, Entity, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle, SharedString, Size,
     Stateful, Window, div, point, prelude::*, px, size,
 };
 use serde_json::{Value, json};
@@ -54,9 +54,11 @@ pub const MIN_H: f32 = 240.0;
 /// 列宽 / 侧栏宽的拖动边界（egui `SIDEBAR_MIN/MAX`、`NAME_MIN/MAX`、`MODE_MIN/MAX`）。
 pub const SIDEBAR_MIN: f32 = 180.0;
 pub const SIDEBAR_MAX: f32 = 420.0;
-pub const NAME_MIN: f32 = 120.0;
+// 用户 2026-11-17：列最小宽度太小，拖到极限后列名/值完全看不清。
+// Name 至少容得下缩进后的完整名称，mode 列至少容得下「#123456」这类常见值。
+pub const NAME_MIN: f32 = 180.0;
 pub const NAME_MAX: f32 = 420.0;
-pub const MODE_MIN: f32 = 100.0;
+pub const MODE_MIN: f32 = 140.0;
 pub const MODE_MAX: f32 = 420.0;
 pub const MODE_W: f32 = 200.0;
 /// 水平滚动条的条带高度（egui `HSCROLL_H`）；需要横滚时从行区高度里扣掉。
@@ -219,6 +221,21 @@ fn cell_of(vars: &figcraft_doc::Variables, val: Option<&figcraft_doc::VariableVa
     }
 }
 
+/// 把分组连同它的所有祖先分组一起收集（`Varia/bl/k` → `Varia`、`Varia/bl`）。
+/// 用户 2026-11-17：只有叶子组会被 `rsplit_once('/')` 命中，中间层在侧栏里会凭空消失。
+fn push_group(groups: &mut Vec<String>, group: &str) {
+    let mut upto = String::new();
+    for seg in group.split('/') {
+        if !upto.is_empty() {
+            upto.push('/');
+        }
+        upto.push_str(seg);
+        if !groups.contains(&upto) {
+            groups.push(upto.clone());
+        }
+    }
+}
+
 /// 从 `Document` 读快照（本地集合；库变量只读与 extends 继承留给后续）。
 pub fn read(doc: &figcraft_doc::Document) -> VariablesData {
     let vars = &doc.variables;
@@ -237,8 +254,8 @@ pub fn read(doc: &figcraft_doc::Document) -> VariablesData {
                         Some((g, s)) => (g.to_string(), s.to_string()),
                         None => (String::new(), v.name.clone()),
                     };
-                    if !group.is_empty() && !groups.contains(&group) {
-                        groups.push(group.clone());
+                    if !group.is_empty() {
+                        push_group(&mut groups, &group);
                     }
                     VarRow {
                         id: v.id.clone(),
@@ -283,8 +300,8 @@ pub fn read_libraries(cache: &figcraft_engine::library::Cache, doc: &figcraft_do
                                 Some((g, s)) => (g.to_string(), s.to_string()),
                                 None => (String::new(), v.name.clone()),
                             };
-                            if !group.is_empty() && !groups.contains(&group) {
-                                groups.push(group.clone());
+                            if !group.is_empty() {
+                                push_group(&mut groups, &group);
                             }
                             VarRow {
                                 id: v.id.clone(),
@@ -382,6 +399,25 @@ pub struct Menu {
     pub x: f32,
     pub y: f32,
     pub items: Vec<MenuItem>,
+    /// 对齐到某个控件的真实矩形（窗口坐标）：创建变量钮 / 过滤眼睛用它把菜单贴到按钮上。
+    /// `None` = 右键 / 省略号菜单，直接以按下点 `(x, y)` 为锚。
+    pub anchor: Option<Bounds<Pixels>>,
+    /// 相对锚点矩形的对齐方式（`RectAlign::TopStart` = 按钮上方左对齐）。
+    pub align: crate::widgets::RectAlign,
+    pub gap: f32,
+    pub width: crate::widgets::Width,
+}
+
+impl Menu {
+    /// 按下点锚定的菜单（右键 / 旧调用）。
+    fn at(x: f32, y: f32, items: Vec<MenuItem>) -> Self {
+        Self { x, y, items, anchor: None, align: crate::widgets::RectAlign::BottomStart, gap: 0.0, width: crate::widgets::Width::Min(180.0) }
+    }
+
+    /// 贴到某个控件矩形上的菜单：`align` 决定在哪一侧，`gap` 是它和控件的距离。
+    fn on(rect: Option<Bounds<Pixels>>, align: crate::widgets::RectAlign, gap: f32, items: Vec<MenuItem>) -> Self {
+        Self { x: 0.0, y: 0.0, items, anchor: rect, align, gap, width: crate::widgets::Width::Fit }
+    }
 }
 
 /// 一次列表拖拽（集合 / 分组 / 变量行共用），落点由 `crate::drag::resolve` 算。
@@ -418,23 +454,48 @@ pub struct ClipRow {
 /// `Entity<V>`/`V: Render` 的约束换成闭包捕获）。
 #[derive(Default)]
 struct RowCaches {
-    rename_field: Option<Entity<TextField>>,
-    rename_field_id: Option<String>,
-    mode_rename_field: Option<Entity<TextField>>,
-    mode_rename_field_id: Option<String>,
+    /// 就地改名控件（照搬左栏样式重命名）。**每次开始改名都新建一个**：
+    /// `InlineInput` 自己文档里写死了复用会留下上一次的草稿，且旧编辑器若仍在编辑态，
+    /// `begin_edit` 里的 `finish_edit` 会把旧草稿提交到刚设置的新目标上（表现为要连点
+    /// 三四次、输入框空白或串名）。
+    rename_input: Option<Entity<crate::inline_input::InlineInput>>,
+    mode_rename_input: Option<Entity<crate::inline_input::InlineInput>>,
+    /// sidebar 集合 / 分组改名，同样是 InlineInput（不各造 TextField）。
+    collection_rename_input: Option<Entity<crate::inline_input::InlineInput>>,
+    group_rename_input: Option<Entity<crate::inline_input::InlineInput>>,
+    /// 分组改名需要成员（变量 id + 组内剩余名），提交时逐条重命名。
+    group_rename_members: Rc<RefCell<Vec<(String, String)>>>,
+    /// 每个可拖行在窗口里的真实矩形（prepaint 写入，按下时读）。
+    /// 插入线 / 落点判定都用它校准，而不是拿按下点当行顶 —— 后者会把「点在行内的偏移」
+    /// 当成整列的偏移，插入线因此画错、行也拖不动（用户 2026-11-17）。
+    drag_bounds: Rc<RefCell<HashMap<String, Bounds<Pixels>>>>,
     value_editors: HashMap<String, Entity<TextField>>,
-    /// sidebar 里集合 / 分组的内联改名框。
-    collection_rename: Option<Entity<TextField>>,
-    collection_rename_id: Option<String>,
-    group_rename: Option<Entity<TextField>>,
-    group_rename_id: Option<String>,
+    /// 颜色值格用通用 `ColorField`：它的 hex / alpha 是裸 `TextEdit`，按 key 缓存以保住焦点。
+    color_editors: HashMap<String, (Entity<crate::widgets::input::TextEdit>, Entity<crate::widgets::input::TextEdit>)>,
+    /// 打开取色器用的请求队列（由 `WindowState` 注入；独立渲染测试里可能没有）。
+    popups: Option<crate::panels::PopupReqs>,
 }
 
 /// 虚拟列表中的「条目」：分组间隔、分组标题、或一条变量行。
 enum RowItem {
     Gap,
-    GroupHeader { name: String },
+    /// 分组标题。`first` 是该组第一个变量：拖拽落在这里 = 移到该组**上方**（组外），
+    /// 提交时用它当 `before` 并显式 `group: ""`。
+    GroupHeader { name: String, first: String },
     Row { index: usize, row: VarRow },
+}
+
+/// 拖拽行里的分组标题锚点前缀：`\u{1}g\u{1}{组名}\u{1}{组首变量 id}`。
+const DRAG_GROUP: &str = "\u{1}g\u{1}";
+
+/// 分组标题锚点的字符串键（不会与变量 id 或名字撞）。
+fn drag_group_key(group: &str, first: &str) -> String {
+    format!("{DRAG_GROUP}{group}\u{1}{first}")
+}
+
+/// 从锚点键里取出「组首变量 id」；普通变量 id 返回 `None`。
+fn drag_group_first(key: &str) -> Option<&str> {
+    key.strip_prefix(DRAG_GROUP)?.split_once('\u{1}').map(|(_, first)| first)
 }
 impl RowItem {
     fn height(&self) -> f32 {
@@ -474,6 +535,8 @@ pub struct EditorState {
     pub rename: Option<String>,
     /// 正在内联改名的 mode id（`variable.renameMode`）。
     pub rename_mode: Option<String>,
+    /// 该 mode 所属 collection（`variable.renameMode` 需要 collection + mode 两个 id）。
+    pub rename_mode_coll: Option<String>,
     pub menu: Option<Menu>,
     pub drag: Option<ListDragState>,
     /// mode 列水平拖动：`(起始列下标, 按下 x, 当前 x)`。
@@ -496,6 +559,14 @@ pub struct EditorState {
     pub collapsed: BTreeSet<String>,
     /// 正在编辑详情的变量 id（egui `details`）。
     pub details: Option<String>,
+    /// 「+ Create variable」按钮的真实矩形（prepaint 写入，开菜单时读，用作锚点）。
+    pub add_anchor: Option<Bounds<Pixels>>,
+    /// 搜索旁过滤眼睛按钮的真实矩形（同上）。
+    pub filter_anchor: Option<Bounds<Pixels>>,
+    /// 「Edit variable」浮层被拖到的位置（窗口坐标；`None` = 默认右上）。
+    pub details_pos: Option<Point<Pixels>>,
+    /// 浮层标题栏拖动中：按下点相对卡片原点的偏移。
+    pub details_drag: Option<Point<Pixels>>,
     /// 用户拖出来的窗口尺寸（None = 默认 FLOAT_W/FLOAT_H）。
     pub size: Option<(f32, f32)>,
     /// resize 拖动中：`(方向位, 按下 x, 按下 y, 起始宽, 起始高)`。
@@ -504,11 +575,10 @@ pub struct EditorState {
     pub last_down: Option<(Instant, String)>,
     /// mode 表头的双击检测。
     pub last_mode_down: Option<(Instant, String)>,
-    /// sidebar 集合 / 分组的双击检测。
-    pub last_coll_down: Option<(Instant, usize)>,
-    pub last_group_down: Option<(Instant, String)>,
     /// 变量表格的虚拟列表滚动句柄（跨帧保留，滚动位置不丢失）。
     pub scroll: VirtualListScrollHandle,
+    /// 侧栏 Groups 列表的虚拟列表滚动句柄（与表格 / 左栏图层同一套虚拟化）。
+    pub groups_scroll: VirtualListScrollHandle,
     /// root 在窗口里的真实矩形（由每帧的 canvas prepaint 写入）。插入线要把窗口坐标换算成
     /// root 局部坐标，而 prepaint 在本帧构建之后才跑——所以这个 `Rc` 必须**跨帧保留**，
     /// 每帧新建一个的话读到的永远是 `None`（插入线因此一直画不出来）。
@@ -538,6 +608,7 @@ impl EditorState {
             rename_group: None,
             rename: None,
             rename_mode: None,
+            rename_mode_coll: None,
             menu: None,
             drag: None,
             mode_drag: None,
@@ -550,13 +621,16 @@ impl EditorState {
             group_order: Vec::new(),
             collapsed: BTreeSet::new(),
             details: None,
+            details_pos: None,
+            details_drag: None,
+            add_anchor: None,
+            filter_anchor: None,
             size: None,
             resize: None,
             last_down: None,
             last_mode_down: None,
-            last_coll_down: None,
-            last_group_down: None,
             scroll: VirtualListScrollHandle::new(),
+            groups_scroll: VirtualListScrollHandle::new(),
             root_bounds: Rc::new(std::cell::Cell::new(None)),
         }
     }
@@ -581,8 +655,12 @@ pub struct VariablesEditor {
 
 /// 表格里的分组标题行（egui `group_rows` 的表头）：左 16pt 起、11pt 次要色、底部 1px 线。
 /// **没有折叠三角** —— 折叠只在 sidebar 的 Groups 里做（egui 同）。
+///
+/// 子组标题按层级缩进（一级 16、二级 40、三级 64 …），缩进**只作用于文字**：
+/// 标题行本身仍然满宽，底线通栏 —— 用户 2026-11-17「子层级的左边距没有了」。
 fn group_header_div(name: &str) -> Div {
     let t = tokens();
+    let level = name.matches('/').count() + 1;
     div()
         .relative()
         .flex_none()
@@ -590,15 +668,33 @@ fn group_header_div(name: &str) -> Div {
         .h(pt(GROUP_H))
         .flex()
         .items_center()
-        .pl(pt(16.0))
+        .pl(pt(16.0 + (level.saturating_sub(1)) as f32 * 24.0))
         .text_size(pt(11.0))
         .text_color(rgba(t.text_secondary))
         .child(name.to_string())
         .child(div().absolute().bottom_0().left_0().w_full().h(pt(1.0)).bg(rgba(t.border)))
 }
 
+/// 内联菜单（`menu_overlay`）按内容自适应时的**预计宽度**：最宽一项的文字宽 +
+/// 行左右各 8 + 卡片外框左右各 [`crate::menu_metrics::MENU_PAD`]。
+/// 通用 `Menu` 只按**左缘**定位；需要「右缘对齐触发按钮」时先用它反推锚点左缘。
+fn menu_fit_width(window: &Window, items: &[MenuItem]) -> f32 {
+    let text_w = items
+        .iter()
+        .map(|i| crate::bidi::measure(window, &i.label, 11.0))
+        .fold(0.0_f32, f32::max);
+    (text_w + 16.0 + 2.0 * crate::menu_metrics::MENU_PAD).ceil()
+}
+
 impl VariablesEditor {
-    pub fn new(cmds: Cmds, data: VariablesData, cx: &mut App, on_full: Rc<dyn Fn(bool, &mut App)>, on_close: Rc<dyn Fn(&mut App)>) -> Self {
+    pub fn new(
+        cmds: Cmds,
+        data: VariablesData,
+        cx: &mut App,
+        popups: Option<crate::panels::PopupReqs>,
+        on_full: Rc<dyn Fn(bool, &mut App)>,
+        on_close: Rc<dyn Fn(&mut App)>,
+    ) -> Self {
         let state: State = Rc::new(RefCell::new(EditorState::new()));
         let search = search_field(cx, SEARCH_W, "", "Search variables");
         let q = state.clone();
@@ -610,7 +706,149 @@ impl VariablesEditor {
                 wake.wake();
             });
         });
-        Self { state, data, cmds, search, row_caches: Rc::new(RefCell::new(RowCaches::default())), details_fields: HashMap::new(), on_full, on_close }
+        // 改名控件不在这里预建：InlineInput 要求每次进入重命名都新建一个（见其文档），
+        // 否则会沿用上一次的草稿，并让 start_*_rename 的旧提交写到新目标上。
+        let mut caches = RowCaches::default();
+        caches.group_rename_members = Rc::new(RefCell::new(Vec::new()));
+        caches.popups = popups;
+        Self { state, data, cmds, search, row_caches: Rc::new(RefCell::new(caches)), details_fields: HashMap::new(), on_full, on_close }
+    }
+
+    // ── 就地改名：每次新建 InlineInput（与左栏 Pages / Layers / 画布标签同款）────────────
+
+    /// 变量名改名。旧编辑器先提交（此时 `rename` 仍指向旧变量），再换新编辑器 + 新目标。
+    ///
+    /// 与左栏 `begin_inline_rename` 完全同一套做法：**只建控件、不在这里 begin_edit**。
+    /// 焦点与全选由下一帧渲染时的 `InlineInput::poll_active` 完成 —— 若在按下事件里
+    /// `begin_edit`，同一手势的抬起会落到刚出现的输入框上、把 `select_all_pending` 吃掉，
+    /// 表现为双击后没有焦点 / 没有全选（用户 2026-11-17：要点三四次才进输入态）。
+    fn start_variable_rename(caches: &Rc<RefCell<RowCaches>>, st: &State, cmds: &Cmds, id: String, name: String, window: &mut Window, cx: &mut App) {
+        Self::finish_previous(&caches.borrow().rename_input, window, cx);
+        let input = crate::inline_input::InlineInput::build(cx, ROW_H, 0.0, name, {
+            let q = st.clone();
+            let c = cmds.clone();
+            move |text: &str, _, _| {
+                let name = text.trim().to_string();
+                // 先 take 到局部变量：`if let Some(id) = q.borrow_mut()...` 的临时 RefMut
+                // 会活到整个 if-let 块结束，块内再 borrow_mut 就是 BorrowMutError
+                // （GPUI 里表现为提交改名时进程 abort —— 用户 2026-11-17「提交时卡死」）。
+                let id = q.borrow_mut().rename.take();
+                if let Some(id) = id {
+                    if !name.is_empty() {
+                        c.push(Cmd { id: "variable.update", params: Some(json!({ "variable": id, "name": name })) });
+                    }
+                    q.borrow_mut().last_down = None;
+                }
+            }
+        });
+        caches.borrow_mut().rename_input = Some(input);
+        st.borrow_mut().rename = Some(id);
+    }
+
+    fn start_mode_rename(
+        caches: &Rc<RefCell<RowCaches>>,
+        st: &State,
+        cmds: &Cmds,
+        coll: String,
+        mode: String,
+        name: String,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        Self::finish_previous(&caches.borrow().mode_rename_input, window, cx);
+        let input = crate::inline_input::InlineInput::build(cx, HEAD_ROW_H, 0.0, name, {
+            let q = st.clone();
+            let c = cmds.clone();
+            move |text: &str, _, _| {
+                let name = text.trim().to_string();
+                // 同 `start_variable_rename`：先把 RefMut 临时收掉，否则块内的后两次
+                // borrow_mut 会 panic（提交 mode 改名时 abort）。
+                let mid = q.borrow_mut().rename_mode.take();
+                if let Some(mid) = mid {
+                    if !name.is_empty() {
+                        let coll = q.borrow_mut().rename_mode_coll.take();
+                        if let Some(coll) = coll {
+                            c.push(Cmd { id: "variable.renameMode", params: Some(json!({ "collection": coll, "mode": mid, "name": name })) });
+                        }
+                    }
+                    q.borrow_mut().last_mode_down = None;
+                }
+            }
+        });
+        {
+            let mut s = st.borrow_mut();
+            s.rename_mode = Some(mode);
+            s.rename_mode_coll = Some(coll);
+        }
+        caches.borrow_mut().mode_rename_input = Some(input);
+    }
+
+    fn start_collection_rename(
+        caches: &Rc<RefCell<RowCaches>>,
+        st: &State,
+        cmds: &Cmds,
+        id: String,
+        name: String,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        Self::finish_previous(&caches.borrow().collection_rename_input, window, cx);
+        let input = crate::inline_input::InlineInput::build(cx, 24.0, 0.0, name, {
+            let q = st.clone();
+            let c = cmds.clone();
+            move |text: &str, _, _| {
+                let name = text.trim().to_string();
+                if let Some(id) = q.borrow_mut().rename_collection.take() {
+                    if !name.is_empty() {
+                        c.push(Cmd { id: "variable.renameCollection", params: Some(json!({ "collection": id, "name": name })) });
+                    }
+                }
+            }
+        });
+        caches.borrow_mut().collection_rename_input = Some(input);
+        st.borrow_mut().rename_collection = Some(id);
+    }
+
+    fn start_group_rename(caches: &Rc<RefCell<RowCaches>>, st: &State, cmds: &Cmds, group: String, name: String, window: &mut Window, cx: &mut App) {
+        Self::finish_previous(&caches.borrow().group_rename_input, window, cx);
+        let gm = caches.borrow().group_rename_members.clone();
+        let input = crate::inline_input::InlineInput::build(cx, 24.0, 0.0, name, {
+            let q = st.clone();
+            let c = cmds.clone();
+            move |text: &str, _, _| {
+                let name = text.trim().replace('/', "-");
+                let old = q.borrow_mut().rename_group.take();
+                if let Some(old) = old {
+                    if !name.is_empty() && name != old {
+                        // 整组改名是**一个手势**：合成一步撤销（`command.batch`）。
+                        let steps: Vec<Value> = gm
+                            .borrow()
+                            .iter()
+                            .map(|(id, rest)| {
+                                json!({ "command": "variable.update", "params": { "variable": id, "name": format!("{name}/{rest}") } })
+                            })
+                            .collect();
+                        if !steps.is_empty() {
+                            c.push(Cmd {
+                                id: "command.batch",
+                                params: Some(json!({ "label": tr("Rename group"), "commands": steps })),
+                            });
+                        }
+                    }
+                }
+            }
+        });
+        caches.borrow_mut().group_rename_input = Some(input);
+        st.borrow_mut().rename_group = Some(group);
+    }
+
+    /// 换目标前先把旧编辑器提交掉（旧 `rename` 目标还没被覆盖）。
+    fn finish_previous(old: &Option<Entity<crate::inline_input::InlineInput>>, window: &mut Window, cx: &mut App) {
+        if let Some(old) = old.clone() {
+            old.update(cx, |f, cx| {
+                f.finish_edit(window, cx);
+            });
+        }
     }
 
     pub fn is_full(&self) -> bool {
@@ -644,6 +882,7 @@ impl VariablesEditor {
             || s.split_resize.is_some()
             || s.mode_resize.is_some()
             || s.hscroll_drag.is_some()
+            || s.details_drag.is_some()
     }
 
     /// 拖拽中：由**根视图**用窗口坐标推进（GPUI 的元素级 `on_mouse_move` 只在指针悬停其
@@ -653,19 +892,61 @@ impl VariablesEditor {
         Self::on_move(&self.state, at);
     }
 
-    /// 抬起 / Escape：清掉所有进行中的尺寸拖动状态。
+    /// 抬起 / Escape：清掉所有进行中的拖动状态。
+    ///
+    /// ⚠️ 提交必须在这里做：窗口级 mouse-up 监听先于元素级 `on_mouse_up` 派发，
+    /// 元素级那层看到 `drag` / `mode_drag` 已经被这里清空过，于是行排序、mode 列重排
+    /// 永远不落地（用户 2026-11-17：「拖不动」「列没有拖动行为」）。
     pub fn end_resize(&self) {
-        let mut s = self.state.borrow_mut();
-        s.resize = None;
-        s.col_resize = None;
-        s.mode_resize = None;
-        s.sidebar_resize = None;
-        s.split_resize = None;
-        // ⛔ 内部拖动也必须一起清：mouse-up 可能落在窗口外收不到，残留的 `drag` / `hscroll_drag`
-        // 会让 `internal_drag()` 永远为真 → 根视图把画布的 move 全抢走。
-        s.drag = None;
-        s.mode_drag = None;
-        s.hscroll_drag = None;
+        let cid = self.coll().map(|c| c.id.clone()).unwrap_or_default();
+        let mode_ids: Vec<String> = self.coll().map(|c| c.modes.iter().map(|m| m.id.clone()).collect()).unwrap_or_default();
+        let (d, md, mode_ws) = {
+            let mut s = self.state.borrow_mut();
+            s.resize = None;
+            s.col_resize = None;
+            s.mode_resize = None;
+            s.sidebar_resize = None;
+            s.split_resize = None;
+            s.hscroll_drag = None;
+            s.details_drag = None;
+            (s.drag.take(), s.mode_drag.take(), s.mode_ws.clone())
+        };
+        if let Some(d) = d {
+            Self::commit_drag(&self.state, &d, &self.cmds);
+        }
+        // mode 列拖动：按**实际列宽**累加，越过下一列宽度就前移/后移一位。
+        if let Some((from, x0, x1)) = md {
+            let dx = x1 - x0;
+            if !mode_ids.is_empty() && dx.abs() > 8.0 {
+                let mut to = from;
+                if dx > 0.0 {
+                    let mut acc = 0.0;
+                    for k in from..mode_ids.len().saturating_sub(1) {
+                        acc += mode_ws.get(k).copied().unwrap_or(MODE_W);
+                        if dx >= acc {
+                            to = k + 1;
+                        } else {
+                            break;
+                        }
+                    }
+                } else {
+                    let mut acc = 0.0;
+                    for k in (0..from).rev() {
+                        acc += mode_ws.get(k).copied().unwrap_or(MODE_W);
+                        if -dx >= acc {
+                            to = k;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                if to != from {
+                    if let Some(mid) = mode_ids.get(from) {
+                        self.cmds.push(Cmd { id: "variable.moveMode", params: Some(json!({ "collection": cid, "mode": mid, "to": to })) });
+                    }
+                }
+            }
+        }
     }
 
     /// 用户拖出来的窗口尺寸（`WindowState::render` 用它覆盖默认宽高）。
@@ -729,12 +1010,20 @@ impl VariablesEditor {
             }
             return false;
         }
-        if accel && key.eq_ignore_ascii_case("c") {
-            Self::copy_row(&self.state, &self.data);
-            return true;
-        }
-        if accel && key.eq_ignore_ascii_case("v") {
-            Self::paste_row(&self.state, &self.data, &self.cmds);
+        if accel && (key.eq_ignore_ascii_case("c") || key.eq_ignore_ascii_case("v")) {
+            // 有选中的 mode 列就整列复制 / 粘贴，否则按整行（用户 2026-11-17）。
+            let mode = self.state.borrow().selected_mode.clone();
+            if key.eq_ignore_ascii_case("c") {
+                if let Some(m) = mode {
+                    Self::copy_column(&self.state, &self.data, &m);
+                } else {
+                    Self::copy_row(&self.state, &self.data);
+                }
+            } else if let Some(m) = mode {
+                Self::paste_column(&self.state, &self.cmds, &m);
+            } else {
+                Self::paste_row(&self.state, &self.data, &self.cmds);
+            }
             return true;
         }
         false
@@ -814,13 +1103,23 @@ impl VariablesEditor {
         st.borrow_mut().clipboard_column = Some(vals);
     }
 
-    /// 粘贴整列到目标 mode：每条一个 `variable.set`。
+    /// 粘贴整列到目标 mode。一次粘贴是**一个手势**，走 `command.batch` 合成一步撤销
+    /// （用户 2026-11-17：所有行为都要可逆、进撤销重做栈）。
     fn paste_column(st: &State, cmds: &Cmds, mode: &str) {
         let Some(vals) = st.borrow().clipboard_column.clone() else { return };
-        for (vid, cell) in vals {
-            let Some(v) = cell_value(&cell) else { continue };
-            cmds.push(Cmd { id: "variable.set", params: Some(json!({ "variable": vid, "mode": mode, "value": v })) });
+        let steps: Vec<Value> = vals
+            .iter()
+            .filter_map(|(vid, cell)| {
+                cell_value(cell).map(|v| json!({ "command": "variable.set", "params": { "variable": vid, "mode": mode, "value": v } }))
+            })
+            .collect();
+        if steps.is_empty() {
+            return;
         }
+        cmds.push(Cmd {
+            id: "command.batch",
+            params: Some(json!({ "label": tr("Paste column"), "commands": steps })),
+        });
     }
 
     fn push(&self, id: &'static str, params: Value) {
@@ -858,21 +1157,27 @@ impl VariablesEditor {
             .rows
             .iter()
             .filter(|v| {
-                let in_group = st.group.as_ref().is_none_or(|g| v.group == *g);
+                // 选中父组（`Brand`）时，子组（`Brand/Dark`）里的变量也要显示出来，
+                // 只过滤掉真正不属于这棵子树的（用户 2026-11-17）。
+                let in_group = st.group.as_ref().is_none_or(|g| v.group == *g || v.group.starts_with(&format!("{g}/")));
                 let full_name = if v.group.is_empty() { v.name.clone() } else { format!("{}/{}", v.group, v.name) };
                 in_group && !st.hidden[v.kind.index()] && (q.is_empty() || full_name.to_lowercase().contains(q))
             })
             .cloned()
             .collect();
+        // 顺序：**无组变量在前**（按文档顺序），组在它们后面；组内按「树序」排：
+        // 一级组在前，二级组紧跟其父组，三级组再跟在二级组后面（用户 2026-11-17）。
+        // 新建变量没有组、引擎追加在集合末尾，以前会落到某个组后面，看起来像「进了组」。
         list.sort_by(|a, b| {
-            let pa = st.group_order.iter().position(|g| g == &a.group);
-            let pb = st.group_order.iter().position(|g| g == &b.group);
-            match (pa, pb) {
-                (Some(i), Some(j)) => i.cmp(&j),
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => a.group.cmp(&b.group),
-            }
+            let key = |r: &VarRow| -> (u8, Vec<usize>) {
+                if r.group.is_empty() {
+                    (0, Vec::new())
+                } else {
+                    (1, group_rank(&r.group, &st.group_order))
+                }
+            };
+            // `sort_by` 是稳定排序：同 key 保持引擎里的原始顺序。
+            key(a).cmp(&key(b))
         });
         list
     }
@@ -882,6 +1187,7 @@ impl VariablesEditor {
     pub fn render(
         &mut self,
         cx: &mut App,
+        window: &mut Window,
         body_h: f32,
         viewport: Size<Pixels>,
         origin: Point<Pixels>,
@@ -902,6 +1208,34 @@ impl VariablesEditor {
         // 以前误用 `viewport.width`，导致表格/滚动条按整窗宽算，列宽和滚动条全错。
         let table_w = (card_w - if sidebar { sidebar_w + 1.0 } else { 0.0 }).max(120.0);
 
+        // 改名焦点由 InlineInput 自己管：每帧 poll 一次「正在改名」的那个，Ended（失焦/提交）
+        // 就把对应状态收掉 —— 这一步同时负责首帧抢焦点+全选、以及点空白取消。
+        {
+            let mut s = st.borrow_mut();
+            if let Some(input) = self.row_caches.borrow().rename_input.clone() {
+                if s.rename.is_some() && input.update(cx, |f, cx| f.poll_active(window, cx)) == crate::inline_input::EditState::Ended {
+                    s.rename = None;
+                }
+            }
+            if let Some(input) = self.row_caches.borrow().mode_rename_input.clone() {
+                if s.rename_mode.is_some() && input.update(cx, |f, cx| f.poll_active(window, cx)) == crate::inline_input::EditState::Ended {
+                    s.rename_mode = None;
+                }
+            }
+            if let Some(input) = self.row_caches.borrow().collection_rename_input.clone() {
+                if s.rename_collection.is_some()
+                    && input.update(cx, |f, cx| f.poll_active(window, cx)) == crate::inline_input::EditState::Ended
+                {
+                    s.rename_collection = None;
+                }
+            }
+            if let Some(input) = self.row_caches.borrow().group_rename_input.clone() {
+                if s.rename_group.is_some() && input.update(cx, |f, cx| f.poll_active(window, cx)) == crate::inline_input::EditState::Ended {
+                    s.rename_group = None;
+                }
+            }
+        }
+
         // 根：按下任意处关掉内联菜单；松开时提交拖拽。
         // ⛔ 这里**不要**铺一块矩形 `bg(t.panel)`：`variables_table` 的卡片 `pad = 0`，这块矩形会
         // 正好铺满整张卡片、把卡片自己的圆角（`Popover` 的 `rounded(RADIUS)`）整个盖掉 —— 渲染出来
@@ -915,7 +1249,24 @@ impl VariablesEditor {
             .flex_col()
             .on_mouse_down(MouseButton::Left, {
                 let st = st.clone();
-                move |_e: &MouseDownEvent, _, _| st.borrow_mut().menu = None
+                let caches = self.row_caches.clone();
+                move |_e: &MouseDownEvent, window, cx| {
+                    // 点面板内任意非输入框位置 = 失焦提交（与根视图 `commit_edits` 同款）。
+                    // 普通 div 不会夺走 TextEdit 的焦点，所以必须显式 finish_edit；输入框自己
+                    // 的 on_mouse_down 已 stop_propagation，不会走到这里。
+                    let inputs = {
+                        let c = caches.borrow();
+                        [c.rename_input.clone(), c.mode_rename_input.clone(), c.collection_rename_input.clone(), c.group_rename_input.clone()]
+                    };
+                    for input in inputs.into_iter().flatten() {
+                        input.update(cx, |f, cx| f.finish_edit(window, cx));
+                    }
+                    // 点面板内任意非输入框位置都释放键盘焦点：否则焦点一直留在搜索框/改名框里，
+                    // 后续 Ctrl+C/V/Z 会被那个输入框吞掉，表格的行列复制粘贴和撤销重做就成了
+                    // 死代码（用户 2026-11-17）。
+                    window.blur();
+                    st.borrow_mut().menu = None;
+                }
             })
             .on_mouse_move({
                 let st = st.clone();
@@ -935,6 +1286,7 @@ impl VariablesEditor {
                         s.sidebar_resize = None;
                         s.split_resize = None;
                         s.hscroll_drag = None;
+                        s.details_drag = None;
                     }
                     let d = st.borrow_mut().drag.take();
                     if let Some(d) = d {
@@ -983,14 +1335,22 @@ impl VariablesEditor {
         root = root.child(self.header(&st, &data, full, drag_start));
         let body = div().flex().flex_row().flex_1().min_h(pt(0.0)).w_full();
         let body = if sidebar {
-            body.child(self.sidebar(&st, &data, cx, body_h)).child(div().flex_none().w(pt(1.0)).h_full().bg(rgba(t.border)))
+            body.child(self.sidebar(&st, &data, cx, window, body_h)).child(div().flex_none().w(pt(1.0)).h_full().bg(rgba(t.border)))
         } else {
             body
         };
         // 表格在窗口里的左缘：卡片原点 + 侧栏宽度（+1pt 分隔线）。
         let table_left = f32::from(origin.x) + if sidebar { sidebar_w + 1.0 } else { 0.0 };
-        root = root.child(body.child(self.table(&st, &coll, cx, body_h, table_w, table_left)));
-        root = root.child(self.bottom_bar(&st, &coll));
+        // 表格和底栏是**同一列的上下两块**（用户 2026-11-17）：左边侧栏整列延伸到底。
+        let table_col = div()
+            .flex_1()
+            .min_w(pt(0.0))
+            .h_full()
+            .flex()
+            .flex_col()
+            .child(self.table(&st, &coll, cx, window, body_h, table_w, table_left))
+            .child(self.bottom_bar(&st, &coll));
+        root = root.child(body.child(table_col));
         root = root.child(self.menu_overlay(&st, origin));
         root = root.child(self.details_overlay(&st, cx, viewport));
         // 记录 root 在窗口里的真实矩形：行拖动要画的插入线，落点 y 是窗口坐标，
@@ -1016,7 +1376,15 @@ impl VariablesEditor {
         ];
         for (dir, el) in handles {
             let st = st.clone();
-            root = root.child(el.on_mouse_down(MouseButton::Left, move |e: &MouseDownEvent, _, _| {
+            // 悬停边/角时显示对应方向的缩放光标，而不是默认箭头。
+            let cursor = match dir {
+                1 | 2 => CursorStyle::ResizeLeftRight,
+                4 | 8 => CursorStyle::ResizeUpDown,
+                5 | 10 => CursorStyle::ResizeUpLeftDownRight,
+                6 | 9 => CursorStyle::ResizeUpRightDownLeft,
+                _ => CursorStyle::Arrow,
+            };
+            root = root.child(el.cursor(cursor).on_mouse_down(MouseButton::Left, move |e: &MouseDownEvent, _, _| {
                 st.borrow_mut().resize = Some((dir, f32::from(e.position.x), f32::from(e.position.y), sw, sh));
             }));
         }
@@ -1120,15 +1488,15 @@ impl VariablesEditor {
                 .on_mouse_down(MouseButton::Left, {
                     let st = st.clone();
                     move |e: &MouseDownEvent, _, _| {
-                        st.borrow_mut().menu = Some(Menu {
-                            x: f32::from(e.position.x),
-                            y: f32::from(e.position.y),
-                            items: vec![
+                        st.borrow_mut().menu = Some(Menu::at(
+                            f32::from(e.position.x),
+                            f32::from(e.position.y),
+                            vec![
                                 MenuItem::new(tr("Variables JSON…"), "ui.export", json!({ "format": "json" })),
                                 MenuItem::new(tr("CSS custom properties…"), "ui.export", json!({ "format": "css" })),
                                 MenuItem::new(tr("Dart constants for Flutter…"), "ui.export", json!({ "format": "dart" })),
                             ],
-                        });
+                        ));
                     }
                 })
                 .child(tr("Export…")),
@@ -1143,26 +1511,59 @@ impl VariablesEditor {
                 .flex()
                 .flex_row()
                 .child(div().flex_none().w(pt(SEARCH_W)).child(self.search.clone()))
-                .child(IconButton::new(Icon::Eye).size(24.0).active(filtered).on_click({
-                    let st = st.clone();
-                    move |e, _, _| {
-                        let mut s = st.borrow_mut();
-                        let open = s.menu.take().is_none();
-                        if open {
-                            let mut items: Vec<MenuItem> = TYPES
-                                .iter()
-                                .enumerate()
-                                .map(|(i, (name, _))| {
-                                    MenuItem::new(format!("{} {}", if s.hidden[i] { "○" } else { "✓" }, name), "ui.filter", json!({ "kind": i }))
-                                })
-                                .collect();
-                            if s.hidden.iter().any(|&h| h) {
-                                items.push(MenuItem::new("Show every type", "ui.showAll", json!({})));
+                .child({
+                    // 过滤菜单要贴着眼睛按钮的右缘：先用 canvas 记下按钮真实矩形。
+                    let st_cap = st.clone();
+                    div()
+                        .relative()
+                        .flex_none()
+                        .w(pt(FILTER_W))
+                        .h_full()
+                        .child(
+                            gpui::canvas(
+                                move |bounds, _, _| {
+                                    st_cap.borrow_mut().filter_anchor = Some(bounds);
+                                },
+                                |_, _, _, _| {},
+                            )
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .size_full(),
+                        )
+                        .child(IconButton::new(Icon::Eye).size(24.0).active(filtered).on_click({
+                            let st = st.clone();
+                            move |_, window, _| {
+                                let mut s = st.borrow_mut();
+                                let open = s.menu.take().is_none();
+                                if open {
+                                    let mut items: Vec<MenuItem> = TYPES
+                                        .iter()
+                                        .enumerate()
+                                        .map(|(i, (name, _))| {
+                                            MenuItem::new(
+                                                format!("{} {}", if s.hidden[i] { "○" } else { "✓" }, name),
+                                                "ui.filter",
+                                                json!({ "kind": i }),
+                                            )
+                                        })
+                                        .collect();
+                                    if s.hidden.iter().any(|&h| h) {
+                                        items.push(MenuItem::new("Show every type", "ui.showAll", json!({})));
+                                    }
+                                    let anchor = s.filter_anchor;
+                                    // 眼睛按钮**下方 4pt**，弹窗**右缘**与按钮右缘对齐，宽度随内容。
+                                    // 通用 `Menu` 只按左缘定位，所以把锚点左缘挪到「右缘 - 预计宽」。
+                                    let w = menu_fit_width(window, &items);
+                                    let anchor = anchor.map(|b| Bounds {
+                                        origin: point(b.origin.x + b.size.width - px(w), b.origin.y),
+                                        size: gpui::size(px(0.0), b.size.height),
+                                    });
+                                    s.menu = Some(Menu::on(anchor, crate::widgets::RectAlign::BottomStart, 4.0, items));
+                                }
                             }
-                            s.menu = Some(Menu { x: f32::from(e.position().x), y: f32::from(e.position().y), items });
-                        }
-                    }
-                })),
+                        }))
+                }),
         );
         // Floating / Full
         h = h.child(IconButton::new(Icon::Frame).size(24.0).active(full).on_click({
@@ -1180,72 +1581,7 @@ impl VariablesEditor {
         h
     }
 
-    /// 集合内联改名框（egui `start_rename(Rename::Collection)`）：右键 Rename / 双击都进这里，
-    /// 不再直接把名字改成 "<旧名> 2"。
-    fn collection_rename_field(&self, cx: &mut App, st: &State, id: &str, initial: &str) -> Entity<TextField> {
-        {
-            let mut c = self.row_caches.borrow_mut();
-            if c.collection_rename_id.as_deref() == Some(id) {
-                if let Some(e) = &c.collection_rename {
-                    return e.clone();
-                }
-            }
-            c.collection_rename = None;
-            c.collection_rename_id = Some(id.to_string());
-        }
-        let f = text_field(cx, 160.0, initial, tr("Collection"), Slot::None, Slot::None);
-        let cmds = self.cmds.clone();
-        let st = st.clone();
-        let cid = id.to_string();
-        f.update(cx, move |tf, _| {
-            tf.set_on_commit(move |text, _, _| {
-                let name = text.trim();
-                if !name.is_empty() {
-                    cmds.push(Cmd { id: "variable.renameCollection", params: Some(json!({ "collection": cid, "name": name })) });
-                }
-                st.borrow_mut().rename_collection = None;
-            });
-        });
-        self.row_caches.borrow_mut().collection_rename = Some(f.clone());
-        f
-    }
-
-    /// 分组内联改名：把组内所有变量的名字前缀整体换掉（egui `rename_group` 的 batch）。
-    fn group_rename_field(&self, cx: &mut App, st: &State, c: &CollectionSnap, group: &str, initial: &str) -> Entity<TextField> {
-        {
-            let mut k = self.row_caches.borrow_mut();
-            if k.group_rename_id.as_deref() == Some(group) {
-                if let Some(e) = &k.group_rename {
-                    return e.clone();
-                }
-            }
-            k.group_rename = None;
-            k.group_rename_id = Some(group.to_string());
-        }
-        let f = text_field(cx, 160.0, initial, tr("Group"), Slot::None, Slot::None);
-        let cmds = self.cmds.clone();
-        let st = st.clone();
-        let old = group.to_string();
-        let prefix = format!("{group}/");
-        let members: Vec<(String, String)> =
-            c.rows.iter().filter(|r| r.full_name.starts_with(&prefix)).map(|r| (r.id.clone(), r.full_name[prefix.len()..].to_string())).collect();
-        f.update(cx, move |tf, _| {
-            tf.set_on_commit(move |text, _, _| {
-                let name = text.trim().replace('/', "-");
-                if !name.is_empty() && name != old {
-                    for (id, rest) in &members {
-                        cmds.push(Cmd { id: "variable.update", params: Some(json!({ "variable": id, "name": format!("{name}/{rest}") })) });
-                    }
-                }
-                st.borrow_mut().rename_group = None;
-            });
-        });
-        self.row_caches.borrow_mut().group_rename = Some(f.clone());
-        f
-    }
-
-    // ── sidebar ───────────────────────────────────────────────────────────────────────────
-    fn sidebar(&self, st: &State, data: &VariablesData, cx: &mut App, body_h: f32) -> Stateful<Div> {
+    fn sidebar(&self, st: &State, data: &VariablesData, cx: &mut App, window: &mut Window, body_h: f32) -> Stateful<Div> {
         let t = tokens();
         let (cur, group_sel, collapsed, library_sel, sidebar_w, split, renaming_coll, renaming_group, selected_all) = {
             let s = st.borrow();
@@ -1263,11 +1599,15 @@ impl VariablesEditor {
         };
         // egui `sidebar()`：Collections 标题 34 + 独立滚动列表 + 7pt 可拖分隔条 +
         // Groups 标题 34 + 独立滚动列表。两个区各自滚动，Groups 不会被库列表挤到屏幕外。
-        let avail = (body_h - HEADER_H - BOTTOM_H).max(160.0);
+        // 侧栏一直伸到卡片底部；「+ Create variable」收进表格那一列，和表格上下排列，
+        // 左边仍是侧栏（用户 2026-11-17）。所以 body 里只多出侧栏那一列的高度，
+        // 底栏的高度算在表格列内部，`avail` 不再扣掉它。
+        let avail = (body_h - HEADER_H).max(160.0);
         let split_total = (avail - 34.0 - 7.0 - 34.0).max(80.0);
         let collections_h = (split * split_total).clamp(40.0, (split_total - 40.0).max(40.0));
         let groups_h = (split_total - collections_h).max(40.0);
-        let mut col = div().id("vars-sidebar").flex_none().w(pt(sidebar_w)).h_full().flex().flex_col().bg(rgba(t.panel));
+        // 用户 2026-11-17：侧栏不再自带底色，跟随卡片背景。
+        let mut col = div().id("vars-sidebar").flex_none().w(pt(sidebar_w)).h_full().flex().flex_col();
 
         // ① Collections 标题 + 新建（unique 命名，不再用时间戳）。
         col = col.child(
@@ -1306,14 +1646,27 @@ impl VariablesEditor {
                 inner = inner.hover(move |s| s.bg(rgba(hover)));
             }
             inner = if renaming_coll.as_deref() == Some(c.id.as_str()) {
-                inner.child(self.collection_rename_field(cx, st, &c.id, &c.name))
+                if let Some(input) = self.row_caches.borrow().collection_rename_input.clone() {
+                    inner.child(div().flex_1().min_w(pt(0.0)).h_full().child(input))
+                } else {
+                    inner.child(div().flex_1().min_w(pt(0.0)).child(c.name.clone()))
+                }
             } else {
-                inner.child(div().flex_1().min_w(pt(0.0)).overflow_hidden().text_size(pt(11.0)).text_color(rgba(t.text)).child(c.name.clone()))
+                inner.child(
+                    div()
+                        .flex_1()
+                        .min_w(pt(0.0))
+                        .overflow_hidden()
+                        .child(crate::inline_input::static_text(c.name.clone().into(), gpui::Hsla::from(rgba(t.text)), 24.0)),
+                )
             };
             inner = inner.child(div().text_size(pt(11.0)).text_color(rgba(t.text_tertiary)).child(format!("{}", c.rows.len())));
+            let coll_bounds = self.row_caches.borrow().drag_bounds.clone();
+            let coll_bounds_key = c.id.clone();
             cl = cl.child(
                 div()
                     .id(SharedString::from(format!("vcoll-{i}")))
+                    .relative()
                     .flex_none()
                     .w_full()
                     .h(pt(SIDE_ROW_H))
@@ -1325,36 +1678,56 @@ impl VariablesEditor {
                         let st = st.clone();
                         let ids = coll_ids.clone();
                         let cid = c.id.clone();
-                        move |e: &MouseDownEvent, _, _| {
+                        let caches = self.row_caches.clone();
+                        let cmds = self.cmds.clone();
+                        let coll_name = c.name.clone();
+                        move |e: &MouseDownEvent, window, cx| {
                             let mut s = st.borrow_mut();
                             s.library = None;
                             s.collection = i;
                             s.group = None;
                             s.selected_all = true;
                             s.menu = None;
-                            let dbl = s.last_coll_down.as_ref().is_some_and(|(at, j)| *j == i && at.elapsed().as_millis() < 400);
-                            s.last_coll_down = Some((Instant::now(), i));
-                            if dbl {
-                                s.rename_collection = Some(cid.clone());
+                            // 双击判定用 GPUI 的原生 `click_count`（与左栏图层 / 页面行同一套），
+                            // 不再自己按 400ms 猜双击；并且这一下必须拦冒泡：根视图的
+                            // 「点别处就提交」会把刚打开的改名框收掉。
+                            if e.click_count >= 2 {
+                                cx.stop_propagation();
+                                drop(s);
+                                Self::start_collection_rename(&caches, &st, &cmds, cid.clone(), coll_name.clone(), window, cx);
                             } else {
-                                s.drag = Some(Self::begin_drag(DragList::Collections, i, &ids, e.position, &[]));
+                                let rect = caches.borrow().drag_bounds.borrow().get(&cid).copied();
+                                s.drag = Some(Self::begin_drag(DragList::Collections, i, &ids, e.position, &[], rect));
                             }
                         }
                     })
                     .on_mouse_down(MouseButton::Right, {
                         let st = st.clone();
                         let cid = c.id.clone();
+                        let cname = c.name.clone();
                         move |e: &MouseDownEvent, _, _| {
-                            st.borrow_mut().menu = Some(Menu {
-                                x: f32::from(e.position.x),
-                                y: f32::from(e.position.y),
-                                items: vec![
-                                    MenuItem::new("Rename collection", "ui.renameCollection", json!({ "collection": cid })),
+                            st.borrow_mut().menu = Some(Menu::at(
+                                f32::from(e.position.x),
+                                f32::from(e.position.y),
+                                vec![
+                                    MenuItem::new("Rename collection", "ui.renameCollection", json!({ "collection": cid, "name": cname })),
                                     MenuItem::new(tr("Delete collection"), "variable.deleteCollection", json!({ "collection": cid })),
                                 ],
-                            });
+                            ));
                         }
                     })
+                    .child(
+                        gpui::canvas(
+                            move |bounds, _, _| {
+                                coll_bounds.borrow_mut().insert(coll_bounds_key.clone(), bounds);
+                            },
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full(),
+                    )
                     .child(inner),
             );
         }
@@ -1416,15 +1789,15 @@ impl VariablesEditor {
                             let st = st.clone();
                             let lid_r = lib.id.clone();
                             move |e: &MouseDownEvent, _, _| {
-                                st.borrow_mut().menu = Some(Menu {
-                                    x: f32::from(e.position.x),
-                                    y: f32::from(e.position.y),
-                                    items: vec![MenuItem::new(
+                                st.borrow_mut().menu = Some(Menu::at(
+                                    f32::from(e.position.x),
+                                    f32::from(e.position.y),
+                                    vec![MenuItem::new(
                                         tr("Extend collection"),
                                         "library.extendCollection",
                                         json!({ "library": lid_r, "collection": cid }),
                                     )],
-                                });
+                                ));
                             }
                         })
                         .child(inner),
@@ -1441,7 +1814,7 @@ impl VariablesEditor {
                 .h(pt(7.0))
                 .flex()
                 .items_center()
-                .cursor_pointer()
+                .cursor(CursorStyle::ResizeUpDown)
                 .child(div().w_full().h(pt(1.0)).bg(rgba(t.border)))
                 .on_mouse_down(MouseButton::Left, {
                     let st = st.clone();
@@ -1468,119 +1841,265 @@ impl VariablesEditor {
             Some(l) => data.libraries.iter().find(|x| &x.id == l).and_then(|x| x.collections.get(cur)).cloned(),
             None => data.collections.get(cur).cloned(),
         };
-        let groups = coll_snap.as_ref().map(|c| c.groups.clone()).unwrap_or_default();
-        let group_ids: Vec<String> = groups.clone();
-        let mut gl = div().id("var-groups").flex_none().w_full().h(pt(groups_h)).flex().flex_col().overflow_y_scroll();
-        let mut all_inner = div().w_full().h(pt(24.0)).flex().items_center().pl(pt(8.0)).rounded(pt(5.0));
-        if selected_all {
-            all_inner = all_inner.bg(rgba(t.selected_row));
-        } else {
-            let hover = t.hover;
-            all_inner = all_inner.hover(move |s| s.bg(rgba(hover)));
+        // 显示顺序必须与拖动落点使用同一份列表：`group_order` 以前只用于表格排序，
+        // 侧栏仍按名字排序 —— 拖动线画到了新位置，松手后侧栏纹丝不动（用户 2026-11-17：
+        // 「拖动和实际位移不匹配」）。这里先按 `group_order` 排，再过滤掉祖先折叠的子组。
+        let mut groups = coll_snap.as_ref().map(|c| c.groups.clone()).unwrap_or_default();
+        {
+            let ord = st.borrow().group_order.clone();
+            groups.sort_by_key(|g| group_rank(g, &ord));
         }
-        all_inner = all_inner.child(div().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(tr("All variables")));
-        gl = gl.child(
-            div()
-                .flex_none()
-                .w_full()
-                .h(pt(SIDE_ROW_H))
-                .flex()
-                .items_center()
-                .px(pt(8.0))
-                .on_mouse_down(MouseButton::Left, {
-                    let st = st.clone();
-                    move |_: &MouseDownEvent, _, _| {
-                        let mut s = st.borrow_mut();
-                        s.group = None;
-                        s.selected_all = true;
-                        s.menu = None;
-                    }
-                })
-                .child(all_inner),
-        );
-        for (i, g) in groups.iter().enumerate() {
-            // 祖先被折叠 → 子组不画（egui `group_rows` 的 collapsed_groups）。
-            if collapsed.iter().any(|c| g.starts_with(&format!("{c}/"))) {
-                continue;
-            }
-            let active = group_sel.as_deref() == Some(g.as_str()) && !selected_all;
-            let is_collapsed = collapsed.contains(g);
-            let level = g.matches('/').count() + 1;
-            let has_children = groups.iter().any(|other| other.starts_with(&format!("{g}/")));
-            let short = g.rsplit('/').next().unwrap_or(g).to_string();
-            let count = coll_snap.as_ref().map(|c| c.rows.iter().filter(|r| r.group == *g).count()).unwrap_or(0);
-            let mut inner = div().w_full().h(pt(24.0)).flex().flex_row().items_center().rounded(pt(5.0));
-            if active {
-                inner = inner.bg(rgba(t.selected_row));
-            } else {
-                let hover = t.hover;
-                inner = inner.hover(move |s| s.bg(rgba(hover)));
-            }
-            let x0 = 8.0 + (level - 1) as f32 * 24.0;
-            inner = inner.child(div().flex_none().w(pt(24.0)).h_full().flex().items_center().justify_center().child(if has_children {
-                paint_icon(if is_collapsed { Icon::ChevronRight } else { Icon::ChevronDown }, rgba(t.text_secondary), 12.0).into_any_element()
-            } else {
-                div().into_any_element()
-            }));
-            inner = if renaming_group.as_deref() == Some(g.as_str()) {
-                let f = coll_snap.as_ref().map(|c| self.group_rename_field(cx, st, c, g, &short));
-                match f {
-                    Some(f) => inner.child(f),
-                    None => inner.child(short.clone()),
+        let visible_groups: Vec<String> =
+            groups.iter().filter(|g| !collapsed.iter().any(|c| g.starts_with(&format!("{c}/")))).cloned().collect();
+        let group_ids: Vec<String> = visible_groups.clone();
+        // 行快照：虚拟列表的渲染闭包必须是 'static，只能拿 owned / Rc 数据。
+        #[derive(Clone)]
+        struct GroupRow {
+            full: String,
+            short: String,
+            level: usize,
+            count: usize,
+            has_children: bool,
+            is_collapsed: bool,
+            vars: Vec<String>,
+        }
+        let group_rows: Vec<GroupRow> = visible_groups
+            .iter()
+            .map(|g| {
+                // 组计数与「Delete group」成员都含子组：与选中父组后表格里显示的行一致。
+                let prefix = format!("{g}/");
+                let members: Vec<String> = coll_snap
+                    .as_ref()
+                    .map(|c| {
+                        c.rows
+                            .iter()
+                            .filter(|r| r.group == *g || r.group.starts_with(&prefix))
+                            .map(|r| r.id.clone())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                GroupRow {
+                    full: g.clone(),
+                    short: g.rsplit('/').next().unwrap_or(g).to_string(),
+                    level: g.matches('/').count() + 1,
+                    count: members.len(),
+                    has_children: groups.iter().any(|other| other.starts_with(&prefix)),
+                    is_collapsed: collapsed.contains(g),
+                    vars: members,
                 }
-            } else {
-                inner.child(div().flex_1().min_w(pt(0.0)).overflow_hidden().text_size(pt(11.0)).text_color(rgba(t.text)).child(short))
-            };
-            inner = inner.child(div().pr(pt(8.0)).text_size(pt(10.0)).text_color(rgba(t.text_tertiary)).child(format!("{count}")));
-            let g_toggle = g.clone();
-            let g_sel = g.clone();
-            let g_dbl = g.clone();
-            let vars: Vec<String> =
-                coll_snap.as_ref().map(|c| c.rows.iter().filter(|r| r.group == *g).map(|r| r.id.clone()).collect()).unwrap_or_default();
-            gl = gl.child(
-                div()
-                    .flex_none()
-                    .w_full()
-                    .h(pt(SIDE_ROW_H))
-                    .flex()
-                    .items_center()
-                    .pl(pt(x0))
-                    .on_mouse_down(MouseButton::Left, {
-                        let st = st.clone();
-                        let ids = group_ids.clone();
-                        move |e: &MouseDownEvent, _, _| {
-                            let mut s = st.borrow_mut();
-                            s.menu = None;
-                            let dbl = s.last_group_down.as_ref().is_some_and(|(at, name)| name == &g_dbl && at.elapsed().as_millis() < 400);
-                            s.last_group_down = Some((Instant::now(), g_dbl.clone()));
-                            if dbl {
-                                s.rename_group = Some(g_dbl.clone());
-                            } else {
-                                s.group = Some(g_sel.clone());
-                                s.selected_all = false;
-                                s.drag = Some(Self::begin_drag(DragList::Groups, i, &ids, e.position, &[]));
+            })
+            .collect();
+        let row_count = group_rows.len() + 1;
+        // 选中父组时，它和它下面的子组连成**一个整块**（左栏图层 / 右栏样式列表的
+        // 「父行深色 + 后代浅色」表现，用户 2026-11-17）。树序保证后代行紧跟父组行，
+        // 这里先求出这一段的起止下标，渲染时只做圆角/上下留白的收边。
+        let sel_run: Option<(usize, usize)> = (!selected_all)
+            .then(|| {
+                group_sel.as_ref().and_then(|sel| {
+                    let start = group_rows.iter().position(|r| r.full == *sel)?;
+                    let lvl = group_rows[start].level;
+                    let mut end = start;
+                    while group_rows.get(end + 1).is_some_and(|next| next.level > lvl) {
+                        end += 1;
+                    }
+                    Some((start, end))
+                })
+            })
+            .flatten();
+        let sel_run = Rc::new(sel_run);
+        let item_sizes: Rc<Vec<Size<Pixels>>> =
+            Rc::new((0..row_count).map(|_| Size::new(px(sidebar_w), px(SIDE_ROW_H))).collect());
+        let group_rows = Rc::new(group_rows);
+        let group_ids = Rc::new(group_ids);
+        let caches = self.row_caches.clone();
+        let cmds = self.cmds.clone();
+        let st2 = st.clone();
+        let scroll = st.borrow().groups_scroll.clone();
+        let coll_snap_r = Rc::new(coll_snap.clone());
+        let renaming_r = Rc::new(renaming_group.clone());
+        let gsel_r = Rc::new(group_sel.clone());
+        let sel_run_r = sel_run.clone();
+        let all_sel = selected_all;
+        // Groups 列表与左栏图层 / 右栏样式同一套虚拟化：只渲染可见行，
+        // 拖动行矩形来自每行 canvas prepaint 的真实 bounds（不再按固定行高硬算）。
+        let gl = div().id("var-groups").flex_none().w_full().h(pt(groups_h)).child(v_virtual_list(
+            "var-groups-vlist",
+            &scroll,
+            item_sizes,
+            move |range, _window, cx| {
+                let t = tokens();
+                let mut out = Vec::with_capacity(range.end - range.start);
+                for ix in range {
+                    if ix == 0 {
+                        let mut all_inner = div().w_full().h(pt(24.0)).flex().items_center().pl(pt(8.0)).rounded(pt(5.0));
+                        if all_sel {
+                            all_inner = all_inner.bg(rgba(t.selected_row));
+                        } else {
+                            let hover = t.hover;
+                            all_inner = all_inner.hover(move |s| s.bg(rgba(hover)));
+                        }
+                        all_inner = all_inner.child(div().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(tr("All variables")));
+                        out.push(
+                            div()
+                                .flex_none()
+                                .w_full()
+                                .h(pt(SIDE_ROW_H))
+                                .flex()
+                                .items_center()
+                                .px(pt(8.0))
+                                .on_mouse_down(MouseButton::Left, {
+                                    let st = st2.clone();
+                                    move |_: &MouseDownEvent, _, _| {
+                                        let mut s = st.borrow_mut();
+                                        s.group = None;
+                                        s.selected_all = true;
+                                        s.menu = None;
+                                    }
+                                })
+                                .child(all_inner)
+                                .into_any_element(),
+                        );
+                        continue;
+                    }
+                    let Some(gr) = group_rows.get(ix - 1) else { continue };
+                    let g = gr.full.clone();
+                    let active = gsel_r.as_deref() == Some(g.as_str()) && !all_sel;
+                    // 选中父组时，它的子组也算「选中块」的一部分（与右栏样式列表同一套：
+                    // 父行 `selected_row`、子行 `selected_row_child`，用户 2026-11-17）。
+                    let under = !all_sel && gsel_r.as_deref().is_some_and(|sel| g.starts_with(&format!("{sel}/")));
+                    let mut inner = div().w_full().flex().flex_row().items_center();
+                    // 选中父组 = 父行深色 + 后代浅色，连成**一整块**（左栏图层 / 右栏样式
+                    // 列表同一表现）：块内行上下不留白，只有整块的顶/底收 4pt 并加圆角。
+                    let in_run = active || under;
+                    let run_top = in_run && sel_run_r.as_ref().is_some_and(|(s, _)| ix - 1 == s);
+                    let run_bottom = in_run && sel_run_r.as_ref().is_some_and(|(_, e)| ix - 1 == e);
+                    if in_run {
+                        let (top_gap, bottom_gap) = (if run_top { 4.0 } else { 0.0 }, if run_bottom { 4.0 } else { 0.0 });
+                        inner = inner.h(pt(SIDE_ROW_H - top_gap - bottom_gap)).mt(pt(top_gap)).mb(pt(bottom_gap));
+                        if run_top {
+                            inner = inner.rounded_t(pt(5.0));
+                        }
+                        if run_bottom {
+                            inner = inner.rounded_b(pt(5.0));
+                        }
+                    } else {
+                        inner = inner.h(pt(24.0)).rounded(pt(5.0));
+                    }
+                    // 高亮块**不跟缩进走**：整行满宽，缩进只作用在内容上。
+                    inner = inner.pl(pt((gr.level - 1) as f32 * 24.0));
+                    if active {
+                        inner = inner.bg(rgba(t.selected_row));
+                    } else if under {
+                        inner = inner.bg(rgba(t.selected_row_child));
+                    } else {
+                        let hover = t.hover;
+                        inner = inner.hover(move |s| s.bg(rgba(hover)));
+                    }
+                    inner = inner.child(div().flex_none().w(pt(24.0)).h_full().flex().items_center().justify_center().child(if gr.has_children {
+                        paint_icon(if gr.is_collapsed { Icon::ChevronRight } else { Icon::ChevronDown }, rgba(t.text_secondary), 12.0).into_any_element()
+                    } else {
+                        div().into_any_element()
+                    }));
+                    inner = if renaming_r.as_deref() == Some(g.as_str()) {
+                        if let Some(input) = caches.borrow().group_rename_input.clone() {
+                            // 提交时要用组内成员：这里先把 (变量 id, 组内剩余名) 填进缓存。
+                            if let Some(cs) = coll_snap_r.as_ref() {
+                                let prefix = format!("{g}/");
+                                *caches.borrow().group_rename_members.borrow_mut() = cs
+                                    .rows
+                                    .iter()
+                                    .filter(|r| r.full_name.starts_with(&prefix))
+                                    .map(|r| (r.id.clone(), r.full_name[prefix.len()..].to_string()))
+                                    .collect();
                             }
+                            inner.child(div().flex_1().min_w(pt(0.0)).h_full().child(input))
+                        } else {
+                            inner.child(gr.short.clone())
                         }
-                    })
-                    .on_mouse_down(MouseButton::Right, {
-                        let st = st.clone();
-                        move |e: &MouseDownEvent, _, _| {
-                            st.borrow_mut().menu = Some(Menu {
-                                x: f32::from(e.position.x),
-                                y: f32::from(e.position.y),
-                                items: vec![
-                                    MenuItem::new(tr("Rename group"), "ui.renameGroup", json!({ "group": g_toggle })),
-                                    MenuItem::new(tr("Delete group"), "ui.deleteGroup", json!({ "variables": vars })),
-                                ],
-                            });
-                        }
-                    })
-                    .child(inner),
-            );
-        }
+                    } else {
+                        inner.child(
+                            div().flex_1().min_w(pt(0.0)).overflow_hidden().child(crate::inline_input::static_text(
+                                gr.short.clone().into(),
+                                gpui::Hsla::from(rgba(t.text)),
+                                24.0,
+                            )),
+                        )
+                    };
+                    inner = inner.child(div().pr(pt(8.0)).text_size(pt(10.0)).text_color(rgba(t.text_tertiary)).child(format!("{}", gr.count)));
+                    let g_toggle = g.clone();
+                    let g_sel = g.clone();
+                    let g_dbl = g.clone();
+                    let g_bounds_key = g.clone();
+                    let short_for_rename = gr.short.clone();
+                    let group_bounds = caches.borrow().drag_bounds.clone();
+                    let vars = gr.vars.clone();
+                    let idx = ix - 1;
+                    let ids = group_ids.clone();
+                    let caches_row = caches.clone();
+                    let cmds_row = cmds.clone();
+                    let st_row = st2.clone();
+                    out.push(
+                        div()
+                            .relative()
+                            .flex_none()
+                            .w_full()
+                            .h(pt(SIDE_ROW_H))
+                            .flex()
+                            .items_center()
+                            .px(pt(8.0))
+                            .on_mouse_down(MouseButton::Left, move |e: &MouseDownEvent, window, cx| {
+                                let mut s = st_row.borrow_mut();
+                                s.menu = None;
+                                // 同集合行：原生 `click_count` 判双击，并拦住这次按下不让根视图提交。
+                                if e.click_count >= 2 {
+                                    cx.stop_propagation();
+                                    drop(s);
+                                    Self::start_group_rename(&caches_row, &st_row, &cmds_row, g_dbl.clone(), short_for_rename.clone(), window, cx);
+                                } else {
+                                    s.group = Some(g_sel.clone());
+                                    s.selected_all = false;
+                                    let rect = caches_row.borrow().drag_bounds.borrow().get(&g_dbl).copied();
+                                    s.drag = Some(Self::begin_drag(DragList::Groups, idx, &ids, e.position, &[], rect));
+                                }
+                            })
+                            .on_mouse_down(MouseButton::Right, {
+                                let st = st2.clone();
+                                let g_short = gr.short.clone();
+                                move |e: &MouseDownEvent, _, _| {
+                                    st.borrow_mut().menu = Some(Menu::at(
+                                        f32::from(e.position.x),
+                                        f32::from(e.position.y),
+                                        vec![
+                                            MenuItem::new(tr("Rename group"), "ui.renameGroup", json!({ "group": g_toggle, "name": g_short })),
+                                            MenuItem::new(tr("Delete group"), "ui.deleteGroup", json!({ "variables": vars })),
+                                        ],
+                                    ));
+                                }
+                            })
+                            .child(
+                                gpui::canvas(
+                                    move |bounds, _, _| {
+                                        group_bounds.borrow_mut().insert(g_bounds_key.clone(), bounds);
+                                    },
+                                    |_, _, _, _| {},
+                                )
+                                .absolute()
+                                .top_0()
+                                .left_0()
+                                .size_full(),
+                            )
+                            .child(inner)
+                            .into_any_element(),
+                    );
+                }
+                out
+            },
+        ));
         col = col.child(gl);
-        // ⑥ 侧栏右缘 6pt 拖动柄（egui `vars_sidebar_edge`，180..420）。
-        col.child(div().absolute().right(pt(0.0)).top(pt(0.0)).w(pt(6.0)).h_full().on_mouse_down(MouseButton::Left, {
+        // ⑥ 侧栏右缘拖动柄（egui `vars_sidebar_edge`，180..420）。
+        // 热区必须**以分隔线为中心左右各 3pt**：原来 `right(0)` 让 6pt 全落在线的左侧，
+        // 指针在线的右边（表格一侧）拖不动（用户 2026-11-17）。
+        col.child(div().absolute().right(pt(-3.0)).top(pt(0.0)).w(pt(6.0)).h_full().cursor(CursorStyle::ResizeLeftRight).on_mouse_down(MouseButton::Left, {
             let st = st.clone();
             move |e: &MouseDownEvent, _, _| {
                 let mut s = st.borrow_mut();
@@ -1590,7 +2109,7 @@ impl VariablesEditor {
     }
 
     // ── table ─────────────────────────────────────────────────────────────────────────────
-    fn table(&mut self, st: &State, coll: &Option<CollectionSnap>, cx: &mut App, body_h: f32, table_w: f32, table_left: f32) -> Stateful<Div> {
+    fn table(&mut self, st: &State, coll: &Option<CollectionSnap>, cx: &mut App, window: &mut Window, body_h: f32, table_w: f32, table_left: f32) -> Stateful<Div> {
         let t = tokens();
         let Some(c) = coll else {
             return div().id("vars-empty").flex_1().min_w(pt(0.0)).h_full().flex().flex_col().child(
@@ -1633,10 +2152,12 @@ impl VariablesEditor {
         let name_eff = name_w.clamp(NAME_MIN, NAME_MAX).min((table_w - ADD_W - 2.0).max(0.0));
         // 只有 mode 列横向滚动：Name / add 列固定。`modes_full` 含每列 1pt 网格线。
         let modes_room = (table_w - name_eff - ADD_W - 2.0).max(0.0);
-        let modes_full: f32 = mode_ws.iter().map(|w| w + 1.0).sum();
+        // 每列的 1pt 网格线是**画在列内部右缘**（`cell` 的 absolute 子节点），不额外占宽；
+        // 所以内容总宽就是各列宽之和。以前多加了 1pt/列，插入线和分隔线因此差 n 个像素。
+        let modes_full: f32 = mode_ws.iter().sum();
         let max_sx = (modes_full - (modes_room + 1.0)).max(0.0);
         let sx = (-f32::from(st.borrow().hscroll.offset().x)).clamp(0.0, max_sx);
-        let mut col = div().flex_1().min_h(pt(0.0)).w_full().flex().flex_col();
+        let mut col = div().flex_1().min_h(pt(0.0)).w_full().flex().flex_col().relative();
         // 表头（底部分隔线 + 每列右缘 1px 网格线）
         let (selected_mode, has_clip_col) = {
             let s = st.borrow();
@@ -1662,8 +2183,8 @@ impl VariablesEditor {
                 .text_color(rgba(t.text_secondary))
                 .child(tr("Name"))
                 .child(div().absolute().right_0().top_0().w(pt(1.0)).h_full().bg(rgba(t.border)))
-                // 右缘 6pt 拖动柄；双击自动适配。
-                .child(div().absolute().right(pt(0.0)).top(pt(0.0)).w(pt(6.0)).h_full().on_mouse_down(MouseButton::Left, {
+                // 右缘 6pt 拖动柄；双击自动适配。悬停显示左右拖动光标。
+                .child(div().absolute().right(pt(0.0)).top(pt(0.0)).w(pt(6.0)).h_full().cursor(CursorStyle::ResizeLeftRight).on_mouse_down(MouseButton::Left, {
                     let st = st.clone();
                     move |e: &MouseDownEvent, _, cx: &mut App| {
                         // 列宽柄是单元格的子节点：不拦冒泡的话，父级 mode 单元格的
@@ -1706,11 +2227,24 @@ impl VariablesEditor {
                 .overflow_hidden()
                 .text_size(pt(11.0))
                 .text_color(rgba(if is_sel { t.text } else { t.text_secondary }))
-                .bg(rgba(if is_sel { t.hover } else { t.panel }));
+                // 列选中与行选中同一底色（原来是 t.hover，比行选中浅）。
+                .bg(rgba(if is_sel { t.selected_row } else { t.panel }));
             cell = if renaming {
-                cell.child(VariablesEditor::ensure_mode_rename_field(&self.row_caches, &self.cmds, cx, &m.name, st, &c.id, &m.id))
+                if let Some(input) = self.row_caches.borrow().mode_rename_input.clone() {
+                    cell.child(div().flex_1().min_w(pt(0.0)).h_full().child(input))
+                } else {
+                    cell.child(div().flex_1().min_w(pt(0.0)).h_full().child(crate::inline_input::static_text(
+                        m.name.clone().into(),
+                        gpui::Hsla::from(rgba(if is_sel { t.text } else { t.text_secondary })),
+                        HEAD_ROW_H,
+                    )))
+                }
             } else {
-                cell.child(m.name.clone())
+                cell.child(div().flex_1().min_w(pt(0.0)).h_full().child(crate::inline_input::static_text(
+                    m.name.clone().into(),
+                    gpui::Hsla::from(rgba(if is_sel { t.text } else { t.text_secondary })),
+                    HEAD_ROW_H,
+                )))
             };
             let mid = m.id.clone();
             let mname = m.name.clone();
@@ -1719,8 +2253,12 @@ impl VariablesEditor {
                 .on_mouse_down(MouseButton::Left, {
                     let st = st.clone();
                     let mid = mid.clone();
+                    let mname = mname.clone();
+                    let cid = cid.clone();
+                    let caches = self.row_caches.clone();
+                    let cmds = self.cmds.clone();
                     let editable = c.editable;
-                    move |e: &MouseDownEvent, _, _| {
+                    move |e: &MouseDownEvent, window, cx| {
                         let mut s = st.borrow_mut();
                         s.menu = None;
                         s.selected = None;
@@ -1728,12 +2266,14 @@ impl VariablesEditor {
                         if !editable {
                             return;
                         }
-                        let dbl = s.last_mode_down.as_ref().is_some_and(|(at, id)| id == &mid && at.elapsed().as_millis() < 400);
-                        s.last_mode_down = Some((Instant::now(), mid.clone()));
-                        if dbl {
-                            s.rename_mode = Some(mid.clone());
+                        // 同左栏：原生 `click_count` 判双击；这一下拦住冒泡，否则根视图
+                        // 的「点别处就提交」会把刚打开的改名框收掉（要点三四次才进输入态）。
+                        if e.click_count >= 2 {
+                            cx.stop_propagation();
+                            drop(s);
+                            Self::start_mode_rename(&caches, &st, &cmds, cid.clone(), mid.clone(), mname.clone(), window, cx);
                         } else {
-                            s.rename_mode = None;
+                            // 同上：交给根节点统一提交，别提前清掉改名目标。
                             let x = f32::from(e.position.x);
                             s.mode_drag = Some((mi, x, x));
                         }
@@ -1750,7 +2290,7 @@ impl VariablesEditor {
                             return;
                         }
                         let mut items = vec![
-                            MenuItem::new(tr("Rename mode"), "ui.renameMode", json!({ "mode": mid.clone() })),
+                            MenuItem::new(tr("Rename mode"), "ui.renameMode", json!({ "mode": mid.clone(), "name": mname.clone() })),
                             MenuItem::new(tr("Add mode"), "variable.addMode", json!({ "collection": cid.clone(), "name": tr("Mode") })),
                             MenuItem::new(
                                 "Duplicate mode",
@@ -1788,11 +2328,11 @@ impl VariablesEditor {
                                 json!({ "collection": cid.clone(), "mode": mid.clone() }),
                             ));
                         }
-                        st.borrow_mut().menu = Some(Menu { x: f32::from(e.position.x), y: f32::from(e.position.y), items });
+                        st.borrow_mut().menu = Some(Menu::at(f32::from(e.position.x), f32::from(e.position.y), items));
                     }
                 });
             cell = cell.child(div().absolute().right_0().top_0().w(pt(1.0)).h_full().bg(rgba(t.border)));
-            cell = cell.child(div().absolute().right(pt(0.0)).top(pt(0.0)).w(pt(6.0)).h_full().on_mouse_down(MouseButton::Left, {
+            cell = cell.child(div().absolute().right(pt(0.0)).top(pt(0.0)).w(pt(6.0)).h_full().cursor(CursorStyle::ResizeLeftRight).on_mouse_down(MouseButton::Left, {
                 let st = st.clone();
                 let edge_key = format!("{mid}-edge");
                 move |e: &MouseDownEvent, _, cx: &mut App| {
@@ -1827,6 +2367,52 @@ impl VariablesEditor {
         head = head.child(add_cell);
         head = head.child(div().absolute().bottom_0().left_0().w_full().h(pt(1.0)).bg(rgba(t.border)));
         col = col.child(head);
+
+        // mode 列拖动：竖插入线。判定与 `end_resize` 完全一致（越过下一列的实际列宽就换位），
+        // 只是换成「落到第几个缝」再换算成表格内的 x。行拖动画横线，列拖动画竖线。
+        let mode_line_x = {
+            let md = st.borrow().mode_drag;
+            md.and_then(|(from, x0, x1)| {
+                let dx = x1 - x0;
+                if dx.abs() <= 4.0 {
+                    return None;
+                }
+                let mut to = from;
+                if dx > 0.0 {
+                    let mut acc = 0.0;
+                    for k in from..n_modes.saturating_sub(1) {
+                        acc += mode_ws.get(k).copied().unwrap_or(MODE_W);
+                        if dx >= acc {
+                            to = k + 1;
+                        } else {
+                            break;
+                        }
+                    }
+                } else {
+                    let mut acc = 0.0;
+                    for k in (0..from).rev() {
+                        acc += mode_ws.get(k).copied().unwrap_or(MODE_W);
+                        if -dx >= acc {
+                            to = k;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                if to == from {
+                    return None;
+                }
+                let insert = if to > from { to + 1 } else { to };
+                // 分隔线左缘 = 前 insert 列宽度之和 − 1（1pt 线画在该列内部右缘）。
+                let acc: f32 = (0..insert).map(|k| mode_ws.get(k).copied().unwrap_or(MODE_W)).sum();
+                let pos = acc - sx;
+                if pos < 0.0 || pos > modes_room {
+                    return None;
+                }
+                Some(name_w + pos)
+            })
+        };
+        // mode 列插入线在函数末尾画：必须盖在行区与其 1pt 竖分隔线之上（用户 2026-11-17）。
 
         // notice_row：库集合只读 / 扩展集合提示（egui `notice_row`）。
         if !c.editable || c.extends.is_some() {
@@ -1871,7 +2457,6 @@ impl VariablesEditor {
         // 底部常驻 12pt 水平滚动条带（egui `HSCROLL_H`），所以行区高度要扣掉它。
         let rows_h = (body_h - HEADER_H - HEAD_ROW_H - BOTTOM_H - HSCROLL_H).max(96.0);
         let visible = self.visible_rows(c);
-        let ids: Vec<String> = visible.iter().map(|r| r.id.clone()).collect();
 
         // 把变量行（含分组间隔 / 分组标题）摊平成一个固定顺序的「条目」序列，
         // 每项高度已知，虚拟列表据此做前缀和 + 二分求可视区间。
@@ -1879,36 +2464,50 @@ impl VariablesEditor {
         let mut items: Vec<RowItem> = Vec::new();
         let mut prev_group: Option<String> = None;
         let mut skip = false;
-        for (i, r) in visible.iter().enumerate() {
+        // 拖拽行下标（分组标题与变量行共用一条序列）。
+        let mut drag_index = 0usize;
+        for r in &visible {
             if prev_group.as_deref() != Some(&r.group) {
                 prev_group = Some(r.group.clone());
                 skip = collapsed.contains(&r.group);
                 if !r.group.is_empty() {
                     items.push(RowItem::Gap);
-                    items.push(RowItem::GroupHeader { name: r.group.clone() });
+                    // 分组标题也要进拖拽序列：否则「组上方」没有任何缝，行只能落进组里。
+                    items.push(RowItem::GroupHeader { name: r.group.clone(), first: r.id.clone() });
+                    drag_index += 1;
                 }
             }
             if skip {
                 continue;
             }
-            items.push(RowItem::Row { index: i, row: r.clone() });
+            items.push(RowItem::Row { index: drag_index, row: r.clone() });
+            drag_index += 1;
         }
 
-        // 每个可见变量行在「内容坐标」里的顶边。分组间隔 / 分组标题都占高度，行拖动重建
-        // 矩形时必须按真实偏移算，不能假设行是连续等距的——否则带分组的集合一拖就整体错位。
-        let row_tops: Rc<Vec<f32>> = Rc::new({
-            let mut tops = vec![0.0f32; visible.len()];
+        // 已渲染行（含分组标题）的拖拽键与「内容坐标」顶边，两者下标一致、且与 `items`
+        // 的实际高度推进完全同步。拖动重建矩形必须用这份**过滤后**的列表：把折叠分组里没画
+        // 出来的行也塞进去，它们会全落在 y=0，`resolve` 的插入缝就会跳到最上面（用户 2026-11-17）。
+        let mut drag_ids: Vec<String> = Vec::with_capacity(drag_index);
+        let mut drag_tops: Vec<f32> = Vec::with_capacity(drag_index);
+        {
             let mut y = 0.0f32;
             for it in &items {
-                if let RowItem::Row { index, .. } = it {
-                    if let Some(slot) = tops.get_mut(*index) {
-                        *slot = y;
+                match it {
+                    RowItem::GroupHeader { name, first, .. } => {
+                        drag_ids.push(drag_group_key(name, first));
+                        drag_tops.push(y);
                     }
+                    RowItem::Row { row, .. } => {
+                        drag_ids.push(row.id.clone());
+                        drag_tops.push(y);
+                    }
+                    RowItem::Gap => {}
                 }
                 y += it.height();
             }
-            tops
-        });
+        }
+        let drag_ids = Rc::new(drag_ids);
+        let row_tops: Rc<Vec<f32>> = Rc::new(drag_tops);
 
         if visible.is_empty() {
             col = col.child(
@@ -1932,14 +2531,14 @@ impl VariablesEditor {
             let cmds2 = self.cmds.clone();
             let caches2 = self.row_caches.clone();
             let c2 = c.clone();
-            let ids2 = ids.clone();
+            let ids2 = drag_ids.clone();
             let list = v_virtual_list("vars-rows", &scroll, item_sizes, move |range, _window, cx| {
                 let mut out: Vec<AnyElement> = Vec::new();
                 for ix in range {
                     let Some(item) = items.get(ix) else { continue };
                     let el: AnyElement = match item {
                         RowItem::Gap => div().flex_none().w(px(table_w)).h(px(GROUP_GAP)).into_any_element(),
-                        RowItem::GroupHeader { name } => group_header_div(name).w(px(table_w)).into_any_element(),
+                        RowItem::GroupHeader { name, .. } => group_header_div(name).w(px(table_w)).into_any_element(),
                         RowItem::Row { index, row } => {
                             VariablesEditor::var_row(&st2, &cmds2, &caches2, &c2, row, *index, &ids2, row_tops.clone(), name_eff, modes_room, sx, cx)
                                 .w(px(table_w))
@@ -1989,7 +2588,11 @@ impl VariablesEditor {
             .child(
                 div().absolute().left(pt(track_start + thumb_x)).top(pt(4.0)).w(pt(thumb_w)).h(pt(4.0)).rounded(pt(2.0)).bg(rgba(t.border_strong)),
             );
-        div().id("vars-table").flex_1().min_w(pt(0.0)).h_full().flex().flex_col().child(col).child(bar)
+        // mode 列拖动的竖插入线：最后画，盖在行区与每格右缘的 1pt 竖分隔线之上。
+        if let Some(x) = mode_line_x {
+            col = col.child(div().absolute().left(pt(x - 1.0)).top_0().bottom_0().w(pt(2.0)).bg(rgba(t.accent)));
+        }
+        div().id("vars-table").flex_1().min_w(pt(0.0)).min_h(pt(0.0)).flex().flex_col().child(col).child(bar)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2008,9 +2611,15 @@ impl VariablesEditor {
         cx: &mut App,
     ) -> Div {
         let t = tokens();
-        let (selected, renaming, mode_ws, has_clip) = {
+        let (selected, renaming, mode_ws, has_clip, selected_mode) = {
             let s = st.borrow();
-            (s.selected.as_deref() == Some(r.id.as_str()), s.rename.as_deref() == Some(r.id.as_str()), s.mode_ws.clone(), s.clipboard.is_some())
+            (
+                s.selected.as_deref() == Some(r.id.as_str()),
+                s.rename.as_deref() == Some(r.id.as_str()),
+                s.mode_ws.clone(),
+                s.clipboard.is_some(),
+                s.selected_mode.clone(),
+            )
         };
         // 库变量 / 扩展集合里继承来的变量：不可拖拽、改名、删除。
         let movable = c.editable && !r.inherited;
@@ -2020,25 +2629,35 @@ impl VariablesEditor {
 
         // 行选择 / 双击改名 / 右键菜单 / 拖拽
         let rid = r.id.clone();
-        let rname = r.name.clone();
+        // 改名输入框里必须是**完整名（含组前缀）**：只给叶子名时，再打一个斜杠会把原有组
+        // 替换掉而不是挂到它下面；输入与原名相同的「组/叶」还会被引擎当成无变化跳过。
+        // 用户 2026-11-17：打斜杠要能加入已有组 / 在组下再加一级。
+        let rname = r.full_name.clone();
         row = row
             .on_mouse_down(MouseButton::Left, {
                 let st = st.clone();
                 let rid = rid.clone();
+                let rname = rname.clone();
                 let ids = ids.to_vec();
-                move |e: &MouseDownEvent, _, _| {
+                let caches = caches.clone();
+                let cmds = (*cmds).clone();
+                move |e: &MouseDownEvent, window, cx| {
                     let mut s = st.borrow_mut();
                     s.menu = None;
                     s.selected_mode = None;
-                    let dbl = s.last_down.as_ref().is_some_and(|(at, id)| id == &rid && at.elapsed().as_millis() < 400);
-                    s.last_down = Some((Instant::now(), rid.clone()));
                     s.selected = Some(rid.clone());
-                    if dbl && movable {
-                        s.rename = Some(rid.clone());
+                    // 与左栏 Layers 行一致：原生 `click_count` 判双击，并在这一下拦住冒泡，
+                    // 否则根视图「点别处就提交」会立刻把刚打开的改名框收掉。
+                    if e.click_count >= 2 && movable {
+                        cx.stop_propagation();
+                        drop(s);
+                        Self::start_variable_rename(&caches, &st, &cmds, rid.clone(), rname.clone(), window, cx);
                     } else if s.rename.as_deref() != Some(rid.as_str()) {
-                        s.rename = None;
+                        // 不在这里清 `rename`：根节点 on_mouse_down 会先 finish_edit 提交
+                        // 正在改名的输入框（提交回调自己 take 掉），这里清掉会让那一下丢提交。
                         if movable {
-                            s.drag = Some(Self::begin_drag(DragList::Variables, index, &ids, e.position, tops.as_slice()));
+                            let rect = caches.borrow().drag_bounds.borrow().get(&rid).copied();
+                            s.drag = Some(Self::begin_drag(DragList::Variables, index, &ids, e.position, tops.as_slice(), rect));
                         }
                     }
                 }
@@ -2046,11 +2665,12 @@ impl VariablesEditor {
             .on_mouse_down(MouseButton::Right, {
                 let st = st.clone();
                 let rid = rid.clone();
+                let rname = rname.clone();
                 move |e: &MouseDownEvent, _, _| {
                     let items = if movable {
                         let mut v = vec![
                             MenuItem::new(tr("Edit variable"), "ui.details", json!({ "variable": rid.clone() })),
-                            MenuItem::new(tr("Rename"), "ui.rename", json!({ "variable": rid.clone() })),
+                            MenuItem::new(tr("Rename"), "ui.rename", json!({ "variable": rid.clone(), "name": rname.clone() })),
                             MenuItem::new(tr("Copy"), "ui.copy", json!({})),
                         ];
                         if has_clip {
@@ -2065,7 +2685,7 @@ impl VariablesEditor {
                     } else {
                         vec![MenuItem::new(tr("Copy"), "ui.copy", json!({}))]
                     };
-                    st.borrow_mut().menu = Some(Menu { x: f32::from(e.position.x), y: f32::from(e.position.y), items });
+                    st.borrow_mut().menu = Some(Menu::at(f32::from(e.position.x), f32::from(e.position.y), items));
                 }
             });
 
@@ -2080,11 +2700,19 @@ impl VariablesEditor {
             .items_center()
             .child(div().flex_none().w(pt(40.0)).h_full().flex().items_center().pl(pt(17.0)).child(kind_glyph(r)));
         if renaming {
-            let ed = Self::ensure_rename_field(caches, cmds, cx, &rname, st, &rid);
-            name_cell = name_cell.child(div().flex_1().min_w(pt(0.0)).child(ed));
+            // 复用左栏同款 InlineInput：焦点与全选由本帧 poll_active 完成，这里只负责显示。
+            if let Some(input) = caches.borrow().rename_input.clone() {
+                name_cell = name_cell.child(div().flex_1().min_w(pt(0.0)).h_full().child(input));
+            }
         } else {
-            name_cell =
-                name_cell.child(div().flex_1().min_w(pt(0.0)).overflow_hidden().text_size(pt(11.0)).text_color(rgba(t.text)).child(rname.clone()));
+            // 与编辑态同源绘制（inline_input::static_text），否则进入/退出编辑时文字会上下跳。
+            name_cell = name_cell.child(
+                div()
+                    .flex_1()
+                    .min_w(pt(0.0))
+                    .overflow_hidden()
+                    .child(crate::inline_input::static_text(rname.clone().into(), gpui::Hsla::from(rgba(t.text)), ROW_H)),
+            );
         }
         name_cell = name_cell.child(div().absolute().right_0().top_0().w(pt(1.0)).h_full().bg(rgba(t.border)));
         row = row.child(name_cell);
@@ -2098,10 +2726,14 @@ impl VariablesEditor {
             let overridden = r.overrides.get(mi).copied().unwrap_or(false);
             let cw = mode_ws.get(mi).copied().unwrap_or(MODE_W);
             let mut cellbox = div().relative().flex_none().w(pt(cw)).h_full().flex().flex_row().items_center().gap(pt(4.0)).pl(pt(4.0)).pr(pt(8.0));
+            // 用户：列选中样式和行一样 —— 选中整列时，每行的值格都用 selected_row 底色。
+            if selected_mode.as_deref() == Some(m.id.as_str()) {
+                cellbox = cellbox.bg(rgba(t.selected_row));
+            }
             if overridden {
                 cellbox = cellbox.child(div().absolute().left(pt(4.0)).top(pt(8.0)).w(pt(2.0)).h(pt(24.0)).bg(rgba(t.accent)));
             }
-            cellbox = cellbox.child(Self::value_cell(caches, cmds, st, c, r, m, &cell, cx));
+            cellbox = cellbox.child(Self::value_cell(caches, cmds, st, c, r, m, &cell, cw, cx));
             if overridden && c.editable {
                 let vid = r.id.clone();
                 let mid = m.id.clone();
@@ -2132,72 +2764,24 @@ impl VariablesEditor {
                 }))
                 .child(div().absolute().left_0().top_0().w(pt(1.0)).h_full().bg(rgba(t.border))),
         );
+        // 记录行在窗口里的真实矩形：插入线与落点判定用它校准（按下点不等于行顶）。
+        {
+            let bounds_map = caches.borrow().drag_bounds.clone();
+            let bounds_key = rid.clone();
+            row = row.child(
+                gpui::canvas(
+                    move |bounds, _, _| {
+                        bounds_map.borrow_mut().insert(bounds_key.clone(), bounds);
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full(),
+            );
+        }
         row.child(div().absolute().bottom_0().left_0().w_full().h(pt(1.0)).bg(rgba(t.border)))
-    }
-
-    fn ensure_rename_field(caches: &Rc<RefCell<RowCaches>>, cmds: &Cmds, cx: &mut App, initial: &str, st: &State, rid: &str) -> Entity<TextField> {
-        // 换了一行改名时必须重建输入框，否则会沿用上一行的初值。
-        if caches.borrow().rename_field_id.as_deref() == Some(rid) {
-            if let Some(e) = &caches.borrow().rename_field {
-                return e.clone();
-            }
-        }
-        caches.borrow_mut().rename_field = None;
-        caches.borrow_mut().rename_field_id = Some(rid.to_string());
-        let f = text_field(cx, NAME_W - 80.0, initial, tr("Name"), Slot::None, Slot::None);
-        let cmds = cmds.clone();
-        let st = st.clone();
-        let rid = rid.to_string();
-        f.update(cx, move |tf, _| {
-            tf.set_on_commit(move |text, _, _| {
-                let name = text.trim();
-                if !name.is_empty() {
-                    cmds.push(Cmd { id: "variable.update", params: Some(json!({ "variable": rid, "name": name })) });
-                }
-                let mut s = st.borrow_mut();
-                s.rename = None;
-                s.last_down = None;
-            });
-        });
-        caches.borrow_mut().rename_field = Some(f.clone());
-        f
-    }
-
-    /// mode 表头的内联改名框（`variable.renameMode`）。同样按目标 id 缓存，避免串值。
-    fn ensure_mode_rename_field(
-        caches: &Rc<RefCell<RowCaches>>,
-        cmds: &Cmds,
-        cx: &mut App,
-        initial: &str,
-        st: &State,
-        cid: &str,
-        mid: &str,
-    ) -> Entity<TextField> {
-        if caches.borrow().mode_rename_field_id.as_deref() == Some(mid) {
-            if let Some(e) = &caches.borrow().mode_rename_field {
-                return e.clone();
-            }
-        }
-        caches.borrow_mut().mode_rename_field = None;
-        caches.borrow_mut().mode_rename_field_id = Some(mid.to_string());
-        let f = text_field(cx, 160.0, initial, tr("Mode"), Slot::None, Slot::None);
-        let cmds = cmds.clone();
-        let st = st.clone();
-        let cid = cid.to_string();
-        let mid = mid.to_string();
-        f.update(cx, move |tf, _| {
-            tf.set_on_commit(move |text, _, _| {
-                let name = text.trim();
-                if !name.is_empty() {
-                    cmds.push(Cmd { id: "variable.renameMode", params: Some(json!({ "collection": cid, "mode": mid, "name": name })) });
-                }
-                let mut s = st.borrow_mut();
-                s.rename_mode = None;
-                s.last_mode_down = None;
-            });
-        });
-        caches.borrow_mut().mode_rename_field = Some(f.clone());
-        f
     }
 
     /// 值格的统一底框（24 高 / 圆角 5 / `t.field` 底 / 6pt 内边距）。
@@ -2280,7 +2864,6 @@ impl VariablesEditor {
         f
     }
 
-    /// 颜色 alpha 的百分比域（通用 `number_field`，0..100）。
     fn alpha_value_field(
         caches: &Rc<RefCell<RowCaches>>,
         cmds: &Cmds,
@@ -2318,6 +2901,7 @@ impl VariablesEditor {
         r: &VarRow,
         m: &ModeSnap,
         cell: &VarCell,
+        width: f32,
         cx: &mut App,
     ) -> AnyElement {
         // 'static 回调要持有命令队列的所有权，不能用本帧的引用。
@@ -2344,68 +2928,89 @@ impl VariablesEditor {
         }
         match cell {
             VarCell::Color { color, hex, alpha } => {
-                // 绝对定位：swatch 左 6、hex 从 28 起、alpha 贴右 4。
-                // 用 flex 会让两个固定宽输入框互相挤压 / 重叠（"0D" 盖住 "100%"）。
-                let hkey = format!("{}/{}:hex", r.id, m.id);
-                let akey = format!("{}/{}:alpha", r.id, m.id);
-                div()
-                    .w_full()
-                    .h(pt(24.0))
-                    .rounded(pt(5.0))
-                    .bg(rgba(t.field))
-                    .relative()
-                    .overflow_hidden()
-                    .child(div().absolute().left(pt(6.0)).top(pt(4.0)).child(Self::value_swatch(*color, &t)))
-                    .child(div().absolute().left(pt(28.0)).top(pt(0.0)).w(pt(76.0)).h(pt(24.0)).child(Self::text_value_field(
-                        caches,
-                        &cmds,
+                // 复用通用 `ColorField`（与右栏 Fill 行同源）：swatch / hex / alpha 全由控件画，
+                // 不再手写绝对定位的几个输入框。
+                let ckey = format!("{}/{}:color", r.id, m.id);
+                let (hex_ed, op_ed) = if let Some(e) = caches.borrow().color_editors.get(&ckey) {
+                    e.clone()
+                } else {
+                    let vid = r.id.clone();
+                    let mid = m.id.clone();
+                    let cmds_h = cmds.clone();
+                    let cmds_a = cmds.clone();
+                    let base = *color;
+                    let (h, o) = crate::widgets::ColorField::color_row_editors(
                         cx,
-                        &hkey,
                         hex,
-                        &r.id,
-                        &m.id,
-                        VarKind::Color,
-                        76.0,
-                    )))
-                    .child(
-                        div()
-                            .absolute()
-                            .right(pt(4.0))
-                            .top(pt(0.0))
-                            .w(pt(64.0))
-                            .h(pt(24.0))
-                            .child(Self::alpha_value_field(caches, &cmds, cx, &akey, *alpha, *color, &r.id, &m.id)),
-                    )
-                    .into_any_element()
+                        *alpha as i64,
+                        move |text, _, _| {
+                            let v = json!(format!("#{}", text.trim().trim_start_matches('#')));
+                            cmds_h.push(Cmd { id: "variable.set", params: Some(json!({ "variable": vid, "mode": mid, "value": v })) });
+                        },
+                        {
+                            let vid = r.id.clone();
+                            let mid = m.id.clone();
+                            move |pct, _, _| {
+                                let a8 = (pct.clamp(0.0, 100.0) / 100.0 * 255.0).round() as u8;
+                                let hex = format!("#{:02X}{:02X}{:02X}{:02X}", base.0[0], base.0[1], base.0[2], a8);
+                                cmds_a.push(Cmd { id: "variable.set", params: Some(json!({ "variable": vid, "mode": mid, "value": json!(hex) })) });
+                            }
+                        },
+                    );
+                    caches.borrow_mut().color_editors.insert(ckey, (h.clone(), o.clone()));
+                    (h, o)
+                };
+                let mut cf = crate::widgets::ColorField::new(
+                    cx,
+                    figcraft_color::Paint::solid(figcraft_color::Color::from_rgba8(color.0[0], color.0[1], color.0[2], color.0[3])),
+                    crate::widgets::ColorText::Hex(SharedString::from(hex.clone())),
+                    width.max(120.0),
+                    hex_ed,
+                    op_ed,
+                );
+                // 点 swatch 打开通用取色器，选色直接写回变量（用户 2026-11-17：颜色值格
+                // 以前只是静态色块，点了没反应）。取色器走 `WindowState::color`，与右栏 Fill 同源。
+                if let Some(popups) = caches.borrow().popups.clone() {
+                    let vid = r.id.clone();
+                    let mid = m.id.clone();
+                    let cmds_pick = cmds.clone();
+                    let current = *color;
+                    cf = cf.on_swatch(move |pos: Point<Pixels>, _w, cx: &mut App| {
+                        let on_pick: Rc<dyn Fn(Color32, &mut Window, &mut App)> = Rc::new({
+                            let cmds_pick = cmds_pick.clone();
+                            let vid = vid.clone();
+                            let mid = mid.clone();
+                            move |c: Color32, _w, _cx| {
+                                // `Color32::to_hex()` 自带 `#`，再拼一个就是 `##RRGGBB`，
+                                // 引擎解析失败 → 颜色永远写不回去（用户 2026-11-17）。
+                                // `to_hex_alpha()` 带上透明度，色板里的 alpha 才不会丢。
+                                let hex = c.to_hex_alpha();
+                                cmds_pick.push(Cmd {
+                                    id: "variable.set",
+                                    params: Some(json!({ "variable": vid, "mode": mid, "value": json!(hex) })),
+                                });
+                            }
+                        });
+                        let w = crate::popovers::WindowState::color(cx, pos, current, None, on_pick, cmds_pick.clone());
+                        popups.request(w);
+                    });
+                }
+                cf.into_any_element()
             }
             VarCell::Bool(b) => {
+                // 布尔值格直接用通用 `Checkbox`（与右栏 Clip content 同一个控件），
+                // 不再手画 14pt 方框 + True/False 文本。
                 let on = *b;
                 let vid = r.id.clone();
                 let mid = m.id.clone();
                 let cmds = cmds.clone();
-                let mut d = Self::value_shell(&t).cursor_pointer();
-                d = d.child(
-                    div()
-                        .flex_none()
-                        .size(pt(14.0))
-                        .rounded(pt(3.0))
-                        .border_1()
-                        .border_color(rgba(t.border_strong))
-                        .bg(rgba(if on { t.accent } else { t.panel }))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(if on {
-                            paint_icon(Icon::Check, rgba(Color32::from_rgb(0xFF, 0xFF, 0xFF)), 10.0).into_any_element()
-                        } else {
-                            div().into_any_element()
-                        }),
-                );
-                d = d.child(if on { tr("True") } else { tr("False") });
-                d.on_mouse_down(MouseButton::Left, move |_: &MouseDownEvent, _, _| {
-                    cmds.push(Cmd { id: "variable.set", params: Some(json!({ "variable": vid, "mode": mid, "value": !on })) });
-                })
-                .into_any_element()
+                Checkbox::new(gpui::ElementId::Name(format!("{}/{}:bool", r.id, m.id).into()))
+                    .label(if on { tr("True") } else { tr("False") })
+                    .checked(on)
+                    .on_change(move |next: &bool, _w, _cx| {
+                        cmds.push(Cmd { id: "variable.set", params: Some(json!({ "variable": vid, "mode": mid, "value": *next })) });
+                    })
+                    .into_any_element()
             }
             VarCell::Alias(name) => {
                 // 别名 chip：点击弹出同类型变量列表（+ Detach）。
@@ -2438,7 +3043,7 @@ impl VariablesEditor {
                             .iter()
                             .map(|(id, name)| MenuItem::new(name.clone(), "ui.setAlias", json!({ "variable": vid, "mode": mid, "alias": id })))
                             .collect();
-                        st.borrow_mut().menu = Some(Menu { x: f32::from(e.position.x), y: f32::from(e.position.y), items });
+                        st.borrow_mut().menu = Some(Menu::at(f32::from(e.position.x), f32::from(e.position.y), items));
                     }
                 })
                 .into_any_element()
@@ -2446,15 +3051,13 @@ impl VariablesEditor {
             VarCell::Number(s) => {
                 let key = format!("{}/{}:num", r.id, m.id);
                 let v = s.trim().parse::<f64>().ok();
-                let mut d = Self::value_shell(&t);
-                d = d.child(Self::number_value_field(caches, &cmds, cx, &key, v, &r.id, &m.id));
-                d.into_any_element()
+                // 共用的 `number_field` 自己带边框 / 背景，外面再套 `value_shell` 就是
+                // 双层外框、颜色也对不上（用户 2026-11-17）。
+                Self::number_value_field(caches, &cmds, cx, &key, v, &r.id, &m.id).into_any_element()
             }
             VarCell::Text(s) => {
                 let key = format!("{}/{}:txt", r.id, m.id);
-                let mut d = Self::value_shell(&t);
-                d = d.child(Self::text_value_field(caches, &cmds, cx, &key, s, &r.id, &m.id, VarKind::String, VALUE_FIELD_W));
-                d.into_any_element()
+                Self::text_value_field(caches, &cmds, cx, &key, s, &r.id, &m.id, VarKind::String, VALUE_FIELD_W).into_any_element()
             }
             VarCell::Empty => Self::value_shell(&t).into_any_element(),
         }
@@ -2485,30 +3088,58 @@ impl VariablesEditor {
         let cid = c.id.clone();
         let items: Vec<MenuItem> = TYPES
             .iter()
-            .map(|(label, k)| MenuItem::new(*label, "variable.create", json!({ "collection": cid, "name": name, "type": k.id(), "value": "0" })))
+            // 不传 `value`：引擎按类型取 `VariableValue::default_for(kind)`。
+            // 以前统一传字符串 "0"，Boolean 走 `as_bool()` 解析失败 → "invalid value"，
+            // 布尔变量根本建不出来（用户 2026-11-17）。
+            .map(|(label, k)| MenuItem::new(*label, "variable.create", json!({ "collection": cid, "name": name, "type": k.id() })))
             .collect();
         div().flex_none().w_full().h(pt(BOTTOM_H)).flex().flex_row().items_center().px(pt(16.0)).border_t_1().border_color(rgba(t.border)).child(
             div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(pt(4.0))
-                .h(pt(24.0))
-                .px(pt(6.0))
-                .rounded(pt(4.0))
-                .cursor_pointer()
-                .text_size(pt(11.0))
-                .text_color(rgba(t.text_secondary))
-                .hover(move |s| s.bg(rgba(t.hover)))
-                .on_mouse_down(MouseButton::Left, {
-                    let st = st.clone();
-                    move |e: &MouseDownEvent, _, cx| {
-                        cx.stop_propagation();
-                        st.borrow_mut().menu = Some(Menu { x: f32::from(e.position.x), y: f32::from(e.position.y) - 130.0, items: items.clone() });
-                    }
-                })
-                .child(paint_icon(Icon::Plus, rgba(t.text_secondary), 14.0))
-                .child(tr("+ Create variable")),
+                .relative()
+                .flex_none()
+                .child(
+                    gpui::canvas(
+                        {
+                            let st_cap = st.clone();
+                            move |bounds, _, _| {
+                                st_cap.borrow_mut().add_anchor = Some(bounds);
+                            }
+                        },
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full(),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(pt(4.0))
+                        .h(pt(24.0))
+                        .px(pt(6.0))
+                        .rounded(pt(4.0))
+                        .cursor_pointer()
+                        .text_size(pt(11.0))
+                        .text_color(rgba(t.text_secondary))
+                        .hover(move |s| s.bg(rgba(t.hover)))
+                        .on_mouse_down(MouseButton::Left, {
+                            let st = st.clone();
+                            move |_, _, cx| {
+                                cx.stop_propagation();
+                                let anchor = st.borrow().add_anchor;
+                                // 按钮**上方 4pt、左对齐**，宽度随内容。通用 `Menu` 的
+                                // `TopStart` 是「卡片顶边 = 锚点顶边 - gap」，所以 gap 要加上
+                                // 菜单自身高度，卡片**底边**才落在按钮上方 4pt（用户 2026-11-17）。
+                                let h = items.len() as f32 * 28.0 + 2.0 * crate::menu_metrics::MENU_PAD;
+                                st.borrow_mut().menu = Some(Menu::on(anchor, crate::widgets::RectAlign::TopStart, h + 4.0, items.clone()));
+                            }
+                        })
+                        .child(paint_icon(Icon::Plus, rgba(t.text_secondary), 12.0))
+                        .child(tr("Create variable")),
+                ),
         )
     }
 
@@ -2522,6 +3153,14 @@ impl VariablesEditor {
         // `menu()` 生成的 `.absolute().left/top` 以卡片左上角为原点，故需减掉卡片原点。
         let local_x = menu.x - f32::from(origin.x);
         let local_y = menu.y - f32::from(origin.y);
+        // 锚点：按钮类菜单用控件的真实矩形（贴边），右键菜单仍以按下点为锚。
+        let at = match menu.anchor {
+            Some(b) => Bounds { origin: point(b.origin.x - origin.x, b.origin.y - origin.y), size: b.size },
+            None => crate::widgets::at_point(local_x, local_y.max(4.0)),
+        };
+        let align = menu.align;
+        let gap = menu.gap;
+        let width = menu.width;
         let cmds = self.cmds.clone();
         let state = st.clone();
         let data = self.data.clone();
@@ -2533,6 +3172,8 @@ impl VariablesEditor {
             let cmds = cmds.clone();
             let state = state.clone();
             let data = data.clone();
+            let caches = self.row_caches.clone();
+            let item_name = params["name"].as_str().map(str::to_owned);
             col = col.child(
                 div()
                     .flex_none()
@@ -2546,7 +3187,7 @@ impl VariablesEditor {
                     .text_size(pt(11.0))
                     .text_color(rgba(t.menu_text))
                     .hover(move |s| s.bg(rgba(t.menu_hover)))
-                    .on_mouse_down(MouseButton::Left, move |_: &MouseDownEvent, _, _| {
+                    .on_mouse_down(MouseButton::Left, move |_: &MouseDownEvent, window, cx| {
                         state.borrow_mut().menu = None;
                         match cmd {
                             "ui.filter" => {
@@ -2560,22 +3201,32 @@ impl VariablesEditor {
                             "ui.showAll" => state.borrow_mut().hidden = [false; 4],
                             "ui.rename" => {
                                 if let Some(v) = params["variable"].as_str() {
-                                    state.borrow_mut().rename = Some(v.to_string());
+                                    let name = item_name.clone().unwrap_or_default();
+                                    Self::start_variable_rename(&caches, &state, &cmds, v.to_string(), name, window, cx);
                                 }
                             }
                             "ui.renameMode" => {
                                 if let Some(v) = params["mode"].as_str() {
-                                    state.borrow_mut().rename_mode = Some(v.to_string());
+                                    let name = item_name.clone().unwrap_or_default();
+                                    let coll = data
+                                        .collections
+                                        .iter()
+                                        .find(|c| c.modes.iter().any(|m| m.id == v))
+                                        .map(|c| c.id.clone())
+                                        .unwrap_or_default();
+                                    Self::start_mode_rename(&caches, &state, &cmds, coll, v.to_string(), name, window, cx);
                                 }
                             }
                             "ui.renameCollection" => {
                                 if let Some(v) = params["collection"].as_str() {
-                                    state.borrow_mut().rename_collection = Some(v.to_string());
+                                    let name = item_name.clone().unwrap_or_default();
+                                    Self::start_collection_rename(&caches, &state, &cmds, v.to_string(), name, window, cx);
                                 }
                             }
                             "ui.renameGroup" => {
                                 if let Some(v) = params["group"].as_str() {
-                                    state.borrow_mut().rename_group = Some(v.to_string());
+                                    let name = item_name.clone().unwrap_or_default();
+                                    Self::start_group_rename(&caches, &state, &cmds, v.to_string(), name, window, cx);
                                 }
                             }
                             "ui.details" => {
@@ -2608,8 +3259,16 @@ impl VariablesEditor {
                                     .as_array()
                                     .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
                                     .unwrap_or_default();
-                                for id in ids {
-                                    cmds.push(Cmd { id: "variable.delete", params: Some(json!({ "variable": id })) });
+                                // 删整组 = 一个手势 = 一步撤销，而不是每个变量一步。
+                                let steps: Vec<Value> = ids
+                                    .iter()
+                                    .map(|id| json!({ "command": "variable.delete", "params": { "variable": id } }))
+                                    .collect();
+                                if !steps.is_empty() {
+                                    cmds.push(Cmd {
+                                        id: "command.batch",
+                                        params: Some(json!({ "label": tr("Delete group"), "commands": steps })),
+                                    });
                                 }
                             }
                             _ => cmds.push(Cmd { id: cmd, params: Some(params.clone()) }),
@@ -2618,49 +3277,70 @@ impl VariablesEditor {
                     .child(label),
             );
         }
-        crate::widgets::menu(crate::widgets::at_point(local_x, local_y.max(4.0)))
-            .gap(0.0)
-            .width(crate::widgets::Width::Min(180.0))
-            .show(|| col.into_any_element())
+        crate::widgets::menu(at).align(align).gap(gap).width(width).show(|| col.into_any_element())
             .unwrap_or_else(|| div().into_any_element())
     }
 
     // ── 拖拽 ──────────────────────────────────────────────────────────────────────────────
 
-    /// 用按下点作为命中行的参考，重建整列的行矩形（`drag::calibrate` 的同构做法）。
+    /// 用按下行的**真实窗口矩形**做参考，重建整列的行矩形。
+    /// 不能用按下点当行顶：指针常落在行中间，纵向偏移会被算成整列偏移，
+    /// 插入线因此错位、并且要拖出大半行才动一格（用户 2026-11-17）。
     /// 平面列表 `can_into = false`，所以 `resolve` 只会在 Above / Below 之间选，`gap` 即插入缝。
-    fn begin_drag(kind: DragList, from: usize, ids: &[String], hit: Point<Pixels>, tops: &[f32]) -> ListDragState {
+    fn begin_drag(
+        kind: DragList,
+        from: usize,
+        ids: &[String],
+        hit: Point<Pixels>,
+        tops: &[f32],
+        hit_rect: Option<Bounds<Pixels>>,
+    ) -> ListDragState {
         let h = match kind {
             DragList::Variables => ROW_H,
             _ => SIDE_ROW_H,
         };
         // 变量表带分组间隔 / 分组标题，行不是等距的：用 `tops`（内容坐标里的真实顶边）
-        // 反推整列矩形。指针按下点的窗口 y 减去按下行的内容 y，就得到内容原点的窗口 y；
+        // 反推整列矩形。按下行的真实窗口顶边减去它的内容 y，就得到内容原点的窗口 y；
         // 纵向滚动也因此自动抵消。侧栏两个列表是等距平铺，`tops` 为空，走原公式。
         let from_top = tops.get(from).copied().unwrap_or(from as f32 * h);
-        let base_y = f32::from(hit.y) - from_top;
-        let rows: Vec<DragRow> = ids
+        let base_y = hit_rect.map(|r| f32::from(r.origin.y)).unwrap_or(f32::from(hit.y)) - from_top;
+        let (x, w) = hit_rect.map(|r| (f32::from(r.origin.x), f32::from(r.size.width))).unwrap_or((0.0, 10000.0));
+        let mut rows: Vec<DragRow> = ids
             .iter()
             .enumerate()
             .map(|(i, _)| {
                 let y = match tops.get(i) {
                     Some(t) => base_y + *t,
-                    None => f32::from(hit.y) - from as f32 * h + i as f32 * h,
+                    None => base_y + i as f32 * h,
                 };
                 DragRow {
                     id: i as u64,
                     path: i.to_string(),
                     can_into: false,
                     collapsed: false,
-                    rect: Bounds { origin: Point { x: px(0.0), y: px(y) }, size: size(px(10000.0), px(h)) },
+                    rect: Bounds { origin: Point { x: px(x), y: px(y) }, size: size(px(w), px(h)) },
                 }
             })
             .collect();
+        // 侧栏两个列表是等距平铺：直接复用通用拖拽件的 `calibrate`，用命中行的真实矩形
+        // 反推整列（与左栏图层同源）。变量表有分组间隔，行不等距，仍用上面的 `tops`。
+        if kind != DragList::Variables
+            && let Some(rect) = hit_rect
+        {
+            drag::calibrate(&mut rows, from, rect);
+        }
         ListDragState { kind, from, ids: ids.to_vec(), rows, pointer: hit, target: None, armed: false }
     }
 
     fn on_move(st: &State, pointer: Point<Pixels>) {
         let mut s = st.borrow_mut();
+        // 「Edit variable」浮层标题栏拖动：位置是窗口坐标，按按下的抓取偏移平移。
+        if let Some(grab) = s.details_drag {
+            s.details_pos = Some(point(
+                px(f32::from(pointer.x) - f32::from(grab.x)),
+                px(f32::from(pointer.y) - f32::from(grab.y)),
+            ));
+        }
         // 横向滚动条：按住滑块（或轨道）拖动，按行程把指针位移换算成滚动量。
         if let Some((x0, off0, range, max_scroll)) = s.hscroll_drag {
             let target = (off0 + (f32::from(pointer.x) - x0) / range.max(1.0) * max_scroll).clamp(0.0, max_scroll);
@@ -2700,7 +3380,7 @@ impl VariablesEditor {
         }
         if let Some((i, x0, w0)) = s.mode_resize {
             if let Some(w) = s.mode_ws.get_mut(i) {
-                *w = (w0 + f32::from(pointer.x) - x0).clamp(100.0, 420.0);
+                *w = (w0 + f32::from(pointer.x) - x0).clamp(MODE_MIN, MODE_MAX);
             }
         }
         let Some(d) = s.drag.as_mut() else { return };
@@ -2711,7 +3391,9 @@ impl VariablesEditor {
         }
         d.armed = true;
         d.pointer = pointer;
-        d.target = drag::resolve(&d.rows, d.from, pointer, DragCfg::default());
+        // 层级基准用行矩形真实左缘（窗口坐标），否则缩进判定把指针当成从 0 开始。
+        let base = d.rows.first().map(|r| f32::from(r.rect.origin.x)).unwrap_or(0.0);
+        d.target = drag::resolve(&d.rows, d.from, pointer, DragCfg { base, ..DragCfg::default() });
     }
 
     fn commit_drag(st: &State, d: &ListDragState, cmds: &Cmds) {
@@ -2721,6 +3403,12 @@ impl VariablesEditor {
         }
         let gap = t.gap.min(d.ids.len());
         let before = d.ids.get(gap).cloned();
+        // 单击时的轻微移动也会让拖拽「armed」，但落点仍是自己这一行（`gap == from`，
+        // `before` 就是被拖项本身）。若当成「移到自己前面」提交，列表会把这一项挪到末尾——
+        // 表现就是「点一下选中，布局跳一次」（用户 2026-11-17）。原地落点直接忽略。
+        if before.as_deref() == d.ids.get(d.from).map(String::as_str) {
+            return;
+        }
         match d.kind {
             DragList::Collections => {
                 let from = d.ids.get(d.from).cloned().unwrap_or_default();
@@ -2733,19 +3421,35 @@ impl VariablesEditor {
             DragList::Variables => {
                 let from = d.ids.get(d.from).cloned().unwrap_or_default();
                 let mut p = json!({ "variable": from });
-                if let Some(b) = before {
+                // 落点是分组标题锚点 = 插到该组**上方**（组外）：`before` 用组首变量，
+                // 并显式 `group: ""`，否则引擎会按 `before` 所在文件夹把行放进组里。
+                let mut out_of_group = false;
+                let before_id = before.as_deref().map(|b| match drag_group_first(b) {
+                    Some(first) => {
+                        out_of_group = true;
+                        first.to_string()
+                    }
+                    None => b.to_string(),
+                });
+                if let Some(b) = before_id {
                     p["before"] = json!(b);
+                }
+                if out_of_group {
+                    p["group"] = json!("");
                 }
                 cmds.push(Cmd { id: "variable.move", params: Some(p) });
             }
             DragList::Groups => {
                 // egui 的 group_order 是会话视图偏好，不进文档：只重排本地顺序。
+                // `d.ids` 就是**当前显示顺序**（与插入线同一个列表），把被拖名插到 `before`
+                // 之前并整体写回，侧栏下一帧就出现在线画的位置——不会再「线动了、行没动」。
                 let mut s = st.borrow_mut();
                 if let Some(name) = d.ids.get(d.from).cloned() {
-                    s.group_order.retain(|g| g != &name);
-                    let at = before.and_then(|b| s.group_order.iter().position(|g| g == &b)).unwrap_or(usize::MAX);
-                    let len = s.group_order.len();
-                    s.group_order.insert(at.min(len), name);
+                    let mut order: Vec<String> = d.ids.clone();
+                    order.retain(|g| g != &name);
+                    let at = before.and_then(|b| order.iter().position(|g| g == &b)).unwrap_or(order.len());
+                    order.insert(at.min(order.len()), name);
+                    s.group_order = order;
                 }
             }
         }
@@ -2815,27 +3519,18 @@ impl VariablesEditor {
         body = body.child(self.details_field(cx, &format!("d-desc-{}", row.id), &row.description, &row.id, "description"));
         // Hide from publishing
         let hidden = row.hidden;
+        let hid_cmds = self.cmds.clone();
+        let hid_vid = row.id.clone();
         body = body.child(
-            div()
-                .w_full()
-                .h(pt(24.0))
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(pt(6.0))
-                .cursor_pointer()
-                .child(div().flex_none().size(pt(14.0)).rounded(pt(3.0)).border_1().border_color(rgba(t.border_strong)).bg(rgba(if hidden {
-                    t.accent
-                } else {
-                    t.panel
-                })))
-                .child(div().text_size(pt(11.0)).text_color(rgba(t.text)).child(tr("Hide from publishing")))
-                .on_mouse_down(MouseButton::Left, {
-                    let cmds = self.cmds.clone();
-                    let vid = row.id.clone();
-                    move |_: &MouseDownEvent, _, _| {
-                        cmds.push(Cmd { id: "variable.update", params: Some(json!({ "variable": vid, "hiddenFromPublishing": !hidden })) });
-                    }
+            Checkbox::new(gpui::ElementId::Name(format!("d-hidden-{}", row.id).into()))
+                .label(tr("Hide from publishing"))
+                .text_xs()
+                .checked(hidden)
+                .on_change(move |next: &bool, _, _| {
+                    hid_cmds.push(Cmd {
+                        id: "variable.update",
+                        params: Some(json!({ "variable": hid_vid, "hiddenFromPublishing": *next })),
+                    });
                 }),
         );
         body = body.child(detail_label(tr("Code syntax")));
@@ -2855,30 +3550,19 @@ impl VariablesEditor {
         // Scoping：egui `details()` 的 "All supported properties" + 逐项范围。
         body = body.child(detail_label(tr("Scoping: where pickers offer it")));
         let all_scopes = row.scopes.is_none();
+        let sc_cmds = self.cmds.clone();
+        let sc_vid = row.id.clone();
         body = body.child(
-            div()
-                .w_full()
-                .h(pt(24.0))
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(pt(6.0))
-                .cursor_pointer()
-                .child(div().flex_none().size(pt(14.0)).rounded(pt(3.0)).border_1().border_color(rgba(t.border_strong)).bg(rgba(if all_scopes {
-                    t.accent
-                } else {
-                    t.panel
-                })))
-                .child(div().text_size(pt(11.0)).text_color(rgba(t.text)).child(tr("All supported properties")))
-                .on_mouse_down(MouseButton::Left, {
-                    let cmds = self.cmds.clone();
-                    let vid = row.id.clone();
-                    move |_: &MouseDownEvent, _, _| {
-                        cmds.push(Cmd {
-                            id: "variable.update",
-                            params: Some(json!({ "variable": vid, "scopes": if all_scopes { Value::Null } else { json!([]) } })),
-                        });
-                    }
+            Checkbox::new(gpui::ElementId::Name(format!("d-scopes-{}", row.id).into()))
+                .label(tr("All supported properties"))
+                .text_xs()
+                .checked(all_scopes)
+                .on_change(move |next: &bool, _, _| {
+                    // 勾上 = 不限范围（`null`）；取消 = 空数组（与 egui 一致）。
+                    sc_cmds.push(Cmd {
+                        id: "variable.update",
+                        params: Some(json!({ "variable": sc_vid, "scopes": if *next { Value::Null } else { json!([]) } })),
+                    });
                 }),
         );
         for scope in row.scopes.clone().unwrap_or_default() {
@@ -2886,15 +3570,28 @@ impl VariablesEditor {
                 body.child(div().pl(pt(16.0)).h(pt(22.0)).flex().items_center().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(scope));
         }
         let close_st = st.clone();
-        let dismiss: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(move |_, _| close_st.borrow_mut().details = None);
-        popover_window(PopoverOpen::At(point(px(300.0), px(60.0))))
+        let dismiss: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(move |_, _| {
+            let mut s = close_st.borrow_mut();
+            s.details = None;
+            s.details_drag = None;
+        });
+        // 与其它弹窗一样由标题栏拖动：按下时记录抓取偏移，后续移动经根视图的窗口级
+        // 路由推进（`internal_drag()` 已包含 `details_drag`），指针移出卡片也不会断。
+        let at = st.borrow().details_pos.unwrap_or(point(px(300.0), px(60.0)));
+        let pop = popover_window(PopoverOpen::At(at))
             .width(280.0)
             .pad(16.0)
             .surface(Surface::Panel)
-            .title(title_text(tr("Edit variable")))
-            .body(body)
-            .show(viewport, dismiss)
-            .1
+            .title(title_text(tr("Edit variable")));
+        let origin = pop.origin(viewport);
+        let drag_st = st.clone();
+        pop.on_drag_start(move |e: &MouseDownEvent, _, _| {
+            let mut s = drag_st.borrow_mut();
+            s.details_drag = Some(point(e.position.x - origin.x, e.position.y - origin.y));
+        })
+        .body(body)
+        .show(viewport, dismiss)
+        .1
     }
 
     fn drag_line(&self, st: &State, root_bounds: Option<Bounds<Pixels>>) -> Option<AnyElement> {
@@ -2905,23 +3602,42 @@ impl VariablesEditor {
         if tg.refused || tg.noop || !d.armed {
             return None;
         }
-        // 落点几何是**窗口坐标**（行矩形由按下点推出来），而插入线要挂在 root 里：
-        // 减去 root 的窗口原点才是局部坐标。x 还要加上侧栏宽度（表格不在 root 左缘）。
+        // 落点几何是**窗口坐标**（行矩形来自各行 prepaint 的真实矩形），插入线挂在 root 里：
+        // 统一减去 root 的窗口原点换成局部坐标。行矩形缺失（没记录到）时才退回旧的
+        // 「从表格左缘铺满」算法。
         let rb = root_bounds?;
         let ox = f32::from(rb.origin.x);
         let oy = f32::from(rb.origin.y);
         let w = f32::from(rb.size.width);
         let h = f32::from(rb.size.height);
         let table_left = if s.sidebar { s.sidebar_w + 1.0 } else { 0.0 };
-        let x0 = table_left + tg.line.x0;
-        let x1 = (table_left + tg.line.x1).min(w);
+        let (x0, x1) = if tg.line.x0 > 0.0 {
+            (tg.line.x0 - ox, (tg.line.x1 - ox).min(w))
+        } else {
+            (table_left, (table_left + tg.line.x1).min(w))
+        };
         let y = tg.line.y - oy;
         if y < 0.0 || y > h || x1 <= x0 {
             return None;
         }
-        let _ = ox;
         Some(div().absolute().left(pt(x0)).top(pt(y)).w(pt((x1 - x0).max(40.0))).h(pt(2.0)).bg(rgba(t.accent)).into_any_element())
     }
+}
+
+/// 分组的「树序」权重：按 `/` 路径逐段取它在 `group_order` 里的位置。
+/// 父组永远排在自己的子组之前（`"A"` 是 `[i]`，`"A/B"` 是 `[i, j]`，前缀相同则短的在前），
+/// 因此表格与侧栏都是「一级组 → 它的二级组 → 三级组 → 下一个一级组」。
+fn group_rank(group: &str, order: &[String]) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut acc = String::new();
+    for seg in group.split('/') {
+        if !acc.is_empty() {
+            acc.push('/');
+        }
+        acc.push_str(seg);
+        out.push(order.iter().position(|g| g == &acc).unwrap_or(usize::MAX));
+    }
+    out
 }
 
 /// egui `unique()`：重名时加 ` 2`、` 3`…（新建集合 / 变量 / mode 都用它）。
@@ -2980,7 +3696,10 @@ fn kind_glyph(r: &VarRow) -> AnyElement {
                     _ => None,
                 })
                 .unwrap_or(Color32::GRAY);
-            div().flex_none().size(pt(14.0)).rounded(pt(3.0)).bg(rgba(c)).border_1().border_color(rgba(t.border)).into_any_element()
+            // 用户要求：变量名前的颜色图标用通用色块控件（圆形 `Swatch`），不要再手写
+            // div + rounded_full（用户 2026-11-17：那不是通用控件）。
+            let paint = figcraft_color::Paint::solid(figcraft_color::Color::from_rgba8(c.0[0], c.0[1], c.0[2], c.0[3]));
+            crate::widgets::swatch::swatch(paint, 14.0).circle().into_any_element()
         }
         VarKind::Number => div()
             .flex_none()

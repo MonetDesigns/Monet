@@ -1195,7 +1195,7 @@ impl CanvasView {
                 "variables_table" | "variables_table_full" => {
                     let t = if data.variables.collections.is_empty() { crate::panels::right::variables::sample() } else { data.variables.clone() };
 
-                    Some(popovers::WindowState::variables_table(queue.clone(), anchor, t))
+                    Some(popovers::WindowState::variables_table(queue.clone(), anchor, t, Some(view.fields.popups())))
                 }
 
                 "color" => {
@@ -1803,7 +1803,12 @@ impl CanvasView {
                     if on && !self.variables_open {
                         let data = self.panel_data();
 
-                        let win = popovers::WindowState::variables_table(self.fields.queue(), Point { x: px(0.0), y: px(100.0) }, data.variables);
+                        let win = popovers::WindowState::variables_table(
+                            self.fields.queue(),
+                            Point { x: px(0.0), y: px(100.0) },
+                            data.variables,
+                            Some(self.fields.popups()),
+                        );
 
                         self.open_window(win, cx);
                     } else if !on && self.variables_open {
@@ -4569,7 +4574,7 @@ impl CanvasView {
 
         let anchor = Point::new(px(100.0), px(100.0));
 
-        let win = popovers::WindowState::variables_table(self.fields.queue(), anchor, data);
+        let win = popovers::WindowState::variables_table(self.fields.queue(), anchor, data, Some(self.fields.popups()));
 
         self.open_window(win, cx);
     }
@@ -6317,7 +6322,7 @@ impl Render for CanvasView {
 
                 let data = cv.panel_data();
 
-                let win = popovers::WindowState::variables_table(cv.fields.queue(), Point { x: px(0.0), y }, data.variables);
+                let win = popovers::WindowState::variables_table(cv.fields.queue(), Point { x: px(0.0), y }, data.variables, Some(cv.fields.popups()));
 
                 // 不再强制 `variables_full = false`：会话记住上次是 Full 还是 Floating。
 
@@ -6806,7 +6811,7 @@ impl Render for CanvasView {
                     els.extend(main_menu::render(mm, vw, vh, hover, click));
                 }
 
-                Popup::Window(w) => els.extend(w.render(cx, vp, dismiss.clone(), drag_start, drag_move.clone(), right_edge)),
+                Popup::Window(w) => els.extend(w.render(cx, window, vp, dismiss.clone(), drag_start, drag_move.clone(), right_edge)),
 
                 Popup::Share { anchor } => {
                     // 锚在 Share 按钮的左下角，贴边夹紧（同 Popup::Menu 的做法）。
@@ -7248,7 +7253,7 @@ impl Render for CanvasView {
 
                 let edge = px(f32::from(vp2.width) - self.pane.right_w);
 
-                w.render(cx, vp2, dismiss, drag_start, drag_move, edge)
+                w.render(cx, window, vp2, dismiss, drag_start, drag_move, edge)
             } else {
                 Vec::new()
             }
@@ -7482,6 +7487,50 @@ impl Render for CanvasView {
             // `on_key_down` 只覆盖画布子树——焦点在右栏的列表行时按键到不了它，列表键盘
             // 就成了死代码。这里只在列表真的拿到焦点时消费（`local_style_key` 自己判断），
             // 其它情况原样放行给内层控件与画布。
+            // 撤销 / 重做在**捕获阶段**兜底：面板里的输入框会在冒泡阶段吞掉 Ctrl+Z/C/V
+            // （它们不 `propagate`），根节点的 `on_key_down` 根本收不到。变量面板打开时
+            // 用户几乎总是刚点完输入框/菜单，这里先截一步，保证 Ctrl+Z / Shift+Ctrl+Z /
+            // Ctrl+Y 一律进文档历史（用户 2026-11-17）。
+            .capture_key_down(cx.listener(|this: &mut CanvasView, e: &KeyDownEvent, window, cx| {
+                this.bind_window_document(window);
+                if !this.variables_open {
+                    return;
+                }
+                let m = &e.keystroke.modifiers;
+                if !(m.platform || m.control) || m.alt {
+                    return;
+                }
+                if !this.app.session.ds().is_ok_and(|d| d.text_edit.is_none()) {
+                    return;
+                }
+                let key = canonical_key(&e.keystroke.key);
+                let id = if key.eq_ignore_ascii_case("y") && !m.shift {
+                    Some("edit.redo")
+                } else if matches!(key.as_str(), "z" | "Z") {
+                    let held = figcraft_engine::keymap::Mods {
+                        shift: m.shift,
+                        alt: m.alt,
+                        cmd: m.platform,
+                        ctrl: m.control,
+                    };
+                    figcraft_engine::keymap::lookup(
+                        figcraft_engine::keymap::Platform::current(),
+                        figcraft_engine::keymap::Context::Canvas,
+                        &key,
+                        held,
+                    )
+                    .map(|b| b.id)
+                } else {
+                    None
+                };
+                if let Some(id) = id
+                    && matches!(id, "edit.undo" | "edit.redo")
+                    && run_binding(&mut this.app, id)
+                {
+                    cx.notify();
+                    cx.stop_propagation();
+                }
+            }))
             .on_key_down(cx.listener(|this: &mut CanvasView, e: &KeyDownEvent, window, cx| {
                 this.bind_window_document(window, true);
                 let accel = e.keystroke.modifiers.platform || e.keystroke.modifiers.control;
@@ -7515,6 +7564,19 @@ impl Render for CanvasView {
                         cx.stop_propagation();
                         return;
                     }
+                }
+
+                // 变量面板的 Ctrl/Cmd+C/V 同理：焦点在面板里的输入框/按钮时，按键沿焦点链
+                // 到不了画布子树的 `variables_key`，整行/整列复制粘贴就成了死代码。
+                // 这里只接管带修饰键的 C/V；Escape 等非修饰键仍交给面板内部控件先处理。
+                if accel
+                    && matches!(canonical_key(&e.keystroke.key).as_str(), "c" | "v")
+                    && this.variables_open
+                    && this.variables_editor.as_ref().is_some_and(|w| w.variables_key(&e.keystroke.key, true))
+                {
+                    cx.notify();
+                    cx.stop_propagation();
+                    return;
                 }
 
                 // A21：Tab / Shift+Tab 在 F6 选中的区域内走控件（egui 的同名行为）。

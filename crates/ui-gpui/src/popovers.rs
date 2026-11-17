@@ -638,6 +638,8 @@ pub(crate) struct WindowState {
     editor_full: Option<bool>,
     var_on_full: Rc<dyn Fn(bool, &mut App)>,
     var_on_close: Rc<dyn Fn(&mut App)>,
+    /// 变量面板里点颜色 swatch 时，通过它向根视图请求通用取色器窗口。
+    var_popups: Option<crate::panels::PopupReqs>,
     /// 浮层内通用下拉的菜单卡片（窗口坐标，作为 `render()` 的兄弟元素返回）。每帧清空重建。
     overlays: Rc<RefCell<Vec<AnyElement>>>,
     /// 当前浮层的关闭回调（`render()` 每帧写入），供菜单 `dismiss` 之外复用。
@@ -776,6 +778,7 @@ impl WindowState {
             editor_full: None,
             var_on_full: Rc::new(|_, _| {}),
             var_on_close: Rc::new(|_| {}),
+            var_popups: None,
             overlays: Rc::new(RefCell::new(Vec::new())),
             dismiss: Rc::new(RefCell::new(None)),
         }
@@ -1352,13 +1355,19 @@ impl WindowState {
     // ── ⑥ 变量编辑器右侧列表（egui `dialogs/variables_panel.rs::table()`）─────────────────
     // 只搬右边的表格：左侧集合/分组 sidebar、顶部搜索、编辑与拖拽都还没做。
     // 标题用集合名（egui 的浮动面板标题），右侧放变量总数的计数 chip。
-    pub(crate) fn variables_table(cmds: Cmds, anchor: Point<Pixels>, data: VariablesData) -> Self {
+    pub(crate) fn variables_table(
+        cmds: Cmds,
+        anchor: Point<Pixels>,
+        data: VariablesData,
+        popups: Option<crate::panels::PopupReqs>,
+    ) -> Self {
         let mut w = Self::base(WindowKind::VariablesTable, tr("Variables"), cmds, Open::Anchor(anchor));
         w.width = variables::WINDOW_W;
         w.height = variables::WINDOW_H;
         // 表格自己控制左右 inset，卡片 body 不再加通用 16 pt 内边距。
         w.pad = 0.0;
         w.variables_data = Some(data);
+        w.var_popups = popups;
         w
     }
 
@@ -2139,14 +2148,39 @@ impl WindowState {
         let model = Rc::new(Cell::new(0usize));
         let model_anchor = Rc::new(Cell::new(None::<Bounds<Pixels>>));
         let shown = Rc::new(Cell::new((usize::MAX, [0u8; 4])));
+        // 样式属性行用的是 `PaintPicker.on_write`（整份 paint 写回 `style.update`），
+        // 而纯色/色相/透明度拖动只走 `pick`。这里必须把选中的颜色也揉进 paint 再调用
+        // `on_write`，否则「样式列表的取色器选完颜色什么都不发生」（用户 2026-11-17）。
+        let paint_write = paint.as_ref().map(|p| p.on_write.clone());
         // Every pick updates the shared colour first, so the SV square / hue / alpha strips
         // repaint from the new value instead of staying frozen at the colour they opened with.
         // Picks also feed the session-wide "Recent" row (ui-egui `remember_recent`).
         let pick: Rc<dyn Fn(Color32, &mut Window, &mut App)> = {
             let cur = cur.clone();
+            let paint_state = paint_state.clone();
+            let grad_sel = grad_sel.clone();
             Rc::new(move |c: Color32, window: &mut Window, cx: &mut App| {
                 cur.set(c);
                 remember_recent(c);
+                if let (Some(state), Some(write)) = (&paint_state, &paint_write) {
+                    let mut np = state.borrow().clone();
+                    match &mut np.kind {
+                        figcraft_color::PaintKind::Solid { color } => {
+                            // 透明度和 `Paint::solid` 同一约定：色值本身不透明，opacity 承担 alpha。
+                            *color = picker_color(c).with_alpha(1.0);
+                            np.opacity = f32::from(c.0[3]) / 255.0;
+                            np.color_alpha = np.opacity;
+                        }
+                        figcraft_color::PaintKind::Gradient(g) => {
+                            let i = grad_sel.get().min(g.stops.len().saturating_sub(1));
+                            if let Some(s) = g.stops.get_mut(i) {
+                                s.color = picker_color(c);
+                            }
+                        }
+                        _ => {}
+                    }
+                    write(np, window, cx);
+                }
                 on_pick(c, window, cx);
             })
         };
@@ -2453,7 +2487,7 @@ impl WindowState {
     }
 
     /// `body_h` = 通用窗口留给 body 的高度（Full 时是整个视口减去 header）。
-    fn body_element(&mut self, cx: &mut App, body_h: f32, card_w: f32, viewport: Size<Pixels>) -> AnyElement {
+    fn body_element(&mut self, cx: &mut App, window: &mut Window, body_h: f32, card_w: f32, viewport: Size<Pixels>) -> AnyElement {
         match self.kind {
             WindowKind::Color => self.color_body(cx),
             WindowKind::CornerSmoothing => self.corner_smoothing_body(),
@@ -2465,7 +2499,14 @@ impl WindowState {
             WindowKind::VariablesTable => {
                 if self.editor.is_none() {
                     if let Some(data) = self.variables_data.take() {
-                        let editor = VariablesEditor::new(self.cmds.clone(), data, cx, self.var_on_full.clone(), self.var_on_close.clone());
+                        let editor = VariablesEditor::new(
+                            self.cmds.clone(),
+                            data,
+                            cx,
+                            self.var_popups.clone(),
+                            self.var_on_full.clone(),
+                            self.var_on_close.clone(),
+                        );
                         // 把在 editor 建立之前就收到的 Full/Floating 记住值灌进去。
                         if let Some(full) = self.editor_full {
                             editor.set_full(full);
@@ -2478,7 +2519,7 @@ impl WindowState {
                 let origin = self.origin;
                 let drag_start = self.drag_start.clone();
                 match &mut self.editor {
-                    Some(e) => e.render(cx, body_h, viewport, origin, drag_start, card_w),
+                    Some(e) => e.render(cx, window, body_h, viewport, origin, drag_start, card_w),
                     None => div().into_any_element(),
                 }
             }
@@ -4484,6 +4525,7 @@ impl WindowState {
     pub(crate) fn render(
         &mut self,
         cx: &mut App,
+        window: &mut Window,
         viewport: Size<Pixels>,
         dismiss: Rc<dyn Fn(&mut Window, &mut App)>,
         drag: Rc<dyn Fn(&MouseDownEvent, &mut Window, &mut App)>,
@@ -4521,12 +4563,20 @@ impl WindowState {
         let (base_w, base_h) = self.editor.as_ref().and_then(|e| e.size()).unwrap_or((self.width, self.height));
         // Full 从左侧 rail 的右缘开始，宽 = 视口 − rail，这样左栏图标不会消失。
         let rail = if full { crate::panels::RAIL_W } else { 0.0 };
+        // 全屏只在「面板 + 画布」区，不能盖住顶部自定义标题栏（`TITLE_H`）——
+        // 用户 2026-11-17：全屏会侵入标题栏。高度与原点一起扣掉标题栏。
+        // 标题栏下沿还有 1pt 分隔线（`top_row` 的 `border_t`，占 `[TITLE_H, TITLE_H+1)`），
+        // 卡片也必须从它下面开始，否则会把这条线盖掉（用户第二轮 2026-11-17）。
+        let title_h = if full { crate::title_bar::TITLE_H + 1.0 } else { 0.0 };
         let width = if full { (f32::from(viewport.width) - rail).max(1.0) } else { base_w };
-        let height = if full { f32::from(viewport.height) } else { base_h };
+        let height = if full { (f32::from(viewport.height) - title_h).max(1.0) } else { base_h };
         // Full 是 `Frame::NONE`：内边距 0、无圆角/阴影；Floating 保留通用 16（变量表构造时是 0）。
         let pad = if full { 0.0 } else { self.pad };
         let body_h = if full {
-            f32::from(viewport.height)
+            // 卡片原点已在 `title_h`（标题栏下沿），`height` 也已扣掉 `title_h`，
+            // body 用 `height` 才刚好铺到视口底部；用完整 `viewport.height` 会让底部
+            // 多出标题栏那截被裁掉。两份 PR 在此处各有修复，合并时都保留。
+            height
         } else if self.fixed_height() {
             // 固定高窗口的 `height` 是整卡高度（含 40pt 头部），body 要把它减掉。
             (height - crate::widgets::popover::HEADER_H - 2.0 * self.pad).max(120.0)
@@ -4534,8 +4584,8 @@ impl WindowState {
             height - 2.0 * self.pad
         };
         let at = if full {
-            // 贴着 rail 右缘，保留左侧图标栏（egui 的 full 就是「面板+画布」那块）。
-            Some(Point { x: px(rail), y: px(0.0) })
+            // 贴着 rail 右缘、标题栏下缘，保留左侧图标栏（egui 的 full 就是「面板+画布」那块）。
+            Some(Point { x: px(rail), y: px(title_h) })
         } else {
             self.place
         };
@@ -4557,14 +4607,22 @@ impl WindowState {
         // 浮层内通用下拉的菜单每帧重建：先清空上一帧，body_element 里的 Dropdown 会重新登记。
         self.overlays.borrow_mut().clear();
         *self.dismiss.borrow_mut() = Some(dismiss.clone());
+        // 用户：变量窗口不要外层通用 header。内层 VariablesEditor::header 自己画了完整的
+        // "Variables" 标题 + 计数 + 侧栏开关 + Import/Export + 搜索/过滤 + Full 按钮，外层
+        // 那条 40pt 空 title 把整排操作顶到 X 下面一行、侧栏被夹在中间——full / floating 都在犯。
+        // 一律不挂外层 title；X 由 popover 独立绝对定位浮在右上角，内层 header 已为它留 48pt。
+        let no_header = self.kind == WindowKind::VariablesTable;
         let mut pop = popover_window(open)
             .width(width)
             .pad(pad)
             .flush(full)
             .surface(self.surface)
-            .height(height)
-            .title(self.title_slot())
-            .body(self.body_element(cx, body_h.max(120.0), width, viewport))
+            .height(height);
+        if !no_header {
+            pop = pop.title(self.title_slot());
+        }
+        pop = pop
+            .body(self.body_element(cx, window, body_h.max(120.0), width, viewport))
             .on_drag_start(move |e, window, cx| drag(e, window, cx))
             .on_drag_move(move |e, window, cx| drag_move(e, window, cx))
             .on_measure({
@@ -4630,7 +4688,7 @@ impl WindowState {
             // 于是取色器整张排在样式面板左边、两张卡并排。直接传父窗口的 `right_edge` 会让它
             // 右缘对齐同一个位置，正好压在样式面板上。
             let child_edge = px(f32::from(self.origin.x) - 8.0);
-            els.extend(child.render(cx, viewport, closer, sub_press, sub_move, child_edge));
+            els.extend(child.render(cx, window, viewport, closer, sub_press, sub_move, child_edge));
             *slot.borrow_mut() = Some(child);
         }
         els
@@ -5025,6 +5083,7 @@ mod tests {
             Cmds::new(&wake),
             Point { x: px(100.0), y: px(100.0) },
             VariablesData { collections: Vec::new(), libraries: Vec::new() },
+            None,
         );
         w.viewport = size(px(1280.0), px(860.0));
         w.origin = Point { x: px(100.0), y: px(100.0) };
