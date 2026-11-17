@@ -46,7 +46,10 @@ pub(crate) fn top_bar(f: &RightFields, d: &PanelData) -> Div {
         .h(pt(TOP_H))
         .flex()
         .flex_row()
-        .items_center()
+        // Figma 参考 Frame 38：行1 内容 y8 h32，底部 y40 **紧贴**行2(Frame79 y40)。
+        // 容器高 40、内容高 32，必须 items_end（贴底）才让内容占 y8–40、底部零间隙。
+        // items_center 会上下各留 4，使头像行底部与 tab 行之间多出 4pt 空隙（用户指出这里不对）。
+        .items_end()
         // 左右内边距 8 pt（Figma 参考 Frame 38：头像 x1208 − 面板 x1200 = 8）。
         .pl(pt(8.0))
         .pr(pt(8.0))
@@ -66,7 +69,8 @@ fn people(f: &RightFields, live: &LiveData) -> Div {
     let shown = live.peers.len().min(MAX_SHOWN);
     let more = live.peers.len().saturating_sub(shown);
 
-    let mut row = div().flex().flex_row().items_center();
+    // 固定 32 高：头像(24) 在其中垂直居中 = 参考 Frame85 头像 y12 于行 y8 h32 内。
+    let mut row = div().h(pt(32.0)).flex().flex_row().items_center();
     // 自己：会话里点开是 Spotlight 菜单（egui `live.rs::people_bar` 的 `live_me`）。
     let me = avatar(&live.me_name, me_fill, live.spotlighting.then_some(me_fill));
     if live.active {
