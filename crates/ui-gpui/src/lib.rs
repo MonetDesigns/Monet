@@ -6469,7 +6469,7 @@ impl Render for CanvasView {
                     els.extend(main_menu::render(mm, vw, vh, hover, click));
                 }
 
-                Popup::Window(w) => els.extend(w.render(cx, vp, dismiss.clone(), drag_start, drag_move.clone(), right_edge)),
+                Popup::Window(w) => els.extend(w.render(cx, window, vp, dismiss.clone(), drag_start, drag_move.clone(), right_edge)),
 
                 Popup::Share { anchor } => {
                     // 锚在 Share 按钮的左下角，贴边夹紧（同 Popup::Menu 的做法）。
@@ -6908,7 +6908,7 @@ impl Render for CanvasView {
 
                 let edge = px(f32::from(vp2.width) - self.right_w);
 
-                w.render(cx, vp2, dismiss, drag_start, drag_move, edge)
+                w.render(cx, window, vp2, dismiss, drag_start, drag_move, edge)
             } else {
                 Vec::new()
             }

@@ -2383,7 +2383,7 @@ impl WindowState {
     }
 
     /// `body_h` = 通用窗口留给 body 的高度（Full 时是整个视口减去 header）。
-    fn body_element(&mut self, cx: &mut App, body_h: f32, card_w: f32, viewport: Size<Pixels>) -> AnyElement {
+    fn body_element(&mut self, cx: &mut App, window: &mut Window, body_h: f32, card_w: f32, viewport: Size<Pixels>) -> AnyElement {
         match self.kind {
             WindowKind::Color => self.color_body(cx),
             WindowKind::CornerSmoothing => self.corner_smoothing_body(),
@@ -2407,7 +2407,7 @@ impl WindowState {
                 let origin = self.origin;
                 let drag_start = self.drag_start.clone();
                 match &mut self.editor {
-                    Some(e) => e.render(cx, body_h, viewport, origin, drag_start, card_w),
+                    Some(e) => e.render(cx, window, body_h, viewport, origin, drag_start, card_w),
                     None => div().into_any_element(),
                 }
             }
@@ -4364,6 +4364,7 @@ impl WindowState {
     pub(crate) fn render(
         &mut self,
         cx: &mut App,
+        window: &mut Window,
         viewport: Size<Pixels>,
         dismiss: Rc<dyn Fn(&mut Window, &mut App)>,
         drag: Rc<dyn Fn(&MouseDownEvent, &mut Window, &mut App)>,
@@ -4432,7 +4433,7 @@ impl WindowState {
             pop = pop.title(self.title_slot());
         }
         pop = pop
-            .body(self.body_element(cx, body_h.max(120.0), width, viewport))
+            .body(self.body_element(cx, window, body_h.max(120.0), width, viewport))
             .on_drag_start(move |e, window, cx| drag(e, window, cx))
             .on_drag_move(move |e, window, cx| drag_move(e, window, cx))
             .on_measure({
@@ -4494,7 +4495,7 @@ impl WindowState {
             // 于是取色器整张排在样式面板左边、两张卡并排。直接传父窗口的 `right_edge` 会让它
             // 右缘对齐同一个位置，正好压在样式面板上。
             let child_edge = px(f32::from(self.origin.x) - 8.0);
-            els.extend(child.render(cx, viewport, closer, sub_press, sub_move, child_edge));
+            els.extend(child.render(cx, window, viewport, closer, sub_press, sub_move, child_edge));
             *slot.borrow_mut() = Some(child);
         }
         els

@@ -422,12 +422,14 @@ struct RowCaches {
     /// 会自动聚焦并全选，没有它就得再点两次（用户指出右栏改名表现不对）。
     rename_input: Option<Entity<crate::inline_input::InlineInput>>,
     mode_rename_input: Option<Entity<crate::inline_input::InlineInput>>,
+    /// sidebar 集合 / 分组改名，同样是共享 InlineInput（不各造 TextField）。
+    collection_rename_input: Option<Entity<crate::inline_input::InlineInput>>,
+    group_rename_input: Option<Entity<crate::inline_input::InlineInput>>,
+    /// 分组改名需要成员（变量 id + 组内剩余名），提交时逐条重命名。
+    group_rename_members: Rc<RefCell<Vec<(String, String)>>>,
     value_editors: HashMap<String, Entity<TextField>>,
-    /// sidebar 里集合 / 分组的内联改名框。
-    collection_rename: Option<Entity<TextField>>,
-    collection_rename_id: Option<String>,
-    group_rename: Option<Entity<TextField>>,
-    group_rename_id: Option<String>,
+    /// 颜色值格用通用 `ColorField`：它的 hex / alpha 是裸 `TextEdit`，按 key 缓存以保住焦点。
+    color_editors: HashMap<String, (Entity<crate::widgets::input::TextEdit>, Entity<crate::widgets::input::TextEdit>)>,
 }
 
 /// 虚拟列表中的「条目」：分组间隔、分组标题、或一条变量行。
@@ -637,9 +639,42 @@ impl VariablesEditor {
                 }
             }
         });
+        let collection_rename_input = crate::inline_input::InlineInput::build(cx, crate::inline_input::ROW_H, 0.0, "", {
+            let q = state.clone();
+            let c = cmds.clone();
+            move |text: &str, _, _| {
+                let name = text.trim().to_string();
+                let id = q.borrow_mut().rename_collection.take();
+                if let Some(id) = id {
+                    if !name.is_empty() {
+                        c.push(Cmd { id: "variable.renameCollection", params: Some(json!({ "collection": id, "name": name })) });
+                    }
+                }
+            }
+        });
+        let group_members: Rc<RefCell<Vec<(String, String)>>> = Rc::new(RefCell::new(Vec::new()));
+        let group_rename_input = crate::inline_input::InlineInput::build(cx, crate::inline_input::ROW_H, 0.0, "", {
+            let q = state.clone();
+            let c = cmds.clone();
+            let gm = group_members.clone();
+            move |text: &str, _, _| {
+                let name = text.trim().replace('/', "-");
+                let old = q.borrow_mut().rename_group.take();
+                if let Some(old) = old {
+                    if !name.is_empty() && name != old {
+                        for (id, rest) in gm.borrow().iter() {
+                            c.push(Cmd { id: "variable.update", params: Some(json!({ "variable": id, "name": format!("{name}/{rest}") })) });
+                        }
+                    }
+                }
+            }
+        });
         let mut caches = RowCaches::default();
         caches.rename_input = Some(rename_input);
         caches.mode_rename_input = Some(mode_rename_input);
+        caches.collection_rename_input = Some(collection_rename_input);
+        caches.group_rename_input = Some(group_rename_input);
+        caches.group_rename_members = group_members;
         Self { state, data, cmds, search, row_caches: Rc::new(RefCell::new(caches)), details_fields: HashMap::new(), on_full, on_close }
     }
 
@@ -912,6 +947,7 @@ impl VariablesEditor {
     pub fn render(
         &mut self,
         cx: &mut App,
+        window: &mut Window,
         body_h: f32,
         viewport: Size<Pixels>,
         origin: Point<Pixels>,
@@ -1013,13 +1049,13 @@ impl VariablesEditor {
         root = root.child(self.header(&st, &data, full, drag_start));
         let body = div().flex().flex_row().flex_1().min_h(pt(0.0)).w_full();
         let body = if sidebar {
-            body.child(self.sidebar(&st, &data, cx, body_h)).child(div().flex_none().w(pt(1.0)).h_full().bg(rgba(t.border)))
+            body.child(self.sidebar(&st, &data, cx, window, body_h)).child(div().flex_none().w(pt(1.0)).h_full().bg(rgba(t.border)))
         } else {
             body
         };
         // 表格在窗口里的左缘：卡片原点 + 侧栏宽度（+1pt 分隔线）。
         let table_left = f32::from(origin.x) + if sidebar { sidebar_w + 1.0 } else { 0.0 };
-        root = root.child(body.child(self.table(&st, &coll, cx, body_h, table_w, table_left)));
+        root = root.child(body.child(self.table(&st, &coll, cx, window, body_h, table_w, table_left)));
         root = root.child(self.bottom_bar(&st, &coll));
         root = root.child(self.menu_overlay(&st, origin));
         root = root.child(self.details_overlay(&st, cx, viewport));
@@ -1218,72 +1254,7 @@ impl VariablesEditor {
         h
     }
 
-    /// 集合内联改名框（egui `start_rename(Rename::Collection)`）：右键 Rename / 双击都进这里，
-    /// 不再直接把名字改成 "<旧名> 2"。
-    fn collection_rename_field(&self, cx: &mut App, st: &State, id: &str, initial: &str) -> Entity<TextField> {
-        {
-            let mut c = self.row_caches.borrow_mut();
-            if c.collection_rename_id.as_deref() == Some(id) {
-                if let Some(e) = &c.collection_rename {
-                    return e.clone();
-                }
-            }
-            c.collection_rename = None;
-            c.collection_rename_id = Some(id.to_string());
-        }
-        let f = text_field(cx, 160.0, initial, tr("Collection"), Slot::None, Slot::None);
-        let cmds = self.cmds.clone();
-        let st = st.clone();
-        let cid = id.to_string();
-        f.update(cx, move |tf, _| {
-            tf.set_on_commit(move |text, _, _| {
-                let name = text.trim();
-                if !name.is_empty() {
-                    cmds.push(Cmd { id: "variable.renameCollection", params: Some(json!({ "collection": cid, "name": name })) });
-                }
-                st.borrow_mut().rename_collection = None;
-            });
-        });
-        self.row_caches.borrow_mut().collection_rename = Some(f.clone());
-        f
-    }
-
-    /// 分组内联改名：把组内所有变量的名字前缀整体换掉（egui `rename_group` 的 batch）。
-    fn group_rename_field(&self, cx: &mut App, st: &State, c: &CollectionSnap, group: &str, initial: &str) -> Entity<TextField> {
-        {
-            let mut k = self.row_caches.borrow_mut();
-            if k.group_rename_id.as_deref() == Some(group) {
-                if let Some(e) = &k.group_rename {
-                    return e.clone();
-                }
-            }
-            k.group_rename = None;
-            k.group_rename_id = Some(group.to_string());
-        }
-        let f = text_field(cx, 160.0, initial, tr("Group"), Slot::None, Slot::None);
-        let cmds = self.cmds.clone();
-        let st = st.clone();
-        let old = group.to_string();
-        let prefix = format!("{group}/");
-        let members: Vec<(String, String)> =
-            c.rows.iter().filter(|r| r.full_name.starts_with(&prefix)).map(|r| (r.id.clone(), r.full_name[prefix.len()..].to_string())).collect();
-        f.update(cx, move |tf, _| {
-            tf.set_on_commit(move |text, _, _| {
-                let name = text.trim().replace('/', "-");
-                if !name.is_empty() && name != old {
-                    for (id, rest) in &members {
-                        cmds.push(Cmd { id: "variable.update", params: Some(json!({ "variable": id, "name": format!("{name}/{rest}") })) });
-                    }
-                }
-                st.borrow_mut().rename_group = None;
-            });
-        });
-        self.row_caches.borrow_mut().group_rename = Some(f.clone());
-        f
-    }
-
-    // ── sidebar ───────────────────────────────────────────────────────────────────────────
-    fn sidebar(&self, st: &State, data: &VariablesData, cx: &mut App, body_h: f32) -> Stateful<Div> {
+    fn sidebar(&self, st: &State, data: &VariablesData, cx: &mut App, window: &mut Window, body_h: f32) -> Stateful<Div> {
         let t = tokens();
         let (cur, group_sel, collapsed, library_sel, sidebar_w, split, renaming_coll, renaming_group, selected_all) = {
             let s = st.borrow();
@@ -1344,7 +1315,11 @@ impl VariablesEditor {
                 inner = inner.hover(move |s| s.bg(rgba(hover)));
             }
             inner = if renaming_coll.as_deref() == Some(c.id.as_str()) {
-                inner.child(self.collection_rename_field(cx, st, &c.id, &c.name))
+                if let Some(input) = self.row_caches.borrow().collection_rename_input.clone() {
+                    inner.child(div().flex_1().min_w(pt(0.0)).h_full().child(input))
+                } else {
+                    inner.child(div().flex_1().min_w(pt(0.0)).child(c.name.clone()))
+                }
             } else {
                 inner.child(div().flex_1().min_w(pt(0.0)).overflow_hidden().text_size(pt(11.0)).text_color(rgba(t.text)).child(c.name.clone()))
             };
@@ -1363,7 +1338,9 @@ impl VariablesEditor {
                         let st = st.clone();
                         let ids = coll_ids.clone();
                         let cid = c.id.clone();
-                        move |e: &MouseDownEvent, _, _| {
+                        let caches = self.row_caches.clone();
+                        let coll_name = c.name.clone();
+                        move |e: &MouseDownEvent, window, cx| {
                             let mut s = st.borrow_mut();
                             s.library = None;
                             s.collection = i;
@@ -1374,6 +1351,10 @@ impl VariablesEditor {
                             s.last_coll_down = Some((Instant::now(), i));
                             if dbl {
                                 s.rename_collection = Some(cid.clone());
+                                drop(s);
+                                if let Some(input) = caches.borrow().collection_rename_input.clone() {
+                                    crate::inline_input::InlineInput::begin_edit(&input, coll_name.clone(), window, cx);
+                                }
                             } else {
                                 s.drag = Some(Self::begin_drag(DragList::Collections, i, &ids, e.position, &[]));
                             }
@@ -1382,12 +1363,13 @@ impl VariablesEditor {
                     .on_mouse_down(MouseButton::Right, {
                         let st = st.clone();
                         let cid = c.id.clone();
+                        let cname = c.name.clone();
                         move |e: &MouseDownEvent, _, _| {
                             st.borrow_mut().menu = Some(Menu {
                                 x: f32::from(e.position.x),
                                 y: f32::from(e.position.y),
                                 items: vec![
-                                    MenuItem::new("Rename collection", "ui.renameCollection", json!({ "collection": cid })),
+                                    MenuItem::new("Rename collection", "ui.renameCollection", json!({ "collection": cid, "name": cname })),
                                     MenuItem::new(tr("Delete collection"), "variable.deleteCollection", json!({ "collection": cid })),
                                 ],
                             });
@@ -1561,18 +1543,29 @@ impl VariablesEditor {
                 div().into_any_element()
             }));
             inner = if renaming_group.as_deref() == Some(g.as_str()) {
-                let f = coll_snap.as_ref().map(|c| self.group_rename_field(cx, st, c, g, &short));
-                match f {
-                    Some(f) => inner.child(f),
-                    None => inner.child(short.clone()),
+                if let Some(input) = self.row_caches.borrow().group_rename_input.clone() {
+                    // 提交时要用组内成员：这里先把 (变量 id, 组内剩余名) 填进缓存。
+                    if let Some(cs) = coll_snap.as_ref() {
+                        let prefix = format!("{g}/");
+                        *self.row_caches.borrow().group_rename_members.borrow_mut() = cs
+                            .rows
+                            .iter()
+                            .filter(|r| r.full_name.starts_with(&prefix))
+                            .map(|r| (r.id.clone(), r.full_name[prefix.len()..].to_string()))
+                            .collect();
+                    }
+                    inner.child(div().flex_1().min_w(pt(0.0)).h_full().child(input))
+                } else {
+                    inner.child(short.clone())
                 }
             } else {
-                inner.child(div().flex_1().min_w(pt(0.0)).overflow_hidden().text_size(pt(11.0)).text_color(rgba(t.text)).child(short))
+                inner.child(div().flex_1().min_w(pt(0.0)).overflow_hidden().text_size(pt(11.0)).text_color(rgba(t.text)).child(short.clone()))
             };
             inner = inner.child(div().pr(pt(8.0)).text_size(pt(10.0)).text_color(rgba(t.text_tertiary)).child(format!("{count}")));
             let g_toggle = g.clone();
             let g_sel = g.clone();
             let g_dbl = g.clone();
+            let short_for_rename = short.clone();
             let vars: Vec<String> =
                 coll_snap.as_ref().map(|c| c.rows.iter().filter(|r| r.group == *g).map(|r| r.id.clone()).collect()).unwrap_or_default();
             gl = gl.child(
@@ -1586,13 +1579,19 @@ impl VariablesEditor {
                     .on_mouse_down(MouseButton::Left, {
                         let st = st.clone();
                         let ids = group_ids.clone();
-                        move |e: &MouseDownEvent, _, _| {
+                        let caches = self.row_caches.clone();
+                        let g_name = short_for_rename.clone();
+                        move |e: &MouseDownEvent, window, cx| {
                             let mut s = st.borrow_mut();
                             s.menu = None;
                             let dbl = s.last_group_down.as_ref().is_some_and(|(at, name)| name == &g_dbl && at.elapsed().as_millis() < 400);
                             s.last_group_down = Some((Instant::now(), g_dbl.clone()));
                             if dbl {
                                 s.rename_group = Some(g_dbl.clone());
+                                drop(s);
+                                if let Some(input) = caches.borrow().group_rename_input.clone() {
+                                    crate::inline_input::InlineInput::begin_edit(&input, g_name.clone(), window, cx);
+                                }
                             } else {
                                 s.group = Some(g_sel.clone());
                                 s.selected_all = false;
@@ -1602,12 +1601,13 @@ impl VariablesEditor {
                     })
                     .on_mouse_down(MouseButton::Right, {
                         let st = st.clone();
+                        let g_short = short.clone();
                         move |e: &MouseDownEvent, _, _| {
                             st.borrow_mut().menu = Some(Menu {
                                 x: f32::from(e.position.x),
                                 y: f32::from(e.position.y),
                                 items: vec![
-                                    MenuItem::new(tr("Rename group"), "ui.renameGroup", json!({ "group": g_toggle })),
+                                    MenuItem::new(tr("Rename group"), "ui.renameGroup", json!({ "group": g_toggle, "name": g_short })),
                                     MenuItem::new(tr("Delete group"), "ui.deleteGroup", json!({ "variables": vars })),
                                 ],
                             });
@@ -1628,7 +1628,7 @@ impl VariablesEditor {
     }
 
     // ── table ─────────────────────────────────────────────────────────────────────────────
-    fn table(&mut self, st: &State, coll: &Option<CollectionSnap>, cx: &mut App, body_h: f32, table_w: f32, table_left: f32) -> Stateful<Div> {
+    fn table(&mut self, st: &State, coll: &Option<CollectionSnap>, cx: &mut App, window: &mut Window, body_h: f32, table_w: f32, table_left: f32) -> Stateful<Div> {
         let t = tokens();
         let Some(c) = coll else {
             return div().id("vars-empty").flex_1().min_w(pt(0.0)).h_full().flex().flex_col().child(
@@ -1801,7 +1801,7 @@ impl VariablesEditor {
                             return;
                         }
                         let mut items = vec![
-                            MenuItem::new(tr("Rename mode"), "ui.renameMode", json!({ "mode": mid.clone() })),
+                            MenuItem::new(tr("Rename mode"), "ui.renameMode", json!({ "mode": mid.clone(), "name": mname.clone() })),
                             MenuItem::new(tr("Add mode"), "variable.addMode", json!({ "collection": cid.clone(), "name": tr("Mode") })),
                             MenuItem::new(
                                 "Duplicate mode",
@@ -2110,11 +2110,12 @@ impl VariablesEditor {
             .on_mouse_down(MouseButton::Right, {
                 let st = st.clone();
                 let rid = rid.clone();
+                let rname = rname.clone();
                 move |e: &MouseDownEvent, _, _| {
                     let items = if movable {
                         let mut v = vec![
                             MenuItem::new(tr("Edit variable"), "ui.details", json!({ "variable": rid.clone() })),
-                            MenuItem::new(tr("Rename"), "ui.rename", json!({ "variable": rid.clone() })),
+                            MenuItem::new(tr("Rename"), "ui.rename", json!({ "variable": rid.clone(), "name": rname.clone() })),
                             MenuItem::new(tr("Copy"), "ui.copy", json!({})),
                         ];
                         if has_clip {
@@ -2171,7 +2172,7 @@ impl VariablesEditor {
             if overridden {
                 cellbox = cellbox.child(div().absolute().left(pt(4.0)).top(pt(8.0)).w(pt(2.0)).h(pt(24.0)).bg(rgba(t.accent)));
             }
-            cellbox = cellbox.child(Self::value_cell(caches, cmds, st, c, r, m, &cell, cx));
+            cellbox = cellbox.child(Self::value_cell(caches, cmds, st, c, r, m, &cell, cw, cx));
             if overridden && c.editable {
                 let vid = r.id.clone();
                 let mid = m.id.clone();
@@ -2285,7 +2286,6 @@ impl VariablesEditor {
         f
     }
 
-    /// 颜色 alpha 的百分比域（通用 `number_field`，0..100）。
     fn alpha_value_field(
         caches: &Rc<RefCell<RowCaches>>,
         cmds: &Cmds,
@@ -2323,6 +2323,7 @@ impl VariablesEditor {
         r: &VarRow,
         m: &ModeSnap,
         cell: &VarCell,
+        width: f32,
         cx: &mut App,
     ) -> AnyElement {
         // 'static 回调要持有命令队列的所有权，不能用本帧的引用。
@@ -2349,39 +2350,47 @@ impl VariablesEditor {
         }
         match cell {
             VarCell::Color { color, hex, alpha } => {
-                // 绝对定位：swatch 左 6、hex 从 28 起、alpha 贴右 4。
-                // 用 flex 会让两个固定宽输入框互相挤压 / 重叠（"0D" 盖住 "100%"）。
-                let hkey = format!("{}/{}:hex", r.id, m.id);
-                let akey = format!("{}/{}:alpha", r.id, m.id);
-                div()
-                    .w_full()
-                    .h(pt(24.0))
-                    .rounded(pt(5.0))
-                    .bg(rgba(t.field))
-                    .relative()
-                    .overflow_hidden()
-                    .child(div().absolute().left(pt(6.0)).top(pt(4.0)).child(Self::value_swatch(*color, &t)))
-                    .child(div().absolute().left(pt(28.0)).top(pt(0.0)).w(pt(76.0)).h(pt(24.0)).child(Self::text_value_field(
-                        caches,
-                        &cmds,
+                // 复用通用 `ColorField`（与右栏 Fill 行同源）：swatch / hex / alpha 全由控件画，
+                // 不再手写绝对定位的几个输入框。
+                let ckey = format!("{}/{}:color", r.id, m.id);
+                let (hex_ed, op_ed) = if let Some(e) = caches.borrow().color_editors.get(&ckey) {
+                    e.clone()
+                } else {
+                    let vid = r.id.clone();
+                    let mid = m.id.clone();
+                    let cmds_h = cmds.clone();
+                    let cmds_a = cmds.clone();
+                    let base = *color;
+                    let (h, o) = crate::widgets::ColorField::color_row_editors(
                         cx,
-                        &hkey,
                         hex,
-                        &r.id,
-                        &m.id,
-                        VarKind::Color,
-                        76.0,
-                    )))
-                    .child(
-                        div()
-                            .absolute()
-                            .right(pt(4.0))
-                            .top(pt(0.0))
-                            .w(pt(64.0))
-                            .h(pt(24.0))
-                            .child(Self::alpha_value_field(caches, &cmds, cx, &akey, *alpha, *color, &r.id, &m.id)),
-                    )
-                    .into_any_element()
+                        *alpha as i64,
+                        move |text, _, _| {
+                            let v = json!(format!("#{}", text.trim().trim_start_matches('#')));
+                            cmds_h.push(Cmd { id: "variable.set", params: Some(json!({ "variable": vid, "mode": mid, "value": v })) });
+                        },
+                        {
+                            let vid = r.id.clone();
+                            let mid = m.id.clone();
+                            move |pct, _, _| {
+                                let a8 = (pct.clamp(0.0, 100.0) / 100.0 * 255.0).round() as u8;
+                                let hex = format!("#{:02X}{:02X}{:02X}{:02X}", base.0[0], base.0[1], base.0[2], a8);
+                                cmds_a.push(Cmd { id: "variable.set", params: Some(json!({ "variable": vid, "mode": mid, "value": json!(hex) })) });
+                            }
+                        },
+                    );
+                    caches.borrow_mut().color_editors.insert(ckey, (h.clone(), o.clone()));
+                    (h, o)
+                };
+                let cf = crate::widgets::ColorField::new(
+                    cx,
+                    figcraft_color::Paint::solid(figcraft_color::Color::from_rgba8(color.0[0], color.0[1], color.0[2], color.0[3])),
+                    crate::widgets::ColorText::Hex(SharedString::from(hex.clone())),
+                    width.max(120.0),
+                    hex_ed,
+                    op_ed,
+                );
+                cf.into_any_element()
             }
             VarCell::Bool(b) => {
                 let on = *b;
@@ -2538,6 +2547,8 @@ impl VariablesEditor {
             let cmds = cmds.clone();
             let state = state.clone();
             let data = data.clone();
+            let caches = self.row_caches.clone();
+            let item_name = params["name"].as_str().map(str::to_owned);
             col = col.child(
                 div()
                     .flex_none()
@@ -2551,8 +2562,15 @@ impl VariablesEditor {
                     .text_size(pt(11.0))
                     .text_color(rgba(t.menu_text))
                     .hover(move |s| s.bg(rgba(t.menu_hover)))
-                    .on_mouse_down(MouseButton::Left, move |_: &MouseDownEvent, _, _| {
+                    .on_mouse_down(MouseButton::Left, move |_: &MouseDownEvent, window, cx| {
                         state.borrow_mut().menu = None;
+                        let rename_target: Option<(String, Option<String>)> = match cmd {
+                            "ui.rename" => params["variable"].as_str().map(|v| ("variable".to_string(), Some(v.to_string()))),
+                            "ui.renameMode" => params["mode"].as_str().map(|v| ("mode".to_string(), Some(v.to_string()))),
+                            "ui.renameCollection" => params["collection"].as_str().map(|v| ("collection".to_string(), Some(v.to_string()))),
+                            "ui.renameGroup" => params["group"].as_str().map(|v| ("group".to_string(), Some(v.to_string()))),
+                            _ => None,
+                        };
                         match cmd {
                             "ui.filter" => {
                                 if let Some(i) = params["kind"].as_u64() {
@@ -2566,21 +2584,37 @@ impl VariablesEditor {
                             "ui.rename" => {
                                 if let Some(v) = params["variable"].as_str() {
                                     state.borrow_mut().rename = Some(v.to_string());
+                                    let name = item_name.clone().unwrap_or_default();
+                                    if let Some(input) = caches.borrow().rename_input.clone() {
+                                        crate::inline_input::InlineInput::begin_edit(&input, name, window, cx);
+                                    }
                                 }
                             }
                             "ui.renameMode" => {
                                 if let Some(v) = params["mode"].as_str() {
                                     state.borrow_mut().rename_mode = Some(v.to_string());
+                                    let name = item_name.clone().unwrap_or_default();
+                                    if let Some(input) = caches.borrow().mode_rename_input.clone() {
+                                        crate::inline_input::InlineInput::begin_edit(&input, name, window, cx);
+                                    }
                                 }
                             }
                             "ui.renameCollection" => {
                                 if let Some(v) = params["collection"].as_str() {
                                     state.borrow_mut().rename_collection = Some(v.to_string());
+                                    let name = item_name.clone().unwrap_or_default();
+                                    if let Some(input) = caches.borrow().collection_rename_input.clone() {
+                                        crate::inline_input::InlineInput::begin_edit(&input, name, window, cx);
+                                    }
                                 }
                             }
                             "ui.renameGroup" => {
                                 if let Some(v) = params["group"].as_str() {
                                     state.borrow_mut().rename_group = Some(v.to_string());
+                                    let name = item_name.clone().unwrap_or_default();
+                                    if let Some(input) = caches.borrow().group_rename_input.clone() {
+                                        crate::inline_input::InlineInput::begin_edit(&input, name, window, cx);
+                                    }
                                 }
                             }
                             "ui.details" => {
