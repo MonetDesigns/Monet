@@ -132,10 +132,27 @@ pub(crate) const DEFAULT_PANEL: f32 = 280.0;
 pub(crate) const DEFAULT_LEFT_PANEL: f32 = 421.0;
 pub(crate) const DEFAULT_RIGHT_PANEL: f32 = 374.0;
 
-/// 左右栏头部区域相邻控件的**统一间距**（Figma 参考 `Figma (7).fig` 的
-/// Frame 182 左栏头部 / Frame 38 右栏头部：文字→chevron、Design→Prototype、
-/// 头像组→按钮组→Share 全部 4 pt）。所有头部控件间距都引用它，不再各写各的。
-pub(crate) const HEADER_GAP: f32 = 4.0;
+/// 左右栏头部间距，直接取自 Figma 参考 `Figma (7).fig` 的 **AutoLayout 数据**
+/// （不是量坐标猜的）。`AutoLayout { gap, padding, main_align, cross_align }`：
+///
+/// Frame 38 右栏头部：
+///   Frame 38   Vertical  gap=0   pad=[T8,R8,B8,L8]
+///   ├ Frame 82 Horizontal gap=4  main=Max  cross=Center  （头像组 → ▶▾ → 分享）
+///   │  └ Frame 83 Horizontal gap=1  （▶ 与 ▾ 之间）
+///   └ Frame 79 Horizontal gap=10 cross=Center            （tab组 → zoom）
+///      └ Frame 78 Horizontal gap=4                        （Design ↔ Prototype）
+/// Frame 182 左栏头部：
+///   Frame 182  Vertical  gap=0   pad=[T8,R12,B8,L12]
+///   └ Frame 179 Horizontal gap=0 cross=Center
+///      └ Frame 180 Horizontal gap=4 pad=[T0,R4,B0,L4]     （文件名 → chevron）
+///
+/// 每处 gap 都有灰尘级差异，不能用一个 4.0 抹平，故逐个按参考命名。
+pub(crate) const HEADER_PAD_V: f32 = 8.0;   // Frame 38 / 182 的 T/B padding
+pub(crate) const HEADER_PAD_H: f32 = 8.0;   // Frame 38 的 L/R padding
+pub(crate) const LEFT_HEADER_PAD_H: f32 = 12.0; // Frame 182 的 L/R padding
+pub(crate) const HEADER_GAP: f32 = 4.0;     // 头像组→按钮→分享 / Design↔Prototype / 文件名→chevron
+pub(crate) const PRESENT_GAP: f32 = 1.0;    // Frame 83：▶ 与 ▾ 之间
+pub(crate) const TAB_ZOOM_GAP: f32 = 10.0;  // Frame 79：tab 组 → zoom
 
 /// A right-panel field that writes back to the selected node via `node.set`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

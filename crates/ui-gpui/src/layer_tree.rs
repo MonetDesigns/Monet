@@ -311,9 +311,10 @@ impl CanvasView {
             .h(pt(64.0))
             .flex()
             .flex_col()
-            // 头部内边距：左右 12 / 上 8（Figma 参考 Frame 182：3577−3565=12，2287−2279=8）。
-            .px(pt(12.0))
-            .pt(pt(8.0))
+            // Figma 参考 Frame 182 AutoLayout：padding=[T8,R12,B8,L12] gap=0。
+            .px(pt(crate::panels::LEFT_HEADER_PAD_H))
+            .pt(pt(crate::panels::HEADER_PAD_V))
+            .pb(pt(crate::panels::HEADER_PAD_V))
             .border_b_1()
             .border_color(rgba(t.border))
             // 头部相邻控件间距统一 4 pt（Figma 参考 Frame 182：文件名 → chevron = 4 pt）。

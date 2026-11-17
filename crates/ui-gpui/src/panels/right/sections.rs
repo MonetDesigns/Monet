@@ -282,6 +282,8 @@ pub(crate) fn view_bar(f: &RightFields, d: &PanelData, motion: bool) -> gpui::Di
             .child(tab(tr(crate::naming::right_tab_label(0)), 0))
             .child(tab(tr(crate::naming::right_tab_label(1)), 1))
     };
+    // Figma 参考 Frame 79 AutoLayout：Horizontal gap=10 cross=Center。
+    // tab 组(Frame78) 与 zoom(Frame80) 之间用真实 gap=10，不再 justify_between。
     div()
         .flex_none()
         .w_full()
@@ -289,7 +291,7 @@ pub(crate) fn view_bar(f: &RightFields, d: &PanelData, motion: bool) -> gpui::Di
         .flex()
         .flex_row()
         .items_center()
-        .justify_between()
+        .gap(pt(crate::panels::TAB_ZOOM_GAP))
         .px(pt(8.0))
         .border_b_1()
         .border_color(rgba(tokens().border))

@@ -46,13 +46,11 @@ pub(crate) fn top_bar(f: &RightFields, d: &PanelData) -> Div {
         .h(pt(TOP_H))
         .flex()
         .flex_row()
-        // Figma 参考 Frame 38：行1 内容 y8 h32，底部 y40 **紧贴**行2(Frame79 y40)。
-        // 容器高 40、内容高 32，必须 items_end（贴底）才让内容占 y8–40、底部零间隙。
-        // items_center 会上下各留 4，使头像行底部与 tab 行之间多出 4pt 空隙（用户指出这里不对）。
-        .items_end()
-        // 左右内边距 8 pt（Figma 参考 Frame 38：头像 x1208 − 面板 x1200 = 8）。
-        .pl(pt(8.0))
-        .pr(pt(8.0))
+        // Figma 参考 Frame 38 AutoLayout：外层 Vertical padding=[T8,R8,B8,L8]，
+        // 行1(Frame82) cross=Center。这里 top_bar 是行1 容器，内容(h32)垂直居中。
+        .items_center()
+        .pl(pt(crate::panels::HEADER_PAD_H))
+        .pr(pt(crate::panels::HEADER_PAD_H))
         // 左：people（你 + 别人 + 人数菜单）。
         .child(people(f, &d.live))
         // 右：Present + Share。相邻控件间距统一 4 pt（Figma 参考 Frame 38）。
@@ -231,7 +229,8 @@ fn present(f: &RightFields) -> Div {
             root.update(cx, |cv, cx| cv.open_menu(anchor, Some(200.0), rows, on_pick, cx));
         })
         .child(crate::widgets::icon::paint(Icon::ChevronDown, rgba(t.text_secondary), 10.0));
-    div().flex().flex_row().items_center().child(play).child(menu)
+    // Figma 参考 Frame 83 AutoLayout：gap=1（▶ 32 与 ▾ 16 之间）。
+    div().flex().flex_row().items_center().gap(pt(crate::panels::PRESENT_GAP)).child(play).child(menu)
 }
 
 /// Share 按钮：强调色、32 pt 高、圆角 6，宽度跟着文字（egui 同款）。
