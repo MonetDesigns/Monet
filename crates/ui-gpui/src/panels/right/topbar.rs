@@ -28,8 +28,8 @@ use gpui::{
 use serde_json::{Value, json};
 use std::rc::Rc;
 
-/// 顶栏高度（egui `allocate_exact_size(vec2(w, 48.0))`）。
-pub(crate) const TOP_H: f32 = 48.0;
+/// 顶栏高度（Figma 参考 Frame 38：行1 内容 y8 h32 + 下边距 8 = 40；行2 从 y40 起）。
+pub(crate) const TOP_H: f32 = 40.0;
 /// 头像半径（egui `const R: f32 = 12.0`）。
 const R: f32 = 12.0;
 /// 头像中心间距（egui `const STEP: f32 = 20.0`）。
@@ -176,10 +176,11 @@ fn avatar(name: &str, fill: Color32, ring: Option<Color32>) -> Div {
 fn present(f: &RightFields) -> Div {
     let t = tokens();
     let play_cmds = f.cmds.clone();
+    // 尺寸 1:1（Figma 参考 Frame 38：Frame84 ▶ = 32×32）。
     let play = div()
         .id("right-present-play")
-        .w(pt(26.0))
-        .h(pt(28.0))
+        .w(pt(32.0))
+        .h(pt(32.0))
         .flex()
         .items_center()
         .justify_center()
@@ -192,10 +193,11 @@ fn present(f: &RightFields) -> Div {
         .child(play_glyph(14.0, t.icon));
     let menu_cmds = f.cmds.clone();
     let root = f.root.clone();
+    // 尺寸 1:1（Figma 参考 Frame 38：Frame58 ▾ = 16×32）。
     let menu = div()
         .id("right-present-menu")
         .w(pt(16.0))
-        .h(pt(28.0))
+        .h(pt(32.0))
         .flex()
         .items_center()
         .justify_center()

@@ -211,7 +211,8 @@ fn view_rows(v: &ViewData) -> Vec<ViewMenuRow> {
 pub(crate) fn view_bar(f: &RightFields, d: &PanelData, motion: bool) -> gpui::Div {
     let t = tokens();
     let zoom_label = format!("{}%", (d.view.zoom * 100.0).round() as i64);
-    let zoom = checked_dropdown(f, zoom_label, 64.0, view_rows(&d.view));
+    // 尺寸 1:1（Figma 参考 Frame 38：Frame80 zoom = 49×16，把宽度按参考收窄）。
+    let zoom = checked_dropdown(f, zoom_label, 49.0, view_rows(&d.view));
     // egui `right.rs` 的 tabs 行（Design / Prototype）：激活的那个上底色 `hover`、圆角 5、
     // 半粗 11 pt；未激活的 `text_secondary`、无底色。整行 40 pt 高、下边框。
     // 纯 UI 状态（`app.ui.right_tab`），不进文档，所以只动 `f.right_tab` 并唤醒一帧。
