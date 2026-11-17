@@ -2760,7 +2760,10 @@ pub(crate) fn header(f: &RightFields, d: &PanelData, col: f32) -> Option<gpui::D
         head_dropdown(f, tr(&h.label).to_string(), rows).into_any_element()
     } else {
         // 其它类型没有下拉，连 chevron 都不画：就是一段 13 pt 半粗文字。
+        // 补 8 pt 内缩 = 有下拉类型 Dropdown 内部的 LEAD_PAD(8)；加上 header 行的 pl(8)，
+        // 所有类型名文字统一距左 16，与下方各 section 的 PAD(16) 对齐（Rectangle/Text 不对齐即此因）。
         div()
+            .pl(pt(8.0))
             .text_size(pt(13.0))
             .font_weight(crate::panels::UI_FONT_REGULAR)
             .text_color(rgba(t.text))
