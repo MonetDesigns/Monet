@@ -2122,6 +2122,13 @@ impl CanvasView {
         cx.notify();
     }
 
+    /// 演示 tab 的源文档在 `session.docs` 里的下标（eGUI `tabs::owner`）：
+    /// 只有源文档是本窗口前台文档时，演示才读改那份文件。
+    fn present_owner_index(&self, uid: u64) -> Option<usize> {
+        let wins = self.windows.borrow();
+        self.app.session.docs.iter().position(|d| d.uid == uid && wins.shows(uid))
+    }
+
     /// 把在屏播放器收进当前 active 的演示 tab（eGUI `pause_present`）。
     fn pause_present(&mut self) {
         if let (Some(pres), Some(active)) = (self.present.take(), self.present_active) {
@@ -2139,6 +2146,13 @@ impl CanvasView {
         self.pause_present();
         self.present_active = Some(id);
         self.tabs.home = false;
+        // eGUI show_present：演示属于哪个文件，就把那个文件切到前台（总 tab 联动）。
+        let owner = self.present_tabs.iter().find(|t| t.id == id).map(|t| t.uid);
+        if let Some(uid) = owner
+            && let Some(i) = self.present_owner_index(uid).filter(|i| *i != self.app.session.active)
+        {
+            let _ = self.app.session.execute("doc.switch", &serde_json::json!({ "index": i }));
+        }
         if let Some(tab) = self.present_tabs.iter_mut().find(|t| t.id == id) {
             self.present = tab.pres.take();
         }
@@ -2146,16 +2160,26 @@ impl CanvasView {
 
     /// 关演示 tab：从标签栏移除；若关的是在屏的，恢复下一个演示（eGUI `close_present`）。
     pub(crate) fn close_present_tab(&mut self, id: u64) {
+        let Some(tab) = self.present_tabs.iter().find(|t| t.id == id).cloned() else { return };
         self.present_tabs.retain(|t| t.id != id);
         if self.present_active == Some(id) {
             self.present = None;
             self.present_active = None;
-            // 还有别的演示 tab 就恢复最后一个的播放器。
             let next_id = self.present_tabs.last().map(|t| t.id);
             if let Some(nid) = next_id {
                 let pres = self.present_tabs.last_mut().and_then(|t| t.pres.take());
                 self.present_active = Some(nid);
                 self.present = pres;
+            } else {
+                // eGUI close_present：关掉在屏演示后，源文档置前；文档没了就回 Home。
+                if let Some(i) = self.present_owner_index(tab.uid) {
+                    if i != self.app.session.active {
+                        let _ = self.app.session.execute("doc.switch", &serde_json::json!({ "index": i }));
+                    }
+                    self.tabs.home = false;
+                } else {
+                    self.show_home();
+                }
             }
         }
     }
@@ -2192,6 +2216,22 @@ impl CanvasView {
     /// 演示层：消费顶栏按钮 / 画面点击，推进播放头与过渡时钟。
 
     fn sync_present(&mut self) {
+        // eGUI `present_owner_active`：演示只在其源文档是本窗口前台时才读改它。
+        // 源文档被切走时，先把播放器收进 tab，不推进 / 不消费点击。
+        if let (Some(tid), Some(_)) = (self.present_active, self.present.as_ref()) {
+            let owner_ok = self
+                .present_tabs
+                .iter()
+                .find(|t| t.id == tid)
+                .and_then(|t| self.present_owner_index(t.uid))
+                .is_some_and(|i| i == self.app.session.active);
+            if !owner_ok {
+                present::ACTION.with(|a| a.replace(0));
+                self.pause_present();
+                return;
+            }
+        }
+
         let action = present::ACTION.with(|a| a.replace(0));
 
         if action == 3 {
