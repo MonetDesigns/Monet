@@ -646,9 +646,9 @@ pub(crate) fn spec(kind: Kind, data: &Value) -> Spec {
         }
         Kind::Preferences => {
             // 1:1 with `ui-egui/src/dialogs.rs::preferences`: the same checkbox list, name, server,
-            // nudge, interface size, theme and language. `data["prefs"]` carries the live values
-            // (injected by `open_dialog`). Accent and the graphics backend have no engine command,
-            // so they are not faked here.
+            // nudge, interface size, theme, theme colour and language. `data["prefs"]` carries the
+            // live values (injected by `open_dialog`). The graphics backend has no engine command,
+            // so it is not faked here.
             let p = &data["prefs"];
             let on = |k: &str| p[k].as_bool().unwrap_or(false);
             let text = |k: &str| p[k].as_str().unwrap_or("").to_string();
@@ -685,6 +685,23 @@ pub(crate) fn spec(kind: Kind, data: &Value) -> Spec {
                 .field(
                     Field::choice("theme", tr("Theme"), vec![tr("Light"), tr("Dark"), tr("System")], theme_active)
                         .commands(vec!["view.themeLight", "view.themeDark", "view.themeSystem"]),
+                )
+                // 主题颜色（强调色）：`pref.accent` 写 `prefs.accent`，根视图每帧重建 tokens，
+                // 选完立即生效并随偏好持久化。
+                .field(
+                    Field::choice(
+                        "accent",
+                        tr("Theme colour"),
+                        vec![tr("Blue"), tr("Green"), tr("Yellow"), tr("Pink")],
+                        ["blue", "green", "yellow", "pink"].iter().position(|a| text("accent").eq_ignore_ascii_case(a)).unwrap_or(1),
+                    )
+                    .commands(vec!["pref.accent"; 4])
+                    .with_params(vec![
+                        json!({"accent": "blue"}),
+                        json!({"accent": "green"}),
+                        json!({"accent": "yellow"}),
+                        json!({"accent": "pink"}),
+                    ]),
                 )
                 .field(
                     Field::choice("language", tr("Language"), vec![tr("System"), "English", "简体中文", "日本語", "Deutsch", "Français"], lang_active)
@@ -1014,6 +1031,7 @@ fn collect_sources(sources: &[Source], cx: &App) -> Vec<(String, Value)> {
 }
 
 /// One open dialog. The root view holds `Option<DialogState>` and rebuilds only the element tree.
+#[derive(Clone)]
 pub(crate) struct DialogState {
     spec: Spec,
     kind: Kind,

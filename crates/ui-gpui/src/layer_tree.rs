@@ -158,6 +158,7 @@ fn run_color(rows: &[LayerRow], from: usize, to: usize) -> gpui::Rgba {
 }
 
 /// Drag and expansion state for the tree, kept on `CanvasView` across frames.
+#[derive(Clone)]
 pub struct LayerTreeState {
     /// Container nodes that are expanded (have children and are open).
     pub expanded: BTreeSet<NodeId>,

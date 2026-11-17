@@ -32,6 +32,10 @@ use std::rc::Rc;
 /// button's top (`ui-egui/src/popover.rs`: "its top on `y` (the button's top)").
 const BUTTON_HALF: f32 = 12.0;
 
+/// 变量 / 文本样式列表的最大可见高度（超出滚动）。必须是常量：从 `body_h` 派生会被
+/// `measured_h` 的「量到多少就多高」反馈放大，每帧长一截。
+const LIST_MAX_H: f32 = 320.0;
+
 /// 样式编辑器属性行里那颗左侧 `Dropdown` 的宽度：卡片 304 − 左缩进 `PAD` 16 − 右缩进
 /// `PAD_RIGHT` 8 − 尾部两颗 24 pt 图标按钮 48。与右栏 `field_row_full_trailing` 的字段列同宽，
 /// 这样两个面板里同一行的内缩与图标位置完全一致。
@@ -58,6 +62,8 @@ pub(crate) enum WindowKind {
     StyleEditor,
     /// 平滑圆角小窗：右栏 Appearance 圆角行旁的小按钮打开，正文只有一条通用滑条。
     CornerSmoothing,
+    /// 字体选择窗：Typography 的字体族控件打开，列表每项用它自己的字体渲染名称做预览。
+    FontPicker,
 }
 
 /// One clickable row of a list window (a variable, a style, a create action).
@@ -68,11 +74,18 @@ pub(crate) struct Row {
     pub trail: Option<SharedString>,
     pub cmd: &'static str,
     pub params: Value,
+    /// Font-picker rows render their label in this family, so the item name doubles as a live
+    /// preview of the font's own style. `None` for ordinary list windows.
+    pub font_family: Option<String>,
 }
 
 impl Row {
     pub fn new(label: impl Into<SharedString>, cmd: &'static str, params: Value) -> Self {
-        Self { group: None, label: label.into(), trail: None, cmd, params }
+        Self { group: None, label: label.into(), trail: None, cmd, params, font_family: None }
+    }
+    pub fn font_family(mut self, family: impl Into<String>) -> Self {
+        self.font_family = Some(family.into());
+        self
     }
     pub fn group(mut self, name: impl Into<SharedString>) -> Self {
         self.group = Some(name.into());
@@ -501,6 +514,7 @@ pub(crate) enum StyleProp {
 
 /// 样式编辑器正文（egui `style_picker::editor`）：Name / Description 两个输入框 + 属性行 +
 /// 是否有选区（决定要不要画 "Update from selection"）。全部照源码字段来。
+#[derive(Clone)]
 pub(crate) struct StyleEditState {
     pub id: String,
     pub has_selection: bool,
@@ -532,6 +546,7 @@ struct StyleSnap {
 }
 
 
+#[derive(Clone)]
 struct ColorState {
     /// Shared: picking anywhere in the picker must refresh the SV square, hue and alpha strips.
     current: Rc<Cell<Color32>>,
@@ -567,6 +582,7 @@ struct ColorState {
 
 /// Everything an open detached window needs. Kept as data on the root view (a retained tree), not
 /// rebuilt into a fresh element tree from a closure every frame.
+#[derive(Clone)]
 pub(crate) struct WindowState {
     kind: WindowKind,
     title: SharedString,
@@ -582,6 +598,14 @@ pub(crate) struct WindowState {
     measured_h: Rc<Cell<f32>>,
     /// `Some` once the header has been dragged (egui's `Place::At`).
     place: Option<Point<Pixels>>,
+    /// 已经完成过一次定位。`measured_h` 修正会改 `height`，若每帧都重新 `open_pos`/`clamp`，
+    /// 卡片会在「量到真实高度」的那一帧跳一下（用户 2026-11-16：Type settings 点开后
+    /// 移开鼠标才「刷新」）。定位一次后钉住原点，除非用户拖动。
+    placed_once: bool,
+    /// Exact window-space **top** of the button that opened this card, when the trigger
+    /// reported it. `anchored_open` uses this instead of guessing from the press point.
+    /// `None` keeps the old pointer-minus-half-button fallback (keyboard / command opens).
+    exact_top: Option<Pixels>,
     origin: Point<Pixels>,
     /// Last viewport the card was laid out in. A drag clamps every step to it, exactly like
     /// egui's `clamp(at - grab, size, screen)`, so a pointer leaving the window cannot park the
@@ -702,12 +726,22 @@ fn style_write_queue(cmds: &Cmds, style_id: String, text: Rc<RefCell<Value>>) ->
 }
 
 impl WindowState {
-    /// DIAGNOSTIC CUT glue: no-op anchor adjustment (base WindowState lacks exact_top).
-    pub(crate) fn anchor_to_button_top(&mut self, _top: Pixels) {}
+    /// Pin the card's top to the exact top of its trigger button (window coordinates).
+    /// Call this at the open site when the button reported its own `Bounds`; the press
+    /// point is then used only to decide *which* button was pressed, never to place the card.
+    pub(crate) fn anchor_to_button_top(&mut self, top: Pixels) {
+        self.exact_top = Some(top);
+    }
 
     /// 供根视图判断当前是否是某个特定窗口（例如变量面板已开时再点按钮就不要二次弹出）。
     pub(crate) fn kind(&self) -> WindowKind {
         self.kind
+    }
+
+    /// 高度由设计稿**固定**、不随内容测量的窗口。它们不吃 `measured_h` 回写，否则
+    /// 「body 高度 = height + 列表 flex_1 撑满」会每帧把卡片顶高 40pt（越滚越大）。
+    fn fixed_height(&self) -> bool {
+        matches!(self.kind, WindowKind::FontPicker)
     }
 
     /// Base state; the five constructors below fill in the body model.
@@ -722,6 +756,8 @@ impl WindowState {
             height: 240.0,
             measured_h: Rc::new(Cell::new(0.0)),
             place: None,
+            placed_once: false,
+            exact_top: None,
             origin: Point { x: px(0.0), y: px(0.0) },
             viewport: size(px(0.0), px(0.0)),
             hold: crate::hold_drag::HoldDrag::default(),
@@ -1436,6 +1472,32 @@ impl WindowState {
         // 40 头部 + 24 滑条 + 上下各 12 内边距（真实高度由 `on_measure` 回写）。
         w.height = HEADER_H + 24.0 + 24.0;
         w.smoothing = Some(Rc::new(Cell::new(value.clamp(0.0, 1.0))));
+        w
+    }
+
+    /// 字体选择窗：列表每项显示字体名，并用该字体自身渲染（名字即预览）。
+    pub(crate) fn font_picker(cmds: Cmds, cx: &mut App, current: Option<&str>, anchor: Point<Pixels>) -> Self {
+        let mut w = Self::base(WindowKind::FontPicker, tr("Font family"), cmds, Open::Anchor(anchor));
+        // Figma `typePanel.fontFamily.fontPickerWindow`：宽 `15rem`(=240)，窗口背景是
+        // `var(--color-bg)`（**面板色**，不是菜单色），body 内联高度 429px、内边距 0。
+        w.surface = Surface::Panel;
+        w.width = 240.0;
+        // `height` 在 `Popover` 里是**整卡**高度（`open_pos` / `clamp` 用它算触底上翻），
+        // 所以要含 40pt 头部：body 429 + header 40。否则上翻会少算 40pt、卡片底仍飞出屏幕。
+        w.height = 429.0 + crate::widgets::popover::HEADER_H;
+        w.pad = 0.0;
+        w.rows = figcraft_text::family_names()
+            .into_iter()
+            .map(|fam| {
+                let params = json!({ "props": { "fontFamily": fam.clone() } });
+                let mut row = Row::new(fam.clone(), "node.set", params).font_family(fam.clone());
+                if Some(fam.as_str()) == current {
+                    row = row.trail("✓");
+                }
+                row
+            })
+            .collect();
+        w.add_search(cx, "Search fonts");
         w
     }
 
@@ -2167,9 +2229,17 @@ impl WindowState {
 
     fn add_search(&mut self, cx: &mut App, hint: &str) {
         let query = self.query.clone();
-        let field = search_field(cx, self.width - 2.0 * self.pad, "", hint);
+        // 字体窗的搜索行自带 16/12 的左右内缩（Figma `fontPickerSearchRow`），字段要减掉，
+        // 否则固定宽度会把搜索框顶出卡片。
+        let inset = if self.kind == WindowKind::FontPicker { 16.0 + 12.0 } else { 2.0 * self.pad };
+        let field = search_field(cx, self.width - inset, "", hint);
+        // 边打边过滤（`on_change`），不是回车才生效。
+        let wake = self.cmds.clone();
         field.update(cx, move |tf, _| {
-            tf.set_on_commit(move |text, _, _| *query.borrow_mut() = text.to_lowercase());
+            tf.set_on_change(move |text, _, _| {
+                *query.borrow_mut() = text.to_lowercase();
+                wake.wake();
+            });
         });
         self.search = Some(field);
     }
@@ -2314,7 +2384,7 @@ impl WindowState {
             }
             // 变量编辑器把「标题 + 计数」画进自己的工具条：整窗一个插槽，顶部只有一行。
             WindowKind::VariablesTable => div().into_any_element(),
-            WindowKind::Layout | WindowKind::Stroke | WindowKind::EffectSettings | WindowKind::StyleEditor | WindowKind::CornerSmoothing => {
+            WindowKind::Layout | WindowKind::Stroke | WindowKind::EffectSettings | WindowKind::StyleEditor | WindowKind::CornerSmoothing | WindowKind::FontPicker => {
                 title_text(self.title.clone()).into_any_element()
             }
             // Type settings 的标题栏就是三页签（截图顶部没有单独的 "Type settings" 标题文字），
@@ -2387,10 +2457,11 @@ impl WindowState {
         match self.kind {
             WindowKind::Color => self.color_body(cx),
             WindowKind::CornerSmoothing => self.corner_smoothing_body(),
+            WindowKind::FontPicker => self.list_element(cx, body_h),
             WindowKind::Layout | WindowKind::Stroke | WindowKind::TypeSettings | WindowKind::EffectSettings | WindowKind::StyleEditor => {
                 self.settings_element(cx)
             }
-            WindowKind::Variables | WindowKind::TextStyles => self.list_element(cx),
+            WindowKind::Variables | WindowKind::TextStyles => self.list_element(cx, body_h),
             WindowKind::VariablesTable => {
                 if self.editor.is_none() {
                     if let Some(data) = self.variables_data.take() {
@@ -3081,11 +3152,36 @@ impl WindowState {
         div().w(pt(240.0)).flex().flex_col().gap(pt(4.0)).child(ramp).child(stops).child(buttons)
     }
 
-    fn list_element(&self, cx: &mut App) -> AnyElement {
+    fn list_element(&self, cx: &mut App, body_h: f32) -> AnyElement {
         let t = tokens();
-        let mut col = div().w_full().flex().flex_col().gap(pt(2.0));
+        // 字体窗按 Figma `fontPicker*`：卡片内边距 0，搜索行 40（左 16 / 右 12 / 底 1px 线），
+        // 行高 28、左 12 / 右 18，**列表自身滚动**（`overflow-y:scroll`，`flex-grow:1`）。
+        // 其它列表窗（变量 / 样式）沿用原来的 8pt 内缩与 24pt 行，只加一个高度上限 + 滚动。
+        let fonts = self.kind == WindowKind::FontPicker;
+        let mut col = div().w_full().flex().flex_col();
+        if fonts {
+            // Figma 的 body 是固定 429px：搜索行与列表一起撑满，列表吃剩余高度。
+            col = col.h(pt(body_h));
+        }
         if let Some(search) = &self.search {
-            col = col.child(div().w_full().h(pt(28.0)).child(search.clone()));
+            let mut row = div().w_full().flex().items_center();
+            row = if fonts {
+                row.h(pt(40.0)).pl(pt(16.0)).pr(pt(12.0)).border_b_1().border_color(rgba(t.border))
+            } else {
+                row.h(pt(32.0)).pb(pt(4.0))
+            };
+            col = col.child(row.child(search.clone()));
+        }
+        let mut list = div().id("window-list").w_full().flex().flex_col().overflow_y_scroll();
+        list = if fonts {
+            list.flex_1().min_h(px(0.0))
+        } else {
+            // 其它列表：内容多时滚动，内容少时仍 hug。上限必须是**常量**——若用 `body_h`
+            // 派生，`measured_h` 会把它连同卡片高度一起每帧撑大（同样的「越滚越大」）。
+            list.max_h(px(LIST_MAX_H))
+        };
+        if !fonts {
+            list = list.gap(pt(2.0));
         }
         let q = self.query.borrow().trim().to_lowercase();
         let mut shown = 0usize;
@@ -3096,7 +3192,7 @@ impl WindowState {
             }
             if row.group != last_group {
                 if let Some(g) = &row.group {
-                    col = col.child(div().mt(pt(4.0)).text_size(pt(9.0)).text_color(rgba(t.text_secondary)).child(g.clone()));
+                    list = list.child(div().mt(pt(4.0)).text_size(pt(9.0)).text_color(rgba(t.text_secondary)).child(g.clone()));
                 }
                 last_group = row.group.clone();
             }
@@ -3104,33 +3200,42 @@ impl WindowState {
             let cmd = row.cmd;
             let params = row.params.clone();
             let trail = row.trail.clone();
-            col = col.child(
-                div()
-                    .h(pt(24.0))
-                    .w_full()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .px(pt(8.0))
-                    .rounded(pt(4.0))
-                    .text_size(pt(11.0))
-                    .text_color(rgba(t.menu_text))
-                    .hover(|s| s.bg(rgba(t.menu_hover)))
-                    .on_mouse_down(MouseButton::Left, move |_, _, _| {
-                        cmds.push(Cmd { id: cmd, params: Some(params.clone()) });
-                    })
-                    .child(div().flex_1().min_w(pt(0.0)).overflow_hidden().child(row.label.clone()))
-                    .children(trail.map(|tr| div().text_color(rgba(t.menu_dim)).child(tr))),
-            );
+            let font_family = row.font_family.clone();
+            // A font-picker row renders its own name in that family — the item is its own preview.
+            // Figma `fontPickerItemRow` 的正文是 11px。
+            let label_el = if let Some(fam) = font_family {
+                div().flex_1().min_w(pt(0.0)).overflow_hidden().text_size(pt(11.0)).font_family(SharedString::from(fam)).child(row.label.clone())
+            } else {
+                div().flex_1().min_w(pt(0.0)).overflow_hidden().child(row.label.clone())
+            };
+            let row_h = if row.font_family.is_some() { pt(28.0) } else { pt(24.0) };
+            // 字体行：`padding: 0 18px 0 12px`、悬停用面板 hover（不是菜单 hover）。
+            let mut row_el = div()
+                .h(row_h)
+                .w_full()
+                .flex()
+                .flex_row()
+                .items_center()
+                .text_size(pt(11.0))
+                .on_mouse_down(MouseButton::Left, move |_, _, _| {
+                    cmds.push(Cmd { id: cmd, params: Some(params.clone()) });
+                });
+            row_el = if fonts {
+                row_el.pl(pt(12.0)).pr(pt(18.0)).text_color(rgba(t.text)).hover(|s| s.bg(rgba(t.hover)))
+            } else {
+                row_el.px(pt(8.0)).rounded(pt(4.0)).text_color(rgba(t.menu_text)).hover(|s| s.bg(rgba(t.menu_hover)))
+            };
+            list = list.child(row_el.child(label_el).children(trail.map(|tr| {
+                div().text_color(rgba(if fonts { t.text_secondary } else { t.menu_dim })).child(tr)
+            })));
             shown += 1;
         }
         if shown == 0 {
-            col = col.child(div().py(pt(12.0)).text_size(pt(11.0)).text_color(rgba(t.menu_dim)).child(if self.rows.is_empty() {
-                "No items yet."
-            } else {
-                "No matching items"
-            }));
+            list = list.child(div().py(pt(12.0)).px(pt(12.0)).text_size(pt(11.0)).text_color(rgba(if fonts { t.text_secondary } else { t.menu_dim })).child(
+                if self.rows.is_empty() { "No items yet." } else { "No matching items" },
+            ));
         }
+        col = col.child(list);
         let _ = cx;
         col.into_any_element()
     }
@@ -3317,7 +3422,14 @@ impl WindowState {
                         };
                         let picker = PaintPicker { paint: all[idx].clone(), on_write: Rc::new(write) };
                         let on_pick: Rc<dyn Fn(crate::canvas::geom::Color32, &mut Window, &mut App)> = Rc::new(|_, _, _| {});
-                        popups.request(Self::color(cx, e.position, current, Some(picker), on_pick, cmds.clone()));
+                        // 走右栏统一的打开入口：触发标识 + 再点关闭 + 精确顶部一套逻辑。
+                        crate::panels::right::sections::open_detached_with(
+                            popups.clone(),
+                            format!("style-paint-{sid}-{idx}"),
+                            None,
+                            cx,
+                            |anchor, cx| Self::color(cx, anchor, current, Some(picker), on_pick, cmds.clone()),
+                        );
                     });
                 }
                 Some(row.into_any_element())
@@ -3385,14 +3497,22 @@ impl WindowState {
                     let pick = PaintPicker { paint: paint.clone(), on_write: write };
                     let on_pick: Rc<dyn Fn(crate::canvas::geom::Color32, &mut Window, &mut App)> = Rc::new(|_, _, _| {});
                     let open_cmds = self.cmds.clone();
-                    cf = cf.on_swatch(move |pos: Point<Pixels>, _w, cx: &mut App| {
+                    let hit = Rc::new(Cell::new(None));
+                    let hit_click = hit.clone();
+                    cf = cf.on_swatch(move |pos: Point<Pixels>, window, cx: &mut App| {
                         // 往**左**让 8 pt：取色器右缘贴着面板左缘排开（`open_pos` 会把它放在
                         // 锚点左侧），两个卡片并排而不是一开一关。
+                        let top = button_top(&hit_click, window);
                         let anchor = Point { x: pos.x - px(8.0), y: pos.y };
-                        let child = Self::color(cx, anchor, current, Some(pick.clone()), on_pick.clone(), open_cmds.clone());
+                        let mut child = Self::color(cx, anchor, current, Some(pick.clone()), on_pick.clone(), open_cmds.clone());
+                        child.anchor_to_button_top(top);
                         *slot.borrow_mut() = Some(Box::new(child));
                         open_cmds.wake();
                     });
+                    return Some(with_button_bounds(
+                        crate::widgets::panel_section::field_row_full_trailing(cf, vec![eye, minus]),
+                        hit,
+                    ));
                 }
                 Some(crate::widgets::panel_section::field_row_full_trailing(cf, vec![eye, minus]).into_any_element())
             }
@@ -4370,10 +4490,12 @@ impl WindowState {
         drag_move: Rc<dyn Fn(&MouseMoveEvent, &mut Window, &mut App)>,
         right_edge: Pixels,
     ) -> Vec<AnyElement> {
+        // 视口变了（窗口缩放）要重新夹取；否则定位一次后钉住原点。
+        let viewport_changed = self.viewport != viewport;
         self.viewport = viewport;
         // 变量编辑器把拖动绑在**自己的头部左侧**（不是整张卡片），所以要把回调传进 body。
         self.drag_start = Some(drag.clone());
-        let open = anchored_open(self.open, right_edge);
+        let open = anchored_open(self.open, right_edge, self.exact_top);
         // Full 呈现：egui 的 `variables_panel::full(panel)` —— 只占「面板 + 画布」那块（左侧 rail
         // 保留），`Frame::NONE` 贴边铺满；Floating 用构造时的宽高与拖拽位置。
         let full = self.kind == WindowKind::VariablesTable && self.variables_full();
@@ -4385,7 +4507,11 @@ impl WindowState {
         // 构造期的 `height` 只是估算（取色器估成 532，实际约 307）：估算偏大时 `clamp` 会把
         // 卡片顶在上边界、怎么拖都不动。上一帧量到过真实高度就用它（变量表有自己的尺寸，
         // 由 `editor.size()` 决定，不参与）。
-        if self.editor.is_none() {
+        //
+        // ⛔ 固定高度的窗口（字体窗：body 恒 429）绝不能吃这个回写：body 高度 = `height`、
+        // 列表又 `flex_1` 撑满，于是「量到 469 → height=469 → 卡片 509 → 再量 509…」每帧
+        // 长 40pt，表现为「越滚越大」。固定高的窗口自己说了算。
+        if self.editor.is_none() && !self.fixed_height() {
             let real = self.measured_h.get();
             if real > 0.0 {
                 self.height = real;
@@ -4399,7 +4525,14 @@ impl WindowState {
         let height = if full { f32::from(viewport.height) } else { base_h };
         // Full 是 `Frame::NONE`：内边距 0、无圆角/阴影；Floating 保留通用 16（变量表构造时是 0）。
         let pad = if full { 0.0 } else { self.pad };
-        let body_h = if full { f32::from(viewport.height) } else { height - 2.0 * self.pad };
+        let body_h = if full {
+            f32::from(viewport.height)
+        } else if self.fixed_height() {
+            // 固定高窗口的 `height` 是整卡高度（含 40pt 头部），body 要把它减掉。
+            (height - crate::widgets::popover::HEADER_H - 2.0 * self.pad).max(120.0)
+        } else {
+            height - 2.0 * self.pad
+        };
         let at = if full {
             // 贴着 rail 右缘，保留左侧图标栏（egui 的 full 就是「面板+画布」那块）。
             Some(Point { x: px(rail), y: px(0.0) })
@@ -4409,9 +4542,16 @@ impl WindowState {
         // 先算**当帧**卡片原点：面板内部右键菜单记的是窗口坐标，body_element 要用它换算成
         // 卡片局部坐标。origin() 只依赖 open/at/width/height/flush，可用一个 probe 提前求值，
         // 否则首帧或拖动后会差一帧。
+        // 定位只做一次：`measured_h` 会在下一帧把 `height` 修正成真实高度，若每帧重新
+        // `open_pos` / `clamp`，卡片就会在那一帧跳一下（鼠标一动才重绘 → 看起来像「刷新」）。
+        // 钉住原点，除非用户拖动（`at` = `place`）或视口尺寸变了。
+        let pinned = self.placed_once && at.is_none() && !viewport_changed;
+        let prev_origin = self.origin;
         let mut probe = popover_window(open).width(width).pad(pad).flush(full).height(height);
         if let Some(p) = at {
             probe = probe.at(p);
+        } else if pinned {
+            probe = probe.at(prev_origin);
         }
         self.origin = probe.origin(viewport);
         // 浮层内通用下拉的菜单每帧重建：先清空上一帧，body_element 里的 Dropdown 会重新登记。
@@ -4436,8 +4576,12 @@ impl WindowState {
         if let Some(p) = at {
             pop = pop.at(p);
         }
+        if pinned {
+            pop = pop.at(prev_origin);
+        }
         let (origin, card) = pop.show(viewport, dismiss);
         self.origin = origin;
+        self.placed_once = true;
         // 菜单卡片与浮层卡片同挂窗口根（els），所以菜单用窗口坐标，不被浮层的滚动裁剪。
         let mut els = vec![card];
         els.extend(self.overlays.borrow_mut().drain(..));
@@ -4684,11 +4828,16 @@ fn wire_set(field: &Entity<TextField>, cx: &mut App, cmds: &Cmds, key: &'static 
 
 /// Placement rule from `ui-egui/src/popover.rs`: the card's right edge sits on the Design
 /// panel's left edge, its top on the button that opened it — "lifted so its bottom keeps off the
-/// screen's bottom". Callers hand us the press point; only its y survives (moved up to the
-/// button's top). The pointer's x must never decide where a detached window opens.
-fn anchored_open(open: Open, right_edge: Pixels) -> Open {
+/// screen's bottom". The pointer's x must never decide where a detached window opens.
+///
+/// When the trigger reports its own bounds we use that exact top. Otherwise (keyboard / command
+/// opens) the old approximation stays: the press point minus half of a 24 pt button.
+fn anchored_open(open: Open, right_edge: Pixels, exact_top: Option<Pixels>) -> Open {
     match open {
-        Open::Anchor(a) => Open::Anchor(Point { x: right_edge, y: px((f32::from(a.y) - BUTTON_HALF).max(0.0)) }),
+        Open::Anchor(a) => {
+            let y = exact_top.unwrap_or_else(|| px((f32::from(a.y) - BUTTON_HALF).max(0.0)));
+            Open::Anchor(Point { x: right_edge, y })
+        }
         other => other,
     }
 }
@@ -4742,12 +4891,42 @@ fn picker_knob(x: f32, y: f32, fill: Color32) -> gpui::Div {
         )
 }
 
-/// 记录元素矩形（弹窗菜单锚点用）的透明探针：prepaint 存盒子，绘制阶段什么都不画。
-fn bounds_probe(hit: Rc<Cell<Option<Bounds<Pixels>>>>) -> gpui::Div {
+/// 记录元素矩形（弹窗菜单锚点 / 浮窗精确顶部）的透明探针：prepaint 存盒子，绘制阶段什么都不画。
+pub(crate) fn bounds_probe(hit: Rc<Cell<Option<Bounds<Pixels>>>>) -> gpui::Div {
     div().absolute().left_0().top_0().w_full().h_full().child(gpui::canvas(
         move |bounds, _, _| hit.set(Some(bounds)),
         |_, _, _, _| {},
     ))
+}
+
+/// Attach a bounds probe as a child of the trigger element itself. Never wrap in a new `div()`:
+/// a wrapper would collapse `w_full()` fields to their content width (the colour input shrank to
+/// a "lump"), and would steal the positioning context of `absolute` buttons. The probe is
+/// absolute/full-size, so it takes no space and only measures.
+pub(crate) fn with_button_bounds<E>(el: E, hit: Rc<Cell<Option<Bounds<Pixels>>>>) -> AnyElement
+where
+    E: IntoElement,
+    E::Element: ParentElement + Styled,
+{
+    el.into_element().relative().child(bounds_probe(hit)).into_any()
+}
+
+/// Inject the probe into an element that is **already positioned** (typically `absolute`).
+/// Never call `.relative()` here: it would override `absolute` and drop the element into the
+/// normal flow — that is what broke the variable-binding button that sits at `right: 0` of its
+/// field. The probe itself is absolute/full-size and measures its nearest positioned ancestor.
+pub(crate) fn with_absolute_bounds<E>(el: E, hit: Rc<Cell<Option<Bounds<Pixels>>>>) -> AnyElement
+where
+    E: IntoElement,
+    E::Element: ParentElement,
+{
+    el.into_element().child(bounds_probe(hit)).into_any()
+}
+
+/// Exact button top for a window opened from `hit`, falling back to the press point when the
+/// probe has not run yet (e.g. a keyboard open on the first frame).
+pub(crate) fn button_top(hit: &Rc<Cell<Option<Bounds<Pixels>>>>, window: &Window) -> Pixels {
+    hit.get().map(|b| b.origin.y).unwrap_or_else(|| window.mouse_position().y - px(BUTTON_HALF))
 }
 
 /// WCAG 相对亮度（sRGB，按 0.2126 / 0.7152 / 0.0722 加权）。
@@ -4791,16 +4970,29 @@ mod tests {
     #[test]
     fn every_window_opens_against_the_design_panel_not_the_pointer() {
         // The press was out in the right panel; only its y (button top) may survive.
-        let open = anchored_open(Open::Anchor(Point { x: px(2589.0), y: px(503.0) }), px(980.0));
+        let open = anchored_open(Open::Anchor(Point { x: px(2589.0), y: px(503.0) }), px(980.0), None);
         match open {
             Open::Anchor(p) => {
                 assert_eq!(f32::from(p.x), 980.0, "right edge belongs on the panel edge");
-                assert_eq!(f32::from(p.y), 503.0 - BUTTON_HALF, "top belongs on the button top");
+                assert_eq!(f32::from(p.y), 503.0 - BUTTON_HALF, "fallback guesses the button top");
             }
             _ => panic!("an anchor must stay an anchor"),
         }
         // All five kinds are built as anchors now; none pins its top-left to the pointer.
         assert!(matches!(open, Open::Anchor(_)));
+    }
+
+    #[test]
+    fn an_exact_button_top_wins_over_the_press_point() {
+        // A click near the bottom edge of a 24 pt button: pointer − 12 would be 11 pt too low.
+        let open = anchored_open(Open::Anchor(Point { x: px(2589.0), y: px(514.0) }), px(980.0), Some(px(502.0)));
+        match open {
+            Open::Anchor(p) => {
+                assert_eq!(f32::from(p.x), 980.0, "left edge stays on the panel");
+                assert_eq!(f32::from(p.y), 502.0, "top is the button's, not the pointer's");
+            }
+            _ => panic!("an anchor must stay an anchor"),
+        }
     }
 
     #[test]

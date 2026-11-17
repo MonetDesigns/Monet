@@ -77,6 +77,7 @@ pub(crate) enum Act {
 }
 
 /// 一级菜单的数据。
+#[derive(Clone)]
 pub(crate) struct Level {
     pub rows: Vec<MenuRow>,
     /// 与 `rows` 一一对应的 `(显示名, 动作)`；`on_hover` / 点击只拿得到下标，靠它反查。
@@ -90,6 +91,7 @@ impl Level {
 }
 
 /// 一个打开的主菜单：第 0 级是顶层菜单名，之后每级是一个展开的子菜单。
+#[derive(Clone)]
 pub(crate) struct MainMenu {
     pub levels: Vec<Level>,
     /// 每级当前展开的子项下标（与 `levels` 等长；`None` = 这一级没展开子菜单）。

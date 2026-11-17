@@ -164,6 +164,7 @@ impl Render for KeyframeField {
 
 /// The retained set of keyframe fields. Created once in `CanvasView::new`, like `RightFields`,
 /// so typing / caret state survives between frames.
+#[derive(Clone)]
 pub struct KeyframeFields {
     fields: Vec<Entity<KeyframeField>>,
     /// The last column width pushed to the fields. The `Input` template positions its lead / edit /

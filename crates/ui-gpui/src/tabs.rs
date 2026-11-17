@@ -28,28 +28,33 @@ pub const OPEN_TIME: f64 = 0.18;
 /// GPUI 由 `CanvasView` 跨帧持有（`tabs_view::TabState`）。只在标签集合变化时分配。
 #[derive(Clone, Default, Debug)]
 pub struct TabMotion {
-    initialized: bool,
-    known: Vec<u64>,
+    /// 每个窗口各自的「已知标签」：所有窗口共用同一个 `CanvasView`，但显示的是不同子集。
+    /// ⛔ 用**一份** `known` 会让两个窗口每帧互相把对方的标签判成「新标签」→ 入场动画永远
+    /// 播不完 → 每帧 `notify` → 画布不停闪（用户 2026-11-16）。
+    initialized: std::collections::HashMap<u64, bool>,
+    known: std::collections::HashMap<u64, Vec<u64>>,
+    /// 正在入场的标签（uid 全局唯一，窗口之间不重叠，所以一份就够）。
     opening: Vec<(u64, f64)>,
 }
 
 impl TabMotion {
-    /// 每帧调用：登记新增标签、让过期的动画出列。`reduce_motion` 时立刻完成所有入场。
-    pub fn begin_frame(&mut self, current: impl Iterator<Item = u64> + Clone, now: f64, reduce_motion: bool) {
-        if !self.known.iter().copied().eq(current.clone()) {
-            if self.initialized && !reduce_motion {
-                for uid in current.clone().filter(|uid| !self.known.contains(uid)) {
+    /// 每帧调用：登记**这个窗口**新增的标签、让过期的动画出列。`reduce_motion` 时立刻完成。
+    pub fn begin_frame(&mut self, window_id: u64, current: impl Iterator<Item = u64> + Clone, now: f64, reduce_motion: bool) {
+        let known = self.known.get(&window_id).cloned().unwrap_or_default();
+        if !known.iter().copied().eq(current.clone()) {
+            if self.initialized.get(&window_id).copied().unwrap_or(false) && !reduce_motion {
+                for uid in current.clone().filter(|uid| !known.contains(uid)) {
                     self.opening.push((uid, now));
                 }
             }
-            self.known = current.collect();
+            self.known.insert(window_id, current.collect());
         }
-        self.initialized = true;
+        self.initialized.insert(window_id, true);
         if reduce_motion {
             self.opening.clear();
         } else {
-            let known = &self.known;
-            self.opening.retain(|(uid, started)| known.contains(uid) && now - *started < OPEN_TIME);
+            // 只按时间过期：文档被拖到别的窗口时，`known` 里已经没有它，但动画仍应自然播完。
+            self.opening.retain(|(_, started)| now - *started < OPEN_TIME);
         }
     }
 
@@ -215,14 +220,14 @@ mod layout_tests {
     #[test]
     fn new_tabs_animate_unless_motion_is_reduced() {
         let mut motion = TabMotion::default();
-        motion.begin_frame([1].into_iter(), 0.0, false);
+        motion.begin_frame(0, [1].into_iter(), 0.0, false);
         assert!(motion.opening().is_empty(), "the tabs open at start-up don't animate");
-        motion.begin_frame([1, 2].into_iter(), 1.0, false);
+        motion.begin_frame(0, [1, 2].into_iter(), 1.0, false);
         assert_eq!(open_progress(motion.opening(), 2, 1.0), 0.0);
         assert_eq!(open_progress(motion.opening(), 1, 1.0), 1.0);
-        motion.begin_frame([1, 2].into_iter(), 1.0 + 2.0 * OPEN_TIME, false);
+        motion.begin_frame(0, [1, 2].into_iter(), 1.0 + 2.0 * OPEN_TIME, false);
         assert!(motion.opening().is_empty(), "the animation ends");
-        motion.begin_frame([1, 2, 3].into_iter(), 2.0, true);
+        motion.begin_frame(0, [1, 2, 3].into_iter(), 2.0, true);
         assert!(motion.opening().is_empty(), "Reduce motion opens tabs at once");
     }
 

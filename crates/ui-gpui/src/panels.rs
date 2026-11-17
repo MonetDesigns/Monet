@@ -227,7 +227,10 @@ pub(crate) struct Cmd {
 /// its command executed on the next frame.
 #[derive(Clone)]
 pub(crate) struct CmdQueue {
-    items: std::rc::Rc<std::cell::RefCell<Vec<Cmd>>>,
+    /// `(发起该命令的窗口 id, 命令)`：多个 OS 窗口共用一个 `CanvasView` 和一份 Session，
+    /// 命令必须由**发起它的那个窗口**执行，否则「在第二个窗口点加页」会被先渲染的
+    /// 主窗口取走、加到主窗口的文档上（用户 2026-11-16 实测）。
+    items: std::rc::Rc<std::cell::RefCell<Vec<(u64, Cmd)>>>,
     wake: std::rc::Rc<dyn Fn()>,
     /// 出口改写：派生的队列（[`CmdQueue::mapped`]）在入队前先把命令改一遍。默认 `None`
     /// —— 也就是所有既有按钮的行为完全不变。
@@ -254,7 +257,8 @@ impl CmdQueue {
             Some(f) => f(cmd),
             None => cmd,
         };
-        self.items.borrow_mut().push(cmd);
+        let window = crate::windows::current();
+        self.items.borrow_mut().push((window, cmd));
         (self.wake)();
     }
 
@@ -263,8 +267,21 @@ impl CmdQueue {
         (self.wake)();
     }
 
+    /// 只取走**当前窗口**发起的命令；别的窗口的留在队列里等它们自己的那一帧。
     pub(crate) fn drain(&self) -> Vec<Cmd> {
-        self.items.borrow_mut().drain(..).collect()
+        let current = crate::windows::current();
+        let mut items = self.items.borrow_mut();
+        let mut out = Vec::new();
+        let mut keep = Vec::new();
+        for (window, cmd) in items.drain(..) {
+            if window == current {
+                out.push(cmd);
+            } else {
+                keep.push((window, cmd));
+            }
+        }
+        *items = keep;
+        out
     }
 
     /// Only for tests: how many commands are still waiting for a frame.
@@ -280,20 +297,69 @@ pub(crate) type Cmds = CmdQueue;
 /// swallowed by a missing `set_root`. `wake()` asks for that frame.
 #[derive(Clone)]
 pub(crate) struct PopupReqs {
-    slot: Rc<std::cell::RefCell<Option<crate::popovers::WindowState>>>,
+    /// `(发起窗口 id, 窗口状态)`：和命令队列一样按窗口隔离，否则主窗口会把第二个窗口
+    /// 请求的浮窗取走、画在自己的窗口里。
+    slot: Rc<std::cell::RefCell<Vec<(u64, crate::popovers::WindowState)>>>,
     cmds: Cmds,
+    /// 当前打开窗口的**触发按钮标识**（根视图每帧 `sync_open` 写回）。按触发源而不是按
+    /// `WindowKind` 判断：同一类窗口（变量、取色器…）有多个入口，按 kind 会让它们一起亮。
+    open_trigger: Rc<std::cell::RefCell<Option<String>>>,
+    /// 按钮请求关闭当前窗口；根视图每帧 `take_close` 消费一次。
+    close_req: Rc<std::cell::Cell<bool>>,
+    /// 渲染帧号（`sync_open` 每帧 +1）。用于「同一帧内同一个按钮只触发一次」的去重。
+    frame: Rc<std::cell::Cell<u64>>,
+    /// 上一次 toggle 的 `(帧号, 触发标识)`：某些元素会同时收到 click 与 mouse-down 两个
+    /// 回调，重复触发会「先开一次、再用新锚点开一次」（用户 2026-11-16 的
+    /// 「第 1 次启动，第 2 次刷新位置」）。
+    last_toggle: Rc<std::cell::RefCell<(u64, Option<String>)>>,
 }
 
 impl PopupReqs {
     pub(crate) fn request(&self, w: crate::popovers::WindowState) {
-        *self.slot.borrow_mut() = Some(w);
+        self.slot.borrow_mut().push((crate::windows::current(), w));
         self.cmds.wake();
     }
 
-    /// DIAGNOSTIC CUT glue: no-op (base PopupReqs lacks open_kind/close_req fields).
-    pub(crate) fn sync_open(&self, _current: Option<crate::popovers::WindowKind>) {}
+    /// 这个触发按钮打开的窗口现在是否开着（用于 `.active(...)`）。
+    pub(crate) fn is_open(&self, trigger: &str) -> bool {
+        self.open_trigger.borrow().as_deref() == Some(trigger)
+    }
+
+    /// 打开 / 关闭同一个窗口：已开就关，未开就开。与 egui 面板里「再点一次收起」同义。
+    ///
+    /// 触发标识**只在这里写一次**（打开时），根视图只负责在窗口真的关掉后清空——
+    /// 两处都写会导致同一件事写两遍（用户 2026-11-16 指出）。
+    pub(crate) fn toggle(&self, trigger: impl Into<String>, w: crate::popovers::WindowState) {
+        let trigger = trigger.into();
+        // 同一帧里同一个按钮重复触发：忽略第二次（否则会重建一次窗口、位置被刷新）。
+        {
+            let frame = self.frame.get();
+            let mut last = self.last_toggle.borrow_mut();
+            if last.0 == frame && last.1.as_deref() == Some(trigger.as_str()) {
+                return;
+            }
+            *last = (frame, Some(trigger.clone()));
+        }
+        if self.is_open(&trigger) {
+            self.close_req.set(true);
+            self.cmds.wake();
+        } else {
+            *self.open_trigger.borrow_mut() = Some(trigger);
+            self.request(w);
+        }
+    }
+
+    /// 根视图每帧告诉这里「当前是否还开着 detached 窗口」；关掉时清空触发标识。
+    pub(crate) fn sync_open(&self, window_open: bool) {
+        self.frame.set(self.frame.get().wrapping_add(1));
+        if !window_open {
+            *self.open_trigger.borrow_mut() = None;
+        }
+    }
+
+    /// 根视图每帧消费一次「按钮请求关闭」。
     pub(crate) fn take_close(&self) -> bool {
-        false
+        self.close_req.replace(false)
     }
 }
 
@@ -511,6 +577,7 @@ pub(crate) mod visibility {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct RightFields {
     /// Commands the panel raised this frame.
     cmds: Cmds,
@@ -630,6 +697,14 @@ pub(crate) struct RightFields {
     pad_individual: std::rc::Rc<std::cell::RefCell<bool>>,
     /// Shared source of truth for the 4 padding values, so one field's edit re-pushes the whole array.
     pad: std::rc::Rc<std::cell::RefCell<[f64; 4]>>,
+    /// 四个独立圆角字段（`topLeftRadius` / `topRightRadius` / `bottomLeftRadius` /
+    /// `bottomRightRadius`）。只在 Appearance 的「Individual corners」展开后显示。
+    corner_tl: Entity<TextField>,
+    corner_tr: Entity<TextField>,
+    corner_bl: Entity<TextField>,
+    corner_br: Entity<TextField>,
+    /// 「独立圆角」展开开关（egui `right.rs` 的 `Id::new("indep_corners")` 临时标记）。
+    corners_individual: std::rc::Rc<std::cell::RefCell<bool>>,
     /// Alignment dropdown current labels (serde names) for the main and cross axes.
     align_main_label: std::cell::RefCell<SharedString>,
     align_cross_label: std::cell::RefCell<SharedString>,
@@ -656,7 +731,14 @@ pub(crate) struct RightFields {
     /// view takes it on the next frame. This deliberately does **not** go through
     /// `Entity<CanvasView>`: a `let Some(root) = ... else { return }` guard silently swallows the
     /// click whenever the one-shot `set_root` did not land, which is the "button does nothing" bug.
-    popup_slot: Rc<std::cell::RefCell<Option<crate::popovers::WindowState>>>,
+    popup_slot: Rc<std::cell::RefCell<Vec<(u64, crate::popovers::WindowState)>>>,
+    /// 当前打开的窗口种类（根视图每帧写回）：触发按钮的选中态与「再点一次关闭」都读它。
+    popup_open_trigger: Rc<std::cell::RefCell<Option<String>>>,
+    /// 渲染帧号 + 上一次 toggle，见 `PopupReqs::toggle` 的同帧去重。
+    popup_frame: Rc<std::cell::Cell<u64>>,
+    popup_last_toggle: Rc<std::cell::RefCell<(u64, Option<String>)>>,
+    /// 触发按钮请求关闭当前窗口（根视图每帧消费）。
+    popup_close_req: Rc<std::cell::Cell<bool>>,
     /// 全部编辑器实体（含所有 TextField 的内层 editor、颜色行 editor、列表行池）。
     /// 点画布时统一 `finish_edit`，保证草稿不会因为「焦点转移但视图没重绘」而丢失。
     editors: Vec<Entity<TextEdit>>,
@@ -846,6 +928,23 @@ fn nf_pad(
                 *pad_commit.borrow_mut() = arr;
                 cmds.push(Cmd { id: "node.set", params: Some(serde_json::json!({ "props": { "padding": arr.to_vec() } })) });
                 wake();
+            }
+        });
+    })
+}
+
+/// One of the four independent corner-radius fields (`egui right.rs` 的
+/// `topLeftRadius` / `topRightRadius` / `bottomRightRadius` / `bottomLeftRadius`)：每次提交只写
+/// 自己那一个 key（`node.set {"props": {<key>: v}}`），与 egui 的 `app.field(&ids, key, …)` 同义。
+fn nf_corner(cx: &mut App, lead: &'static str, key: &'static str, cmds: &Cmds) -> Entity<TextField> {
+    let cmds = cmds.clone();
+    TextField::build(cx, DEFAULT_COL, move |tf, _| {
+        tf.set_lead(Slot::Text(SharedString::from(lead)));
+        tf.set_numeric("", 1.0);
+        let cmds = cmds.clone();
+        tf.set_on_commit(move |text, _window, _cx| {
+            if let Ok(v) = text.trim().parse::<f64>() {
+                cmds.push(Cmd { id: "node.set", params: Some(serde_json::json!({ "props": { key: v.max(0.0) } })) });
             }
         });
     })
@@ -1200,13 +1299,22 @@ impl RightFields {
             pad_h: nf_set(cx, "H", 10.0, "", 1.0, "paddingHorizontal", &cmds, wake),
             pad_v: nf_set(cx, "V", 10.0, "", 1.0, "paddingVertical", &cmds, wake),
             pad_individual: std::rc::Rc::new(std::cell::RefCell::new(false)),
+            corner_tl: nf_corner(cx, "TL", "topLeftRadius", &cmds),
+            corner_tr: nf_corner(cx, "TR", "topRightRadius", &cmds),
+            corner_bl: nf_corner(cx, "BL", "bottomLeftRadius", &cmds),
+            corner_br: nf_corner(cx, "BR", "bottomRightRadius", &cmds),
+            corners_individual: std::rc::Rc::new(std::cell::RefCell::new(false)),
             align_main_label: std::cell::RefCell::new(SharedString::from("min")),
             align_cross_label: std::cell::RefCell::new(SharedString::from("min")),
             // Blend-mode dropdown: a button that opens the blend menu on click (egui `dropdown`).
             blend_label: std::cell::RefCell::new(SharedString::from(tr("Normal"))),
             blend_open: std::rc::Rc::new(std::cell::RefCell::new(false)),
             root: None,
-            popup_slot: Rc::new(std::cell::RefCell::new(None)),
+            popup_slot: Rc::new(std::cell::RefCell::new(Vec::new())),
+            popup_open_trigger: Rc::new(std::cell::RefCell::new(None)),
+            popup_frame: Rc::new(std::cell::Cell::new(0)),
+            popup_last_toggle: Rc::new(std::cell::RefCell::new((0, None))),
+            popup_close_req: Rc::new(std::cell::Cell::new(false)),
             last_fill: std::cell::RefCell::new(None),
             last_stroke: std::cell::RefCell::new(None),
             row_editors,
@@ -1268,6 +1376,49 @@ impl RightFields {
                 e.finish_edit(window, cx);
             });
         }
+    }
+
+    /// 新 OS 窗口拿到的一份**独立**右栏 UI 状态。
+    ///
+    /// `RightFields` 里大量字段是 `Rc<RefCell<_>>`：直接 `clone()` 只是共享同一块内存，
+    /// 于是右栏的折叠 / 展开 / 局部列表会在所有窗口同步（用户 2026-11-16 实测：
+    /// 一个窗口折叠右栏 section，其它窗口一起折叠）。这里把所有纯 UI 的 `Rc` 换成新的，
+    /// 命令队列 / 弹层槽位 / 输入框实体仍保持共享（它们本来就按窗口或按文档分槽）。
+    pub(crate) fn detached(&self) -> Self {
+        let mut f = self.clone();
+        f.preset_open = Default::default();
+        f.selection_colors_open = Default::default();
+        f.selection_colors_hover = Default::default();
+        f.right_tab = Default::default();
+        f.local_style_renaming = Default::default();
+        f.local_style_rename_style = Default::default();
+        f.local_style_rename_seen = Default::default();
+        f.local_style_folded = Default::default();
+        f.local_styles_ui = Default::default();
+        f.comment_ui = Default::default();
+        f.inspect_lang = Default::default();
+        f.inspect_fmt = Default::default();
+        f.inspect_rem = Default::default();
+        f.proto_open = Default::default();
+        f.wgsl_param_ctx = Default::default();
+        f.dev_filter = Default::default();
+        f.dev_cat_filter = Default::default();
+        f.dev_res_add = Default::default();
+        f.dev_res_edit = Default::default();
+        f.asset_fmt = Default::default();
+        f.scale_ctx = Default::default();
+        f.pad = Default::default();
+        f.pad_individual = Default::default();
+        f.corners_individual = Default::default();
+        f.row_ctx = Default::default();
+        f.limit_open = Default::default();
+        f.bind_hover = Default::default();
+        f.blend_open = Default::default();
+        f.popup_open_trigger = Default::default();
+        f.popup_frame = Default::default();
+        f.popup_last_toggle = Default::default();
+        f.popup_close_req = Default::default();
+        f
     }
 
     /// Take the commands raised since the last frame.
@@ -1536,12 +1687,22 @@ impl RightFields {
 
     /// Handle for button callbacks that open one of the five detached windows.
     pub(crate) fn popups(&self) -> PopupReqs {
-        PopupReqs { slot: self.popup_slot.clone(), cmds: self.cmds.clone() }
+        PopupReqs {
+            slot: self.popup_slot.clone(),
+            cmds: self.cmds.clone(),
+            open_trigger: self.popup_open_trigger.clone(),
+            close_req: self.popup_close_req.clone(),
+            frame: self.popup_frame.clone(),
+            last_toggle: self.popup_last_toggle.clone(),
+        }
     }
 
     /// Take the window a button requested; the root view checks this once per frame.
     pub(crate) fn take_window(&self) -> Option<crate::popovers::WindowState> {
-        self.popup_slot.borrow_mut().take()
+        let current = crate::windows::current();
+        let mut slot = self.popup_slot.borrow_mut();
+        let at = slot.iter().position(|(window, _)| *window == current)?;
+        Some(slot.remove(at).1)
     }
 
     /// Wire the popover-triggering slots. Called once after `CanvasView` exists, so the field
@@ -1592,6 +1753,10 @@ impl RightFields {
             &self.star_ratio,
             &self.opacity,
             &self.corner,
+            &self.corner_tl,
+            &self.corner_tr,
+            &self.corner_bl,
+            &self.corner_br,
             &self.font_size,
             &self.stroke_weight,
             &self.gap,
@@ -1651,6 +1816,27 @@ impl RightFields {
         }
         *self.align_main_label.borrow_mut() = align_label("mainAlign", main_align);
         *self.align_cross_label.borrow_mut() = align_label("crossAlign", cross_align);
+    }
+
+    /// 四个独立圆角字段的回填（selection → panel）。`None` = 多选不一致 → "Mixed"。
+    /// `radii` 与 `Corners::radii` 同序：`[topLeft, topRight, bottomRight, bottomLeft]`。
+    pub(crate) fn set_corner_values(&self, cx: &mut App, radii: Option<[f64; 4]>) {
+        let mut fmt = |e: &Entity<TextField>, v: Option<f64>| {
+            e.update(cx, |tf, _| match v {
+                Some(val) => {
+                    tf.set_placeholder("");
+                    tf.set_value(fmt_num(val));
+                }
+                None => {
+                    tf.set_value("");
+                    tf.set_placeholder(tr("Mixed"));
+                }
+            });
+        };
+        fmt(&self.corner_tl, radii.map(|r| r[0]));
+        fmt(&self.corner_tr, radii.map(|r| r[1]));
+        fmt(&self.corner_br, radii.map(|r| r[2]));
+        fmt(&self.corner_bl, radii.map(|r| r[3]));
     }
 
     /// Dimensions 的 min/max 字段（`layout_panel.rs::limit_row_v`）。
@@ -2242,11 +2428,6 @@ pub(crate) fn right_panel(
         body = body.child(star_section(f)).child(sep());
     }
 
-    // ── Frame 设置：Clip content（Figma 的 Frame 区；仅 frame-like 类型显示）────────────
-    if sel.all_frame {
-        body = body.child(right::sections::clip_content(f, data)).child(sep());
-    }
-
     body = body
         // ── Appearance（egui `paints.rs::appearance`：Eye / Variable / Blend 三个 header 图标）──
         .child(right::sections::appearance(f, data, row_w, &f.opacity, &f.corner))
@@ -2500,14 +2681,24 @@ pub(crate) fn auto_layout_section(
         let popups = f.popups();
         let settings_queue = f.queue();
         let settings_data = data.clone();
-        let layout_dots = IconButton::new(Icon::Menu).id("layout-settings-dots").size(24.0).on_click(move |_e, window, cx: &mut App| {
-            if std::env::var_os("FC_DEBUG_POPUP_BTN").is_some() {
-                eprintln!("[popup-btn] layout dots clicked");
-            }
-            let anchor = window.mouse_position();
-            let w = crate::popovers::WindowState::layout(settings_queue.clone(), &settings_data, cx, anchor);
-            popups.request(w);
-        });
+        let dots_hit = std::rc::Rc::new(std::cell::Cell::new(None));
+        let dots_click = dots_hit.clone();
+        let layout_dots = crate::popovers::with_button_bounds(
+            IconButton::new(Icon::Menu)
+                .id("layout-settings-dots")
+                .size(24.0)
+                .active(popups.is_open("layout"))
+                .on_click(move |_e, window, cx: &mut App| {
+                    if std::env::var_os("FC_DEBUG_POPUP_BTN").is_some() {
+                        eprintln!("[popup-btn] layout dots clicked");
+                    }
+                    let top = crate::popovers::button_top(&dots_click, window);
+                    right::sections::open_detached_with(popups.clone(), "layout", Some(top), cx, |anchor, cx| {
+                        crate::popovers::WindowState::layout(settings_queue.clone(), &settings_data, cx, anchor)
+                    });
+                }),
+            dots_hit,
+        );
         sec = sec.child(sublabel_row2(left_cap, tr("Spacing"))).child(crate::widgets::field_row_h(
             vec![picker, right_col],
             vec![layout_dots],
@@ -2527,9 +2718,11 @@ pub(crate) fn auto_layout_section(
         });
         sec = sec.child(sublabel_row(tr("Padding")));
         if individual {
+            // egui `layout_panel.rs::spacing`：开关 `layout_button_at(padding_row, 0)` 贴在
+            // **第一行**的右侧 action 槽；展开后的第二行（R/B）没有开关。开关不能跟着行走。
             sec = sec
-                .child(field_row(vec![f.pad_l.clone(), f.pad_t.clone()], Vec::<IconButton>::new()))
-                .child(field_row(vec![f.pad_r.clone(), f.pad_b.clone()], vec![toggle]));
+                .child(field_row(vec![f.pad_l.clone(), f.pad_t.clone()], vec![toggle]))
+                .child(field_row(vec![f.pad_r.clone(), f.pad_b.clone()], Vec::<IconButton>::new()));
         } else {
             // 水平 / 垂直内边距同样可绑变量（`paddingHorizontal` / `paddingVertical`）。
             // 独立四边是「一个数组一起提交」，原版也没有逐边绑定，这里保持纯数值。
@@ -2553,6 +2746,11 @@ pub(crate) fn auto_layout_section(
     // ④ 网格轨道（egui `layout_panel.rs::tracks`，只在 grid frame 上出现）：
     // 每轴一组「Column sizes / Row sizes」+ 每条轨道一行（序号 / 尺寸 / sizing 下拉）。
     sec = right::sections::grid_track_rows(f, data, cx, n, sec);
+    // ⑤ Clip content：egui `layout_section` 末尾 `if frames { row(24, checkbox) }` —— 它属于
+    // **Layout 节**，不是 Appearance，也不是独立 "Frame" 节。
+    if sel.all_frame {
+        sec = sec.child(right::sections::clip_content(f, data));
+    }
     sec.into_any_element()
 }
 

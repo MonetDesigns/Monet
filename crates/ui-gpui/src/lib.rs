@@ -213,7 +213,7 @@ use canvas::geom::*;
 
 use canvas::render_worker::Worker;
 
-use canvas::{CanvasOutput, Painter};
+use canvas::{CanvasOutput, CanvasState, Painter};
 
 /// 连击判定：两次按下之间不超过这个时间、且几乎没移动，就算双击。
 
@@ -228,7 +228,7 @@ const DOUBLE_CLICK_SLOP: f32 = 4.0;
 const PALETTE_H: f32 = 450.0;
 
 /// 动作库每行的行高（egui `draw_row` 的 34 pt；菜单卡默认 24 太挤）。
-const PALETTE_ROW_H: f32 = 34.0;
+const PALETTE_ROW_H: f32 = 32.0;
 
 /// 主菜单的目录、几何与外观都在 `main_menu` 模块里（照 `ui-egui/src/menus/tree.rs`）。
 
@@ -349,6 +349,7 @@ pub(crate) enum ResizeSide {
 
 /// 闭包在 `render` 里每帧从数据重建（与 `menu.rs` 的 `menu_popup` 同源）。
 
+#[derive(Clone)]
 enum Popup {
     /// 下拉菜单：`anchor` 是触发控件的矩形（egui 的 `Response::rect`）——菜单位置取它的左下角，
 
@@ -453,24 +454,18 @@ enum InlineRenameTarget {
     Page,
 }
 
-/// 画布视图：引擎会话 + 画布状态 + 交互状态。
-
-pub struct CanvasView {
-    app: CanvasApp,
-
+/// 一个窗口**自己的** UI 状态（对应 EGUI `windows.rs::Pane`）。
+///
+/// 所有 OS 窗口共用同一个 `CanvasView` 和一份 Session（文档内容共享），但「首页/弹层/页签/
+/// 面板宽度/指针/拖拽」这些是窗口私有的。进入某个窗口的渲染或事件前 `enter_pane` 把整个
+/// `PaneState` 换入（等价 EGUI `exchange()` 的整块 swap），这样新增字段不可能漏。
+///
+/// 68 个窗口私有字段全部集中在这里；`CanvasView` 通过 `Deref/DerefMut` 保持 `self.popup`
+/// 这类访问不变。要加窗口私有状态，加在这个结构里，**不要**再加回 `CanvasView`。
+#[derive(Clone)]
+pub struct PaneState {
     /// 顶部 40pt 标签条的状态（Home / 开场动画 / 拖拽），P0-1。
     tabs: tabs_view::TabState,
-
-    worker: Worker,
-
-    /// 键盘焦点（空格平移、Z 缩放工具要收键盘事件）。
-    focus: FocusHandle,
-
-    /// A21：F6 / Shift+F6 的区域键盘导航状态（焦点环 + 方向键移动选区）。
-    a11y: a11y::KeyboardNav,
-    /// A21：F6 / Shift+F6 的区域键盘导航状态。
-    /// A16：本视图之外的 OS 窗口（共享同一会话）。
-    windows: windows::Windows,
 
     /// 按下后正在拖拽（Move 事件只在拖拽时送给引擎）。
     dragging: bool,
@@ -479,7 +474,6 @@ pub struct CanvasView {
     pan: Option<(Pos2, f64, f64)>,
 
     /// 这次平移是 **Ctrl+右键** 发起的：`on_mouse_move` 必须把 `Right` 当成「仍按住」，
-
     /// 否则 `route_canvas_drag` 会按「窗口外松手」立刻收尾，右键根本拖不动。
     right_pan: bool,
 
@@ -503,9 +497,6 @@ pub struct CanvasView {
 
     /// 左键当前是否按下（光标要变握拳）。
     primary_down: bool,
-
-    /// 控制通道的请求队列（`--control <port>` 时由 [`control_server`] 往里塞）。
-    control_queue: control::Queue,
 
     /// 左 / 右面板宽度（240..=500，默认 280）。
     left_w: f32,
@@ -539,14 +530,11 @@ pub struct CanvasView {
     popup: Option<Popup>,
 
     /// 变量编辑器**独立于 `popup`**（egui 的 `app.ui.variables`：不是 dialog，与主菜单等并存）。
-
     /// 关掉时只把 `variables_open` 置 false、**保留实体**，这样 Full/Floating、窗口位置、
-
     /// 选中行、分组折叠都能跨开关记住；再点按钮直接复用，不重建 `WindowState`。
     variables_editor: Option<popovers::WindowState>,
 
     /// 变量面板是否打开 / 是否全屏（Full）。小窗(Floating)时左栏 Variables 按钮不显示选中；
-
     /// 全屏时 Variables 选中、File/Assets 取消选中（egui `layers.rs::variables_full` 的等价）。
     variables_open: bool,
 
@@ -573,7 +561,6 @@ pub struct CanvasView {
     draw_brush_ink: Option<[u8; 3]>,
 
     /// 画板的 Design 面板是否展开（`ui-egui` 的 `app.ui.board_panel`）。画板没有原型、也没有
-
     /// Dev Mode，右栏默认收起，工具栏最右的按钮 / `view.design` 是它的开关。
     board_panel: bool,
 
@@ -584,7 +571,6 @@ pub struct CanvasView {
     tool_last: Vec<(&'static str, figcraft_engine::ToolId)>,
 
     /// Motion 时间线是否展开（Animation 模式）。**默认收起** —— egui `FigApp::new` 是
-
     /// `motion_open: false`，而且打开任何文件都会把它关掉（用户 2026-11-10）。
     motion: bool,
 
@@ -646,7 +632,6 @@ pub struct CanvasView {
     left_collapsed: bool,
 
     /// 底部中间的一条临时提示（egui `app.toast`）：导入失败、拖入被拒这类话必须让用户看见，
-
     /// 不能像以前那样只在 `FC_DEBUG_CMDS` 下打到 stderr。
     toast_msg: Option<(String, std::time::Instant)>,
 
@@ -660,7 +645,6 @@ pub struct CanvasView {
     rename_cancel: bool,
 
     /// `TextEdit::set_on_commit` must not borrow the view back (commit_edits already holds
-
     /// `&mut CanvasView`). It only drops the result here; `render` drains it next frame.
     inline_rename_pending: std::rc::Rc<std::cell::RefCell<Option<(InlineRenameTarget, Vec<figcraft_doc::NodeId>, String)>>>,
 
@@ -687,16 +671,77 @@ pub struct CanvasView {
     layer_tree: layer_tree::LayerTreeState,
 
     /// 通用窗口级拖拽层（Kit 范式：`canvas` 覆盖层 + `window.on_mouse_event`）。
-
     /// 每帧在 Paint 阶段注册 move/up/down 三个窗口级监听，把跨元素 / 跨窗口的拖拽
-
     /// 统一收口到 `WindowDragTarget` 实现，指针移到哪一层拖拽都不中断。
     drag_layer: drag_manager::WindowDragLayer,
 
     /// 上一帧的 `on_mouse_up` 刚结束过一次拖拽（窗口级已收尾）。根 div 的 up handler
-
     /// 据此跳过 plain-click 的 guide 命中，避免拖拽收尾那一下重复触发命中逻辑。
     drag_just_ended: bool,
+}
+
+/// 窗口私有状态整体换入换出：`CanvasView` 上几百处 `self.popup` / `self.left_w` 保持不变，
+/// 真正读写的永远是**当前换入窗口**的那份 `PaneState`。
+impl std::ops::Deref for CanvasView {
+    type Target = PaneState;
+    fn deref(&self) -> &PaneState {
+        &self.pane
+    }
+}
+
+impl std::ops::DerefMut for CanvasView {
+    fn deref_mut(&mut self) -> &mut PaneState {
+        &mut self.pane
+    }
+}
+
+/// 每个窗口自己的画布：贴图 / 视图缓存 + 该窗口的渲染线程。
+///
+/// 这是 EGUI `Pane` 里 `canvas` + `worker` 两个字段的对应物。两者**必须**按窗口隔离：
+/// - `CanvasState` 只有一份贴图。共用时两个窗口每帧各自 `canvas::show` 一次，同一张贴图在
+///   两份文档之间来回改 → 画布疯狂闪烁；
+/// - [`Worker::poll`] 一次取走「最新的一张」并**丢弃其余**。共用时窗口 A 会把窗口 B 的完成图
+///   吃掉，B 永远拿不到自己的图，只能无限重提 → 不仅是闪烁，还一直烧 CPU。
+struct CanvasPane {
+    canvas: CanvasState,
+    worker: Worker,
+}
+
+/// 画布视图：引擎会话 + 画布状态 + 交互状态。
+pub struct CanvasView {
+    app: CanvasApp,
+
+    worker: Worker,
+
+    /// 每个窗口的画布状态与渲染线程；当前换入窗口的那份在 `app.canvas` / `worker` 上。
+    canvases: std::collections::HashMap<u64, CanvasPane>,
+
+    /// 新建窗口时给它的 worker 用的唤醒器（与主窗口同一个）。
+    canvas_wake: Arc<dyn Fn() + Send + Sync>,
+
+    /// 键盘焦点（空格平移、Z 缩放工具要收键盘事件）。
+    focus: FocusHandle,
+
+    /// A21：F6 / Shift+F6 的区域键盘导航状态（焦点环 + 方向键移动选区）。
+    a11y: a11y::KeyboardNav,
+
+    /// A16：本视图之外的 OS 窗口（共享同一会话）。
+    windows: std::rc::Rc<std::cell::RefCell<windows::Windows>>,
+
+    /// 每个窗口的私有 UI 状态（`PaneState`）；`pane_wid` 是当前换入的那个窗口。
+    panes: std::collections::HashMap<u64, PaneState>,
+    pane_wid: u64,
+
+    /// 控制通道的请求队列（`--control <port>` 时由 [`control_server`] 往里塞）。
+    control_queue: control::Queue,
+
+    /// **当前换入窗口**的私有 UI 状态（首页/弹层/页签/面板宽度/指针…）。
+    pane: PaneState,
+}
+
+/// OS 窗口句柄 → 登记的窗口 id（还没登记的窗口当作主窗口 0）。
+fn window_id_of(windows: &windows::Windows, window: &Window) -> u64 {
+    windows.id_for(window.window_handle().window_id())
 }
 
 impl CanvasView {
@@ -704,23 +749,139 @@ impl CanvasView {
     /// root entity is mounted in several OS windows, so `session.active` set by the last window to
     /// render is not necessarily the one an input event belongs to. Call this at the start of any
     /// handler that reads `app.session` (and from render).
-    fn bind_window_document(&mut self, window: &mut Window) {
-        let wid = self.windows.list.iter().find(|w| w.window_id == window.window_handle().window_id()).map_or(0, |w| w.id);
+    /// 换入窗口 `wid` 的私有 UI 状态：整块 `PaneState` swap（等价 EGUI `exchange()`），
+    /// 而不是逐字段挑选——逐字段挑选正是「新增字段忘了搬」的根源。
+    /// 目标窗口第一次出现时沿用它上一次的壳层设置（面板宽度/页签），但清掉窗口私有的
+    /// 浮层与指针，避免新窗口一开就带着别的窗口的弹窗。
+    fn enter_pane(&mut self, wid: u64) {
+        if self.pane_wid == wid {
+            return;
+        }
+        let old = self.pane_wid;
+        let next = match self.panes.remove(&wid) {
+            Some(n) => n,
+            None => {
+                let mut p = self.pane.clone();
+                p.popup = None;
+                p.dialog = None;
+                p.tabs.home = false;
+                p.extra = None;
+                p.pointer = None;
+                // `clone()` 只复制了 `Rc` 指针：右栏的折叠 / 展开 / 过滤面板会和别的窗口
+                // 共享同一块内存，一处折叠处处折叠（用户 2026-11-16 实测）。
+                p.fields = p.fields.detached();
+                p
+            }
+        };
+        let prev = std::mem::replace(&mut self.pane, next);
+        self.panes.insert(old, prev);
+        // 画布状态与渲染线程同样按窗口整块换：只隔离 UI 字段不够（见 `CanvasPane`）。
+        let mut next_canvas = self
+            .canvases
+            .remove(&wid)
+            .unwrap_or_else(|| CanvasPane { canvas: CanvasState::default(), worker: Worker::new(self.canvas_wake.clone()) });
+        std::mem::swap(&mut self.app.canvas, &mut next_canvas.canvas);
+        std::mem::swap(&mut self.worker, &mut next_canvas.worker);
+        self.canvases.insert(old, next_canvas);
+        self.pane_wid = wid;
+    }
+
+    /// 只换入窗口 `wid` 的私有 UI 状态，不动 `session.active`。窗口级 Capture 监听用它：
+    /// 鼠标移动 / 抬起 / 滚轮一进入窗口，后续所有 handler 读到的 `self.popup` /
+    /// `self.left_w` / `self.pointer` 就都是**这个窗口**的那份，而不是最后渲染的那个窗口的。
+    pub(crate) fn enter_window(&mut self, window: &mut Window) {
+        let wid = window_id_of(&self.windows.borrow(), window);
         windows::set_current(wid);
-        self.windows.current = wid;
-        let want = if wid == 0 { self.windows.main_active } else { self.windows.entry(wid).and_then(|w| w.active) };
-        if let Some(uid) = want
+        self.windows.borrow_mut().current = wid;
+        self.enter_pane(wid);
+    }
+
+    /// `authoritative`：**事件**处理时为 true —— 事件来自哪个窗口，那个窗口的文档就必须成为
+    /// 全局 `session.active`，否则第二个窗口里点「加页」会加到第一个窗口的文档上
+    /// （用户 2026-11-16 实测）。渲染时为 false：只有聚焦窗口写，避免两个窗口每帧互相覆盖。
+    pub(crate) fn bind_window_document(&mut self, window: &mut Window, authoritative: bool) {
+        let doc_uids: Vec<u64> = self.app.session.docs.iter().map(|d| d.uid).collect();
+        let mut wins = self.windows.borrow_mut();
+        let wid = window_id_of(&wins, window);
+        windows::set_current(wid);
+        wins.current = wid;
+        let want = if wid == 0 { wins.main_active } else { wins.active_of(wid) };
+        // 事件来自哪个窗口，它就成为「聚焦窗口」——否则 `focused` 永远停在上次新建的那个。
+        if authoritative {
+            wins.focused = wid;
+        }
+        // ⛔ 每个窗口画的是**它自己**的活动文档：`session.active` 是全局共享的，另一个窗口
+        // 渲染时一定会把它改成那边自己的文档。渲染时不再「只在 active 不属于本窗口时才修正」
+        // ——那样本窗口点标签切到 B 后，别的窗口一渲染把 active 改成 C，本窗口下一次重绘
+        // （`cx.notify()` 会让所有窗口重绘）又按「C 不属于我」回落成自己的旧文档，
+        // 表现就是「拉开多个窗口后点标签切不过去」（用户 2026-11-16）。
+        // 正确做法：每帧都按**本窗口的记录**把 active 写回来，各窗口各自画各自的文档。
+        let cur = self.app.session.ds().ok().map(|d| d.uid);
+        let owned = |uid: u64| wins.of(uid) == wid && doc_uids.contains(&uid);
+        let show = want
+            .filter(|uid| owned(*uid))
+            .or_else(|| cur.filter(|uid| owned(*uid)))
+            .or_else(|| {
+                if wid == 0 {
+                    // 主窗口的文档 = 不属于任何额外窗口的那些（按 session 的打开顺序）。
+                    doc_uids.iter().copied().find(|uid| wins.of(*uid) == 0)
+                } else {
+                    wins.entry(wid).and_then(|w| w.docs.first().copied()).filter(|uid| doc_uids.contains(uid))
+                }
+            });
+        // 只能绑定**本窗口拥有**的文档：否则主窗口会把「已经被拖到别的窗口」的文档设成
+        // 全局 active，画布显示一份它没有标签的文档（用户 2026-11-16：切不过去）。
+        if let Some(uid) = show
             && let Some(i) = self.app.session.docs.iter().position(|d| d.uid == uid)
         {
             self.app.session.active = i;
         }
         if let Some(uid) = self.app.session.ds().ok().map(|d| d.uid) {
+            let owner = wins.of(uid);
             if wid == 0 {
-                self.windows.main_active = Some(uid);
-            } else if let Some(entry) = self.windows.entry_mut(wid) {
+                // 主窗口只记住自己拥有的文档，别把额外窗口的 uid 写进 `main_active`。
+                if owner == 0 {
+                    wins.main_active = Some(uid);
+                }
+            } else if owner == wid
+                && let Some(entry) = wins.entry_mut(wid)
+            {
                 entry.active = Some(uid);
             }
         }
+        drop(wins);
+        // 进入这个窗口的上下文：换入它自己的 UI 状态（首页 / 弹层 / 面板宽度 / 指针 …）。
+        self.enter_pane(wid);
+    }
+
+    /// 标签点击：按 **uid** 当场切文档。
+    ///
+    /// 不走命令队列 —— 队列里带的 `index` 是渲染那一刻的下标，多窗口增删文档后会漂移，
+    /// 守卫据此判定「这是别的窗口的文档」并丢弃，表现就是「点标签切不过去」
+    /// （用户 2026-11-16）。uid 不漂移，且这里仍校验归属，不会切到别的窗口的文档。
+    pub(crate) fn select_doc(&mut self, uid: u64, cx: &mut Context<Self>) {
+        let Some(i) = self.app.session.docs.iter().position(|d| d.uid == uid) else { return };
+        let res = self.app.session.execute("doc.switch", &serde_json::json!({ "index": i }));
+        // 引擎命令可能因为正在编辑文字等原因拒绝执行；此时直接把活动文档切过去，
+        // 保证点击一定生效（`canvas::show` 只看 `session.active` / `ds()`）。
+        if res.is_err() {
+            self.app.session.active = i;
+        }
+        // ⛔ 必须把新文档记到**本窗口**自己的活动项上：`session.active` 是全局共享的，
+        // 别的窗口下一次渲染就会把它改成那边自己的文档；而每次渲染都会按窗口记录把
+        // active 写回来（见 `bind_window_document`）。不记这一步，点击那一刻切过去了，
+        // 下一帧又被本窗口的旧记录覆盖回原文档 —— 「点标签切不过去」（用户 2026-11-16）。
+        let wid = crate::windows::current();
+        {
+            let mut wins = self.windows.borrow_mut();
+            if wid == 0 {
+                wins.main_active = Some(uid);
+            } else if let Some(entry) = wins.entry_mut(wid) {
+                entry.active = Some(uid);
+            }
+        }
+        self.close_home();
+        cx.notify();
     }
 
     pub fn new(cx: &mut Context<Self>) -> Self {
@@ -801,18 +962,8 @@ impl CanvasView {
 
         let extra_state = panels::extra::ExtraState::new(cx, &fields.queue());
 
-        let mut view = Self {
-            app,
-
+        let pane = PaneState {
             tabs: tabs_view::TabState::default(),
-
-            worker: Worker::new(wake),
-
-            focus: cx.focus_handle(),
-
-            a11y: a11y::KeyboardNav::default(),
-
-            windows: windows::Windows::default(),
 
             dragging: false,
 
@@ -833,8 +984,6 @@ impl CanvasView {
             last_down: None,
 
             primary_down: false,
-
-            control_queue: Arc::new(std::sync::Mutex::new(Vec::new())),
 
             left_w: panels::DEFAULT_LEFT_PANEL,
 
@@ -876,35 +1025,12 @@ impl CanvasView {
 
             board_panel: false,
 
-            pages_open: std::rc::Rc::new(std::cell::RefCell::new(true)),
-
-            page_search: std::rc::Rc::new(std::cell::RefCell::new(false)),
-
-            page_filter: std::rc::Rc::new(std::cell::RefCell::new(String::new())),
-
-            file_name_field: widgets::TextField::build(cx, 180.0, |tf, _| {
-                tf.set_placeholder(tr("Untitled"));
-            }),
-
-            file_rename: std::rc::Rc::new(std::cell::RefCell::new(None)),
-
-            page_search_field: widgets::search_field(cx, 200.0, "", "Search pages"),
-
-            left_collapsed: false,
-
-            toast_msg: None,
-
-            file_name_seen: None,
-
             tpl_pics: std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new())),
 
             tool_last: {
                 // 每个组默认显示它的第一个工具（egui 的 `remembered(...).unwrap_or(first)`）。
-
                 // Keyed by group key — egui stores one `tb_last` per key, so a board's nine groups
-
                 // and a design file's six groups each remember their own tool.
-
                 let mut last: Vec<(&'static str, figcraft_engine::ToolId)> = Vec::new();
 
                 for g in toolbar::GROUPS.iter().chain(toolbar::BOARD_GROUPS) {
@@ -942,6 +1068,30 @@ impl CanvasView {
 
             palette_field,
 
+            extra: None,
+
+            extra_state,
+
+            left_tab: 0,
+
+            pages_open: std::rc::Rc::new(std::cell::RefCell::new(true)),
+
+            page_search: std::rc::Rc::new(std::cell::RefCell::new(false)),
+
+            page_filter: std::rc::Rc::new(std::cell::RefCell::new(String::new())),
+
+            file_name_field: widgets::TextField::build(cx, 180.0, |tf, _| {
+                tf.set_placeholder(tr("Untitled"));
+            }),
+
+            file_rename: std::rc::Rc::new(std::cell::RefCell::new(None)),
+
+            page_search_field: widgets::search_field(cx, 200.0, "", "Search pages"),
+
+            left_collapsed: false,
+
+            toast_msg: None,
+
             inline_rename: None,
 
             inline_rename_field,
@@ -950,11 +1100,7 @@ impl CanvasView {
 
             inline_rename_pending: std::rc::Rc::new(std::cell::RefCell::new(None)),
 
-            extra: None,
-
-            extra_state,
-
-            left_tab: 0,
+            file_name_seen: None,
 
             board_shape_open: std::rc::Rc::new(std::cell::RefCell::new(false)),
 
@@ -971,6 +1117,28 @@ impl CanvasView {
             drag_layer: drag_manager::WindowDragLayer::new(),
 
             drag_just_ended: false,
+        };
+
+        let mut view = Self {
+            app,
+
+            worker: Worker::new(wake.clone()),
+
+            canvases: std::collections::HashMap::new(),
+
+            canvas_wake: wake,
+
+            focus: cx.focus_handle(),
+
+            a11y: a11y::KeyboardNav::default(),
+
+            windows: std::rc::Rc::new(std::cell::RefCell::new(windows::Windows::default())),
+            panes: std::collections::HashMap::new(),
+            pane_wid: 0,
+
+            control_queue: Arc::new(std::sync::Mutex::new(Vec::new())),
+
+            pane,
         };
 
         // 启动即 Motion 模式（egui `set_open(true)`）：右栏加宽到 inspector 的 413pt，
@@ -1074,7 +1242,9 @@ impl CanvasView {
                     me.update(cx, |v, cx| {
                         v.palette_query = q;
 
-                        v.palette_sel = Some(0);
+                        // 高亮落到**第一条可执行行**：分组标题是 disabled，不能一开就停在它上面。
+                        let items = palette::items(&palette::sections(&v.palette_query, v.palette_tab, &v.app.session));
+                        v.palette_sel = items.iter().position(|it| !it.disabled);
 
                         cx.notify();
                     });
@@ -1089,7 +1259,8 @@ impl CanvasView {
                 me.update(cx, |v, cx| {
                     let items = palette::items(&palette::sections(&v.palette_query, v.palette_tab, &v.app.session));
 
-                    if let Some(item) = v.palette_sel.and_then(|i| items.get(i)) {
+                    // 只有可执行行能回车触发（分组标题 `disabled`，key 为空）。
+                    if let Some(item) = v.palette_sel.and_then(|i| items.get(i)).filter(|it| !it.disabled) {
                         let key = item.key.to_string();
 
                         v.pick_palette(&key, cx);
@@ -1475,7 +1646,9 @@ impl CanvasView {
                 // A16：File ▸ New window / Open in new window / 拖出成窗口都走 window.new。
                 "window.new" | "window.focus" => {
                     let root = cx.entity();
-                    if let Err(e) = windows::requests(&mut self.windows, cx, root, &r.kind, &r.data) {
+                    // 这里在 `render` 的 `&mut self` 里：把 `windows` 与 `app.session` 两个字段
+                    // 分别借出去，绝不能再 `root.read/update`（会 double-lease panic）。
+                    if let Err(e) = windows::requests(&self.windows, cx, root, &mut self.app.session, &r.kind, &r.data) {
                         self.toast(e, cx);
                     }
                     cx.notify();
@@ -1736,7 +1909,7 @@ impl CanvasView {
                     "auto_save": p.auto_save, "start_on_home": p.start_on_home,
                     "user_name": p.user_name, "publish_server": p.publish_server,
                     "nudge_small": p.nudge_small, "nudge_big": p.nudge_big,
-                    "theme": p.theme, "language": p.language,
+                    "theme": p.theme, "language": p.language, "accent": p.accent,
                 }}))
             }
             dialogs::Kind::Plugins => {
@@ -2072,6 +2245,17 @@ impl CanvasView {
             let ids = self.app.session.ds().ok().map(|d| d.selection.clone()).unwrap_or_default();
 
             for c in cmds {
+                // ⛔ 只能操作**本窗口拥有**的文档：否则第二个窗口能切到 / 关掉第一个窗口的文件
+                // （用户 2026-11-16 实测）。`index` 是 `session.docs` 的下标。
+                if matches!(c.id, "doc.switch" | "file.close")
+                    && let Some(i) = c.params.as_ref().and_then(|p| p.get("index")).and_then(|v| v.as_u64())
+                {
+                    // 只有带 `index` 的才校验；按 id 关闭等其它形式保持原样。
+                    let owner = self.app.session.docs.get(i as usize).map(|d| self.windows.borrow().of(d.uid));
+                    if owner != Some(crate::windows::current()) {
+                        continue;
+                    }
+                }
                 // egui ran `app.run(cmd, {"ids": ids})`; extra command params (e.g.
 
                 // `effect.add {type:"dropShadow"}`) are merged into that object here.
@@ -2089,6 +2273,23 @@ impl CanvasView {
                 match self.app.session.execute(c.id, &params) {
                     Ok(result) => {
                         self.capture_import_report(c.id, &params, &result, cx);
+
+                        // 新建 / 打开出来的文档属于**发起命令的那个窗口**：否则点第二个窗口的
+                        // 「+」会在第一个窗口里多一个标签页（用户 2026-11-16 实测）。
+                        if matches!(c.id, "file.new" | "file.open")
+                            && let Ok(ds) = self.app.session.ds()
+                        {
+                            let uid = ds.uid;
+                            let wid = crate::windows::current();
+                            if wid != 0
+                                && let Some(e) = self.windows.borrow_mut().entry_mut(wid)
+                            {
+                                if !e.docs.contains(&uid) {
+                                    e.docs.push(uid);
+                                }
+                                e.active = Some(uid);
+                            }
+                        }
 
                         // A23：导出命令没给路径时引擎只回 base64，UI 负责弹保存对话框落盘。
                         self.deliver_download(c.id, &result, cx);
@@ -2116,7 +2317,9 @@ impl CanvasView {
         // 样式命令回写文档后，刷新打开中的同款样式编辑器正文（被删则关闭），否则点了按钮界面不变。
         if !style_targets.is_empty() {
             let mut deleted = false;
-            if let Some(Popup::Window(w)) = &mut self.popup {
+            // `popup` 走 Deref 会把 self 整体借走；用 pane 路径才能与 `self.app` 共存。
+
+            if let Some(Popup::Window(w)) = &mut self.pane.popup {
                 if w.kind() == popovers::WindowKind::StyleEditor
                     && w.style_id().as_deref().is_some_and(|id| style_targets.iter().any(|t| t == id))
                 {
@@ -2183,6 +2386,10 @@ impl CanvasView {
         if let Some(dims) = &data.dimensions {
             self.fields.set_dim_limits(cx, dims.min_w, dims.max_w, dims.min_h, dims.max_h);
         }
+
+        // Appearance 展开后的四个独立圆角（egui `right.rs` 的 `topLeftRadius` …）。
+
+        self.fields.set_corner_values(cx, data.corner_radii);
 
         // 排版数值字段（字号 / 行高 / 字距 / 段落间距）：仅全选文本时回填。
 
@@ -3518,7 +3725,9 @@ impl CanvasView {
 
         let mut wait = None;
 
-        if let Some(Popup::MainMenu(m)) = &mut self.popup {
+        // `checked` 已借 `self.app`；`popup` 用 pane 路径才不会整体借走 self。
+
+        if let Some(Popup::MainMenu(m)) = &mut self.pane.popup {
             wait = m.hover(level, row, pointer, |prefix| main_menu::build_level(prefix, &checked));
         }
 
@@ -3534,7 +3743,9 @@ impl CanvasView {
 
         let mut wait = None;
 
-        if let Some(Popup::MainMenu(m)) = &mut self.popup {
+        // 同上：`checked` 借 `self.app`，`popup` 走 pane 路径。
+
+        if let Some(Popup::MainMenu(m)) = &mut self.pane.popup {
             wait = m.settle(|prefix| main_menu::build_level(prefix, &checked));
         }
 
@@ -3870,15 +4081,18 @@ impl CanvasView {
     /// `stop_propagation()`——表现就是「页面原本的拖动一塌糊涂」。所以这里必须看 `variables_open`。
 
     fn active_window_mut(&mut self) -> Option<&mut popovers::WindowState> {
-        if let Some(Popup::Window(w)) = &mut self.popup {
+        // 返回值直接借出 popup：走 pane 路径，后面读 `variables_open` / `variables_editor`
+        // 才是不同字段，不会撞上这次整块可变借用。
+
+        if let Some(Popup::Window(w)) = &mut self.pane.popup {
             return Some(w);
         }
 
-        if !self.variables_open {
+        if !self.pane.variables_open {
             return None;
         }
 
-        self.variables_editor.as_mut()
+        self.pane.variables_editor.as_mut()
     }
 
     fn active_window(&self) -> Option<&popovers::WindowState> {
@@ -4153,11 +4367,15 @@ impl CanvasView {
             }
 
             if self.app.selection_spacing.is_dragging() {
+                // `space` 先取 Copy 值：Deref 读字段会借整个 self。
+
+                let space = self.space;
+
                 let _ = canvas::selection_spacing::input(
                     &mut self.app,
                     Some(pos),
                     true,
-                    self.space,
+                    space,
                     false,
                     false,
                     true,
@@ -4255,7 +4473,11 @@ impl CanvasView {
         }
 
         if self.app.motion_gizmo.drag.is_some() {
-            let _ = canvas::motion_overlay::input(&mut self.app, pos, false, self.primary_down, false, e.modifiers.control);
+            // `primary_down` 先取 Copy 值，避免与 `&mut self.app` 冲突。
+
+            let primary_down = self.primary_down;
+
+            let _ = canvas::motion_overlay::input(&mut self.app, pos, false, primary_down, false, e.modifiers.control);
 
             cx.notify();
 
@@ -4271,13 +4493,19 @@ impl CanvasView {
         }
 
         if self.app.selection_spacing.is_dragging() {
+            // 同上：两个字段都先取 Copy 值。
+
+            let space = self.space;
+
+            let primary_down = self.primary_down;
+
             let _ = canvas::selection_spacing::input(
                 &mut self.app,
                 Some(pos),
                 true,
-                self.space,
+                space,
                 false,
-                self.primary_down,
+                primary_down,
                 false,
                 e.modifiers.platform || e.modifiers.control,
                 e.modifiers.alt,
@@ -4290,7 +4518,11 @@ impl CanvasView {
         }
 
         if self.app.handles.drag.is_some() {
-            let _ = canvas::handles::input(&mut self.app, pos, false, self.primary_down, false, e.modifiers.shift);
+            // `primary_down` 先取 Copy 值。
+
+            let primary_down = self.primary_down;
+
+            let _ = canvas::handles::input(&mut self.app, pos, false, primary_down, false, e.modifiers.shift);
 
             cx.notify();
 
@@ -4465,6 +4697,67 @@ impl CanvasView {
 
         self.fields.set_stroke_color(color, cx);
     }
+
+    /// 窗口级 Capture 监听层：`canvas` 的 paint 阶段每帧注册一次，早于**所有**元素级
+    /// 点击 / 移动 handler 运行（`Window::dispatch_mouse_event` 先跑 window-level Capture，
+    /// 再倒序跑 Bubble）。按下时绑定本窗口的文档，移动 / 抬起 / 滚轮至少换入本窗口的
+    /// 私有状态——两个窗口共用一份 `CanvasView` 时，事件 handler 读到的才是**事件所属
+    /// 窗口**的浮层 / 面板 / 指针，而不是最后渲染那个窗口的。
+    /// 1×1 绝对定位：不参与布局、不接管命中区，但 paint 闭包照常每帧运行。
+    fn window_bind_layer(&self, cx: &mut Context<Self>) -> AnyElement {
+        let me = cx.entity().downgrade();
+        let down = me.clone();
+        let moved = me.clone();
+        let up = me.clone();
+        let scroll = me;
+        gpui::canvas(
+            |_, _, _| {},
+            move |_, _, window, _cx| {
+                let me = down.clone();
+                window.on_mouse_event(move |_e: &MouseDownEvent, phase, window, cx| {
+                    if !phase.capture() {
+                        return;
+                    }
+                    if let Some(me) = me.upgrade() {
+                        me.update(cx, |this, _cx| this.bind_window_document(window, true));
+                    }
+                });
+                let me = moved.clone();
+                window.on_mouse_event(move |_e: &MouseMoveEvent, phase, window, cx| {
+                    if !phase.capture() {
+                        return;
+                    }
+                    if let Some(me) = me.upgrade() {
+                        me.update(cx, |this, _cx| this.enter_window(window));
+                    }
+                });
+                let me = up.clone();
+                window.on_mouse_event(move |_e: &MouseUpEvent, phase, window, cx| {
+                    if !phase.capture() {
+                        return;
+                    }
+                    if let Some(me) = me.upgrade() {
+                        me.update(cx, |this, _cx| this.enter_window(window));
+                    }
+                });
+                let me = scroll.clone();
+                window.on_mouse_event(move |_e: &ScrollWheelEvent, phase, window, cx| {
+                    if !phase.capture() {
+                        return;
+                    }
+                    if let Some(me) = me.upgrade() {
+                        me.update(cx, |this, _cx| this.enter_window(window));
+                    }
+                });
+            },
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .w(px(1.0))
+        .h(px(1.0))
+        .into_any_element()
+    }
 }
 
 impl Render for CanvasView {
@@ -4474,8 +4767,15 @@ impl Render for CanvasView {
         self.app.session.live_poll();
         // A21：上一帧的控件登记表成为这一帧的读屏树与 Tab 列表。
         a11y::begin_frame(cx);
+        // A16：窗口关掉后它的私有状态不该永久留在 `panes` 里（反复拖出 / 塞回会越积越多，
+        // 窗口 id 也不再复用）。`0` 是主窗口，恒存在。
+        {
+            let wins = self.windows.borrow();
+            self.panes.retain(|wid, _| wins.exists(*wid));
+            self.canvases.retain(|wid, _| wins.exists(*wid));
+        }
         // A16：绑定本窗口的文档（含 active 回写，见 bind_window_document）。
-        self.bind_window_document(window);
+        self.bind_window_document(window, false);
         let a11y_focused = window.focused(cx);
         let a11y_scale = window.scale_factor();
         for (_, command) in a11y::commit_frame("Monet", a11y_focused.as_ref(), a11y_scale, window, cx) {
@@ -4665,14 +4965,6 @@ impl Render for CanvasView {
             }
         }
 
-        let current_kind = match &self.popup {
-            Some(Popup::Window(w)) => Some(w.kind()),
-
-            _ => self.variables_open.then_some(popovers::WindowKind::VariablesTable),
-        };
-
-        popup_reqs.sync_open(current_kind);
-
         // 右栏按钮把「要打开的窗口」放进共享槽，这里每帧取走。按钮因此不需要持有根视图
 
         // Entity，也就不会被 `let Some(root) = … else { return }` 静默吞掉。
@@ -4686,6 +4978,11 @@ impl Render for CanvasView {
 
             self.open_window(w, cx);
         }
+
+        // ⚠️ 必须在**消费完窗口请求之后**判断：写在前面的话，点开的那一帧 `self.popup`
+        // 还是旧的（`None`），按钮要等下一次重绘（鼠标移开触发 hover）才亮。
+        // 触发标识由 `toggle` 打开时写一次，这里只负责「窗口真的没了就清空」。
+        popup_reqs.sync_open(matches!(&self.popup, Some(Popup::Window(_))));
 
         let vp = window.viewport_size();
 
@@ -5084,7 +5381,7 @@ impl Render for CanvasView {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this: &mut CanvasView, e: &MouseDownEvent, window, cx| {
-                    this.bind_window_document(window);
+                    this.bind_window_document(window, true);
                     // 点画布 = 整窗失焦：先把右栏所有仍在编辑的草稿提交，再把焦点给画布。
 
                     // 只靠 TextEdit::render() 轮询 focus 会漏：GPUI 对未标脏的嵌套 Entity
@@ -5142,13 +5439,17 @@ impl Render for CanvasView {
 
                     // 多选间距/重排手柄：原文 `selection_spacing::input` 在 `handles::input` 之前。
 
+                    // `this.space` 走 Deref 会借整个 self，与 `&mut this.app` 冲突：先取 Copy 值。
+
+                    let space = this.space;
+
                     if !this.space
                         && !this.zoom_key
                         && canvas::selection_spacing::input(
                             &mut this.app,
                             Some(pos),
                             true,
-                            this.space,
+                            space,
                             true,
                             true,
                             false,
@@ -5208,7 +5509,7 @@ impl Render for CanvasView {
             )
             // 移动：拖拽进度统一由共用窗口级路由接管；这里只做 hover 命中。
             .on_mouse_move(cx.listener(|this: &mut CanvasView, e: &MouseMoveEvent, window, cx| {
-                this.bind_window_document(window);
+                this.bind_window_document(window, true);
                 // 任何共用拖拽进行中，元素级 move 一律不重复推进：它只在指针悬停画布时
                 // 触发，指针移到别的面板就停发（用户 2026-11-13 指出的问题）。
                 if this.any_window_drag_active() {
@@ -5278,14 +5579,20 @@ impl Render for CanvasView {
                     return;
                 }
 
+                // 同上：`space` / `primary_down` 先取 Copy 值，避免与 `&mut this.app` 冲突。
+
+                let space = this.space;
+
+                let primary_down = this.primary_down;
+
                 if !this.dragging
                     && canvas::selection_spacing::input(
                         &mut this.app,
                         Some(pos),
                         true,
-                        this.space,
+                        space,
                         false,
-                        this.primary_down,
+                        primary_down,
                         false,
                         e.modifiers.platform || e.modifiers.control,
                         e.modifiers.alt,
@@ -5297,13 +5604,13 @@ impl Render for CanvasView {
                     return;
                 }
 
-                if canvas::motion_overlay::input(&mut this.app, pos, false, this.primary_down, false, e.modifiers.control) {
+                if canvas::motion_overlay::input(&mut this.app, pos, false, primary_down, false, e.modifiers.control) {
                     cx.notify();
 
                     return;
                 }
 
-                if canvas::handles::input(&mut this.app, pos, false, this.primary_down, false, e.modifiers.shift) {
+                if canvas::handles::input(&mut this.app, pos, false, primary_down, false, e.modifiers.shift) {
                     cx.notify();
 
                     return;
@@ -5357,11 +5664,15 @@ impl Render for CanvasView {
                     }
 
                     if this.app.selection_spacing.is_dragging() {
+                        // `space` 先取 Copy 值：Deref 读字段会借整个 self。
+
+                        let space = this.space;
+
                         let _ = canvas::selection_spacing::input(
                             &mut this.app,
                             Some(pos),
                             true,
-                            this.space,
+                            space,
                             false,
                             false,
                             true,
@@ -5486,7 +5797,7 @@ impl Render for CanvasView {
             )
             // 键盘：空格 = 平移工具，Z = 缩放工具（Alt 缩小）。
             .on_key_down(cx.listener(|this: &mut CanvasView, e: &KeyDownEvent, window, cx| {
-                this.bind_window_document(window);
+                this.bind_window_document(window, true);
                 this.mods = e.keystroke.modifiers;
 
                 // R4/R5: Escape cancels an inline rename (egui `Rename` keeps the old name);
@@ -5576,7 +5887,9 @@ impl Render for CanvasView {
                                 }
                             }
 
-                            let _ = crate::motion::apply(&mut this.app, &mut this.motion_ui, vec![crate::motion::Act::ClearSelection]);
+                            // `self.app` 与 `self.pane` 是不同字段：第二个可变借用走 pane 路径。
+
+                            let _ = crate::motion::apply(&mut this.app, &mut this.pane.motion_ui, vec![crate::motion::Act::ClearSelection]);
 
                             cx.stop_propagation();
 
@@ -5613,14 +5926,31 @@ impl Render for CanvasView {
                 // field's commit) runs it.
                 if matches!(&this.popup, Some(Popup::Palette { .. })) {
                     let key = e.keystroke.key.as_str();
-                    if key == "up" || key == "down" {
-                        let count = palette::items(&palette::sections(&this.palette_query, this.palette_tab, &this.app.session)).len();
-                        if count > 0 {
-                            let cur = this.palette_sel.unwrap_or(0);
-                            this.palette_sel = Some(if key == "up" { cur.saturating_sub(1) } else { (cur + 1).min(count - 1) });
+                    if key == "up" || key == "down" || key == "escape" {
+                        let items = palette::items(&palette::sections(&this.palette_query, this.palette_tab, &this.app.session));
+                        // gpui-kit `Command` 的键盘语义：↑/↓ **循环并跳过禁用行**（分组标题是
+                        // disabled 的，不能停上去）；Esc 先清空非空查询，空了才关闭。
+                        let pickable: Vec<usize> = items.iter().enumerate().filter(|(_, it)| !it.disabled).map(|(i, _)| i).collect();
+                        if key == "escape" && !this.palette_query.is_empty() {
+                            this.palette_query.clear();
+                            this.palette_sel = pickable.first().copied();
                             cx.notify();
+                            return;
                         }
-                        return;
+                        if (key == "up" || key == "down") && !pickable.is_empty() {
+                            let cur = this.palette_sel.unwrap_or(pickable[0]);
+                            let pos = pickable.iter().position(|i| *i == cur).unwrap_or(0);
+                            let next = if key == "up" {
+                                if pos == 0 { pickable.len() - 1 } else { pos - 1 }
+                            } else if pos + 1 >= pickable.len() {
+                                0
+                            } else {
+                                pos + 1
+                            };
+                            this.palette_sel = Some(pickable[next]);
+                            cx.notify();
+                            return;
+                        }
                     }
                 }
 
@@ -5970,8 +6300,10 @@ impl Render for CanvasView {
 
                     let data = cv.panel_data();
 
-                    if let Some(win) = &mut cv.variables_editor {
-                        win.set_variables_full(cv.variables_full);
+                    // 两个字段都在 `cv.pane` 里：走直接字段路径才能同时可变借用。
+
+                    if let Some(win) = &mut cv.pane.variables_editor {
+                        win.set_variables_full(cv.pane.variables_full);
 
                         win.set_variables_data(data.variables);
                     }
@@ -6173,7 +6505,10 @@ impl Render for CanvasView {
         // ── 系统级窗口标题区域（kit `TitleBar::new().child(TabBar)`）────────────────────
         // 标签条塞在标题栏里，不是画布里的一条；标题栏是 Root 的第一个 child，
         // 客户区（Dock）从 y = TITLE_H 起，几何由 dock::DockLayout 统一推导。
-        let tab_docs = tabs_view::read_docs(&self.app.session);
+        let tab_docs = {
+            let wins = self.windows.borrow();
+            tabs_view::read_docs(&self.app.session, &wins, wins.current)
+        };
         let tabs_active = self.app.session.active;
         let tabs_dark = self.app.theme.dark;
         let tabs_reduce_motion = self.app.session.prefs.reduce_motion;
@@ -6269,7 +6604,9 @@ impl Render for CanvasView {
 
         let tpl_pics = self.tpl_pics.clone();
 
-        if let Some(p) = &mut self.popup {
+        // `p` 借出的是 `self.pane.popup`：下面读 `self.app` / `self.pane` 的其它字段才不冲突。
+
+        if let Some(p) = &mut self.pane.popup {
             let me = cx.entity();
 
             let dismiss = std::rc::Rc::new({
@@ -6334,7 +6671,7 @@ impl Render for CanvasView {
 
             let canvas_h = self.app.canvas.rect.height();
 
-            let bar_w = toolbar::width(toolbar::groups(board), board, self.draw_mode);
+            let bar_w = toolbar::width(toolbar::groups(board), board, self.pane.draw_mode);
 
             // 画布原点 y = 标题栏高度；弹层挂在 root 上用窗口坐标，必须加回这个原点，
             // 否则 flyout / palette 整体上移 40pt。
@@ -6342,7 +6679,7 @@ impl Render for CanvasView {
 
             // The Design panel's left edge: the one x every detached window opens against.
 
-            let right_edge = px(vw - self.right_w);
+            let right_edge = px(vw - self.pane.right_w);
 
             // `ui-egui/src/popover.rs` Hold rule: the panel that opened the popover is held out,
 
@@ -6572,7 +6909,7 @@ impl Render for CanvasView {
 
                     let pill_left = canvas_left + (canvas_w - bar_w) / 2.0;
 
-                    let caret = toolbar::caret_left(toolbar::groups(board), *key, board, self.draw_mode).unwrap_or(0.0);
+                    let caret = toolbar::caret_left(toolbar::groups(board), *key, board, self.pane.draw_mode).unwrap_or(0.0);
 
                     let left = pill_left + caret;
 
@@ -6768,7 +7105,10 @@ impl Render for CanvasView {
                         vh,
                     );
 
-                    let list = div().id("palette-list").flex_1().min_h(px(0.0)).w_full().mx(widgets::pt(8.0)).overflow_y_scroll().children(if palette_count == 0 {
+                    // 行内已经有 8pt 左内缩，卡片自身再 8pt：文字左边 = 卡片边 + 16（egui
+                    // `Surface::palette` 的 8 内边距 + 行 `rect.left() + 8`）。列表**不再**额外
+                    // `mx(8)`，否则文字被推到 +24，右侧也少 8（用户 2026-11-16 指出间距不对）。
+                    let list = div().id("palette-list").flex_1().min_h(px(0.0)).w_full().overflow_y_scroll().children(if palette_count == 0 {
                         vec![
                             div()
                                 .p(widgets::pt(8.0))
@@ -6867,7 +7207,7 @@ impl Render for CanvasView {
         let variables_full = self.variables_open && self.variables_full;
 
         let variables_el: Vec<AnyElement> = if self.variables_open {
-            if let Some(w) = &mut self.variables_editor {
+            if let Some(w) = &mut self.pane.variables_editor {
                 // 每帧把最新文档快照写回编辑器。命令（新建集合 / 加 mode / 改名 / 删除 …）只改
 
                 // 文档，不刷新快照的话面板永远停在「打开那一刻」——按钮点了、命令也执行了，
@@ -6906,7 +7246,7 @@ impl Render for CanvasView {
 
                 let vp2 = window.viewport_size();
 
-                let edge = px(f32::from(vp2.width) - self.right_w);
+                let edge = px(f32::from(vp2.width) - self.pane.right_w);
 
                 w.render(cx, vp2, dismiss, drag_start, drag_move, edge)
             } else {
@@ -7098,6 +7438,9 @@ impl Render for CanvasView {
 
         // 窗口级拖拽层：paint 阶段注册窗口级监听，所有拖拽统一由它路由。
         let drag_overlay = self.drag_layer.layer(cx.entity().downgrade());
+
+        // 窗口级 Capture 监听层：早于任何元素 handler 换入**事件所属窗口**的私有状态。
+        let bind_overlay = self.window_bind_layer(cx);
         div()
             .size_full()
             .flex()
@@ -7120,7 +7463,7 @@ impl Render for CanvasView {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this: &mut CanvasView, _e: &MouseDownEvent, window, cx| {
-                    this.bind_window_document(window);
+                    this.bind_window_document(window, true);
                     // A21：鼠标一按就回到指针模式（焦点环消失，上游同义）。
                     if this.a11y.region.take().is_some() {
                         cx.notify();
@@ -7129,13 +7472,18 @@ impl Render for CanvasView {
                     this.commit_edits(window, cx);
                 }),
             )
+            // Capture 阶段的按键：早于焦点链上的每个控件 handler，先把本窗口换入并绑定
+            // 本窗口的文档（Bubble 里的根节点 handler 太晚，输入框已经按别的窗口的文档处理过）。
+            .capture_key_down(cx.listener(|this: &mut CanvasView, _e: &KeyDownEvent, window, _cx| {
+                this.bind_window_document(window, true);
+            }))
             // Local styles 列表的键盘（↑/↓ / Enter / Delete / Ctrl+C / Ctrl+V / Ctrl+D）。
             // 必须挂在**根节点**上：GPUI 的按键沿焦点链派发（root → 焦点节点），而画布那个
             // `on_key_down` 只覆盖画布子树——焦点在右栏的列表行时按键到不了它，列表键盘
             // 就成了死代码。这里只在列表真的拿到焦点时消费（`local_style_key` 自己判断），
             // 其它情况原样放行给内层控件与画布。
             .on_key_down(cx.listener(|this: &mut CanvasView, e: &KeyDownEvent, window, cx| {
-                this.bind_window_document(window);
+                this.bind_window_document(window, true);
                 let accel = e.keystroke.modifiers.platform || e.keystroke.modifiers.control;
 
                 // 撤销 / 重做必须在根节点兜底：GPUI 的按键沿**焦点链**派发，而整套命令快捷键
@@ -7262,13 +7610,15 @@ impl Render for CanvasView {
             )
             // 时间轴 hover 标记：与拖拽无关，但仍需每次 move 更新。
             .on_mouse_move(cx.listener(|this: &mut CanvasView, e: &MouseMoveEvent, window, _cx| {
-                this.bind_window_document(window);
+                this.bind_window_document(window, true);
                 let vh = f32::from(window.viewport_size().height);
                 crate::motion::timeline::set_pointer_in_bar(this.motion && f32::from(e.position.y) >= vh - this.motion_bar_h());
             }))
             // 通用窗口级拖拽层：paint 阶段每帧注册 move / up / down 监听并转给
             // `WindowDragTarget`。所有拖拽统一从这里按窗口坐标推进，不再依赖任何
             // 元素级 `on_mouse_move`（指针移出最初的元素就停发）。
+            // Capture 层在它之前：两者都是 paint 阶段的窗口级监听，Capture 一定先跑。
+            .child(bind_overlay)
             .child(drag_overlay)
     }
 }
@@ -7551,11 +7901,15 @@ impl drag_manager::WindowDragTarget for CanvasView {
         }
 
         if self.app.selection_spacing.is_dragging() {
+            // `space` 先取 Copy 值：Deref 读字段会借整个 self。
+
+            let space = self.space;
+
             let _ = canvas::selection_spacing::input(
                 &mut self.app,
                 Some(pos),
                 true,
-                self.space,
+                space,
                 false,
                 false,
                 true,

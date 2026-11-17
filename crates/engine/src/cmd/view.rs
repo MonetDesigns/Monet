@@ -372,6 +372,17 @@ pub fn specs() -> Vec<CommandSpec> {
                 ok()
             }
         ),
+        spec!(
+            "window.merge",
+            "Move file back to the main window",
+            "{index}  open file `index` goes back to the main window (the extra window closes if it becomes empty)",
+            false,
+            |s, p| {
+                let index = req_index("window.merge", p, "index")?;
+                s.request_ui("window.merge", json!({"index": index}));
+                ok()
+            }
+        ),
         spec!("window.focus", "Bring window to front", "{id}  a window id (control channel `window.list`)", false, |s, p| {
             let id = req_index("window.focus", p, "id")?;
             s.request_ui("window.focus", json!({"id": id}));
@@ -503,6 +514,20 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
                 s.prefs.language = lang.to_string();
                 Ok(json!({"language": s.prefs.language}))
+            }
+        ),
+        spec!(
+            "pref.accent",
+            "Theme colour",
+            "{accent: blue|green|yellow|pink}",
+            false,
+            |s, p| {
+                let accent = req_string("pref.accent", p, "accent")?.trim().to_ascii_lowercase();
+                if !matches!(accent.as_str(), "blue" | "green" | "yellow" | "pink") {
+                    return Err(bad("pref.accent", format!("`{accent}` is not an accent colour")));
+                }
+                s.prefs.accent = accent;
+                Ok(json!({"accent": s.prefs.accent}))
             }
         ),
         spec!("app.preferences", "Preferences", "{}", false, |s, _| ui(s, "dialog.preferences")),

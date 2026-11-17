@@ -1298,6 +1298,11 @@ pub struct PanelData {
     pub corner_smoothing_supported: bool,
     /// 选中节点里最大的圆角（`0` = 都没有圆角 → 平滑圆角入口不显示）。
     pub corner_radius: f64,
+    /// 四个独立圆角（`topLeft` / `topRight` / `bottomRight` / `bottomLeft`，与 `Corners::radii`
+    /// 同序）；`None` = 多选不一致。只在展开「Individual corners」后显示。
+    pub corner_radii: Option<[f64; 4]>,
+    /// 选中节点是否都支持独立四边圆角（`NodeKind::has_independent_corners`，egui 的 `indep_ok`）。
+    pub corners_independent: bool,
     /// 画布辅助元素的显示 / 隐藏开关（右栏顶部 Zoom / Show 菜单）。
     pub view: ViewData,
     /// Prototype 标签的全部数据（flows / settings / interactions / scroll）。
@@ -1727,9 +1732,12 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
     // ── Frame 设置：裁剪内容 + Appearance 的平滑圆角（`node.set` 的两条属性）──
     d.clip = common(doc, ids, |n| n.clip);
     d.corner_smoothing = common(doc, ids, |n| n.corners.smoothing);
+    d.corner_radii = common(doc, ids, |n| n.corners.radii);
     d.corner_smoothing_supported = !ids.is_empty();
+    d.corners_independent = !ids.is_empty();
     for n in ids.iter().filter_map(|i| doc.node(*i)) {
         d.corner_smoothing_supported &= n.kind.has_corner_smoothing();
+        d.corners_independent &= n.kind.has_independent_corners();
         d.corner_radius = d.corner_radius.max(n.corners.radii.iter().copied().fold(0.0, f64::max));
     }
 

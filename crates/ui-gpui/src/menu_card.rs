@@ -30,6 +30,8 @@ use std::rc::Rc;
 const PAD: f32 = crate::menu_metrics::MENU_PAD;
 /// A menu item's own radius (egui `rect_filled(r, CornerRadius::same(5), …)`).
 const ITEM_RADIUS: f32 = 5.0;
+/// 动作库行的字号（egui `MenuItem::show_palette` 的 `regular(13.0)`）。
+const PALETTE_TEXT_PT: f32 = 13.0;
 /// The check column: egui's label starts at `r.min.x + 28.0`.
 const CHECK_W: f32 = 28.0;
 /// The icon column's left edge and the label's, for a row that carries a tool mark.
@@ -207,11 +209,14 @@ pub(crate) fn rows(
             .items_center()
             .rounded(pt(ITEM_RADIUS))
             .pl(pt(inset))
-            .pr(pt(10.0))
-            .text_size(pt(TEXT_PT))
-            .text_color(if item.disabled { rgba(t.menu_dim) } else { crate::menu_metrics::ink() });
+            .pr(pt(8.0))
+            // egui `MenuItem::show_palette`：动作库（palette）是**面板底**上的 32pt 行，
+            // 墨色用 `t.text`（不是菜单的白 90%），字号 13，悬停/高亮填 `t.field`。
+            .text_size(pt(PALETTE_TEXT_PT))
+            .text_color(rgba(t.text))
+            .when(item.disabled, |d| d.opacity(0.4));
         if !item.disabled {
-            row = row.hover(|s| s.bg(rgba(t.menu_hover))).cursor_pointer();
+            row = row.hover(|s| s.bg(rgba(t.field))).cursor_pointer();
             let hover = on_hover.clone();
             row = row.on_mouse_move(move |_e, window, cx| hover(i, window, cx));
             let pick = on_pick.clone();
@@ -230,7 +235,8 @@ pub(crate) fn rows(
         // `.hover(...)` above, just always on. Other menus never set `active_fill`, so their
         // checked rows stay plain (no behaviour change outside the toolbar).
         if (selected == Some(i) || item.active_fill) && !item.disabled {
-            row = row.bg(rgba(t.menu_hover));
+            // egui palette 的高亮行填 `t.field`（与悬停同一块），不是菜单的 `menu_hover`。
+            row = row.bg(rgba(t.field));
         }
         // The check mark and the icon are absolutely placed so the label's own inset stays exact.
         if has_check {

@@ -36,6 +36,7 @@ use gpui::Entity;
 
 /// The two editable time boxes in the header (egui `time_field`, L294-311). Retained entities:
 /// rebuilt every frame they would lose focus and the caret on every keystroke.
+#[derive(Clone)]
 pub struct TimeFields {
     cur: Entity<TextField>,
     dur: Entity<TextField>,

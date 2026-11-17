@@ -565,6 +565,7 @@ impl EditorState {
 pub type State = Rc<RefCell<EditorState>>;
 
 /// 完整的变量编辑器。`WindowState` 持有它，`render` 每帧调用。
+#[derive(Clone)]
 pub struct VariablesEditor {
     pub state: State,
     pub data: VariablesData,
@@ -601,8 +602,13 @@ impl VariablesEditor {
         let state: State = Rc::new(RefCell::new(EditorState::new()));
         let search = search_field(cx, SEARCH_W, "", "Search variables");
         let q = state.clone();
+        // 边打边过滤：`on_change` 立即写查询词并唤醒根视图重绘（原来是回车才过滤）。
+        let wake = cmds.clone();
         search.update(cx, move |tf, _| {
-            tf.set_on_commit(move |text, _, _| q.borrow_mut().query = text.trim().to_lowercase());
+            tf.set_on_change(move |text, _, _| {
+                q.borrow_mut().query = text.trim().to_lowercase();
+                wake.wake();
+            });
         });
         Self { state, data, cmds, search, row_caches: Rc::new(RefCell::new(RowCaches::default())), details_fields: HashMap::new(), on_full, on_close }
     }
