@@ -4417,16 +4417,17 @@ impl WindowState {
         // 浮层内通用下拉的菜单每帧重建：先清空上一帧，body_element 里的 Dropdown 会重新登记。
         self.overlays.borrow_mut().clear();
         *self.dismiss.borrow_mut() = Some(dismiss.clone());
-        let no_header = full && self.kind == WindowKind::VariablesTable;
+        // 用户：变量窗口不要外层通用 header。内层 VariablesEditor::header 自己画了完整的
+        // "Variables" 标题 + 计数 + 侧栏开关 + Import/Export + 搜索/过滤 + Full 按钮，外层
+        // 那条 40pt 空 title 把整排操作顶到 X 下面一行、侧栏被夹在中间——full / floating 都在犯。
+        // 一律不挂外层 title；X 由 popover 独立绝对定位浮在右上角，内层 header 已为它留 48pt。
+        let no_header = self.kind == WindowKind::VariablesTable;
         let mut pop = popover_window(open)
             .width(width)
             .pad(pad)
             .flush(full)
             .surface(self.surface)
             .height(height);
-        // 用户：变量表 full 模式下侧栏被「外层空头部 + 内层真头部」双层夹住、头部内容整体下移。
-        // 内层 VariablesEditor::header 已经是完整工具条（标题/计数/Import/Export/搜索），外层
-        // title_slot 对这个 kind 返回空 div，只多出一条 40pt 空栏。full 时不挂它，X 仍浮在右上角。
         if !no_header {
             pop = pop.title(self.title_slot());
         }

@@ -21,7 +21,7 @@ use crate::widgets::{
 use figcraft_i18n::tr;
 use figcraft_i18n::tr_noop;
 use gpui::{
-    AnyElement, App, Bounds, Div, Entity, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle, SharedString, Size,
+    AnyElement, App, Bounds, CursorStyle, Div, Entity, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle, SharedString, Size,
     Stateful, Window, div, point, prelude::*, px, size,
 };
 use serde_json::{Value, json};
@@ -418,10 +418,10 @@ pub struct ClipRow {
 /// `Entity<V>`/`V: Render` 的约束换成闭包捕获）。
 #[derive(Default)]
 struct RowCaches {
-    rename_field: Option<Entity<TextField>>,
-    rename_field_id: Option<String>,
-    mode_rename_field: Option<Entity<TextField>>,
-    mode_rename_field_id: Option<String>,
+    /// 共享的就地改名控件（照搬左栏样式重命名）：双击时 `InlineInput::begin_edit`
+    /// 会自动聚焦并全选，没有它就得再点两次（用户指出右栏改名表现不对）。
+    rename_input: Option<Entity<crate::inline_input::InlineInput>>,
+    mode_rename_input: Option<Entity<crate::inline_input::InlineInput>>,
     value_editors: HashMap<String, Entity<TextField>>,
     /// sidebar 里集合 / 分组的内联改名框。
     collection_rename: Option<Entity<TextField>>,
@@ -474,6 +474,8 @@ pub struct EditorState {
     pub rename: Option<String>,
     /// 正在内联改名的 mode id（`variable.renameMode`）。
     pub rename_mode: Option<String>,
+    /// 该 mode 所属 collection（`variable.renameMode` 需要 collection + mode 两个 id）。
+    pub rename_mode_coll: Option<String>,
     pub menu: Option<Menu>,
     pub drag: Option<ListDragState>,
     /// mode 列水平拖动：`(起始列下标, 按下 x, 当前 x)`。
@@ -538,6 +540,7 @@ impl EditorState {
             rename_group: None,
             rename: None,
             rename_mode: None,
+            rename_mode_coll: None,
             menu: None,
             drag: None,
             mode_drag: None,
@@ -604,7 +607,40 @@ impl VariablesEditor {
         search.update(cx, move |tf, _| {
             tf.set_on_commit(move |text, _, _| q.borrow_mut().query = text.trim().to_lowercase());
         });
-        Self { state, data, cmds, search, row_caches: Rc::new(RefCell::new(RowCaches::default())), details_fields: HashMap::new(), on_full, on_close }
+        // 改名用共享 InlineInput（和左栏样式重命名同源）：双击 begin_edit 自动聚焦+全选。
+        let rename_input = crate::inline_input::InlineInput::build(cx, crate::inline_input::ROW_H, 0.0, "", {
+            let q = state.clone();
+            let c = cmds.clone();
+            move |text: &str, _, _| {
+                let name = text.trim().to_string();
+                if let Some(id) = q.borrow_mut().rename.take() {
+                    if !name.is_empty() {
+                        c.push(Cmd { id: "variable.update", params: Some(json!({ "variable": id, "name": name })) });
+                    }
+                    q.borrow_mut().last_down = None;
+                }
+            }
+        });
+        let mode_rename_input = crate::inline_input::InlineInput::build(cx, crate::inline_input::ROW_H, 0.0, "", {
+            let q = state.clone();
+            let c = cmds.clone();
+            move |text: &str, _, _| {
+                let name = text.trim().to_string();
+                if let Some(mid) = q.borrow_mut().rename_mode.take() {
+                    if !name.is_empty() {
+                        // 模式改名需要 collection id：从 state 里当前选中的集合取。
+                        if let Some(coll) = q.borrow_mut().rename_mode_coll.take() {
+                            c.push(Cmd { id: "variable.renameMode", params: Some(json!({ "collection": coll, "mode": mid, "name": name })) });
+                        }
+                    }
+                    q.borrow_mut().last_mode_down = None;
+                }
+            }
+        });
+        let mut caches = RowCaches::default();
+        caches.rename_input = Some(rename_input);
+        caches.mode_rename_input = Some(mode_rename_input);
+        Self { state, data, cmds, search, row_caches: Rc::new(RefCell::new(caches)), details_fields: HashMap::new(), on_full, on_close }
     }
 
     pub fn is_full(&self) -> bool {
@@ -1010,7 +1046,15 @@ impl VariablesEditor {
         ];
         for (dir, el) in handles {
             let st = st.clone();
-            root = root.child(el.on_mouse_down(MouseButton::Left, move |e: &MouseDownEvent, _, _| {
+            // 悬停边/角时显示对应方向的缩放光标，而不是默认箭头。
+            let cursor = match dir {
+                1 | 2 => CursorStyle::ResizeLeftRight,
+                4 | 8 => CursorStyle::ResizeUpDown,
+                5 | 10 => CursorStyle::ResizeUpLeftDownRight,
+                6 | 9 => CursorStyle::ResizeUpRightDownLeft,
+                _ => CursorStyle::Arrow,
+            };
+            root = root.child(el.cursor(cursor).on_mouse_down(MouseButton::Left, move |e: &MouseDownEvent, _, _| {
                 st.borrow_mut().resize = Some((dir, f32::from(e.position.x), f32::from(e.position.y), sw, sh));
             }));
         }
@@ -1435,7 +1479,7 @@ impl VariablesEditor {
                 .h(pt(7.0))
                 .flex()
                 .items_center()
-                .cursor_pointer()
+                .cursor(CursorStyle::ResizeUpDown)
                 .child(div().w_full().h(pt(1.0)).bg(rgba(t.border)))
                 .on_mouse_down(MouseButton::Left, {
                     let st = st.clone();
@@ -1574,7 +1618,7 @@ impl VariablesEditor {
         }
         col = col.child(gl);
         // ⑥ 侧栏右缘 6pt 拖动柄（egui `vars_sidebar_edge`，180..420）。
-        col.child(div().absolute().right(pt(0.0)).top(pt(0.0)).w(pt(6.0)).h_full().on_mouse_down(MouseButton::Left, {
+        col.child(div().absolute().right(pt(0.0)).top(pt(0.0)).w(pt(6.0)).h_full().cursor(CursorStyle::ResizeLeftRight).on_mouse_down(MouseButton::Left, {
             let st = st.clone();
             move |e: &MouseDownEvent, _, _| {
                 let mut s = st.borrow_mut();
@@ -1656,8 +1700,8 @@ impl VariablesEditor {
                 .text_color(rgba(t.text_secondary))
                 .child(tr("Name"))
                 .child(div().absolute().right_0().top_0().w(pt(1.0)).h_full().bg(rgba(t.border)))
-                // 右缘 6pt 拖动柄；双击自动适配。
-                .child(div().absolute().right(pt(0.0)).top(pt(0.0)).w(pt(6.0)).h_full().on_mouse_down(MouseButton::Left, {
+                // 右缘 6pt 拖动柄；双击自动适配。悬停显示左右拖动光标。
+                .child(div().absolute().right(pt(0.0)).top(pt(0.0)).w(pt(6.0)).h_full().cursor(CursorStyle::ResizeLeftRight).on_mouse_down(MouseButton::Left, {
                     let st = st.clone();
                     move |e: &MouseDownEvent, _, cx: &mut App| {
                         // 列宽柄是单元格的子节点：不拦冒泡的话，父级 mode 单元格的
@@ -1703,7 +1747,11 @@ impl VariablesEditor {
                 // 列选中与行选中同一底色（原来是 t.hover，比行选中浅）。
                 .bg(rgba(if is_sel { t.selected_row } else { t.panel }));
             cell = if renaming {
-                cell.child(VariablesEditor::ensure_mode_rename_field(&self.row_caches, &self.cmds, cx, &m.name, st, &c.id, &m.id))
+                if let Some(input) = self.row_caches.borrow().mode_rename_input.clone() {
+                    cell.child(div().flex_1().min_w(pt(0.0)).h_full().child(input))
+                } else {
+                    cell.child(m.name.clone())
+                }
             } else {
                 cell.child(m.name.clone())
             };
@@ -1714,8 +1762,11 @@ impl VariablesEditor {
                 .on_mouse_down(MouseButton::Left, {
                     let st = st.clone();
                     let mid = mid.clone();
+                    let mname = mname.clone();
+                    let cid = cid.clone();
+                    let caches = self.row_caches.clone();
                     let editable = c.editable;
-                    move |e: &MouseDownEvent, _, _| {
+                    move |e: &MouseDownEvent, window, cx| {
                         let mut s = st.borrow_mut();
                         s.menu = None;
                         s.selected = None;
@@ -1727,6 +1778,11 @@ impl VariablesEditor {
                         s.last_mode_down = Some((Instant::now(), mid.clone()));
                         if dbl {
                             s.rename_mode = Some(mid.clone());
+                            s.rename_mode_coll = Some(cid.clone());
+                            drop(s);
+                            if let Some(input) = caches.borrow().mode_rename_input.clone() {
+                                crate::inline_input::InlineInput::begin_edit(&input, mname.clone(), window, cx);
+                            }
                         } else {
                             s.rename_mode = None;
                             let x = f32::from(e.position.x);
@@ -1787,7 +1843,7 @@ impl VariablesEditor {
                     }
                 });
             cell = cell.child(div().absolute().right_0().top_0().w(pt(1.0)).h_full().bg(rgba(t.border)));
-            cell = cell.child(div().absolute().right(pt(0.0)).top(pt(0.0)).w(pt(6.0)).h_full().on_mouse_down(MouseButton::Left, {
+            cell = cell.child(div().absolute().right(pt(0.0)).top(pt(0.0)).w(pt(6.0)).h_full().cursor(CursorStyle::ResizeLeftRight).on_mouse_down(MouseButton::Left, {
                 let st = st.clone();
                 let edge_key = format!("{mid}-edge");
                 move |e: &MouseDownEvent, _, cx: &mut App| {
@@ -2026,8 +2082,10 @@ impl VariablesEditor {
             .on_mouse_down(MouseButton::Left, {
                 let st = st.clone();
                 let rid = rid.clone();
+                let rname = rname.clone();
                 let ids = ids.to_vec();
-                move |e: &MouseDownEvent, _, _| {
+                let caches = caches.clone();
+                move |e: &MouseDownEvent, window, cx| {
                     let mut s = st.borrow_mut();
                     s.menu = None;
                     s.selected_mode = None;
@@ -2036,6 +2094,11 @@ impl VariablesEditor {
                     s.selected = Some(rid.clone());
                     if dbl && movable {
                         s.rename = Some(rid.clone());
+                        drop(s);
+                        // 照搬左栏：begin_edit 预填 + 聚焦 + 全选，双击后直接输入即可改名。
+                        if let Some(input) = caches.borrow().rename_input.clone() {
+                            crate::inline_input::InlineInput::begin_edit(&input, rname.clone(), window, cx);
+                        }
                     } else if s.rename.as_deref() != Some(rid.as_str()) {
                         s.rename = None;
                         if movable {
@@ -2081,8 +2144,10 @@ impl VariablesEditor {
             .items_center()
             .child(div().flex_none().w(pt(40.0)).h_full().flex().items_center().pl(pt(17.0)).child(kind_glyph(r)));
         if renaming {
-            let ed = Self::ensure_rename_field(caches, cmds, cx, &rname, st, &rid);
-            name_cell = name_cell.child(div().flex_1().min_w(pt(0.0)).child(ed));
+            // 复用左栏同款 InlineInput：双击时已 begin_edit（聚焦+全选），这里只负责显示。
+            if let Some(input) = caches.borrow().rename_input.clone() {
+                name_cell = name_cell.child(div().flex_1().min_w(pt(0.0)).h_full().child(input));
+            }
         } else {
             name_cell =
                 name_cell.child(div().flex_1().min_w(pt(0.0)).overflow_hidden().text_size(pt(11.0)).text_color(rgba(t.text)).child(rname.clone()));
@@ -2138,75 +2203,6 @@ impl VariablesEditor {
                 .child(div().absolute().left_0().top_0().w(pt(1.0)).h_full().bg(rgba(t.border))),
         );
         row.child(div().absolute().bottom_0().left_0().w_full().h(pt(1.0)).bg(rgba(t.border)))
-    }
-
-    fn ensure_rename_field(caches: &Rc<RefCell<RowCaches>>, cmds: &Cmds, cx: &mut App, initial: &str, st: &State, rid: &str) -> Entity<TextField> {
-        // 换了一行改名时必须重建输入框，否则会沿用上一行的初值。
-        if caches.borrow().rename_field_id.as_deref() == Some(rid) {
-            if let Some(e) = &caches.borrow().rename_field {
-                return e.clone();
-            }
-        }
-        caches.borrow_mut().rename_field = None;
-        caches.borrow_mut().rename_field_id = Some(rid.to_string());
-        let f = text_field(cx, NAME_W - 80.0, initial, tr("Name"), Slot::None, Slot::None);
-        let cmds = cmds.clone();
-        let st = st.clone();
-        let rid = rid.to_string();
-        f.update(cx, move |tf, _| {
-            // 用户：变量名称/模式名称用无边框输入框。
-            tf.set_bare(true);
-            tf.set_on_commit(move |text, _, _| {
-                let name = text.trim();
-                if !name.is_empty() {
-                    cmds.push(Cmd { id: "variable.update", params: Some(json!({ "variable": rid, "name": name })) });
-                }
-                let mut s = st.borrow_mut();
-                s.rename = None;
-                s.last_down = None;
-            });
-        });
-        caches.borrow_mut().rename_field = Some(f.clone());
-        f
-    }
-
-    /// mode 表头的内联改名框（`variable.renameMode`）。同样按目标 id 缓存，避免串值。
-    fn ensure_mode_rename_field(
-        caches: &Rc<RefCell<RowCaches>>,
-        cmds: &Cmds,
-        cx: &mut App,
-        initial: &str,
-        st: &State,
-        cid: &str,
-        mid: &str,
-    ) -> Entity<TextField> {
-        if caches.borrow().mode_rename_field_id.as_deref() == Some(mid) {
-            if let Some(e) = &caches.borrow().mode_rename_field {
-                return e.clone();
-            }
-        }
-        caches.borrow_mut().mode_rename_field = None;
-        caches.borrow_mut().mode_rename_field_id = Some(mid.to_string());
-        let f = text_field(cx, 160.0, initial, tr("Mode"), Slot::None, Slot::None);
-        let cmds = cmds.clone();
-        let st = st.clone();
-        let cid = cid.to_string();
-        let mid = mid.to_string();
-        f.update(cx, move |tf, _| {
-            // 用户：模式名称用无边框输入框。
-            tf.set_bare(true);
-            tf.set_on_commit(move |text, _, _| {
-                let name = text.trim();
-                if !name.is_empty() {
-                    cmds.push(Cmd { id: "variable.renameMode", params: Some(json!({ "collection": cid, "mode": mid, "name": name })) });
-                }
-                let mut s = st.borrow_mut();
-                s.rename_mode = None;
-                s.last_mode_down = None;
-            });
-        });
-        caches.borrow_mut().mode_rename_field = Some(f.clone());
-        f
     }
 
     /// 值格的统一底框（24 高 / 圆角 5 / `t.field` 底 / 6pt 内边距）。
