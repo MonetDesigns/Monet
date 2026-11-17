@@ -221,6 +221,21 @@ fn cell_of(vars: &figcraft_doc::Variables, val: Option<&figcraft_doc::VariableVa
     }
 }
 
+/// 把分组连同它的所有祖先分组一起收集（`Varia/bl/k` → `Varia`、`Varia/bl`）。
+/// 用户 2026-11-17：只有叶子组会被 `rsplit_once('/')` 命中，中间层在侧栏里会凭空消失。
+fn push_group(groups: &mut Vec<String>, group: &str) {
+    let mut upto = String::new();
+    for seg in group.split('/') {
+        if !upto.is_empty() {
+            upto.push('/');
+        }
+        upto.push_str(seg);
+        if !groups.contains(&upto) {
+            groups.push(upto.clone());
+        }
+    }
+}
+
 /// 从 `Document` 读快照（本地集合；库变量只读与 extends 继承留给后续）。
 pub fn read(doc: &figcraft_doc::Document) -> VariablesData {
     let vars = &doc.variables;
@@ -239,8 +254,8 @@ pub fn read(doc: &figcraft_doc::Document) -> VariablesData {
                         Some((g, s)) => (g.to_string(), s.to_string()),
                         None => (String::new(), v.name.clone()),
                     };
-                    if !group.is_empty() && !groups.contains(&group) {
-                        groups.push(group.clone());
+                    if !group.is_empty() {
+                        push_group(&mut groups, &group);
                     }
                     VarRow {
                         id: v.id.clone(),
@@ -285,8 +300,8 @@ pub fn read_libraries(cache: &figcraft_engine::library::Cache, doc: &figcraft_do
                                 Some((g, s)) => (g.to_string(), s.to_string()),
                                 None => (String::new(), v.name.clone()),
                             };
-                            if !group.is_empty() && !groups.contains(&group) {
-                                groups.push(group.clone());
+                            if !group.is_empty() {
+                                push_group(&mut groups, &group);
                             }
                             VarRow {
                                 id: v.id.clone(),
@@ -799,8 +814,19 @@ impl VariablesEditor {
                 let old = q.borrow_mut().rename_group.take();
                 if let Some(old) = old {
                     if !name.is_empty() && name != old {
-                        for (id, rest) in gm.borrow().iter() {
-                            c.push(Cmd { id: "variable.update", params: Some(json!({ "variable": id, "name": format!("{name}/{rest}") })) });
+                        // 整组改名是**一个手势**：合成一步撤销（`command.batch`）。
+                        let steps: Vec<Value> = gm
+                            .borrow()
+                            .iter()
+                            .map(|(id, rest)| {
+                                json!({ "command": "variable.update", "params": { "variable": id, "name": format!("{name}/{rest}") } })
+                            })
+                            .collect();
+                        if !steps.is_empty() {
+                            c.push(Cmd {
+                                id: "command.batch",
+                                params: Some(json!({ "label": tr("Rename group"), "commands": steps })),
+                            });
                         }
                     }
                 }
@@ -978,12 +1004,20 @@ impl VariablesEditor {
             }
             return false;
         }
-        if accel && key.eq_ignore_ascii_case("c") {
-            Self::copy_row(&self.state, &self.data);
-            return true;
-        }
-        if accel && key.eq_ignore_ascii_case("v") {
-            Self::paste_row(&self.state, &self.data, &self.cmds);
+        if accel && (key.eq_ignore_ascii_case("c") || key.eq_ignore_ascii_case("v")) {
+            // 有选中的 mode 列就整列复制 / 粘贴，否则按整行（用户 2026-11-17）。
+            let mode = self.state.borrow().selected_mode.clone();
+            if key.eq_ignore_ascii_case("c") {
+                if let Some(m) = mode {
+                    Self::copy_column(&self.state, &self.data, &m);
+                } else {
+                    Self::copy_row(&self.state, &self.data);
+                }
+            } else if let Some(m) = mode {
+                Self::paste_column(&self.state, &self.cmds, &m);
+            } else {
+                Self::paste_row(&self.state, &self.data, &self.cmds);
+            }
             return true;
         }
         false
@@ -1063,13 +1097,23 @@ impl VariablesEditor {
         st.borrow_mut().clipboard_column = Some(vals);
     }
 
-    /// 粘贴整列到目标 mode：每条一个 `variable.set`。
+    /// 粘贴整列到目标 mode。一次粘贴是**一个手势**，走 `command.batch` 合成一步撤销
+    /// （用户 2026-11-17：所有行为都要可逆、进撤销重做栈）。
     fn paste_column(st: &State, cmds: &Cmds, mode: &str) {
         let Some(vals) = st.borrow().clipboard_column.clone() else { return };
-        for (vid, cell) in vals {
-            let Some(v) = cell_value(&cell) else { continue };
-            cmds.push(Cmd { id: "variable.set", params: Some(json!({ "variable": vid, "mode": mode, "value": v })) });
+        let steps: Vec<Value> = vals
+            .iter()
+            .filter_map(|(vid, cell)| {
+                cell_value(cell).map(|v| json!({ "command": "variable.set", "params": { "variable": vid, "mode": mode, "value": v } }))
+            })
+            .collect();
+        if steps.is_empty() {
+            return;
         }
+        cmds.push(Cmd {
+            id: "command.batch",
+            params: Some(json!({ "label": tr("Paste column"), "commands": steps })),
+        });
     }
 
     fn push(&self, id: &'static str, params: Value) {
@@ -1211,6 +1255,10 @@ impl VariablesEditor {
                     for input in inputs.into_iter().flatten() {
                         input.update(cx, |f, cx| f.finish_edit(window, cx));
                     }
+                    // 点面板内任意非输入框位置都释放键盘焦点：否则焦点一直留在搜索框/改名框里，
+                    // 后续 Ctrl+C/V/Z 会被那个输入框吞掉，表格的行列复制粘贴和撤销重做就成了
+                    // 死代码（用户 2026-11-17）。
+                    window.blur();
                     st.borrow_mut().menu = None;
                 }
             })
@@ -1287,8 +1335,16 @@ impl VariablesEditor {
         };
         // 表格在窗口里的左缘：卡片原点 + 侧栏宽度（+1pt 分隔线）。
         let table_left = f32::from(origin.x) + if sidebar { sidebar_w + 1.0 } else { 0.0 };
-        root = root.child(body.child(self.table(&st, &coll, cx, window, body_h, table_w, table_left)));
-        root = root.child(self.bottom_bar(&st, &coll));
+        // 表格和底栏是**同一列的上下两块**（用户 2026-11-17）：左边侧栏整列延伸到底。
+        let table_col = div()
+            .flex_1()
+            .min_w(pt(0.0))
+            .h_full()
+            .flex()
+            .flex_col()
+            .child(self.table(&st, &coll, cx, window, body_h, table_w, table_left))
+            .child(self.bottom_bar(&st, &coll));
+        root = root.child(body.child(table_col));
         root = root.child(self.menu_overlay(&st, origin));
         root = root.child(self.details_overlay(&st, cx, viewport));
         // 记录 root 在窗口里的真实矩形：行拖动要画的插入线，落点 y 是窗口坐标，
@@ -1537,11 +1593,15 @@ impl VariablesEditor {
         };
         // egui `sidebar()`：Collections 标题 34 + 独立滚动列表 + 7pt 可拖分隔条 +
         // Groups 标题 34 + 独立滚动列表。两个区各自滚动，Groups 不会被库列表挤到屏幕外。
-        let avail = (body_h - HEADER_H - BOTTOM_H).max(160.0);
+        // 侧栏一直伸到卡片底部；「+ Create variable」收进表格那一列，和表格上下排列，
+        // 左边仍是侧栏（用户 2026-11-17）。所以 body 里只多出侧栏那一列的高度，
+        // 底栏的高度算在表格列内部，`avail` 不再扣掉它。
+        let avail = (body_h - HEADER_H).max(160.0);
         let split_total = (avail - 34.0 - 7.0 - 34.0).max(80.0);
         let collections_h = (split * split_total).clamp(40.0, (split_total - 40.0).max(40.0));
         let groups_h = (split_total - collections_h).max(40.0);
-        let mut col = div().id("vars-sidebar").flex_none().w(pt(sidebar_w)).h_full().flex().flex_col().bg(rgba(t.panel));
+        // 用户 2026-11-17：侧栏不再自带底色，跟随卡片背景。
+        let mut col = div().id("vars-sidebar").flex_none().w(pt(sidebar_w)).h_full().flex().flex_col();
 
         // ① Collections 标题 + 新建（unique 命名，不再用时间戳）。
         col = col.child(
@@ -2526,7 +2586,7 @@ impl VariablesEditor {
         if let Some(x) = mode_line_x {
             col = col.child(div().absolute().left(pt(x - 1.0)).top_0().bottom_0().w(pt(2.0)).bg(rgba(t.accent)));
         }
-        div().id("vars-table").flex_1().min_w(pt(0.0)).h_full().flex().flex_col().child(col).child(bar)
+        div().id("vars-table").flex_1().min_w(pt(0.0)).min_h(pt(0.0)).flex().flex_col().child(col).child(bar)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -3071,8 +3131,8 @@ impl VariablesEditor {
                                 st.borrow_mut().menu = Some(Menu::on(anchor, crate::widgets::RectAlign::TopStart, h + 4.0, items.clone()));
                             }
                         })
-                        .child(paint_icon(Icon::Plus, rgba(t.text_secondary), 14.0))
-                        .child(tr("+ Create variable")),
+                        .child(paint_icon(Icon::Plus, rgba(t.text_secondary), 12.0))
+                        .child(tr("Create variable")),
                 ),
         )
     }
@@ -3193,8 +3253,16 @@ impl VariablesEditor {
                                     .as_array()
                                     .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
                                     .unwrap_or_default();
-                                for id in ids {
-                                    cmds.push(Cmd { id: "variable.delete", params: Some(json!({ "variable": id })) });
+                                // 删整组 = 一个手势 = 一步撤销，而不是每个变量一步。
+                                let steps: Vec<Value> = ids
+                                    .iter()
+                                    .map(|id| json!({ "command": "variable.delete", "params": { "variable": id } }))
+                                    .collect();
+                                if !steps.is_empty() {
+                                    cmds.push(Cmd {
+                                        id: "command.batch",
+                                        params: Some(json!({ "label": tr("Delete group"), "commands": steps })),
+                                    });
                                 }
                             }
                             _ => cmds.push(Cmd { id: cmd, params: Some(params.clone()) }),
@@ -3329,6 +3397,12 @@ impl VariablesEditor {
         }
         let gap = t.gap.min(d.ids.len());
         let before = d.ids.get(gap).cloned();
+        // 单击时的轻微移动也会让拖拽「armed」，但落点仍是自己这一行（`gap == from`，
+        // `before` 就是被拖项本身）。若当成「移到自己前面」提交，列表会把这一项挪到末尾——
+        // 表现就是「点一下选中，布局跳一次」（用户 2026-11-17）。原地落点直接忽略。
+        if before.as_deref() == d.ids.get(d.from).map(String::as_str) {
+            return;
+        }
         match d.kind {
             DragList::Collections => {
                 let from = d.ids.get(d.from).cloned().unwrap_or_default();

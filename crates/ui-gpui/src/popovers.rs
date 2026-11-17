@@ -4439,7 +4439,9 @@ impl WindowState {
         let rail = if full { crate::panels::RAIL_W } else { 0.0 };
         // 全屏只在「面板 + 画布」区，不能盖住顶部自定义标题栏（`TITLE_H`）——
         // 用户 2026-11-17：全屏会侵入标题栏。高度与原点一起扣掉标题栏。
-        let title_h = if full { crate::title_bar::TITLE_H } else { 0.0 };
+        // 标题栏下沿还有 1pt 分隔线（`top_row` 的 `border_t`，占 `[TITLE_H, TITLE_H+1)`），
+        // 卡片也必须从它下面开始，否则会把这条线盖掉（用户第二轮 2026-11-17）。
+        let title_h = if full { crate::title_bar::TITLE_H + 1.0 } else { 0.0 };
         let width = if full { (f32::from(viewport.width) - rail).max(1.0) } else { base_w };
         let height = if full { (f32::from(viewport.height) - title_h).max(1.0) } else { base_h };
         // Full 是 `Frame::NONE`：内边距 0、无圆角/阴影；Floating 保留通用 16（变量表构造时是 0）。
