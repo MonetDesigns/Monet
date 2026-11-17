@@ -140,6 +140,55 @@ impl ViewMenuRow {
     }
 }
 
+/// 右栏头部的 Zoom 按钮（egui `right.rs` 的 Zoom `menu_popup` + `menu_check`）。
+///
+/// 与通用 `Dropdown` 不同：这里**宽度由内容决定**（hug，不传固定 width），靠 view_bar 的
+/// `justify_between` 推到最右。菜单仍用按钮自身 rect 作锚点（跨帧探针，按下即对位），
+/// 勾选行与命令写入和 `checked_dropdown` 完全一致。
+fn zoom_button(f: &RightFields, label: String, rows: Vec<ViewMenuRow>) -> gpui::AnyElement {
+    let menu: Vec<MenuRow> = rows
+        .iter()
+        .map(|r| {
+            let mut m = MenuRow::new(r.label.clone());
+            if r.separator {
+                m = m.separator();
+            }
+            if let Some(on) = r.checked {
+                m = m.checked(Some(on));
+            }
+            m
+        })
+        .collect();
+    let hit = Rc::new(Cell::new(None));
+    let hit_click = hit.clone();
+    let mut el = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(pt(4.0))
+        .cursor_pointer()
+        .text_size(pt(crate::widgets::TEXT_PT))
+        .text_color(rgba(tokens().text))
+        .child(label)
+        .child(crate::widgets::icon::paint(Icon::ChevronDown, rgba(tokens().text_secondary), 12.0));
+    if let Some(root) = f.root.clone() {
+        let cmds = f.cmds.clone();
+        el = el.on_mouse_down(MouseButton::Left, move |_e, _window, cx: &mut App| {
+            let anchor = hit_click.get().unwrap_or_else(|| Bounds { origin: gpui::point(px(0.0), px(0.0)), size: size(px(1.0), px(0.0)) });
+            let rows = rows.clone();
+            let menu = menu.clone();
+            let cmds = cmds.clone();
+            let on_pick = Rc::new(move |label: &str, _w: &mut Window, _cx: &mut App| {
+                if let Some(r) = rows.iter().find(|r| r.label == label) {
+                    cmds.push(Cmd { id: r.cmd, params: Some(r.params.clone()) });
+                }
+            });
+            root.update(cx, |cv, cx| cv.open_menu(anchor, Some(200.0), menu, on_pick, cx));
+        });
+    }
+    crate::popovers::with_button_bounds(el, hit).into_any_element()
+}
+
 /// 带勾选状态的下拉（egui `right.rs` 的 Zoom `menu_popup` + `menu_check`）。
 /// `MenuRow` 自己负责 `✓ ` 前缀与对齐，`on_pick` 按**纯文本**匹配，所以这里只存原始 label。
 fn checked_dropdown(f: &RightFields, label: impl Into<SharedString>, width: f32, rows: Vec<ViewMenuRow>) -> Dropdown {
@@ -211,8 +260,8 @@ fn view_rows(v: &ViewData) -> Vec<ViewMenuRow> {
 pub(crate) fn view_bar(f: &RightFields, d: &PanelData, motion: bool) -> gpui::Div {
     let t = tokens();
     let zoom_label = format!("{}%", (d.view.zoom * 100.0).round() as i64);
-    // 尺寸 1:1（Figma 参考 Frame 38：Frame80 zoom = 49×16，把宽度按参考收窄）。
-    let zoom = checked_dropdown(f, zoom_label, 49.0, view_rows(&d.view));
+    // Zoom 靠最右，宽度由内容（百分比数字 + chevron）决定，不设定宽。
+    let zoom = zoom_button(f, zoom_label, view_rows(&d.view));
     // egui `right.rs` 的 tabs 行（Design / Prototype）：激活的那个上底色 `hover`、圆角 5、
     // 半粗 11 pt；未激活的 `text_secondary`、无底色。整行 40 pt 高、下边框。
     // 纯 UI 状态（`app.ui.right_tab`），不进文档，所以只动 `f.right_tab` 并唤醒一帧。
@@ -282,8 +331,7 @@ pub(crate) fn view_bar(f: &RightFields, d: &PanelData, motion: bool) -> gpui::Di
             .child(tab(tr(crate::naming::right_tab_label(0)), 0))
             .child(tab(tr(crate::naming::right_tab_label(1)), 1))
     };
-    // Figma 参考 Frame 79 AutoLayout：Horizontal gap=10 cross=Center。
-    // tab 组(Frame78) 与 zoom(Frame80) 之间用真实 gap=10，不再 justify_between。
+    // Zoom 靠最右：tabs 后放弹簧，宽度由 zoom 内容自己决定（用户明确要求）。
     div()
         .flex_none()
         .w_full()
@@ -291,11 +339,11 @@ pub(crate) fn view_bar(f: &RightFields, d: &PanelData, motion: bool) -> gpui::Di
         .flex()
         .flex_row()
         .items_center()
-        .gap(pt(crate::panels::TAB_ZOOM_GAP))
         .px(pt(8.0))
         .border_b_1()
         .border_color(rgba(tokens().border))
         .child(tabs)
+        .child(div().flex_1())
         .child(zoom)
 }
 

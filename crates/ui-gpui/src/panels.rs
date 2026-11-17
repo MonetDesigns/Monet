@@ -139,7 +139,7 @@ pub(crate) const DEFAULT_RIGHT_PANEL: f32 = 374.0;
 ///   Frame 38   Vertical  gap=0   pad=[T8,R8,B8,L8]
 ///   ├ Frame 82 Horizontal gap=4  main=Max  cross=Center  （头像组 → ▶▾ → 分享）
 ///   │  └ Frame 83 Horizontal gap=1  （▶ 与 ▾ 之间）
-///   └ Frame 79 Horizontal gap=10 cross=Center            （tab组 → zoom）
+///   └ Frame 79 Horizontal cross=Center                    （tab组 ←弹簧→ zoom 靠右，宽度由内容定）
 ///      └ Frame 78 Horizontal gap=4                        （Design ↔ Prototype）
 /// Frame 182 左栏头部：
 ///   Frame 182  Vertical  gap=0   pad=[T8,R12,B8,L12]
@@ -152,7 +152,6 @@ pub(crate) const HEADER_PAD_H: f32 = 8.0;   // Frame 38 的 L/R padding
 pub(crate) const LEFT_HEADER_PAD_H: f32 = 12.0; // Frame 182 的 L/R padding
 pub(crate) const HEADER_GAP: f32 = 4.0;     // 头像组→按钮→分享 / Design↔Prototype / 文件名→chevron
 pub(crate) const PRESENT_GAP: f32 = 1.0;    // Frame 83：▶ 与 ▾ 之间
-pub(crate) const TAB_ZOOM_GAP: f32 = 10.0;  // Frame 79：tab 组 → zoom
 
 /// A right-panel field that writes back to the selected node via `node.set`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
