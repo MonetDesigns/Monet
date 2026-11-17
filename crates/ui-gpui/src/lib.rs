@@ -924,6 +924,8 @@ impl CanvasView {
     /// 守卫据此判定「这是别的窗口的文档」并丢弃，表现就是「点标签切不过去」
     /// （用户 2026-11-16）。uid 不漂移，且这里仍校验归属，不会切到别的窗口的文档。
     pub(crate) fn select_doc(&mut self, uid: u64, cx: &mut Context<Self>) {
+        // eGUI：点文件 tab 切走时，在屏的演示播放器收进它的 tab（下次点演示 tab 恢复）。
+        self.pause_present();
         let Some(i) = self.app.session.docs.iter().position(|d| d.uid == uid) else { return };
         let res = self.app.session.execute("doc.switch", &serde_json::json!({ "index": i }));
         // 引擎命令可能因为正在编辑文字等原因拒绝执行；此时直接把活动文档切过去，
@@ -1955,17 +1957,23 @@ impl CanvasView {
                         } else {
                             let tid = self.present_next;
                             self.present_next += 1;
-                            self.present_tabs.push(present::PresentTab { id: tid, uid, path, page, file, page_name });
+                            self.present_tabs.push(present::PresentTab { id: tid, uid, path, page, file, page_name, pres: None });
                             tid
                         };
+                        // 复用同 page 的 tab 时取回它的播放器；新建则从头播。
+                        self.pause_present();
                         self.present_active = Some(tab_id);
-                        self.present = Some(present::PresentState::new(id, preview));
+                        self.present = if let Some(tab) = self.present_tabs.iter_mut().find(|t| t.id == tab_id) {
+                            tab.pres.take().or_else(|| Some(present::PresentState::new(id, preview)))
+                        } else {
+                            Some(present::PresentState::new(id, preview))
+                        };
                     }
                 }
 
                 panels::extra::UiAction::PreviewClose => {
-                    // eGUI：退出演示只把播放器收起来，tab 保留在标签栏（下次点它恢复）。
-                    self.present = None;
+                    // eGUI `close_present`：播放器收进 tab，tab 保留在标签栏（下次点它恢复）。
+                    self.pause_present();
                 }
             }
         }
@@ -2114,29 +2122,45 @@ impl CanvasView {
         cx.notify();
     }
 
-    /// Show the Home screen (the tab strip's Home button): the Home panel plus the tab state.
-    /// 点演示 tab：切到该演示（eGUI `show_present`）。播放器状态在切走时收进 tab，切回时恢复。
-    pub(crate) fn switch_present_tab(&mut self, id: u64) {
-        if self.present_active == Some(id) {
-            return;
-        }
-        self.present_active = Some(id);
-        self.tabs.home = false;
-        // GPUI 侧只保留一个在屏播放器：切 tab 时用它重建，保留 tab 上的页面（暂不保留播放头）。
-        if let Some(tab) = self.present_tabs.iter().find(|t| t.id == id) {
-            let start = tab.page;
-            self.present = Some(present::PresentState::new(start, false));
+    /// 把在屏播放器收进当前 active 的演示 tab（eGUI `pause_present`）。
+    fn pause_present(&mut self) {
+        if let (Some(pres), Some(active)) = (self.present.take(), self.present_active) {
+            if let Some(tab) = self.present_tabs.iter_mut().find(|t| t.id == active) {
+                tab.pres = Some(pres);
+            }
         }
     }
 
-    /// 关演示 tab：从标签栏移除；若关的是在屏的，退出演示（eGUI `close_present`）。
+    /// 点演示 tab：先把当前播放器存回旧 tab，再把目标 tab 的播放器取出上屏（eGUI `show_present`）。
+    pub(crate) fn switch_present_tab(&mut self, id: u64) {
+        if self.present_active == Some(id) && self.present.is_some() {
+            return;
+        }
+        self.pause_present();
+        self.present_active = Some(id);
+        self.tabs.home = false;
+        if let Some(tab) = self.present_tabs.iter_mut().find(|t| t.id == id) {
+            self.present = tab.pres.take();
+        }
+    }
+
+    /// 关演示 tab：从标签栏移除；若关的是在屏的，恢复下一个演示（eGUI `close_present`）。
     pub(crate) fn close_present_tab(&mut self, id: u64) {
         self.present_tabs.retain(|t| t.id != id);
         if self.present_active == Some(id) {
             self.present = None;
-            self.present_active = self.present_tabs.last().map(|t| t.id);
+            self.present_active = None;
+            // 还有别的演示 tab 就恢复最后一个的播放器。
+            let next_id = self.present_tabs.last().map(|t| t.id);
+            if let Some(nid) = next_id {
+                let pres = self.present_tabs.last_mut().and_then(|t| t.pres.take());
+                self.present_active = Some(nid);
+                self.present = pres;
+            }
         }
     }
+
+    /// Show the Home screen (the tab strip's Home button): the Home panel plus the tab state.
 
     pub(crate) fn show_home(&mut self) {
         self.tabs.home = true;
@@ -2171,8 +2195,8 @@ impl CanvasView {
         let action = present::ACTION.with(|a| a.replace(0));
 
         if action == 3 {
-            self.present = None;
-
+            // 顶栏 Close 退出演示：状态收进 tab，tab 本身保留在标签栏。
+            self.pause_present();
             return;
         }
 

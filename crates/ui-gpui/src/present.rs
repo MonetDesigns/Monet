@@ -48,7 +48,7 @@ fn apply_animation_op(op: AnimationOp, cur: MotionClock, at_ms: f64, dur_ms: f64
 }
 
 /// 编辑器标签栏里的演示标签（eGUI `present::chrome::PresentTab`）：每个演示独占一个 tab，
-/// 切回设计文件保留播放器状态。GPUI 侧只保留标签栏所需的元数据，播放器状态在 `PresentState`。
+/// 切回设计文件时播放器存回 tab（`pres`），再点 tab 时取回 —— 保留播放头 / 历史 / 滚动。
 #[derive(Clone, Debug)]
 pub struct PresentTab {
     pub id: u64,
@@ -57,6 +57,8 @@ pub struct PresentTab {
     pub page: NodeId,
     pub file: String,
     pub page_name: String,
+    /// 不在屏时存放的播放器（eGUI `PresentTab.pres`）。
+    pub pres: Option<PresentState>,
 }
 
 impl PresentTab {
@@ -89,12 +91,10 @@ pub struct PresentState {
     /// hotspot 提示（点空白处闪一下可点区域）——这里简化为顶栏开关。
     pub hints: bool,
     pub preview: bool,
-    /// 演示外壳（对齐 eGUI `present::chrome`）：左右面板、设备、缩放、隐藏 UI。
+    /// 演示外壳（eGUI `PresentView`）：评论 / Inspect / 隐藏 UI。
     pub comments: bool,
     pub inspect: bool,
     pub hide_ui: bool,
-    pub device: String,
-    pub scale: f32,
     /// 非 current 画框各自的挂起时钟；导航离开 / 进入时存取，落实「画框之间独立」。
     clocks: BTreeMap<NodeId, MotionClock>,
 }
@@ -117,8 +117,6 @@ impl PresentState {
             comments: false,
             inspect: false,
             hide_ui: false,
-            device: String::new(),
-            scale: 1.0,
             clocks: BTreeMap::new(),
         }
     }
@@ -442,7 +440,6 @@ pub fn render(app: &CanvasApp, state: &PresentState) -> Stateful<Div> {
         // 右：文字按钮（eGUI 全窗口模式用 regular 11.5 文字）
         .child(title_button(tr("Inspect").into(), 6, state.inspect))
         .child(title_button(tr("Comments").into(), 5, state.comments))
-        .child(title_button(tr("Options").into(), 10, false))
         .child(title_button(tr("Restart").into(), 4, false))
         .child(title_button(tr("Close").into(), 3, false));
 
