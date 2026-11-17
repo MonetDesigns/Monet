@@ -470,7 +470,7 @@ pub(crate) fn bar(app: &crate::CanvasApp, cmds: Cmds, shape_open: &Rc<RefCell<bo
                     .justify_center()
                     .rounded(px(5.0))
                     .text_size(px(11.0))
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .font_weight(crate::panels::UI_FONT_REGULAR)
                     .text_color(rgba(t.text))
                     .cursor_pointer()
                     .hover(|s| s.bg(rgba(t.hover)))

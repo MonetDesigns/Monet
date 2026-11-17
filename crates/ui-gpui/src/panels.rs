@@ -153,6 +153,13 @@ pub(crate) const LEFT_HEADER_PAD_H: f32 = 12.0; // Frame 182 的 L/R padding
 pub(crate) const HEADER_GAP: f32 = 4.0;     // 头像组→按钮→分享 / Design↔Prototype / 文件名→chevron
 pub(crate) const PRESENT_GAP: f32 = 1.0;    // Frame 83：▶ 与 ▾ 之间
 
+/// UI 字体（MiSans）字重映射，按用户 2026-11-17 给定：
+/// 普通=NORMAL(305)，粗体=REGULAR(330)。MiSans 这两档字形名与常见字体相反
+/// （Normal 比 Regular 细），GPUI 按数值选字形，故直接用这两个权重常量。
+/// 全局根设 305；所有原本 SEMIBOLD/MEDIUM 的「强调」文字改 330。
+pub(crate) const UI_FONT_NORMAL: gpui::FontWeight = gpui::FontWeight(305.0);
+pub(crate) const UI_FONT_REGULAR: gpui::FontWeight = gpui::FontWeight(330.0);
+
 /// A right-panel field that writes back to the selected node via `node.set`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Prop {

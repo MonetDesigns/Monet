@@ -98,7 +98,7 @@ pub(crate) fn bar(app: &crate::CanvasApp, cmds: Cmds) -> Option<AnyElement> {
                         .flex()
                         .items_center()
                         .text_size(px(11.0))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .font_weight(crate::panels::UI_FONT_REGULAR)
                         .text_color(rgba(if on { t.accent_on } else { t.text }))
                         .when(on, |d| d.bg(rgba(t.accent)))
                         .hover(|s| s.bg(rgba(t.hover)))

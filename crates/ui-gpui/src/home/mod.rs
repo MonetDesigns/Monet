@@ -45,7 +45,7 @@ pub(crate) fn body(app: &CanvasApp, cmds: &Cmds, state: &ExtraState) -> Div {
             // used by the rail / main menu). The renderer only keeps alpha, so each layer is
             // tinted separately instead of relying on the SVG's own colours.
             .child(gpui::svg().path("brand/monet-dots.svg").w(px(24.0)).h(px(24.0)).text_color(gpui::Hsla::from(gpui::rgb(0x007BE5))))
-            .child(div().text_size(pt(16.0)).font_weight(gpui::FontWeight::SEMIBOLD).text_color(rgba(t.text)).child(tr("Monet"))),
+            .child(div().text_size(pt(16.0)).font_weight(crate::panels::UI_FONT_REGULAR).text_color(rgba(t.text)).child(tr("Monet"))),
     );
     side = side.child(state.home_search.clone());
     for (i, (icon, label)) in [(Icon::Page, tr("Recents")), (Icon::LinkOn, tr("Online")), (Icon::ViewGrid, tr("Templates"))].into_iter().enumerate() {
@@ -176,7 +176,7 @@ pub(crate) fn body(app: &CanvasApp, cmds: &Cmds, state: &ExtraState) -> Div {
                     .items_center()
                     .gap(pt(8.0))
                     .child(
-                        div().flex_1().text_size(pt(13.0)).font_weight(gpui::FontWeight::SEMIBOLD).text_color(rgba(t.text)).child(tr("Recent files")),
+                        div().flex_1().text_size(pt(13.0)).font_weight(crate::panels::UI_FONT_REGULAR).text_color(rgba(t.text)).child(tr("Recent files")),
                     )
                     .child(cycle_bool(if grid { tr("Grid") } else { tr("List") }, state.home_view_grid.clone(), cmds))
                     .child(cycle_u8(if *state.home_sort.borrow() == 0 { tr("Name") } else { tr("Edited") }, state.home_sort.clone(), 2, cmds)),
@@ -367,7 +367,7 @@ fn template_card(state: &ExtraState, tpl: &figcraft_engine::templates::Template,
             .flex_col()
             .gap(pt(4.0))
             .p(pt(12.0))
-            .child(div().text_size(pt(12.0)).font_weight(gpui::FontWeight::SEMIBOLD).text_color(rgba(t.text)).child(SharedString::from(name)))
+            .child(div().text_size(pt(12.0)).font_weight(crate::panels::UI_FONT_REGULAR).text_color(rgba(t.text)).child(SharedString::from(name)))
             .child(
                 div()
                     .text_size(pt(11.0))
@@ -411,11 +411,11 @@ fn note(text: &'static str) -> Div {
 }
 
 fn heading(text: &'static str) -> Div {
-    div().w_full().text_size(pt(20.0)).font_weight(gpui::FontWeight::SEMIBOLD).text_color(rgba(tokens().text)).child(SharedString::from(text))
+    div().w_full().text_size(pt(20.0)).font_weight(crate::panels::UI_FONT_REGULAR).text_color(rgba(tokens().text)).child(SharedString::from(text))
 }
 
 fn subheading(text: &'static str) -> Div {
-    div().w_full().text_size(pt(13.0)).font_weight(gpui::FontWeight::SEMIBOLD).text_color(rgba(tokens().text)).child(SharedString::from(text))
+    div().w_full().text_size(pt(13.0)).font_weight(crate::panels::UI_FONT_REGULAR).text_color(rgba(tokens().text)).child(SharedString::from(text))
 }
 
 /// `ui-egui/src/home.rs::action_card`: 260x72, a 32 pt accent icon tile, title + sub line.
@@ -453,7 +453,7 @@ fn action_card(icon: Icon, title: &'static str, sub: &'static str, id: &'static 
                 .flex()
                 .flex_col()
                 .gap(pt(4.0))
-                .child(div().text_size(pt(12.0)).font_weight(gpui::FontWeight::SEMIBOLD).text_color(rgba(t.text)).child(SharedString::from(title)))
+                .child(div().text_size(pt(12.0)).font_weight(crate::panels::UI_FONT_REGULAR).text_color(rgba(t.text)).child(SharedString::from(title)))
                 .child(div().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(sub))),
         )
         .on_mouse_down(MouseButton::Left, move |_e, _, _| c.push(Cmd { id, params: None }))

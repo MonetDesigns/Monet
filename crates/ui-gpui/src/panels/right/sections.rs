@@ -296,7 +296,7 @@ pub(crate) fn view_bar(f: &RightFields, d: &PanelData, motion: bool) -> gpui::Di
             .child(
                 div()
                     .text_size(pt(11.0))
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .font_weight(crate::panels::UI_FONT_REGULAR)
                     .text_color(rgba(if active { t.text } else { t.text_secondary }))
                     .child(label),
             )
@@ -312,7 +312,7 @@ pub(crate) fn view_bar(f: &RightFields, d: &PanelData, motion: bool) -> gpui::Di
             .items_center()
             .rounded(pt(5.0))
             .text_size(pt(11.0))
-            .font_weight(gpui::FontWeight::SEMIBOLD)
+            .font_weight(crate::panels::UI_FONT_REGULAR)
             .text_color(rgba(t.text))
             .child(s)
     };
@@ -1528,7 +1528,7 @@ pub(crate) fn selection_colors(
         .flex_none()
         .text_size(pt(TITLE_PT))
         .line_height(pt(TITLE_PT * 1.25))
-        .font_weight(gpui::FontWeight::MEDIUM)
+        .font_weight(crate::panels::UI_FONT_REGULAR)
         .text_color(rgba(ink))
         .child(tr("Selection colors"));
     // lizard 从 `rect.right() - PAD` 起从右往左摆：`+N` 最右，色块在其左，间隔 8 pt。
@@ -2762,7 +2762,7 @@ pub(crate) fn header(f: &RightFields, d: &PanelData, col: f32) -> Option<gpui::D
         // 其它类型没有下拉，连 chevron 都不画：就是一段 13 pt 半粗文字。
         div()
             .text_size(pt(13.0))
-            .font_weight(gpui::FontWeight::SEMIBOLD)
+            .font_weight(crate::panels::UI_FONT_REGULAR)
             .text_color(rgba(t.text))
             .child(SharedString::from(tr(&h.label).to_string()))
             .into_any_element()
@@ -3399,7 +3399,7 @@ fn local_style_caption(title: SharedString, plus: IconButton) -> Div {
         .items_center()
         .pl(pt(LS_PAD))
         .pr(pt(LS_INSET))
-        .child(div().text_size(pt(11.0)).font_weight(gpui::FontWeight::SEMIBOLD).text_color(rgba(t.text_secondary)).child(title))
+        .child(div().text_size(pt(11.0)).font_weight(crate::panels::UI_FONT_REGULAR).text_color(rgba(t.text_secondary)).child(title))
         .child(div().flex_1().min_w(px(0.0)))
         .child(plus)
 }
@@ -3641,7 +3641,7 @@ fn local_style_folder(
                     .min_w(px(0.0))
                     .overflow_hidden()
                     .text_size(pt(11.0))
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .font_weight(crate::panels::UI_FONT_REGULAR)
                     .text_color(rgba(t.text))
                     .child(SharedString::from(label.to_string())),
             )

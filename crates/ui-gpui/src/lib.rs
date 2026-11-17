@@ -2220,7 +2220,7 @@ impl CanvasView {
             .child(
                 div()
                     .text_size(widgets::pt(11.0))
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .font_weight(panels::UI_FONT_REGULAR)
                     .text_color(widgets::rgba(t.text))
                     .child(gpui::SharedString::from(n.name.clone())),
             );
@@ -2233,7 +2233,7 @@ impl CanvasView {
                     .rounded(widgets::pt(4.0))
                     .bg(widgets::rgba(col))
                     .text_size(widgets::pt(10.0))
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .font_weight(panels::UI_FONT_REGULAR)
                     .text_color(gpui::white())
                     .child(gpui::SharedString::from(label)),
             );
@@ -7424,7 +7424,7 @@ impl Render for CanvasView {
                         .border_1()
                         .border_color(widgets::rgba(t.accent))
                         .text_size(px(14.0))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .font_weight(panels::UI_FONT_REGULAR)
                         .text_color(widgets::rgba(t.text))
                         .child(label),
                 )
@@ -7524,6 +7524,8 @@ impl Render for CanvasView {
             // 全局字体：MiSans（系统已装）。GPUI 按 family 名解析；子元素与自绘的
             // `window.text_style()` 都继承这一层。
             .font_family("MiSans")
+            // UI 字重：普通=NORMAL(305)（原默认 400 会选到 Regular，偏重）——用户 2026-11-17。
+            .font_weight(panels::UI_FONT_NORMAL)
             // ⛔ 点窗口**任意位置**都先结束输入框的编辑（原来只有点画布 / 分隔线才提交，
             // 于是点了别处输入框仍然保持「聚焦 + 全选」的样子，退不出去）。
             // 输入框自己按下时会 `cx.stop_propagation()`，所以点进输入框不会走到这里。

@@ -88,7 +88,7 @@ pub(crate) fn panel(f: &RightFields, rows: &[CommentRow], total: usize) -> Div {
             .items_center()
             .h(px(40.0))
             .px(px(16.0))
-            .child(div().flex_1().text_size(px(12.0)).font_weight(gpui::FontWeight::SEMIBOLD).text_color(rgba(t.text)).child(tr("Comments")))
+            .child(div().flex_1().text_size(px(12.0)).font_weight(crate::panels::UI_FONT_REGULAR).text_color(rgba(t.text)).child(tr("Comments")))
             .child(filter_button(f, cu.filter, cu.sort)),
     );
     if rows.is_empty() {

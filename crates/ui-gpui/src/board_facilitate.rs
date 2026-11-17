@@ -200,7 +200,7 @@ fn title(text: impl Into<SharedString>) -> impl IntoElement {
         .flex()
         .items_center()
         .text_size(px(12.0))
-        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .font_weight(crate::panels::UI_FONT_REGULAR)
         .text_color(rgba(t.menu_text))
         .child(text.into())
 }
@@ -260,7 +260,7 @@ pub(crate) fn pill(app: &CanvasApp, cmds: Cmds, st: &Rc<RefCell<State>>) -> Opti
                         .flex()
                         .items_center()
                         .text_size(px(13.0))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .font_weight(crate::panels::UI_FONT_REGULAR)
                         .text_color(rgba(color))
                         .child(SharedString::from(text)),
                 );

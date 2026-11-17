@@ -186,7 +186,7 @@ pub(crate) fn picker(pics: &Pictures, on_card: Rc<dyn Fn(usize, &mut gpui::Windo
                 .items_center()
                 .pl(pt(2.0))
                 .text_size(pt(12.0))
-                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .font_weight(crate::panels::UI_FONT_REGULAR)
                 .text_color(rgba(t.menu_text))
                 .child(SharedString::from(figcraft_i18n::tr("Templates"))),
         )

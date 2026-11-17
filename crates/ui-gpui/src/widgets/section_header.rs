@@ -80,7 +80,7 @@ impl IntoElement for SectionHeader {
                 // 行高按 1.25×字号，让 GPUI 自己在行框里排。
                 .line_height(pt(TITLE_PT * 1.25))
                 // 用户 2026-11-05：大标题的字重全部用 medium（原来是 bold，显得过重）。
-                .font_weight(FontWeight::MEDIUM)
+                .font_weight(crate::panels::UI_FONT_REGULAR)
                 .text_color(title_color)
                 .child(self.title.clone()),
             0xFF2D55,

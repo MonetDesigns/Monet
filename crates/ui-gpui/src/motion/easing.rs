@@ -384,7 +384,7 @@ pub fn panel(cx: &mut App, doc: &Document, ui: &MotionUi, queue: &Queue, _window
             div()
                 .flex_1()
                 .text_size(pt(11.5))
-                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .font_weight(crate::panels::UI_FONT_REGULAR)
                 .text_color(rgba(t.text))
                 .child(tr("Easing"))
                 .into_any_element(),

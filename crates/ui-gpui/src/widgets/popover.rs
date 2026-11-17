@@ -331,7 +331,7 @@ pub fn title_text(text: impl Into<SharedString>) -> gpui::Div {
         .flex()
         .items_center()
         .text_size(pt(11.0))
-        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .font_weight(crate::panels::UI_FONT_REGULAR)
         .text_color(rgba(tokens().text))
         .whitespace_nowrap()
         .overflow_hidden()

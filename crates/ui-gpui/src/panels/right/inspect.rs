@@ -199,7 +199,7 @@ fn connect_section(f: &RightFields, data: &InspectData, cx: &mut App, n: &mut us
         .rounded(pt(4.0))
         .bg(gpui::rgb(0x087D4F))
         .text_size(pt(10.0))
-        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .font_weight(crate::panels::UI_FONT_REGULAR)
         .text_color(gpui::white())
         .child(SharedString::from(tr("Connected")));
     sec = sec.child(field_row_full(

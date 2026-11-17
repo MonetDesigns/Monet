@@ -346,7 +346,7 @@ pub fn render(app: &CanvasApp, state: &PresentState) -> Stateful<Div> {
                 .flex_1()
                 .min_w(px(0.0))
                 .text_size(pt(11.0))
-                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .font_weight(crate::panels::UI_FONT_REGULAR)
                 .text_color(rgba(t.text))
                 .child(SharedString::from(name)),
         )

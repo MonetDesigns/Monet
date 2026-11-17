@@ -322,7 +322,7 @@ pub(crate) fn render(kind: &ExtraKind, app: &CanvasApp, cmds: &Cmds, state: &Ext
                         .child(
                             div()
                                 .text_size(pt(13.0))
-                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .font_weight(crate::panels::UI_FONT_REGULAR)
                                 .text_color(rgba(t.text))
                                 .child(SharedString::from(kind.title())),
                         )
@@ -520,7 +520,7 @@ fn versions_body(app: &CanvasApp, cmds: &Cmds, state: &ExtraState, cx: &mut App)
                         .child(
                             div()
                                 .text_size(pt(11.0))
-                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .font_weight(crate::panels::UI_FONT_REGULAR)
                                 .text_color(rgba(t.text))
                                 .child(SharedString::from(format!("Viewing “{nm}”"))),
                         )
@@ -757,7 +757,7 @@ fn compare_body(app: &CanvasApp, cmds: &Cmds, state: &ExtraState, id: Option<fig
 
     let mut body = div().flex().flex_col().w_full().h_full().gap(pt(8.0)).p(pt(12.0));
     let summary = format!("{} · {} added · {} removed · {} modified", cmp.name, cmp.added, cmp.removed, cmp.modified);
-    body = body.child(div().text_size(pt(12.0)).font_weight(gpui::FontWeight::SEMIBOLD).text_color(rgba(t.text)).child(SharedString::from(summary)));
+    body = body.child(div().text_size(pt(12.0)).font_weight(crate::panels::UI_FONT_REGULAR).text_color(rgba(t.text)).child(SharedString::from(summary)));
     if let Some(v) = &chosen {
         if let Some(name) = ds.versions.iter().find(|x| &x.id == v).map(|x| x.name.clone()) {
             body = body
@@ -892,7 +892,7 @@ fn compare_body(app: &CanvasApp, cmds: &Cmds, state: &ExtraState, id: Option<fig
     let mut list = div().id("compare-changes").flex_none().w(px(300.0)).h_full().min_h(px(0.0)).flex().flex_col().overflow_y_scroll().child(
         div()
             .text_size(pt(11.0))
-            .font_weight(gpui::FontWeight::SEMIBOLD)
+            .font_weight(crate::panels::UI_FONT_REGULAR)
             .text_color(rgba(t.text))
             .child(SharedString::from(format!("{} changes", cmp.changes.len()))),
     );
@@ -1082,7 +1082,7 @@ fn component_tile(doc: &figcraft_doc::Document, cmds: &Cmds, id: figcraft_doc::N
                         .min_w(px(0.0))
                         .overflow_hidden()
                         .text_size(pt(11.0))
-                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .font_weight(crate::panels::UI_FONT_REGULAR)
                         .text_color(rgba(t.text))
                         .child(SharedString::from(name)),
                 )
@@ -1172,7 +1172,7 @@ fn style_badge(s: &Style) -> Div {
         StyleKind::Text { .. } => boxed(IconButton::new(Icon::Text).size(14.0)),
         StyleKind::Grid { .. } => boxed(IconButton::new(Icon::ViewGrid).size(14.0)),
         StyleKind::Effect { .. } => {
-            boxed(div().text_size(pt(9.0)).font_weight(gpui::FontWeight::SEMIBOLD).text_color(rgba(t.text_secondary)).child(SharedString::from("fx")))
+            boxed(div().text_size(pt(9.0)).font_weight(crate::panels::UI_FONT_REGULAR).text_color(rgba(t.text_secondary)).child(SharedString::from("fx")))
         }
     }
 }
@@ -1189,11 +1189,11 @@ fn icon_cmd(icon: Icon, id: &'static str, params: Value, cmds: &Cmds) -> IconBut
 /// All data and actions come from the engine (`prefs.recent_files`, `prefs.getting_started_dismissed`,
 /// `file.new` / `file.newBoard` / `file.open` / `file.openRecent` / `file.newFromTemplate`).
 fn heading(text: &'static str) -> Div {
-    div().w_full().text_size(pt(20.0)).font_weight(gpui::FontWeight::SEMIBOLD).text_color(rgba(tokens().text)).child(text)
+    div().w_full().text_size(pt(20.0)).font_weight(crate::panels::UI_FONT_REGULAR).text_color(rgba(tokens().text)).child(text)
 }
 
 fn subheading(text: &'static str) -> Div {
-    div().w_full().text_size(pt(13.0)).font_weight(gpui::FontWeight::SEMIBOLD).text_color(rgba(tokens().text)).child(text)
+    div().w_full().text_size(pt(13.0)).font_weight(crate::panels::UI_FONT_REGULAR).text_color(rgba(tokens().text)).child(text)
 }
 
 /// `ui-egui/src/home.rs::action_card`: 260x72, a 32 pt accent icon tile, title + sub line.
@@ -1231,7 +1231,7 @@ fn action_card(icon: Icon, title: &'static str, sub: &'static str, id: &'static 
                 .flex()
                 .flex_col()
                 .gap(pt(4.0))
-                .child(div().text_size(pt(12.0)).font_weight(gpui::FontWeight::SEMIBOLD).text_color(rgba(t.text)).child(title))
+                .child(div().text_size(pt(12.0)).font_weight(crate::panels::UI_FONT_REGULAR).text_color(rgba(t.text)).child(title))
                 .child(div().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(sub)),
         )
         .on_mouse_down(MouseButton::Left, move |_e, _, _| c.push(Cmd { id, params: None }))

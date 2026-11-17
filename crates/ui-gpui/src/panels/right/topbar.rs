@@ -114,7 +114,7 @@ fn people(f: &RightFields, live: &LiveData) -> Div {
                 .items_center()
                 .justify_center()
                 .text_size(pt(10.0))
-                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .font_weight(crate::panels::UI_FONT_REGULAR)
                 .text_color(rgba(t.text))
                 .child(SharedString::from(format!("+{more}"))),
         );
@@ -169,7 +169,7 @@ fn avatar(name: &str, fill: Color32, ring: Option<Color32>) -> Div {
         .items_center()
         .justify_center()
         .text_size(pt(9.0))
-        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .font_weight(crate::panels::UI_FONT_REGULAR)
         .text_color(rgba(ink_on(fill)))
         .child(SharedString::from(figcraft_engine::live::initials(name)))
 }
@@ -257,7 +257,7 @@ fn share_button(f: &RightFields, live: &LiveData, t: &crate::theme::Tokens) -> g
             let anchor = Bounds { origin, size: gpui::size(px(1.0), px(0.0)) };
             root.update(cx, |cv, cx| cv.open_share(anchor, cx));
         })
-        .child(div().text_size(pt(11.5)).font_weight(gpui::FontWeight::SEMIBOLD).text_color(rgba(t.accent_on)).child(tr("Share")))
+        .child(div().text_size(pt(11.5)).font_weight(crate::panels::UI_FONT_REGULAR).text_color(rgba(t.accent_on)).child(tr("Share")))
 }
 
 /// 一个填充的 ▶（egui 用 `closed_line` 画的三角形；GPUI 这里自绘三角形，不新增图标）。
@@ -302,7 +302,7 @@ pub(crate) fn share_card(
             .pt(pt(4.0))
             .pb(pt(2.0))
             .text_size(pt(12.0))
-            .font_weight(gpui::FontWeight::SEMIBOLD)
+            .font_weight(crate::panels::UI_FONT_REGULAR)
             .text_color(rgba(t.menu_text))
             .child(title),
     );

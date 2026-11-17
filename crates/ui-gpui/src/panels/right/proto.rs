@@ -477,7 +477,7 @@ fn interaction_line(f: &RightFields, it: &InteractionRow, i: usize, node: Option
             cmds.wake();
         })
         .child(
-            div().text_size(pt(11.0)).font_weight(gpui::FontWeight::SEMIBOLD).text_color(rgba(t.text)).child(SharedString::from(it.trigger.clone())),
+            div().text_size(pt(11.0)).font_weight(crate::panels::UI_FONT_REGULAR).text_color(rgba(t.text)).child(SharedString::from(it.trigger.clone())),
         )
         .child(div().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(it.summary.clone())));
     field_row(vec![glyph.into_any_element(), text.into_any_element()], vec![remove])

@@ -226,7 +226,7 @@ fn annotation_head(f: &RightFields, a: &AnnotationRow, node: figcraft_doc::NodeI
                 .flex_1()
                 .min_w(px(0.0))
                 .text_size(pt(10.0))
-                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .font_weight(crate::panels::UI_FONT_REGULAR)
                 .text_color(rgba(t.text_secondary))
                 .child(SharedString::from(format!("Note {}", a.index + 1))),
         )
@@ -381,7 +381,7 @@ fn resource_line(f: &RightFields, r: &DevResourceRow, node: figcraft_doc::NodeId
                 cx.open_url(&url_open);
             }
         })
-        .child(div().text_size(pt(11.0)).font_weight(gpui::FontWeight::SEMIBOLD).text_color(rgba(t.accent)).child(SharedString::from(r.name.clone())))
+        .child(div().text_size(pt(11.0)).font_weight(crate::panels::UI_FONT_REGULAR).text_color(rgba(t.accent)).child(SharedString::from(r.name.clone())))
         .child(div().text_size(pt(10.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(below)));
     let mut row = div().flex().flex_row().items_center().gap(pt(6.0)).w_full().child(link);
     if let Some(i) = r.index {
@@ -495,7 +495,7 @@ fn checked_dropdown(f: &RightFields, label: &'static str, rows: Vec<(String, boo
 /// 一行小标题。
 fn sublabel(text: &'static str) -> Div {
     let t = tokens();
-    div().w_full().text_size(pt(10.0)).font_weight(gpui::FontWeight::SEMIBOLD).text_color(rgba(t.text_secondary)).child(SharedString::from(text))
+    div().w_full().text_size(pt(10.0)).font_weight(crate::panels::UI_FONT_REGULAR).text_color(rgba(t.text_secondary)).child(SharedString::from(text))
 }
 
 /// 一行次要提示文字。

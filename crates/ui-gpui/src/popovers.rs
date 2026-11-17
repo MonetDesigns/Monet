@@ -3434,7 +3434,7 @@ impl WindowState {
                         .pt(pt(8.0))
                         .pb(pt(4.0))
                         .text_size(pt(10.5))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .font_weight(crate::panels::UI_FONT_REGULAR)
                         .text_color(rgba(t.text))
                         .child(text.clone())
                         .into_any_element(),
@@ -4207,7 +4207,7 @@ impl WindowState {
                         div()
                             .pl(pt(16.0))
                             .text_size(pt(11.0))
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .font_weight(crate::panels::UI_FONT_REGULAR)
                             .text_color(rgba(t.text))
                             .child(text.clone()),
                     )

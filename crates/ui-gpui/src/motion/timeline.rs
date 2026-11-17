@@ -752,6 +752,7 @@ fn text_layers(labels: &[Label]) -> Vec<AnyElement> {
         .iter()
         .map(|l| {
             let weight = match l.font.weight {
+                // 画布文字图层 = 用户内容，字重照原样映射，不走 UI 字体的 Normal/Regular 规则。
                 crate::canvas::geom::FontWeight::Bold => gpui::FontWeight::BOLD,
                 crate::canvas::geom::FontWeight::SemiBold => gpui::FontWeight::SEMIBOLD,
                 _ => gpui::FontWeight::NORMAL,
