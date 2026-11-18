@@ -1008,8 +1008,8 @@ impl PresentState {
 /// 顶栏高度（px，eGUI `Chrome::FULL.bar_h`）。
 const BAR_H: f32 = 40.0;
 
-/// 预览窗格顶栏高度（px，eGUI `Chrome::PANE.bar_h`）。
-const PANE_BAR_H: f32 = 36.0;
+/// 预览窗格顶栏高度（px）。用普通标题栏的通用高度，不抄 Figma 预览模式更矮的 36。
+const PANE_BAR_H: f32 = 38.0;
 
 /// 画面四周留白（eGUI `Chrome::FULL.pad`）。
 const PAD: f32 = 32.0;

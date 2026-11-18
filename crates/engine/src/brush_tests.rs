@@ -509,3 +509,98 @@ fn a_stray_sample_does_not_throw_the_stroke_off() {
     let (_, curves) = shape_of(&path);
     assert!(curves >= 2, "the stroke was dropped instead of fitted: {curves} curves");
 }
+
+/// The UI preset menu uses `tool.drawStyle {tool:"brush", preset:<abr id>}` (not the older
+/// `tool.brushPreset`). Reproduce that exact path end to end: choosing a preset and drawing
+/// must paint with that tip, not silently fall back to nothing.
+#[test]
+fn ui_drawstyle_preset_paints_the_same_as_brushpreset() {
+    install_test_brushes();
+    fn painted(setup: impl Fn(&mut Session)) -> usize {
+        let mut s = Session::new();
+        s.execute("tool.set", &json!({"tool": "brush"})).unwrap();
+        setup(&mut s);
+        s.pointer(&PointerEvent::at(PointerKind::Down, 10.0, 100.0, 1.0)).unwrap();
+        for i in 1..=20 {
+            s.pointer(&PointerEvent::at(PointerKind::Move, 10.0 + f64::from(i) * 5.0, 100.0, 1.0)).unwrap();
+        }
+        s.pointer(&PointerEvent::at(PointerKind::Up, 110.0, 100.0, 1.0)).unwrap();
+        let doc = s.doc().unwrap();
+        let view = figcraft_render::View { origin: (0.0, 0.0), scale: 1.0, width: 200, height: 200 };
+        let pix = figcraft_render::render_view(doc, s.page().unwrap(), &view, &figcraft_render::Options::default()).unwrap();
+        pix.data().chunks_exact(4).filter(|p| p[3] > 0).count()
+    }
+    let via_old = painted(|s| { s.execute("tool.brushPreset", &json!({"preset": "dots"})).unwrap(); });
+    let via_ui = painted(|s| { s.execute("tool.drawStyle", &json!({"tool": "brush", "preset": "dots"})).unwrap(); });
+    // The UI hands `infos()[].id`, which is `<group>/<index>/<name>` — not a legacy short name.
+    let full_id = figcraft_abr::infos().first().map(|b| b.id.clone()).expect("test library has brushes");
+    let via_full_id = painted(|s| { s.execute("tool.drawStyle", &json!({"tool": "brush", "preset": full_id})).unwrap(); });
+    assert!(via_old > 0, "brushPreset paints");
+    assert!(via_ui > 0, "UI tool.drawStyle preset must paint, got 0 pixels");
+    assert!(via_full_id > 0, "UI passes the full ABR id; it must paint, got 0 pixels");
+}
+
+
+
+/// End-to-end through the UI path: the toolbar's Flow / Opacity / Smoothing steppers issue
+/// `tool.drawStyle {tool:"brush", <key>: v}`; the next stroke must reflect each one.
+/// Rendered with `render_nodes_into` (no page colour) so alpha is the paint's own coverage —
+/// with the page background under it every pixel would be opaque regardless.
+#[test]
+fn ui_flow_opacity_smoothing_steppers_take_effect() {
+    install_test_brushes();
+    // Draw a horizontal stroke through a fixed point and return (alpha at the centre, profile len).
+    let run = |style: serde_json::Value| -> (u8, usize) {
+        let mut s = Session::new();
+        s.execute("tool.set", &json!({"tool": "brush"})).unwrap();
+        s.execute("tool.drawStyle", &json!({"tool": "brush", "preset": "dots"})).unwrap();
+        for (k, v) in style.as_object().expect("object").clone() {
+            s.execute("tool.drawStyle", &json!({"tool": "brush", k: v})).unwrap();
+        }
+        s.pointer(&PointerEvent::at(PointerKind::Down, 20.0, 100.0, 1.0)).unwrap();
+        for i in 1..=20 {
+            s.pointer(&PointerEvent::at(PointerKind::Move, 20.0 + f64::from(i) * 4.0, 100.0, 1.0)).unwrap();
+        }
+        s.pointer(&PointerEvent::at(PointerKind::Up, 100.0, 100.0, 1.0)).unwrap();
+        let doc = s.doc().unwrap();
+        let view = figcraft_render::View { origin: (50.0, 99.0), scale: 1.0, width: 3, height: 3 };
+        let mut pix = figcraft_render::Pixmap::new(3, 3).unwrap();
+        figcraft_render::render_nodes_into(doc, &doc.node(s.page().unwrap()).unwrap().children, &view, &mut pix);
+        let a = pix.data()[(3 + 1) * 4 + 3];
+        let pts = doc.nodes().find_map(|n| n.stroke.profile().map(|pr| pr.points.len())).unwrap_or(0);
+        (a, pts)
+    };
+
+    let (base, _) = run(json!({}));
+    let (op_half, _) = run(json!({"opacity": 0.5}));
+    let (flow_half, _) = run(json!({"flow": 0.5}));
+
+    assert!(base > 200, "default brush paints solid at the centre, got {base}");
+    assert!(op_half > 40 && op_half < 200, "opacity 0.5 must cap the stroke near half, got {op_half}");
+    assert!(flow_half > 0 && flow_half < base, "flow 0.5 must lay down less ink per dab than 1.0, got {flow_half} vs {base}");
+
+    // Smoothing reshapes the written width profile (the stabilizer smooths the sampled points).
+    // Compare the actual profile *points*, not their count: smoothing moves samples, it does not
+    // add or remove them.
+    let profile_of = |style: serde_json::Value| -> String {
+        let mut s = Session::new();
+        s.execute("tool.set", &json!({"tool": "brush"})).unwrap();
+        s.execute("tool.drawStyle", &json!({"tool": "brush", "preset": "dots"})).unwrap();
+        for (k, v) in style.as_object().expect("object").clone() {
+            s.execute("tool.drawStyle", &json!({"tool": "brush", k: v})).unwrap();
+        }
+        s.pointer(&PointerEvent::at(PointerKind::Down, 20.0, 100.0, 1.0)).unwrap();
+        // A wobbly path so smoothing has something to smooth.
+        for i in 1..=20 {
+            let y = 100.0 + if i % 2 == 0 { 1.6 } else { -1.6 };
+            s.pointer(&PointerEvent::at(PointerKind::Move, 20.0 + f64::from(i) * 4.0, y, 1.0)).unwrap();
+        }
+        s.pointer(&PointerEvent::at(PointerKind::Up, 100.0, 100.0, 1.0)).unwrap();
+        let doc = s.doc().unwrap();
+        doc.nodes().find_map(|n| n.stroke.profile().map(|pr| format!("{:?}", pr.points))).unwrap_or_default()
+    };
+    let p_none = profile_of(json!({"smoothing": 0.0}));
+    let p_max = profile_of(json!({"smoothing": 1.0}));
+    assert!(!p_none.is_empty(), "a brush stroke writes a width profile");
+    assert_ne!(p_none, p_max, "smoothing 0 vs 1 must change the written width profile");
+}

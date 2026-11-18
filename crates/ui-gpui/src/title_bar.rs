@@ -28,8 +28,8 @@ use gpui::{Div, Point, SharedString, TitlebarOptions, WindowControlArea, div, pr
 use crate::widgets::icon::{self, Icon};
 use crate::widgets::{pt, rgba, tokens};
 
-/// 窗口标题栏高度（kit 默认 34px，示例允许 `.h(px(40.))`；本项目的 TabBar 用 40pt）。
-pub const TITLE_H: f32 = 40.0;
+/// 窗口标题栏高度。Figma 桌面壳实测 38px（`tab_bar--container` height:38px），标签条与之同高。
+pub const TITLE_H: f32 = 38.0;
 /// 标题栏内容左留白（上游 `tabs.rs`：Home 键与左轨右缘对齐）。
 pub const LEFT_PAD: f32 = 8.0;
 /// 一个窗口控制按钮的宽度（上游 `windows_buttons::W = 46.0`）。

@@ -2933,7 +2933,7 @@ impl WindowState {
         if let Some(anchor) = c.model_anchor.get() {
             let rows: Vec<MenuRow> = COLOR_MODELS
                 .iter()
-                .map(|n| MenuRow { label: (*n).into(), trail: None, checked: Some(*n == model_name), separator_before: false })
+                .map(|n| MenuRow { label: (*n).into(), trail: None, checked: Some(*n == model_name), separator_before: false, key: None })
                 .collect();
             let set_model = c.model.clone();
             let close = c.model_anchor.clone();
@@ -2964,7 +2964,7 @@ impl WindowState {
             let current_blend = state.borrow().blend;
             let rows: Vec<MenuRow> = figcraft_color::BlendMode::ALL
                 .iter()
-                .map(|m| MenuRow { label: m.label().into(), trail: None, checked: Some(*m == current_blend), separator_before: false })
+                .map(|m| MenuRow { label: m.label().into(), trail: None, checked: Some(*m == current_blend), separator_before: false, key: None })
                 .collect();
             let write = p.on_write.clone();
             let st = state.clone();
@@ -2995,7 +2995,7 @@ impl WindowState {
         if let Some(anchor) = c.swatch_anchor.get() {
             let rows: Vec<MenuRow> = [("On this page", 0u8), ("Recent", 1u8)]
                 .into_iter()
-                .map(|(name, i)| MenuRow { label: tr(name).into(), trail: None, checked: Some(i == set), separator_before: false })
+                .map(|(name, i)| MenuRow { label: tr(name).into(), trail: None, checked: Some(i == set), separator_before: false, key: None })
                 .collect();
             let set_cell = c.swatch_set.clone();
             let close = c.swatch_anchor.clone();

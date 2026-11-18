@@ -4011,24 +4011,25 @@ impl CanvasView {
                 // Every brush comes from an external `.abr` file; "Plain" clears the preset.
                 let current = self.app.session.tool.brush_style.preset.as_ref().map(|b| b.preset.clone());
                 let mut rows = Vec::new();
-                let mut ids: std::collections::HashMap<String, Option<String>> = std::collections::HashMap::new();
                 let plain = figcraft_i18n::tr("Plain").to_string();
-                rows.push(MenuRow::new(plain.clone()).checked(Some(current.is_none())));
-                ids.insert(plain, None);
+                // The row's pick value is its `key`, never its label: the label is "group / name"
+                // but the engine needs the full ABR id, and matching on the label text silently
+                // missed — the preset stayed on Plain, so any non-Plain tip fell back to a plain
+                // outline ("only Plain draws").
+                rows.push(MenuRow::new(plain).key("").checked(Some(current.is_none())));
                 for b in figcraft_abr::infos() {
                     let label = if b.folder.is_empty() {
                         format!("{} / {}", b.group, b.name)
                     } else {
                         format!("{} / {} / {}", b.group, b.folder.join(" / "), b.name)
                     };
-                    rows.push(MenuRow::new(label.clone()).checked(Some(current.as_deref() == Some(b.id.as_str()))));
-                    ids.insert(label, Some(b.id));
+                    rows.push(MenuRow::new(label).key(b.id.clone()).checked(Some(current.as_deref() == Some(b.id.as_str()))));
                 }
                 let cmds = self.fields.queue();
-                let on_pick = std::rc::Rc::new(move |label: &str, _w: &mut Window, _cx: &mut App| {
-                    if let Some(preset) = ids.get(label) {
-                        cmds.push(panels::Cmd { id: "tool.drawStyle", params: Some(serde_json::json!({ "tool": "brush", "preset": preset })) });
-                    }
+                let on_pick = std::rc::Rc::new(move |key: &str, _w: &mut Window, _cx: &mut App| {
+                    // "" = Plain (clear the tip); anything else is the full ABR id.
+                    let preset = if key.is_empty() { None } else { Some(key.to_string()) };
+                    cmds.push(panels::Cmd { id: "tool.drawStyle", params: Some(serde_json::json!({ "tool": "brush", "preset": preset })) });
                 });
                 let anchor = crate::widgets::dropdown::menu_anchor("draw-brush-preset");
                 self.open_dropdown_menu(Some(anchor), rect, Some(160.0), rows, on_pick, cx);

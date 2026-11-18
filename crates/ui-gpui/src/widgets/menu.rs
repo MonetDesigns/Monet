@@ -42,12 +42,23 @@ pub struct MenuRow {
     pub checked: Option<bool>,
     /// Draw a 1 pt divider above this row — egui's `ui.separator()` between menu groups.
     pub separator_before: bool,
+    /// The value handed to `on_pick`, when it must differ from the label. The brush-preset menu
+    /// needs this: its rows show "group / name" but the pick must carry the full ABR id, and
+    /// matching on the label string silently missed (the preset never changed, so a non-Plain
+    /// tip fell back to a plain outline). `None` keeps the old behaviour (pick the label).
+    pub key: Option<SharedString>,
 }
 
 impl MenuRow {
     /// A plain row with just a label (no trailing shortcut text).
     pub fn new(label: impl Into<SharedString>) -> Self {
-        Self { label: label.into(), trail: None, checked: None, separator_before: false }
+        Self { label: label.into(), trail: None, checked: None, separator_before: false, key: None }
+    }
+
+    /// Override the value handed to `on_pick` (defaults to the label).
+    pub fn key(mut self, k: impl Into<SharedString>) -> Self {
+        self.key = Some(k.into());
+        self
     }
 
     /// A check row, or (with `None`) a plain row that keeps the check column's width.
@@ -143,7 +154,8 @@ pub fn menu_popup_in(
         // 之前用 `"✓ "` / `"    "` 前缀去顶，勾与不勾的字宽不同、缩进对不上，整列是歪的
         // （用户 2026-11-05 指出）。没有勾选态的行不占这一列。
         let check = if r.checked == Some(true) { "✓" } else { "" };
-        let pick_text = r.label.to_string();
+        // Prefer an explicit key (rows whose pick value is not their visible label).
+        let pick_text = r.key.clone().unwrap_or_else(|| r.label.clone()).to_string();
         let label = r.label;
         let trail = r.trail;
         let on_pick = on_pick.clone();

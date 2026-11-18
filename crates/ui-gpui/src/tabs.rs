@@ -7,8 +7,8 @@
 //! 2026-11-08（P0-1 第 1 步）：以 `git show upstream/main:crates/ui-egui/src/tabs.rs` 为准，
 //! **不照工作区那份 714 行的本地 egui 参考版**（它被 111 个本地提交改写过）。
 
-/// 标签条高度（上游 `HEIGHT`）。
-pub const HEIGHT: f32 = 40.0;
+/// 标签条高度。与标题栏同高（Figma `tab_bar--container` height:38px）。
+pub const HEIGHT: f32 = 38.0;
 /// 一个标签能被压缩到的最窄宽度（上游 `MIN_TAB_WIDTH`）。
 pub const MIN_TAB_WIDTH: f32 = 96.0;
 /// 溢出按钮宽度（上游 `OVERFLOW_WIDTH`）。
@@ -40,6 +40,8 @@ pub const TAB_BUTTON: f32 = 24.0;
 pub const TAB_BUTTON_RADIUS: f32 = 5.0;
 /// 新标签按钮左右外边距（Figma `.tab_bar--newTabButtonUI3` margin:0 7px）。
 pub const NEW_TAB_MARGIN_X: f32 = 7.0;
+/// 关闭按钮距标签右边缘的留白（Figma `.tab--fadeOutOverlay` padding-right:8px）。
+pub const TAB_CLOSE_RIGHT: f32 = 8.0;
 
 /// 上一帧有哪些标签、以及新出现的标签何时开始入场。上游把它放在 egui 的 `data` 里，
 /// GPUI 由 `CanvasView` 跨帧持有（`tabs_view::TabState`）。只在标签集合变化时分配。

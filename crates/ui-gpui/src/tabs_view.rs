@@ -28,7 +28,8 @@ use serde_json::json;
 use crate::panels::{Cmd, Cmds};
 use crate::tabs::{
     BAR_BUTTON, BAR_ICON, CLOSE_ICON, HEIGHT, LIVE_MARK_WIDTH, LiveBadge, NEW_TAB_MARGIN_X, OVERFLOW_WIDTH, TAB_BUTTON, TAB_BUTTON_RADIUS,
-    TAB_FONT, TAB_GAP, TAB_LABEL_MAX, TAB_PAD_X, TabMotion, VisibleTab, live_badge, preferred_width, tab_drop_position, tab_layout,
+    TAB_CLOSE_RIGHT, TAB_FONT, TAB_GAP, TAB_LABEL_MAX, TAB_PAD_X, TabMotion, VisibleTab, live_badge, preferred_width, tab_drop_position,
+    tab_layout,
 };
 use crate::title_bar;
 use crate::widgets::icon::{self, Icon};
@@ -536,6 +537,9 @@ pub(crate) fn tab_strip(
     // Home 键（active / hover 底色 + 32pt 图标：图标本身等比放大，线宽在 SVG 里按比例
     // 退回去保持视觉粗细不变，用户 2026-11-16）。
     let me_home = me.clone();
+    let home_ink = tab_ink();
+    let home_normal = home_ink.secondary;
+    let home_hot = home_ink.text;
     let home = div()
         .id("tab-home")
         .flex_none()
@@ -547,6 +551,7 @@ pub(crate) fn tab_strip(
         // Home 的盒子右边缘要让给 1pt 分隔线，所以内容再右缩 `content_x0`：
         // 这样图标中心落在整条左竖栏（0..RAIL_W）的中心，而不是盒子中心（偏右 4pt）。
         .pr(pt(content_x0))
+        .group("tab-home-grp")
         .when(home_active, move |d| d.bg(rgba(t.pressed)))
         .hover(move |s| s.bg(rgba(t.hover)))
         .on_click(move |_e: &ClickEvent, window, cx: &mut App| {
@@ -558,7 +563,26 @@ pub(crate) fn tab_strip(
                 cx.notify();
             });
         })
-        .child(icon::paint(Icon::Home, rgba(t.icon), 32.0))
+        // Figma `.tab--fileBrowserTab`：图标普通 text-secondary，hover/active 变 text。
+        // svg 的显式色不继承父 text_color，用双叠层 + group_hover 显隐。
+        .child(
+            div()
+                .relative()
+                .flex_none()
+                .w(pt(32.0))
+                .h(pt(32.0))
+                .child(icon::paint(Icon::Home, rgba(if home_active { home_hot } else { home_normal }), 32.0))
+                .when(!home_active, |d| {
+                    d.child(
+                        div()
+                            .absolute()
+                            .inset_0()
+                            .opacity(0.0)
+                            .group_hover("tab-home-grp", |s| s.opacity(1.0))
+                            .child(icon::paint(Icon::Home, rgba(home_hot), 32.0)),
+                    )
+                }),
+        )
         .into_any_element();
 
     // 这是 kit `TitleBar::new().child(...)` 的 child：高度 / 底色 / 窗口按钮都由壳负责。
@@ -651,7 +675,6 @@ pub(crate) fn tab_strip(
         // Figma 按钮态色（Copy 的 Color32），供下面的 hover/active 闭包 move。
         let ink_hover = ink.hover;
         let ink_panel = ink.panel;
-        let ink_border = ink.border;
         let ink_text = ink.text;
         // Figma hover 联动：body 作为 group，图标与文字用 group_hover 变蓝/变深。
         let tab_group = SharedString::from(format!("tabgrp-{key:?}"));
@@ -671,7 +694,7 @@ pub(crate) fn tab_strip(
             TabKey::Present { .. } | TabKey::New { .. } => 0,
         };
         // `w` 含右侧 1pt 分隔线：body + close 只能占 `w - 1`（close 按 Figma 24pt）。
-        let body_w = (w - TAB_BUTTON - 1.0).max(0.0);
+        let body_w = (w - TAB_BUTTON - TAB_CLOSE_RIGHT - 1.0).max(0.0);
         // 上游 `bidi::paint_name` 的可用宽度也要扣掉 live 标记与未保存点，否则名字会压到徽标上。
         let name_w = (w - if e.live.visible() { LIVE_MARK_WIDTH } else { 0.0 } - if e.dirty { 12.0 } else { 0.0 }).max(0.0);
         let name = crate::bidi::fit(window, &e.name, 12.0, name_width(name_w));
@@ -809,6 +832,7 @@ pub(crate) fn tab_strip(
             .items_center()
             .justify_center()
             .rounded(pt(TAB_BUTTON_RADIUS))
+            .mr(pt(TAB_CLOSE_RIGHT))
             .hover(move |s| s.bg(rgba(ink_hover)));
         match key {
             TabKey::Doc { index } => {
@@ -880,7 +904,9 @@ pub(crate) fn tab_strip(
             .items_center()
             .border_r_1()
             .border_color(rgba(ink.border))
-            .when(is_active, move |d| d.bg(rgba(ink_panel)).border_b_1().border_color(rgba(ink_border)).pt(pt(1.0)))
+            // active 只铺纯色、铺满整个标签高度：不再 border_b_1 + pt(1)（那会挤内容盒、
+            // 在白底顶/底露出标题栏灰底 →「白底没到底、非 active 又到底」的 bug）。
+            .when(is_active, move |d| d.bg(rgba(ink_panel)))
             .when(!is_active, move |d| d.hover(move |s| s.bg(rgba(ink_hover))))
             .child(body)
             .child(close);
