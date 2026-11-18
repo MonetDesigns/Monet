@@ -926,27 +926,19 @@ impl PresentState {
             }
             Action::ChangeTo { dest } => {
                 let Some(inst) = figcraft_engine::proto_run::change_to_target(&doc, node, *dest) else { return false };
-                eprintln!("[dbg changeTo] node={node} inst={inst} dest={dest}");
                 if !doc.contains(*dest) {
                     return false;
                 }
                 self.begin(tr, dur, easing, now);
                 let Some(d) = self.design.as_mut() else { return false };
                 let before = d.clone();
-                dbg_boxes("pre", &before);
-                dbg_tree("pre", &before, NodeId(103));
                 if let Some(n) = d.node_mut(inst)
                     && let figcraft_doc::NodeKind::Instance { component, .. } = &mut n.kind
                 {
                     *component = *dest;
                 }
                 figcraft_engine::components::sync_instance(d, inst);
-                dbg_boxes("synced", d);
                 self.settle(&before);
-                if let Some(d) = self.design.as_ref() {
-                    dbg_boxes("post", d);
-                    dbg_tree("post", d, NodeId(103));
-                }
                 self.rev += 1;
                 true
             }
@@ -1439,46 +1431,7 @@ pub fn render(app: &CanvasApp, state: &PresentState, vp: (f32, f32), canvas: (f3
                     .bg(gpui::rgb(0x000000)),
             );
         }
-        // 6) hotspot 提示（eGUI `draw`）：点击空白后从整不透明淡出到 0（`(flash_until-now)/FLASH_SECS`）。
-        if state.hints && state.clock < state.flash_until {
-            let a = ((state.flash_until - state.clock) / FLASH_SECS).clamp(0.0, 1.0) as f32;
-            eprintln!(
-                "[dbg flash] clock={:.3} until={:.3} a={:.3} hot={}",
-                state.clock,
-                state.flash_until,
-                a,
-                state.hot.len()
-            );
-            for (_, r) in &state.hot {
-                if r.w <= 0.0 || r.h <= 0.0 {
-                    continue;
-                }
-                layer = layer.child(
-                    div()
-                        .absolute()
-                        .left(px(r.x - g.screen.x))
-                        .top(px(r.y - g.screen.y))
-                        .w(px(r.w))
-                        .h(px(r.h))
-                        .rounded(px(4.0))
-                        .bg(rgba(t.accent))
-                        .opacity(0.25 * a),
-                );
-                layer = layer.child(
-                    div()
-                        .absolute()
-                        .left(px(r.x - g.screen.x))
-                        .top(px(r.y - g.screen.y))
-                        .w(px(r.w))
-                        .h(px(r.h))
-                        .rounded(px(4.0))
-                        .border_1()
-                        .border_color(rgba(t.accent))
-                        .opacity(a),
-                );
-            }
-        }
-        // 7) Inspect：选中层描边。
+        // 6) Inspect：选中层描边。
         if state.inspect
             && let Some(id) = state.inspected
             && let Some(b) = doc.world_bounds(id)
@@ -1496,8 +1449,44 @@ pub fn render(app: &CanvasApp, state: &PresentState, vp: (f32, f32), canvas: (f3
             );
         }
         stage = stage.child(layer);
-        // 8) 设备玻璃圆角遮罩：在画面之上盖住方角溢出部分（eGUI `device_glass`）。
+        // 7) 设备玻璃圆角遮罩：在画面之上盖住方角溢出部分（eGUI `device_glass`）。
         stage = device_glass(stage, g, area);
+        // 8) hotspot 提示（eGUI `draw` 的最后一步）：点击空白后从整不透明淡出到 0
+        //    （`(flash_until-now)/FLASH_SECS`）。和 eGUI 一样画在设备玻璃之上、舞台坐标系里，
+        //    不受屏幕层的圆角裁切影响。
+        if state.hints && state.clock < state.flash_until {
+            let a = ((state.flash_until - state.clock) / FLASH_SECS).clamp(0.0, 1.0) as f32;
+            for (_, r) in &state.hot {
+                if r.w <= 0.0 || r.h <= 0.0 {
+                    continue;
+                }
+                let (x, y) = (r.x - area.x, r.y - area.y);
+                stage = stage.child(
+                    div()
+                        .absolute()
+                        .left(px(x))
+                        .top(px(y))
+                        .w(px(r.w))
+                        .h(px(r.h))
+                        .rounded(px(4.0))
+                        .bg(rgba(t.accent))
+                        .opacity(0.25 * a),
+                );
+                // eGUI 是 1.5px 外描边：GPUI 没有外描边，外扩 1.5 再内描 1px 近似。
+                stage = stage.child(
+                    div()
+                        .absolute()
+                        .left(px(x - 1.5))
+                        .top(px(y - 1.5))
+                        .w(px(r.w + 3.0))
+                        .h(px(r.h + 3.0))
+                        .rounded(px(5.5))
+                        .border_1()
+                        .border_color(rgba(t.accent))
+                        .opacity(a),
+                );
+            }
+        }
     } else {
         stage = stage.child(
             div()
@@ -2047,62 +2036,6 @@ pub fn push_key(key: String, mods: figcraft_doc::proto::KeyMods) {
 pub fn push_move(x: f64, y: f64) {
     input::push(Ev::Move(x, y));
 }
-
-/// 临时调试：打印一组节点的世界矩形（present 内部布局诊断）。
-fn dbg_boxes(tag: &str, d: &Document) {
-    let ids = [103u64, 104, 127, 142, 143, 147, 153, 154, 177, 181, 182, 188, 195];
-    for id in ids {
-        match (d.world_bounds(NodeId(id)), d.node(NodeId(id))) {
-            (Some(b), Some(n)) => eprintln!(
-                "[dbg {tag}] {id}: ({:.1},{:.1},{:.1},{:.1}) size={:.1}x{:.1} ovr=[{}]",
-                b.x0,
-                b.y0,
-                b.width(),
-                b.height(),
-                n.width,
-                n.height,
-                n.overrides.iter().cloned().collect::<Vec<_>>().join(",")
-            ),
-            _ => eprintln!("[dbg {tag}] {id}: -"),
-        }
-    }
-}
-
-/// 临时调试：打印子树（含 sizing 与 grid 位置）。
-fn dbg_tree(tag: &str, d: &Document, root: NodeId) {
-    for id in d.subtree(root) {
-        let Some(n) = d.node(id) else { continue };
-        let Some(b) = d.world_bounds(id) else { continue };
-        let cl = &n.child_layout;
-        eprintln!(
-            "[dbg {tag}] {:>4} {:<8} '{}' ({:.1},{:.1},{:.1},{:.1}) h={}/{}{} v={}/{}{} grid={:?},{:?}",
-            id.0,
-            match n.kind {
-                figcraft_doc::NodeKind::Frame { .. } => "frame",
-                figcraft_doc::NodeKind::Group { .. } => "group",
-                figcraft_doc::NodeKind::Instance { .. } => "instance",
-                figcraft_doc::NodeKind::Text(_) => "text",
-                figcraft_doc::NodeKind::Rectangle => "rect",
-                figcraft_doc::NodeKind::Component { .. } => "component",
-                _ => "other",
-            },
-            n.name,
-            b.x0,
-            b.y0,
-            b.width(),
-            b.height(),
-            if cl.sizing_h == figcraft_doc::Sizing::Fill { "fill" } else if cl.sizing_h == figcraft_doc::Sizing::Hug { "hug" } else { "fix" },
-            n.width,
-            cl.min_w.map_or(String::new(), |v| format!(" min={v}")),
-            if cl.sizing_v == figcraft_doc::Sizing::Fill { "fill" } else if cl.sizing_v == figcraft_doc::Sizing::Hug { "hug" } else { "fix" },
-            n.height,
-            cl.min_h.map_or(String::new(), |v| format!(" min={v}")),
-            cl.grid_column,
-            cl.grid_row
-        );
-    }
-}
-
 
 /// 调试：上一帧 hotspot 矩形（`present.hot` 控制命令用）。
 pub fn debug_hot() -> (Option<(f64, f64)>, Vec<u64>, Vec<(u64, f32, f32, f32, f32)>) {
