@@ -27,8 +27,9 @@ use serde_json::json;
 
 use crate::panels::{Cmd, Cmds};
 use crate::tabs::{
-    BAR_BUTTON, BAR_ICON, CLOSE_ICON, HEIGHT, LIVE_MARK_WIDTH, LiveBadge, OVERFLOW_WIDTH, TabMotion, VisibleTab, live_badge,
-    preferred_width, tab_drop_position, tab_layout,
+    BAR_BUTTON, BAR_ICON, CLOSE_ICON, HEIGHT, LIVE_MARK_WIDTH, LiveBadge, NEW_TAB_MARGIN_X, OVERFLOW_WIDTH, TAB_BUTTON, TAB_BUTTON_RADIUS,
+    TAB_CLOSE_RIGHT, TAB_FONT, TAB_GAP, TAB_LABEL_MAX, TAB_PAD_X, TabMotion, VisibleTab, live_badge, preferred_width, tab_drop_position,
+    tab_layout,
 };
 use crate::title_bar;
 use crate::widgets::icon::{self, Icon};
@@ -219,6 +220,30 @@ fn open_overflow_menu(me: &Entity<CanvasView>, _cmds: &Cmds, docs: &[TabDoc], ac
     me.update(cx, |cv, cx| cv.open_menu(anchor, Some(200.0), rows, on_pick, cx));
 }
 
+/// Figma 桌面壳标签页的颜色语义 → 项目现有 theme token 的映射（1:1 语义，不写死色值）。
+///
+/// `desktop_shell.css` 用的是 `--color-*` 语义变量，这里逐条对到 `theme::Tokens`：
+///   `--color-text`            → t.text（主文字）
+///   `--color-text-secondary`  → t.text_secondary（普通标签文字）
+///   `--color-icon-brand`      → t.accent（hover/active 图标）
+///   `--color-bghovertransparent`→ t.hover（标签 hover 底）
+///   `--color-bg`              → t.panel（active 标签不透明底）
+///   `--color-bordertranslucent`→ t.border（分隔线 / active 底线）
+/// 换主题 / 换品牌色时标签自动跟随。
+struct TabInk {
+    text: crate::canvas::geom::Color32,
+    secondary: crate::canvas::geom::Color32,
+    brand: crate::canvas::geom::Color32,
+    hover: crate::canvas::geom::Color32,
+    panel: crate::canvas::geom::Color32,
+    border: crate::canvas::geom::Color32,
+}
+
+fn tab_ink() -> TabInk {
+    let t = tokens();
+    TabInk { text: t.text, secondary: t.text_secondary, brand: t.accent, hover: t.hover, panel: t.panel, border: t.border }
+}
+
 /// 一条 32pt 方形按钮（新标签 / 主题）：上游 `BAR_BUTTON=32` / `BAR_ICON=20`。
 /// `IconButton` 内部把字形锁在 16pt，这里按 #1729 的规范用 Kit 的 `icon::paint` 画 20pt。
 fn bar_button(icon: Icon, t: crate::theme::Tokens, id: &'static str) -> Stateful<Div> {
@@ -233,6 +258,25 @@ fn bar_button(icon: Icon, t: crate::theme::Tokens, id: &'static str) -> Stateful
         .rounded(pt(5.0))
         .hover(move |s| s.bg(rgba(t.hover)))
         .child(icon::paint(icon, rgba(t.icon), BAR_ICON))
+}
+
+/// Figma `.tab_bar--newTabButtonUI3`：24×24、圆角 5、左右外边距 7，
+/// 图标 text-secondary、hover 铺 hover 底（映射项目 token）。
+fn new_tab_button(id: &'static str) -> Stateful<Div> {
+    let ink = tab_ink();
+    let (normal, hover) = (ink.secondary, ink.hover);
+    div()
+        .id(id)
+        .flex_none()
+        .w(pt(TAB_BUTTON))
+        .h(pt(TAB_BUTTON))
+        .mx(pt(NEW_TAB_MARGIN_X))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(pt(TAB_BUTTON_RADIUS))
+        .hover(move |s| s.bg(rgba(hover)))
+        .child(icon::paint(Icon::Plus, rgba(normal), TAB_BUTTON - 8.0))
 }
 
 /// 画 40pt 标签条，并把本帧的可见标签矩形同步进拖拽状态。
@@ -254,6 +298,8 @@ pub(crate) fn tab_strip(
     // 根视图在后面还要借 `self.tabs` / `self.render_left_panel(...)`，会直接 E0502/E0499。
 ) -> Stateful<Div> {
     let t = tokens();
+    // Figma 标签页语义色 → 项目 token（见 tab_ink）。逐条映射，换主题自动跟随。
+    let ink = tab_ink();
     let now = state.now();
     state.motion.begin_frame(crate::windows::current(), docs.iter().map(|d| d.uid), now, reduce_motion);
     // 不再做新标签的渐显：点 `+` 时新标签正好落在指针底下，半透明会一直挂着，
@@ -286,6 +332,9 @@ pub(crate) fn tab_strip(
     // Home 键（active / hover 底色 + 32pt 图标：图标本身等比放大，线宽在 SVG 里按比例
     // 退回去保持视觉粗细不变，用户 2026-11-16）。
     let me_home = me.clone();
+    let home_ink = tab_ink();
+    let home_normal = home_ink.secondary;
+    let home_hot = home_ink.text;
     let home = div()
         .id("tab-home")
         .flex_none()
@@ -297,6 +346,7 @@ pub(crate) fn tab_strip(
         // Home 的盒子右边缘要让给 1pt 分隔线，所以内容再右缩 `content_x0`：
         // 这样图标中心落在整条左竖栏（0..RAIL_W）的中心，而不是盒子中心（偏右 4pt）。
         .pr(pt(content_x0))
+        .group("tab-home-grp")
         .when(home_active, move |d| d.bg(rgba(t.pressed)))
         .hover(move |s| s.bg(rgba(t.hover)))
         .on_click(move |_e: &ClickEvent, window, cx: &mut App| {
@@ -308,7 +358,26 @@ pub(crate) fn tab_strip(
                 cx.notify();
             });
         })
-        .child(icon::paint(Icon::Home, rgba(t.icon), 32.0))
+        // Figma `.tab--fileBrowserTab`：图标普通 text-secondary，hover/active 变 text。
+        // 双叠层 + group_hover（svg 显式色不继承父 text_color，只能叠一层显隐）。
+        .child(
+            div()
+                .relative()
+                .flex_none()
+                .w(pt(32.0))
+                .h(pt(32.0))
+                .child(icon::paint(Icon::Home, rgba(if home_active { home_hot } else { home_normal }), 32.0))
+                .when(!home_active, |d| {
+                    d.child(
+                        div()
+                            .absolute()
+                            .inset_0()
+                            .opacity(0.0)
+                            .group_hover("tab-home-grp", |s| s.opacity(1.0))
+                            .child(icon::paint(Icon::Home, rgba(home_hot), 32.0)),
+                    )
+                }),
+        )
         .into_any_element();
 
     // 这是 kit `TitleBar::new().child(...)` 的 child：高度 / 底色 / 窗口按钮都由壳负责。
@@ -395,12 +464,19 @@ pub(crate) fn tab_strip(
         let drag_cmds = cmds.clone();
         let index = d.index;
         let uid = d.uid;
-        // `w` 含右侧 1pt 分隔线：body + close 只能占 `w - 1`。
-        let body_w = (w - 32.0 - 1.0).max(0.0);
+        // `w` 含右侧 1pt 分隔线：body + close 只能占 `w - 1`（close 按 Figma 24pt）。
+        let body_w = (w - TAB_BUTTON - TAB_CLOSE_RIGHT - 1.0).max(0.0);
+        // Figma hover 联动：body 作为 group，图标与文字用 group_hover 变蓝/变深。
+        let tab_group = SharedString::from(format!("tabgrp-doc-{uid}"));
+        let ink_hover = ink.hover;
+        let ink_panel = ink.panel;
+        let ink_text = ink.text;
         // 上游 `bidi::paint_name` 的可用宽度也要扣掉 live 标记与未保存点，否则名字会压到徽标上。
         let name_w = (w - if d.live.visible() { LIVE_MARK_WIDTH } else { 0.0 } - if d.dirty { 12.0 } else { 0.0 }).max(0.0);
-        let name = crate::bidi::fit(window, &d.name, 12.0, name_width(name_w));
+        let name = crate::bidi::fit(window, &d.name, TAB_FONT, name_width(name_w));
         let badge = d.live;
+        // 预先算出图标（`.when` 闭包的 `d` 是 Div，会遮蔽文档变量 `d`）。
+        let doc_glyph = file_mark(d.board);
 
         let body = div()
             .flex()
@@ -409,10 +485,11 @@ pub(crate) fn tab_strip(
             .h_full()
             .w(pt(body_w))
             .min_w(pt(0.0))
-            .pl(pt(10.0))
-            .gap(pt(6.0))
+            .pl(pt(TAB_PAD_X))
+            .gap(pt(TAB_GAP))
             .overflow_hidden()
             .id(("tab-body", uid as usize))
+            .group(tab_group.clone())
             .on_click(move |_e: &ClickEvent, window, cx: &mut App| {
                 // 直接按 uid 切（不排队）：多窗口增删文档后 `session.docs` 下标会漂移，
                 // 用 render 时记下的 `index` 排队会被判成别的窗口的文档而丢弃 ——
@@ -446,18 +523,38 @@ pub(crate) fn tab_strip(
                     me_menu.update(cx, |cv, cx| cv.open_menu(anchor, Some(200.0), rows, on_pick, cx));
                 }
             })
-            .child(icon::paint(file_mark(d.board), rgba(t.accent), BAR_ICON))
+            // Figma：图标普通 = text-secondary，active = icon-brand；非 active
+            // hover 时叠一层品牌蓝图标显现（`.tab--tab:hover .tab--icon`）。
+            .child(
+                div()
+                    .relative()
+                    .flex_none()
+                    .w(pt(BAR_ICON))
+                    .h(pt(BAR_ICON))
+                    .child(icon::paint(doc_glyph, rgba(if is_active { ink.brand } else { ink.secondary }), BAR_ICON))
+                    .when(!is_active, |d| {
+                        d.child(
+                            div()
+                                .absolute()
+                                .inset_0()
+                                .opacity(0.0)
+                                .group_hover(tab_group.clone(), |s| s.opacity(1.0))
+                                .child(icon::paint(doc_glyph, rgba(ink.brand), BAR_ICON)),
+                        )
+                    }),
+            )
             .child(
                 div()
                     .flex_1()
                     .min_w(pt(0.0))
                     .overflow_hidden()
                     .whitespace_nowrap()
-                    .text_size(pt(12.0))
-                    .text_color(rgba(if is_active { t.text } else { t.text_secondary }))
+                    .text_size(pt(TAB_FONT))
+                    .text_color(rgba(if is_active { ink.text } else { ink.secondary }))
+                    .when(!is_active, |d| d.group_hover(tab_group.clone(), |s| s.text_color(rgba(ink_text))))
                     .child(SharedString::from(name)),
             )
-            .when(d.dirty, |d| d.child(div().flex_none().text_size(pt(12.0)).text_color(rgba(t.text)).child("•")))
+            .when(d.dirty, |d| d.child(div().flex_none().text_size(pt(TAB_FONT)).text_color(rgba(ink.text)).child("•")))
             .when(badge.visible(), move |d| {
                 // 上游 `paint_tab`：先判 lost（danger），否则按 shared 画 online::mark。
                 // `widgets/icon.rs` 是 FROZEN 文件，本次不新增 LiveShared / LivePrivate 变体，
@@ -473,15 +570,17 @@ pub(crate) fn tab_strip(
                 d.child(icon::paint(glyph, rgba(color), BAR_ICON))
             });
 
-        // 关闭区独占 32pt，不压在可拖拽的 body 上（上游 `close_r`）。
+        // Figma `.tab--button`：24×24、圆角 5、图标 text-secondary、hover 铺 hover 底。
         let close = div()
             .flex_none()
-            .w(pt(32.0))
-            .h_full()
+            .w(pt(TAB_BUTTON))
+            .h(pt(TAB_BUTTON))
             .flex()
             .items_center()
             .justify_center()
-            .hover(move |s| s.bg(rgba(t.pressed)))
+            .rounded(pt(TAB_BUTTON_RADIUS))
+            .mr(pt(TAB_CLOSE_RIGHT))
+            .hover(move |s| s.bg(rgba(ink_hover)))
             // A18：普通关闭不带 force，让引擎判断文档是否脏 —— 脏了会发 `dialog.unsaved`，
             // 由通用对话框弹 Don't Save / Cancel / Save。只有 Alt+close 才直接丢弃
             // （`e.modifiers.alt`），与 ui-egui 的 Alt+close 语义一致。
@@ -493,11 +592,13 @@ pub(crate) fn tab_strip(
                 cmds_middle.push(Cmd { id: "file.close", params: Some(json!({ "index": index, "force": e.modifiers.alt })) });
                 cx.stop_propagation();
             })
-            .child(icon::paint(Icon::Close, rgba(t.text_secondary), CLOSE_ICON));
+            .child(icon::paint(Icon::Close, rgba(ink.secondary), CLOSE_ICON));
 
-        // 标签外观（用户 2026-11-16，参照 Figma）：整条标题栏统一灰色，标签之间只有一根
-        // 右侧竖线；**选中的标签底色变白**（暗色主题取比灰底更亮的 `hover`），未选中透明。
-        let active_bg = if t.dark { t.hover } else { t.panel };
+        // Figma `.tab--tab` + `.tab--activeTab`：普通透明底 + 右侧 1px bordertranslucent；
+        // hover 铺 hover 底；active 铺 `--color-bg`（t.panel）且**底色铺满整个标签高度**。
+        // ⛔ 不再用 border_b_1 + pt(1)：那些会挤占内容盒、在白底顶/底各露 1px 标题栏灰底，
+        //   表现为「active 白底没到底、非 active 又到底了」（用户 2026-11-18 实测的 bug）。
+        // active 的 hover 不改底色（Figma `.activeTab:hover` 仍是 bg）。
         let tab = div()
             .absolute()
             .left(px(tab_x - tabs_x0))
@@ -508,9 +609,9 @@ pub(crate) fn tab_strip(
             .flex_row()
             .items_center()
             .border_r_1()
-            .border_color(rgba(t.border))
-            .when(is_active, move |d| d.bg(rgba(active_bg)))
-            .when(!is_active, move |d| d.hover(move |s| s.bg(rgba(t.hover))))
+            .border_color(rgba(ink.border))
+            .when(is_active, move |d| d.bg(rgba(ink_panel)))
+            .when(!is_active, move |d| d.hover(move |s| s.bg(rgba(ink_hover))))
             .child(body)
             .child(close);
         elements.push((d.index, tab.into_any_element()));
@@ -531,14 +632,18 @@ pub(crate) fn tab_strip(
     // ── 演示标签（eGUI `tabs.rs:228-244`）：与文件标签同一套 body/close 结构，
     // 画在同一个 `layer` 容器内、跟在文件标签之后（absolute left 相对 layer）。
     {
-        let active_bg = if t.dark { t.hover } else { t.panel };
         let mut px0 = tabs_x0 + tabs_w;
         for (slot, &w) in present_layout.widths.iter().enumerate() {
             let Some((tid, name, on_screen)) = present_tabs.get(present_layout.first + slot) else { break };
             let (tid, name, on_screen) = (*tid, name.clone(), *on_screen);
-            let body_w = (w - 32.0 - 1.0).max(0.0);
-            let name = crate::bidi::fit(window, &name, 12.0, name_width(body_w));
+            // Figma 标签规范：close 24pt、字 11pt、gap 8、左内缩 8。
+            let body_w = (w - TAB_BUTTON - TAB_CLOSE_RIGHT - 1.0).max(0.0);
+            let name = crate::bidi::fit(window, &name, TAB_FONT, name_width(body_w));
             let left = px0 - tabs_x0;
+            let tab_group = SharedString::from(format!("tabgrp-present-{tid}"));
+            let ink_hover = ink.hover;
+            let ink_panel = ink.panel;
+            let ink_text = ink.text;
 
             let me_switch = me.clone();
             let body = div()
@@ -548,36 +653,57 @@ pub(crate) fn tab_strip(
                 .h_full()
                 .w(pt(body_w))
                 .min_w(pt(0.0))
-                .pl(pt(10.0))
-                .gap(pt(6.0))
+                .pl(pt(TAB_PAD_X))
+                .gap(pt(TAB_GAP))
                 .overflow_hidden()
+                .group(tab_group.clone())
                 .on_mouse_down(MouseButton::Left, move |_: &MouseDownEvent, _window, cx: &mut App| {
                     me_switch.update(cx, |cv, cx| {
                         cv.switch_present_tab(tid);
                         cx.notify();
                     });
                 })
-                .child(icon::paint(Icon::Play, rgba(t.accent), BAR_ICON))
+                .child(
+                    div()
+                        .relative()
+                        .flex_none()
+                        .w(pt(BAR_ICON))
+                        .h(pt(BAR_ICON))
+                        .child(icon::paint(Icon::Play, rgba(if on_screen { ink.brand } else { ink.secondary }), BAR_ICON))
+                        .when(!on_screen, |d| {
+                            d.child(
+                                div()
+                                    .absolute()
+                                    .inset_0()
+                                    .opacity(0.0)
+                                    .group_hover(tab_group.clone(), |s| s.opacity(1.0))
+                                    .child(icon::paint(Icon::Play, rgba(ink.brand), BAR_ICON)),
+                            )
+                        }),
+                )
                 .child(
                     div()
                         .flex_1()
                         .min_w(pt(0.0))
                         .overflow_hidden()
                         .whitespace_nowrap()
-                        .text_size(pt(12.0))
-                        .text_color(rgba(if on_screen { t.text } else { t.text_secondary }))
+                        .text_size(pt(TAB_FONT))
+                        .text_color(rgba(if on_screen { ink.text } else { ink.secondary }))
+                        .when(!on_screen, |d| d.group_hover(tab_group.clone(), |s| s.text_color(rgba(ink_text))))
                         .child(SharedString::from(name)),
                 );
 
             let me_close = me.clone();
             let close = div()
                 .flex_none()
-                .w(pt(32.0))
-                .h_full()
+                .w(pt(TAB_BUTTON))
+                .h(pt(TAB_BUTTON))
                 .flex()
                 .items_center()
                 .justify_center()
-                .hover(move |s| s.bg(rgba(t.pressed)))
+                .rounded(pt(TAB_BUTTON_RADIUS))
+                .mr(pt(TAB_CLOSE_RIGHT))
+                .hover(move |s| s.bg(rgba(ink_hover)))
                 .on_mouse_down(MouseButton::Left, move |_: &MouseDownEvent, _window, cx: &mut App| {
                     me_close.update(cx, |cv, cx| {
                         cv.close_present_tab(tid);
@@ -585,9 +711,8 @@ pub(crate) fn tab_strip(
                     });
                     cx.stop_propagation();
                 })
-                .child(icon::paint(Icon::Close, rgba(t.text_secondary), CLOSE_ICON));
+                .child(icon::paint(Icon::Close, rgba(ink.secondary), CLOSE_ICON));
 
-            let hover = t.hover;
             let tab = div()
                 .absolute()
                 .left(px(left))
@@ -598,9 +723,9 @@ pub(crate) fn tab_strip(
                 .flex_row()
                 .items_center()
                 .border_r_1()
-                .border_color(rgba(t.border))
-                .when(on_screen, move |d| d.bg(rgba(active_bg)))
-                .when(!on_screen, move |d| d.hover(move |s| s.bg(rgba(hover))))
+                .border_color(rgba(ink.border))
+                .when(on_screen, move |d| d.bg(rgba(ink_panel)))
+                .when(!on_screen, move |d| d.hover(move |s| s.bg(rgba(ink_hover))))
                 .child(body)
                 .child(close);
             layer = layer.child(tab);
@@ -638,15 +763,13 @@ pub(crate) fn tab_strip(
     // 新标签 +。
     let cmds_new = cmds.clone();
     let me_new = me.clone();
-    strip = strip.child(div().flex_none().h_full().flex().items_center().pl(pt(6.0)).child(bar_button(Icon::Plus, t, "tab-new").on_click(
-        move |_e: &ClickEvent, window, cx: &mut App| {
-            // 新标签属于**当前窗口**：`file.new` 之后由 `sync_panel` 把新文档并入发起窗口，
-            // 不先绑定窗口的话它会按「最后渲染的窗口」归属（点 + 加到别的窗口里）。
-            me_new.update(cx, |cv, cx| cv.bind_window_document(window, true, cx));
-            cmds_new.push(Cmd { id: "file.new", params: Some(json!({})) });
-            me_new.update(cx, |cv, _| cv.close_home());
-        },
-    )));
+    strip = strip.child(new_tab_button("tab-new").on_click(move |_e: &ClickEvent, window, cx: &mut App| {
+        // 新标签属于**当前窗口**：`file.new` 之后由 `sync_panel` 把新文档并入发起窗口，
+        // 不先绑定窗口的话它会按「最后渲染的窗口」归属（点 + 加到别的窗口里）。
+        me_new.update(cx, |cv, cx| cv.bind_window_document(window, true, cx));
+        cmds_new.push(Cmd { id: "file.new", params: Some(json!({})) });
+        me_new.update(cx, |cv, _| cv.close_home());
+    }));
 
     // 空白区 = 系统标题栏的拖拽区（上游 `drag_free_space()` 的 `StartDrag`）。
     // 壳整条已标 `WindowControlArea::Drag`；这里再标一次，保证这块 flex_1 hitbox

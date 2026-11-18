@@ -24,6 +24,25 @@ pub const LIVE_MARK_WIDTH: f32 = 26.0;
 /// 新标签滑入 + 渐显的时长（秒）。
 pub const OPEN_TIME: f64 = 0.18;
 
+// ── Figma 桌面壳标签页规范（126.11.9 desktop_shell.css，1:1 尺寸）──────────────────
+// 颜色不在这里写死：逐项映射到项目现有 theme token（见 tabs_view::tab_ink）。
+/// 标签文字字号（Figma `.tab--text` font-size:11px / font-weight:500）。
+pub const TAB_FONT: f32 = 11.0;
+/// 标签内图标与正文的间距（Figma `.tab--tab` column-gap:8px）。
+pub const TAB_GAP: f32 = 8.0;
+/// 标签正文最大宽度（Figma `.tab--text` max-width:200px）。
+pub const TAB_LABEL_MAX: f32 = 200.0;
+/// 标签左侧内边距（Figma `.tab--fileTabButton` padding:0 8px）。
+pub const TAB_PAD_X: f32 = 8.0;
+/// 关闭按钮边长（Figma `.tab--button` / `.tab_bar--newTabButtonUI3` 24×24）。
+pub const TAB_BUTTON: f32 = 24.0;
+/// 按钮圆角（Figma border-radius:5px）。
+pub const TAB_BUTTON_RADIUS: f32 = 5.0;
+/// 新标签按钮左右外边距（Figma `.tab_bar--newTabButtonUI3` margin:0 7px）。
+pub const NEW_TAB_MARGIN_X: f32 = 7.0;
+/// 关闭按钮距标签右边缘的留白（Figma `.tab--fadeOutOverlay` padding-right:8px）。
+pub const TAB_CLOSE_RIGHT: f32 = 8.0;
+
 /// 上一帧有哪些标签、以及新出现的标签何时开始入场。上游把它放在 egui 的 `data` 里，
 /// GPUI 由 `CanvasView` 跨帧持有（`tabs_view::TabState`）。只在标签集合变化时分配。
 #[derive(Clone, Default, Debug)]
