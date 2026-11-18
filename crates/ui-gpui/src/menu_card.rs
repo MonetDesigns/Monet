@@ -222,7 +222,10 @@ pub(crate) fn rows(
             .text_color(rgba(t.menu_text))
             .when(item.disabled, |d| d.opacity(0.4));
         if !item.disabled {
-            row = row.hover(|s| s.bg(rgba(t.field))).cursor_pointer();
+            // Every menu is the dark surface with `t.menu_text` (white) labels, so the hover fill
+            // must be the dark menu hover, not `t.field` (#F5F5F5 in light theme: white on near-white
+            // is unreadable). CodeRabbit #28/#30/#31/#32.
+            row = row.hover(|s| s.bg(rgba(t.menu_hover))).cursor_pointer();
             let hover = on_hover.clone();
             row = row.on_mouse_move(move |_e, window, cx| hover(i, window, cx));
             let pick = on_pick.clone();
@@ -241,8 +244,7 @@ pub(crate) fn rows(
         // `.hover(...)` above, just always on. Other menus never set `active_fill`, so their
         // checked rows stay plain (no behaviour change outside the toolbar).
         if (selected == Some(i) || item.active_fill) && !item.disabled {
-            // egui palette 的高亮行填 `t.field`（与悬停同一块），不是菜单的 `menu_hover`。
-            row = row.bg(rgba(t.field));
+            row = row.bg(rgba(t.menu_hover));
         }
         // The check mark and the icon are absolutely placed so the label's own inset stays exact.
         if has_check {

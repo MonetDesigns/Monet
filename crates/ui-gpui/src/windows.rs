@@ -326,15 +326,23 @@ pub(crate) fn requests(
                     }
                 }
                 w.main_active = Some(uid);
-                // 空掉的额外窗口直接关掉，不留一个空白窗口。
-                let empties: Vec<u64> = w.list.iter().filter(|e| e.docs.is_empty()).map(|e| e.id).collect();
-                for id in empties {
-                    if let Some(e) = w.entry(id) {
-                        let _ = e.handle.update(cx, |_, window, _| window.remove_window());
-                    }
-                }
-                w.list.retain(|e| !e.docs.is_empty());
+                // 空掉的额外窗口直接关掉，不留一个空白窗口。但「借用」窗口的 docs 本来就恒空
+                // （它只借一份演示播放器），合并别的文件不能把它关掉（CodeRabbit PR#32）。
+                // 关窗会租借 `CanvasView`，必须在 `Windows` 借用结束后 defer 执行，否则重入
+                // panic（CodeRabbit PR#30/#31）。
+                let empties: Vec<_> = w
+                    .list
+                    .iter()
+                    .filter(|e| e.docs.is_empty() && e.borrowed.is_none())
+                    .filter_map(|e| w.entry(e.id).map(|en| en.handle))
+                    .collect();
+                w.list.retain(|e| !e.docs.is_empty() || e.borrowed.is_some());
                 w.focused = 0;
+                cx.defer(move |cx| {
+                    for handle in empties {
+                        let _ = handle.update(cx, |_, window, _| window.remove_window());
+                    }
+                });
             }
             if let Some(pos) = session.docs.iter().position(|d| d.uid == uid) {
                 session.active = pos;

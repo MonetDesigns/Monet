@@ -48,7 +48,11 @@ thread_local! {
 
 /// 取（或建）某开窗触发按钮的跨帧矩形句柄。同一 key 永远返回同一个 `Rc<Cell>`。
 pub(crate) fn window_trigger_top(key: &str) -> Rc<Cell<Option<Bounds<Pixels>>>> {
-    WINDOW_TRIGGER_TOPS.with(|m| m.borrow_mut().entry(key.to_string()).or_insert_with(|| Rc::new(Cell::new(None))).clone())
+    // 键里带窗口身份：两个编辑器窗口的同一个 key（"stroke" / "layout" / paint 行）原本会
+    // 共用一格 bounds，最后画的窗口覆盖另一个的坐标，点前一个窗口的按钮会飘到别的窗口
+    //（CodeRabbit PR#30/#31）。
+    let key = format!("{}:{}", crate::windows::current(), key);
+    WINDOW_TRIGGER_TOPS.with(|m| m.borrow_mut().entry(key).or_insert_with(|| Rc::new(Cell::new(None))).clone())
 }
 
 /// 开窗触发按钮**此刻**的窗口 y 顶部。优先用跨帧探针量到的真实矩形；首次绘制前探针为空时
@@ -2274,7 +2278,13 @@ impl WindowState {
             });
             p
         });
-        let cur = Rc::new(Cell::new(current));
+        // 渐变打开时默认选中 stop 0（`grad_sel` 从 0 开始），picker 的当前色必须与之同步，
+        // 否则第一次改 alpha 会把 BLACK 写进 stop 0（CodeRabbit #30/#29）。
+        let initial = match paint.as_ref().map(|p| &p.paint.kind) {
+            Some(figcraft_color::PaintKind::Gradient(g)) => g.stops.first().map_or(current, |s| picker_c32(s.color)),
+            _ => current,
+        };
+        let cur = Rc::new(Cell::new(initial));
         let model = Rc::new(Cell::new(0usize));
         let model_anchor = Rc::new(Cell::new(None::<Bounds<Pixels>>));
         let shown = Rc::new(Cell::new((usize::MAX, [0u8; 4])));
@@ -2310,6 +2320,10 @@ impl WindowState {
                         _ => {}
                     }
                     write(np, window, cx);
+                    // 整份 paint 已经写好：再调 `on_pick` 会用取色器打开时的 `base_paint`
+                    // 快照发第二次 `selection.setPaint`，把刚改的渐变 stop / opacity 覆盖回
+                    // 原值（CodeRabbit #30/#31/#32）。只有在没有整份写入器时才退回旧回调。
+                    return;
                 }
                 on_pick(c, window, cx);
             })
@@ -2724,7 +2738,16 @@ impl WindowState {
         let sv_hit: Rc<std::cell::Cell<Option<Bounds<Pixels>>>> = Rc::new(std::cell::Cell::new(None));
         let sv_prepaint = sv_hit.clone();
         let sv_click = sv_hit.clone();
-        let sv_pick = pick.clone();
+        let sv_pick = {
+            let pick = pick.clone();
+            let cur = c.current.clone();
+            move |h: f32, s: f32, v: f32, window: &mut Window, cx: &mut App| {
+                // RGB-only 编辑要保留上一次提交色的 alpha，否则 0.4 的纯色一拖 SV 就变全不透明
+                //（CodeRabbit #30）。alpha 交给 `pick` 里的 paint 写入。
+                let a = cur.get().0[3];
+                pick(hsb_color(h, s, v).with_alpha(a), window, cx);
+            }
+        };
         let hue_c = hsb_color(hue, 1.0, 1.0);
         let spectrum = div()
             .relative()
@@ -2763,7 +2786,7 @@ impl WindowState {
                         let Some(b) = sv_click.get() else { return };
                         let s = ((f32::from(e.position.x) - f32::from(b.origin.x)) / f32::from(b.size.width).max(1.0)).clamp(0.0, 1.0);
                         let v = 1.0 - ((f32::from(e.position.y) - f32::from(b.origin.y)) / f32::from(b.size.height).max(1.0)).clamp(0.0, 1.0);
-                        sv_pick(hsb_color(hue, s, v), window, cx);
+                        sv_pick(hue, s, v, window, cx);
                     }),
             )
             // 拾色点：Figma `_1t0vmmd5/7` 是 16 pt 白环 + 4 pt 白边 + 中间填当前色，
@@ -2772,7 +2795,14 @@ impl WindowState {
 
         // ② 色相滑轨：通用 `Slider`（受控：拖动回调写回颜色，下一帧按新色相重算位置），
         //    轨道整条自绘成 6 段 60° 线性渐变。
-        let hue_pick = pick.clone();
+        let hue_pick = {
+            let pick = pick.clone();
+            let cur = c.current.clone();
+            move |h: f32, window: &mut Window, cx: &mut App| {
+                let a = cur.get().0[3];
+                pick(hsb_color(h, 1.0, 1.0).with_alpha(a), window, cx);
+            }
+        };
         let hue_slider = crate::widgets::Slider::new(hue, 0.0, 360.0)
             .step(1.0)
             .paint_track(|window, bounds, _| {
@@ -2796,7 +2826,7 @@ impl WindowState {
                     ));
                 }
             })
-            .on_change(move |v, window, cx| hue_pick(hsb_color(v, 1.0, 1.0), window, cx))
+            .on_change(move |v, window, cx| hue_pick(v, window, cx))
             .render();
 
         // ③ 透明度滑轨：同样用 `Slider`，轨道先棋盘再叠透明→当前色的水平渐变。
@@ -3687,7 +3717,9 @@ impl WindowState {
                     let on_pick: Rc<dyn Fn(crate::canvas::geom::Color32, &mut Window, &mut App)> = Rc::new(|_, _, _| {});
                     let open_cmds = self.cmds.clone();
                     // 跨帧稳定探针：与右栏色块同一机制，按下即量到真实顶部。
-                    let anchor_key = format!("style-editor-paint-{}", sid);
+                    // 每个 paint 行要有自己的探针 key，否则同一样式的多行互相覆盖 bounds，
+                    // 点前面一行会从另一行的顶部弹出（CodeRabbit PR#30/#31）。
+                    let anchor_key = format!("style-editor-paint-{}-{}", sid, idx);
                     let hit = window_trigger_top(&anchor_key);
                     let anchored_key = anchor_key.clone();
                     cf = cf.on_swatch(move |pos: Point<Pixels>, window, cx: &mut App| {

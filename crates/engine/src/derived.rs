@@ -162,8 +162,16 @@ pub fn normalize(doc: &mut Document, before: &Document) {
         if !doc.contains(id) {
             continue;
         }
-        if !moved_only(before, doc, id) && doc.node(id).is_some_and(|n| n.layout.is_some()) {
+        if moved_only(before, doc, id) {
+            continue;
+        }
+        // 改动的可能是一个普通子级（矩形、文本…），它自己没有 layout：宽度从 50 变 100 时
+        // 必须重排它所在的父流，否则后面的兄弟仍停在旧 x（CodeRabbit PR#32）。
+        // 有 layout 的节点仍只重排自己；无 layout 的把最近的 layout 祖先种进 own。
+        if doc.node(id).is_some_and(|n| n.layout.is_some()) {
             own.insert(id);
+        } else if let Some(p) = doc.ancestors(id).into_iter().find(|c| doc.node(*c).is_some_and(|n| n.layout.is_some())) {
+            own.insert(p);
         }
     }
     let own: BTreeSet<NodeId> = own;
@@ -171,9 +179,16 @@ pub fn normalize(doc: &mut Document, before: &Document) {
     // Parents follow only a frame whose box the layout left different: their arrangement is the
     // same when it didn't, and re-running it would re-place layers the edit never touched. Each
     // frame that does change lets its own parent decide the same way, level by level.
+    // 父流是否要重算，除了盒子还要看参与布局的属性：一个固定宽子级变成 invisible，
+    // transform/size/parent 都没变，但同级该从 x=100 移到 x=0（CodeRabbit PR#32）。
     let box_changed = |id: NodeId, doc: &Document| {
         before.node(id).zip(doc.node(id)).is_none_or(|(a, b)| {
-            a.transform != b.transform || a.width != b.width || a.height != b.height || a.parent != b.parent
+            a.transform != b.transform
+                || a.width != b.width
+                || a.height != b.height
+                || a.parent != b.parent
+                || a.visible != b.visible
+                || a.child_layout != b.child_layout
         })
     };
     let mut frontier: Vec<NodeId> = own.into_iter().collect();

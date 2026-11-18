@@ -726,6 +726,9 @@ pub struct CanvasView {
     /// 新建窗口时给它的 worker 用的唤醒器（与主窗口同一个）。
     canvas_wake: Arc<dyn Fn() + Send + Sync>,
 
+    /// 右栏字段 / motion 提交后唤醒渲染循环（新建 pane 重建 editor 时复用）。
+    panel_wake: std::rc::Rc<dyn Fn()>,
+
     /// 键盘焦点（空格平移、Z 缩放工具要收键盘事件）。
     focus: FocusHandle,
 
@@ -814,9 +817,17 @@ impl CanvasView {
                 p.motion_fields = motion::keyframe_field::KeyframeFields::new(cx, 0.0, &p.motion_q);
                 p.motion_clip_fields = motion::clip_popover::ClipFields::new(cx, &p.motion_q);
                 p.motion_times = motion::timeline::TimeFields::new(cx, &p.motion_q);
-                // `clone()` 只复制了 `Rc` 指针：右栏的折叠 / 展开 / 过滤面板会和别的窗口
-                // 共享同一块内存，一处折叠处处折叠（用户 2026-11-16 实测）。
-                p.fields = p.fields.detached();
+                // 新窗口必须有自己的数字写入队列与一整套 editor+context：clone() 只复制
+                // `Rc` 指针，`pending` / `row_ctx` / `scale_ctx` / `pad` 会和别的窗口共享，
+                // 一个窗口的编辑会被另一个窗口 drain、或提交到别的文档（CodeRabbit
+                // #27/#28/#30/#31/#32）。detached() 保留共享 context 是为了不破坏 editor
+                // 回调，代价正是这个 bug；彻底隔离只能连 editor 一起用 new 重建。
+                let pending: panels::Pending = Rc::new(RefCell::new(Vec::new()));
+                p.pending = pending.clone();
+                p.fields = panels::RightFields::new(cx, &pending, &self.panel_wake);
+                // 待提交的重命名也是 Rc<RefCell<_>>：新窗口不能替旧窗口提交。
+                p.inline_rename_pending = std::rc::Rc::new(std::cell::RefCell::new(None));
+                p.inline_rename = None;
                 // `ExtraState` 里全是 `Rc<RefCell<_>>`（dismiss / 搜索词 / 浮层开关）：
                 // clone 后两个窗口共享同一份，一个窗口关浮层会把另一个窗口的首页 /
                 // 空白页一起收掉（用户 2026-11-17）。整块重建。
@@ -922,6 +933,11 @@ impl CanvasView {
     /// 全局 `session.active`，否则第二个窗口里点「加页」会加到第一个窗口的文档上
     /// （用户 2026-11-16 实测）。渲染时为 false：只有聚焦窗口写，避免两个窗口每帧互相覆盖。
     pub(crate) fn bind_window_document(&mut self, window: &mut Window, authoritative: bool, cx: &mut App) {
+        // 先换入事件窗口自己的 pane，再读 present / home / hidden：这些都在 `self.pane` 上，
+        // 换入前读到的是**上一个窗口**的状态。否则 W1 隐藏了 A、W2 是当前窗口时，W1 会用
+        // W2 的空 hidden 把已关标签的 A 选成回落文档（CodeRabbit PR#32）。
+        let wid = window_id_of(&self.windows.borrow(), window);
+        self.enter_pane(wid, cx);
         let doc_uids: Vec<u64> = self.app.session.docs.iter().map(|d| d.uid).collect();
         // 演示正在显示时它借用的源文档 uid：即使设计标签已经关掉（藏起来了），也要允许绑定，
         // 否则预览一打开就会被下面的回落逻辑切走文档（用户 2026-11-17）。
@@ -942,7 +958,6 @@ impl CanvasView {
         }
         let hidden = self.tabs.hidden.clone();
         let mut wins = self.windows.borrow_mut();
-        let wid = window_id_of(&wins, window);
         windows::set_current(wid);
         wins.current = wid;
         let want = if wid == 0 { wins.main_active } else { wins.active_of(wid) };
@@ -999,8 +1014,6 @@ impl CanvasView {
             }
         }
         drop(wins);
-        // 进入这个窗口的上下文：换入它自己的 UI 状态（首页 / 弹层 / 面板宽度 / 指针 …）。
-        self.enter_pane(wid, cx);
         // 用户真的在操作这个窗口了：别的窗口里残留的「+」空白页收掉（设计要求）。
         if authoritative {
             self.dismiss_other_new_tabs(wid);
@@ -1304,6 +1317,8 @@ impl CanvasView {
             canvases: std::collections::HashMap::new(),
 
             canvas_wake: wake,
+
+            panel_wake: panel_wake.clone(),
 
             focus: cx.focus_handle(),
 
@@ -3322,6 +3337,17 @@ impl CanvasView {
     /// 滚轮：Ctrl/Cmd（或捏合）以指针为锚点缩放；否则平移（照搬 `input.rs` 的分支）。
 
     fn on_wheel(&mut self, e: &ScrollWheelEvent) {
+        // 本窗口处于首页 / 没有属于自己的文档时，不要通过 `ds_mut()` 去改全局 active
+        // （那可能属于另一个窗口）。CodeRabbit #30/#31：无归属窗口的滚轮会改别人的画布。
+        if self.tabs.home {
+            let wid = crate::windows::current();
+            let active = self.app.session.ds().ok().map(|d| d.uid);
+            let owns = active.is_some_and(|u| self.windows.borrow().shows_uid(wid, u));
+            if !owns {
+                return;
+            }
+        }
+
         let pos = self.local(e.position);
 
         self.pointer = Some(pos);

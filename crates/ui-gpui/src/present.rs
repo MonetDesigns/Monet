@@ -1026,10 +1026,10 @@ fn page_settings(doc: &Document, id: NodeId) -> PrototypeSettings {
 
 /// 渲染一个 frame 在当前播放头时刻的位图。
 ///
-/// 一帧画面的位图缓存项。`key` = (文档 rev, 像素缩放, GIF 帧, 关键帧时间)。
+/// 一帧画面的位图缓存项。`key` = (文档 uid, 文档 rev, 像素缩放, GIF 帧, 关键帧时间)。
 #[derive(Clone)]
 struct CachedTex {
-    key: (u64, u64, u64, u64),
+    key: (u64, u64, u64, u64, u64),
     img: std::sync::Arc<gpui::RenderImage>,
     bounds: figcraft_geom::Rect,
 }
@@ -1054,6 +1054,14 @@ fn texture_scale(bounds: figcraft_geom::Rect, px: f64) -> f64 {
 fn frame_tex(state: &PresentState, doc: &Document, id: NodeId, px_scale: f64) -> Option<CachedTex> {
     let clock = figcraft_render::images::animation_clock(doc, id, (state.clock - state.arrived).max(0.0) + 0.005);
     let key = (
+        // 文档身份也要进 key：`rev` 是每个 PresentState 局部的，两份文档可能有相同的
+        // frame id / 尺寸 / 局部修订号，同一窗口里先后演示时会复用对方的位图。
+        // `Document` 没有 uid；name 在会话内唯一且稳定，足以区分。
+        {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            std::hash::Hash::hash(&doc.name, &mut h);
+            std::hash::Hasher::finish(&h)
+        },
         state.rev,
         px_scale.to_bits(),
         clock.map_or(0, |c| c.0),
@@ -2169,6 +2177,14 @@ mod tests {
     fn back_returns_to_the_previous_frame() {
         let mut p = PresentState::new(figcraft_doc::NodeId(1), false);
         p.history.push(figcraft_doc::NodeId(1));
+        // Back 从 `visits` 取出要回的那一帧（并反向播放来时过渡）：只填 `history` 会让
+        // 查找立刻返回、current 停在 2（CodeRabbit PR#32）。用真实导航记录构造它。
+        p.visits.push(Visit {
+            frame: figcraft_doc::NodeId(1),
+            transition: figcraft_doc::proto::Transition::Dissolve,
+            dur: 300.0,
+            easing: figcraft_doc::proto::Easing::default(),
+        });
         p.current = figcraft_doc::NodeId(2);
         p.back();
         assert_eq!(p.current, figcraft_doc::NodeId(1));

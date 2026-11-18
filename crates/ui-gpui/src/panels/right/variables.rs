@@ -2056,7 +2056,9 @@ impl VariablesEditor {
                                 *caches.borrow().group_rename_members.borrow_mut() = cs
                                     .rows
                                     .iter()
-                                    .filter(|r| r.full_name.starts_with(&prefix))
+                                    // 继承来的变量引擎拒绝改名，一条失败会让整批回滚、本地
+                                    // 成员也改不掉（CodeRabbit #30/#31/#32）。组删除已这样过滤。
+                                    .filter(|r| r.full_name.starts_with(&prefix) && !r.inherited)
                                     .map(|r| (r.id.clone(), r.full_name[prefix.len()..].to_string()))
                                     .collect();
                             }
@@ -2517,7 +2519,10 @@ impl VariablesEditor {
         for r in &visible {
             if prev_group.as_deref() != Some(&r.group) {
                 prev_group = Some(r.group.clone());
-                skip = collapsed.contains(&r.group);
+                // 折叠父组要连子孙组一起隐藏：只看精确匹配会让 `Brand` 折叠后
+                // `Brand/Dark` 的变量仍在表里（CodeRabbit #30/#31）。按 `/` 边界匹配，
+                // 不误伤同前缀的兄弟组（如 `Branding`）。
+                skip = group_or_ancestor_collapsed(&r.group, &collapsed);
                 if !r.group.is_empty() {
                     items.push(RowItem::Gap);
                     // 分组标题也要进拖拽序列：否则「组上方」没有任何缝，行只能落进组里。
@@ -3752,9 +3757,37 @@ fn detail_label(text: &'static str) -> Div {
 }
 
 /// 剪贴板里的值 → `variable.set` 的 value（egui `value_json` 的等价）。
+/// `group`（如 `Brand/Dark`）自身或其任一父组在 `collapsed` 里就隐藏表格行。
+/// 只按 `/` 边界取祖先，`Brand` 不会把 `Branding` 一起折叠。
+fn group_or_ancestor_collapsed(group: &str, collapsed: &std::collections::BTreeSet<String>) -> bool {
+    if group.is_empty() {
+        return false;
+    }
+    if collapsed.contains(group) {
+        return true;
+    }
+    let mut rest = group;
+    while let Some((parent, _)) = rest.rsplit_once('/') {
+        if collapsed.contains(parent) {
+            return true;
+        }
+        rest = parent;
+    }
+    false
+}
+
 fn cell_value(c: &VarCell) -> Option<Value> {
     match c {
-        VarCell::Color { hex, .. } => Some(json!(format!("#{hex}"))),
+        // 复制色值时保留 alpha：`encode_value` 接受 #RRGGBBAA，粘贴后不能把半透明色变全
+        // 不透明（CodeRabbit #31）。`alpha` 是 0..100 的百分数。
+        VarCell::Color { hex, alpha, .. } => {
+            if *alpha >= 100 {
+                Some(json!(format!("#{hex}")))
+            } else {
+                let a = ((*alpha as f32 / 100.0) * 255.0).round() as u8;
+                Some(json!(format!("#{hex}{a:02X}")))
+            }
+        }
         VarCell::Number(s) => s.trim().parse::<f64>().ok().map(|n| json!(n)),
         VarCell::Text(s) => Some(json!(s)),
         VarCell::Bool(b) => Some(json!(b)),

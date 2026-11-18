@@ -166,17 +166,13 @@ pub fn layout_up(doc: &mut Document, id: NodeId, m: &dyn Measure) {
 /// so it keeps its place and stays out of the flow.
 pub fn flow_children(doc: &Document, frame: NodeId) -> Vec<NodeId> {
     let Some(f) = doc.node(frame) else { return Vec::new() };
-    let grid = f.layout.as_ref().is_some_and(|l| matches!(l.mode, LayoutMode::Grid));
+    // 有自动布局的父节点里，absolute 子级不参与流；grid 子级无论有没有显式坐标都要留在
+    // 流里，没坐标的交给 `grid_place` 自动摆放（CodeRabbit PR#32）。原先把无坐标子级
+    // 过滤掉，会让它们拿不到任何几何，撤销拖入 grid 后也恢复不出来。
     f.children
         .iter()
         .copied()
-        .filter(|c| {
-            doc.node(*c).is_some_and(|n| {
-                n.visible
-                    && !n.child_layout.absolute
-                    && (!grid || n.child_layout.grid_column.is_some() || n.child_layout.grid_row.is_some())
-            })
-        })
+        .filter(|c| doc.node(*c).is_some_and(|n| n.visible && !n.child_layout.absolute))
         .collect()
 }
 
