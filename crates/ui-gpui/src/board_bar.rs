@@ -7,6 +7,7 @@ use crate::panels::{Cmd, Cmds};
 use crate::widgets::{Icon, icon, rgba, tokens};
 use figcraft_doc::{BOARD_COLORS, BoardItem, BoardShape, NodeId, Routing, Stamp, StrokeCap};
 use figcraft_engine::board::TEXT_SIZES;
+use figcraft_engine::tools::PenKind;
 use gpui::{AnyElement, Div, IntoElement, Pixels, Point, SharedString, canvas, div, point, prelude::*, px};
 use serde_json::json;
 use std::cell::RefCell;
@@ -248,7 +249,9 @@ pub(crate) enum Mark {
 }
 
 /// The choices `options` offers, with the tool's current one marked (`choices` in the original).
-pub(crate) fn choices(options: crate::toolbar::Options, board: &figcraft_engine::board::BoardTool) -> Vec<Choice> {
+/// `pen_kind` is the pen's style, for the ink group's flyout (the pen and its highlighter style
+/// are one tool: the caret picks which way it puts ink down).
+pub(crate) fn choices(options: crate::toolbar::Options, board: &figcraft_engine::board::BoardTool, pen_kind: PenKind) -> Vec<Choice> {
     use crate::toolbar::Options;
     match options {
         Options::Colors => BOARD_COLORS
@@ -262,6 +265,13 @@ pub(crate) fn choices(options: crate::toolbar::Options, board: &figcraft_engine:
         Options::Stamps => Stamp::ALL
             .iter()
             .map(|b| Choice { label: b.label(), params: json!({ "stamp": b.id() }), on: board.stamp == *b, mark: Mark::Stamp(*b) })
+            .collect(),
+        Options::PenKinds => PenKind::ALL
+            .iter()
+            .map(|k| {
+                let ink = if *k == PenKind::Highlighter { board.highlighter } else { board.marker };
+                Choice { label: k.label(), params: json!({ "kind": k.id() }), on: pen_kind == *k, mark: Mark::Color(ink) }
+            })
             .collect(),
         Options::None => Vec::new(),
     }

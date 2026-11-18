@@ -70,10 +70,6 @@ impl Session {
                 self.execute("board.stamp", &json!({"x": ev.x, "y": ev.y}))?;
                 Ok(())
             }
-            ToolId::Marker | ToolId::Highlighter => {
-                self.tool.gesture = Gesture::Pencil { points: vec![ev.p()], pressure: vec![ev.pressure] };
-                Ok(())
-            }
             ToolId::Connector => {
                 let from = self.end_at(ev);
                 self.tool.gesture = Gesture::Connect { from, start: ev.p() };
@@ -266,10 +262,13 @@ impl Session {
         self.commit_interaction()
     }
 
-    /// A finished marker or highlighter stroke (page points).
-    pub(crate) fn ink_finish(&mut self, path: &str) -> Result<()> {
-        let high = self.tool.tool == ToolId::Highlighter;
-        self.execute("board.ink", &json!({"path": path, "highlighter": high, "select": false}))?;
+    /// A finished pen stroke on a board (page points): board ink, so the eraser finds it, in the
+    /// pen's colour, weight and style.
+    pub(crate) fn ink_finish(&mut self, path: &str, kind: crate::tools::PenKind, color: figcraft_color::Color, weight: f64) -> Result<()> {
+        self.execute(
+            "board.ink",
+            &json!({"path": path, "highlighter": kind == crate::tools::PenKind::Highlighter, "color": color.to_css_hex(), "weight": weight, "select": false}),
+        )?;
         // Strokes come one after another: the selection stays as it was.
         Ok(())
     }

@@ -237,13 +237,18 @@ impl Session {
             }
             Gesture::Pencil { mut points, mut pressure } => {
                 self.tool.overlay.pen.clear();
+                self.tool.overlay.pen_widths.clear();
                 self.tool.overlay.pen_color = None;
+                self.tool.overlay.pen_weight = None;
                 // The stroke ends where the button came up, even without a move to get there.
                 if points.last().is_none_or(|l| (*l - ev.p()).hypot() > 0.5 / ev.zoom.max(1e-6)) {
                     points.push(ev.p());
                     pressure.push(ev.pressure);
                 }
-                self.pencil_finish(&points, &pressure)?;
+                match self.tool.tool {
+                    ToolId::Brush => self.brush_finish(&points, &pressure, ev.zoom)?,
+                    _ => self.pencil_finish(&points, &pressure, ev.zoom)?,
+                }
             }
             Gesture::Connect { from, start } => self.connect_up(ev, from, start)?,
             Gesture::Erase { .. } => self.erase_up()?,

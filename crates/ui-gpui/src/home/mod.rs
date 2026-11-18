@@ -26,8 +26,12 @@ const HOME_TIPS: [(&str, &str); 6] = [
     (tr_noop("Export"), tr_noop("Export frames and layers as PNG, JPG, SVG or PDF")),
 ];
 
-/// The whole Home screen: sidebar + main.
-pub(crate) fn body(app: &CanvasApp, cmds: &Cmds, state: &ExtraState) -> Div {
+/// The whole Home screen: sidebar + main. `new_page` is the「+」临时标签页：它画成 Figma 桌面
+/// 首页的样子（居中分类胶囊、搜索框、最近文件带缩略图），没有左侧边栏。
+pub(crate) fn body(app: &CanvasApp, cmds: &Cmds, state: &ExtraState, new_page: bool) -> Div {
+    if new_page {
+        return new_page_body(app, cmds, state);
+    }
     let t = tokens();
     let section = *state.home_section.borrow();
     let q = state.home_query.borrow().to_lowercase();
@@ -204,6 +208,192 @@ pub(crate) fn body(app: &CanvasApp, cmds: &Cmds, state: &ExtraState) -> Div {
         }
     }
     div().flex().flex_row().w_full().h_full().child(side).child(main)
+}
+
+/// 「+」的临时页：顶部三个动作（新建设计稿 / 新建画板 / 打开文件，和侧栏 Recents 的那三个
+/// action card 一致），下面一个搜索框，再下面 "Recents" 和最近文件行（缩略图 + 名字 + 相对时间）。
+/// 没有侧边栏。
+fn new_page_body(app: &CanvasApp, cmds: &Cmds, state: &ExtraState) -> Div {
+    let t = tokens();
+    let q = state.home_query.borrow().to_lowercase();
+    let mut col = div().w(px(448.0)).flex().flex_col().gap(pt(10.0));
+
+    // 三个动作：直接推到引擎命令，和首页侧栏的 action card 是同一批 id。
+    let mut actions = div().w_full().flex().flex_row().gap(pt(8.0));
+    for (icon, label, id) in [
+        (Icon::Frame, tr("New design file"), "file.new"),
+        (Icon::Rectangle, tr("New board"), "file.newBoard"),
+        (Icon::Page, tr("Open file"), "file.open"),
+    ] {
+        let c = cmds.clone();
+        let dismiss = state.dismiss.clone();
+        actions = actions.child(
+            div()
+                .id(id)
+                .flex_1()
+                .h(px(34.0))
+                .rounded(pt(6.0))
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_center()
+                .gap(pt(6.0))
+                .bg(rgba(t.field))
+                .border_1()
+                .border_color(rgba(t.border))
+                .cursor_pointer()
+                .hover(move |s| s.bg(rgba(t.hover)))
+                .on_mouse_down(MouseButton::Left, move |_e, _, _| {
+                    c.push(Cmd { id, params: None });
+                    // 临时页只负责发起动作：命令排进队列后就让位，别盖住新建 / 打开的画布
+                    // （取消打开时 `dismiss_new_tabs` 会回首页）。
+                    *dismiss.borrow_mut() = true;
+                    c.wake();
+                })
+                .child(crate::widgets::icon::paint(icon, rgba(t.icon), 14.0))
+                .child(div().text_size(pt(11.0)).text_color(rgba(t.text)).child(SharedString::from(label))),
+        );
+    }
+    col = col.child(actions).child(state.home_search.clone());
+
+    col = col.child(
+        div()
+            .w_full()
+            .pt(pt(6.0))
+            .text_size(pt(11.0))
+            .font_weight(gpui::FontWeight::SEMIBOLD)
+            .text_color(rgba(t.text))
+            .child(tr("Recents")),
+    );
+
+    // 最近文件：按修改时间从新到旧，缩略图来自文件自带的 thumbnail.png（EGUI 首页的行为）。
+    let mut files: Vec<String> = app
+        .session
+        .prefs
+        .recent_files
+        .iter()
+        .filter(|p| q.is_empty() || p.to_lowercase().contains(&q))
+        .cloned()
+        .collect();
+    files.sort_by_key(|p| std::cmp::Reverse(std::fs::metadata(p).and_then(|m| m.modified()).ok()));
+    if files.is_empty() {
+        col = col.child(note(tr("No recent files yet. Open or save a file to see it here.")));
+    } else {
+        let mut rows = div().w_full().flex().flex_col();
+        for path in files.iter().take(20) {
+            rows = rows.child(new_page_row(state, path, cmds));
+        }
+        col = col.child(rows);
+    }
+
+    let scroll = div()
+        .id("home-new-page")
+        .w_full()
+        .h_full()
+        .flex()
+        .flex_col()
+        .items_center()
+        .overflow_y_scroll()
+        .pt(pt(40.0))
+        .pb(pt(24.0))
+        .bg(rgba(t.panel))
+        .child(col);
+    // `overflow_y_scroll` 要 `Stateful<Div>`；外层再包一层普通 `Div` 保持 `body` 的返回类型。
+    div().w_full().h_full().child(scroll)
+}
+
+/// 临时页的一行最近文件：40×30 缩略图、文件名、右对齐的相对时间。点一行打开该文件。
+fn new_page_row(state: &ExtraState, path: &str, cmds: &Cmds) -> Div {
+    let t = tokens();
+    let name = file_name(path);
+    let edited = long_ago(path);
+    let c = cmds.clone();
+    let dismiss = state.dismiss.clone();
+    let p = path.to_string();
+    let pic = match recent_preview(state, path).0 {
+        Some(tex) => div()
+            .flex_none()
+            .w(px(40.0))
+            .h(px(30.0))
+            .rounded(pt(4.0))
+            .overflow_hidden()
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(gpui::img(gpui::ImageSource::Render(tex)).max_w(px(40.0)).max_h(px(30.0))),
+        None => div()
+            .flex_none()
+            .w(px(40.0))
+            .h(px(30.0))
+            .rounded(pt(4.0))
+            .bg(rgba(t.field))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(crate::widgets::icon::paint(Icon::Page, rgba(t.icon), 14.0)),
+    };
+    div()
+        .w_full()
+        .h(px(40.0))
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(pt(10.0))
+        .px(pt(6.0))
+        .rounded(pt(5.0))
+        .hover(|s| s.bg(rgba(t.hover)))
+        .cursor_pointer()
+        .child(pic)
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .overflow_hidden()
+                .text_size(pt(11.0))
+                .text_color(rgba(t.text))
+                .child(SharedString::from(name)),
+        )
+        .child(div().text_size(pt(11.0)).text_color(rgba(t.text_tertiary)).child(SharedString::from(edited)))
+        .on_mouse_down(MouseButton::Left, move |_e, _, _| {
+            c.push(Cmd { id: "file.openRecent", params: Some(json!({ "path": p.clone() })) });
+            *dismiss.borrow_mut() = true;
+            c.wake();
+        })
+}
+
+/// 最近文件的缩略图：文件自带的 `thumbnail.png`（EGUI 首页那条链路），读盘 + 解码一次就缓存。
+fn recent_preview(state: &ExtraState, path: &str) -> (Option<std::sync::Arc<gpui::RenderImage>>, bool) {
+    if let Some(hit) = state.recent_thumbs.borrow().get(path) {
+        return hit.clone();
+    }
+    let p = figcraft_format::thumbnail::file_preview(std::path::Path::new(path), 640);
+    let is_board = p.kind == figcraft_doc::FileKind::Board;
+    let drawn = p
+        .picture
+        .map(|thumb| crate::canvas::render_worker::wrap_rgba(thumb.width, thumb.height, thumb.rgba));
+    let hit = (drawn, is_board);
+    state.recent_thumbs.borrow_mut().insert(path.to_string(), hit.clone());
+    hit
+}
+
+/// 「24 minutes ago」式的相对时间（用词条表里的复数形式，和 Figma 首页显示的一致）。
+fn long_ago(path: &str) -> String {
+    let Ok(modified) = std::fs::metadata(path).and_then(|m| m.modified()) else { return String::new() };
+    let Ok(since) = modified.elapsed() else { return String::new() };
+    let d = since.as_secs();
+    if d < 60 {
+        tr("Just now").to_string()
+    } else if d < 3600 {
+        figcraft_i18n::trn("{n} minutes ago", (d / 60) as usize, &[])
+    } else if d < 86_400 {
+        figcraft_i18n::trn("{n} hours ago", (d / 3600) as usize, &[])
+    } else if d < 2_592_000 {
+        figcraft_i18n::trn("{n} days ago", (d / 86_400) as usize, &[])
+    } else if d < 31_536_000 {
+        figcraft_i18n::trn("{n} months ago", (d / 2_592_000) as usize, &[])
+    } else {
+        figcraft_i18n::trn("{n} years ago", (d / 31_536_000) as usize, &[])
+    }
 }
 
 fn cycle_bool(label: &'static str, slot: Rc<RefCell<bool>>, cmds: &Cmds) -> Div {

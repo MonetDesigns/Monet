@@ -416,11 +416,20 @@ impl Session {
                     pts.push(ev.p());
                     pressure.push(ev.pressure);
                 }
-                // The preview shows the stroke being drawn, so it is smoothed the way the finished
-                // stroke is: painting the raw samples showed the hand's tremor until the button
-                // came up, and the stroke looked like it was jumping around.
-                let preview = figcraft_geom::smooth_points(&pts, 3.0);
-                self.tool.overlay.pen = preview.iter().map(|p| [p.x, p.y]).collect();
+                // The preview runs the same pipeline the committed stroke will: the samples prepared
+                // once (deduped, the tremor averaged out *in screen pixels*), so what is under the
+                // pointer is the curve and — for a brush — the width that will be written down.
+                let (prepared, from) = figcraft_geom::prepare_samples(&pts, self.smoothing_px() / zoom);
+                self.tool.overlay.pen = prepared.iter().map(|p| [p.x, p.y]).collect();
+                let brush = self.tool.tool == ToolId::Brush;
+                self.tool.overlay.pen_weight = Some(if brush { self.brush_weight() } else { self.pen_weight() });
+                self.tool.overlay.pen_widths = if brush {
+                    let carried: Vec<Option<f32>> = from.iter().map(|i| pressure.get(*i).copied().flatten()).collect();
+                    // The same shape the finished stroke gets: pressure times the end taper.
+                    super::pen::brush_scales(&prepared, &carried, zoom).unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
                 self.tool.gesture = Gesture::Pencil { points: pts, pressure };
                 if let Ok(ds) = self.ds_mut() {
                     ds.revision += 1;

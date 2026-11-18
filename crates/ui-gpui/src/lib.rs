@@ -554,12 +554,6 @@ pub struct PaneState {
     /// 仍是 Design，不该冒出 Draw 专属的宽度设置栏。
     draw_mode: bool,
 
-    /// The illustrated Brush nib's own colour. Pen / Pencil read `pen_style` / `pencil_style`,
-    /// but the engine has no Brush slot (it is the pencil with a brush preset), so the Brush
-    /// colour lives here and is set from the Draw colour picker while the Brush nib is selected.
-    /// `None` falls back to the pencil's colour until the user picks one.
-    draw_brush_ink: Option<[u8; 3]>,
-
     /// 画板的 Design 面板是否展开（`ui-egui` 的 `app.ui.board_panel`）。画板没有原型、也没有
     /// Dev Mode，右栏默认收起，工具栏最右的按钮 / `view.design` 是它的开关。
     board_panel: bool,
@@ -673,6 +667,13 @@ pub struct PaneState {
     /// 下一个演示 tab id（单调递增，不自增复用 eGUI `present_next`）。
     present_next: u64,
 
+    /// 「+」打开的空白标签页（内容 = 首页那套创建 / 导入入口 + 当前文件），窗口私有。
+    new_tabs: Vec<u64>,
+    /// 当前激活的空白标签页 id；与文档 / 演示 / 首页互斥。
+    new_active: Option<u64>,
+    /// 下一个空白标签页 id。
+    new_next: u64,
+
     /// 左面板控件树（Layers）的展开 / 选中 / 拖动状态。
     layer_tree: layer_tree::LayerTreeState,
 
@@ -776,6 +777,36 @@ impl CanvasView {
                 // TabDragState 包着 Rc<RefCell<_>>：clone 会和源窗口共享拖拽记录，
                 // 另一个窗口的标签渲染会把本窗口正在拖的目标清掉（CodeRabbit PR#27/#28）。
                 p.tabs.drag = Default::default();
+                // 待应用的重排也是窗口私有的：Rc 会被 clone 共享，新窗口会替旧窗口提交。
+                p.tabs.pending = Default::default();
+                // 演示是窗口私有的（`PaneState.present` 随 `pane` clone 一起复制）：新窗口不该
+                // 继承别的窗口正在播放的演示，否则两个窗口同时画一份播放器（用户 2026-11-17）。
+                p.present = None;
+                p.present_active = None;
+                p.present_tabs.clear();
+                // 空白标签页（「+」）同样是窗口私有的临时页，新窗口不该继承。
+                p.new_tabs.clear();
+                p.new_active = None;
+                // 演示标签被拖出成新窗口：新窗口接手它（含播放器状态），不再新建一个。
+                // ⛔ 不能按 `of(uid)` 判断：借用模式下归属仍指向原窗口，新窗口永远接不到，
+                // 结果就是「拖出去了，却显示原来的设计画布」（用户 2026-11-17）。
+                // 目标窗口 id 由 `open_now` 在首帧之前写进 `pending_present`。
+                // 目标窗口 id 由 `open_now` 在首帧之前写进 `pending_present`；再兜一层
+                // 「借用这份文档且不拥有它」的判定，避免 target 因首帧/登记时序漏写。
+                let take = {
+                    let w = self.windows.borrow();
+                    w.pending_present.as_ref().is_some_and(|(u, target, _)| {
+                        *target == Some(wid) || (w.shows_uid(wid, *u) && w.of(*u) != wid)
+                    })
+                };
+                if take
+                    && let Some((_, _, tab)) = self.windows.borrow_mut().pending_present.take()
+                {
+                    p.tabs.home = false;
+                    p.present_active = Some(tab.id);
+                    p.present = tab.pres.clone();
+                    p.present_tabs = vec![tab];
+                }
                 // motion::Queue 也是 Rc<RefCell<_>>：clone 共享 action vector，两个窗口
                 // 会 drain 彼此的动作、editors 也会 push 进旧窗口的 queue（CodeRabbit PR#28）。
                 // 换新 queue 并用它重建 editors，让新窗口的 Motion 编辑留在本窗口。
@@ -786,6 +817,10 @@ impl CanvasView {
                 // `clone()` 只复制了 `Rc` 指针：右栏的折叠 / 展开 / 过滤面板会和别的窗口
                 // 共享同一块内存，一处折叠处处折叠（用户 2026-11-16 实测）。
                 p.fields = p.fields.detached();
+                // `ExtraState` 里全是 `Rc<RefCell<_>>`（dismiss / 搜索词 / 浮层开关）：
+                // clone 后两个窗口共享同一份，一个窗口关浮层会把另一个窗口的首页 /
+                // 空白页一起收掉（用户 2026-11-17）。整块重建。
+                p.extra_state = panels::extra::ExtraState::new(cx, &p.fields.queue());
                 p
             }
         };
@@ -819,6 +854,24 @@ impl CanvasView {
         windows::set_current(wid);
         self.windows.borrow_mut().current = wid;
         self.enter_pane(wid, cx);
+        // 指针一进入别的窗口就算「操作它」：把残留的「+」空白页收掉（用户 2026-11-17 的设计要求）。
+        self.dismiss_other_new_tabs(wid);
+    }
+
+    /// 给命令新产生的 `ui_requests` 打上**发起窗口**归属。
+    ///
+    /// 所有窗口共享 `session.ui_requests`，而 `sync_ui_requests` 在每帧最前面跑：
+    /// 不标归属时，先渲染的窗口会把别人的请求（典型 `proto.present`）当自己的消费掉
+    /// （用户 2026-11-17：在某个窗口开演示，演示标签跑到首页/别的窗口）。
+    fn stamp_ui_requests(&mut self) {
+        let wid = crate::windows::current();
+        for r in &mut self.app.session.ui_requests {
+            if let Some(o) = r.data.as_object_mut()
+                && !o.contains_key("__window")
+            {
+                o.insert("__window".to_string(), serde_json::json!(wid));
+            }
+        }
     }
 
     /// `file.new` / `file.open` 成功后，把新文档登记到**发起命令的窗口**。
@@ -829,17 +882,22 @@ impl CanvasView {
     /// 命令前后的 `docs` uid-diff 统一登记，并且不抢走已经属于别的窗口的文档。
     /// `before` 是命令执行前的 uid 快照。
     fn adopt_opened_doc(&mut self, command: &str, before: &[u64]) {
-        if command != "file.new" && command != "file.open" {
-            return;
-        }
         let after: Vec<u64> = self.app.session.docs.iter().map(|d| d.uid).collect();
-        let active = self.app.session.ds().ok().map(|d| d.uid);
-        // 新出现的 uid 一定属于发起窗口；再带上当前活动文档，覆盖「打开一个已存在的文档」。
+        // ⛔ 不能按命令白名单判断「有没有新建文档」：`file.newBoard`（首页新加 board）不在
+        // `file.new` / `file.open` 里，之前就被漏掉，于是新 board 从不属于发起窗口，
+        // 永远落到第一个窗口的标签栏（用户 2026-11-17）。
+        // 规则改成：**任何命令**新出现的 uid 都属于发起窗口；只有「切到已存在的文档」
+        // （file.open / file.new 的复用分支）才额外把当前活动文档算进来。
         let mut candidates: Vec<u64> = after.iter().copied().filter(|u| !before.contains(u)).collect();
-        if let Some(a) = active
+        let switches_active = command == "file.open" || command.starts_with("file.new");
+        if switches_active
+            && let Some(a) = self.app.session.ds().ok().map(|d| d.uid)
             && !candidates.contains(&a)
         {
             candidates.push(a);
+        }
+        if candidates.is_empty() {
+            return;
         }
         let wid = crate::windows::current();
         let mut wins = self.windows.borrow_mut();
@@ -865,6 +923,24 @@ impl CanvasView {
     /// （用户 2026-11-16 实测）。渲染时为 false：只有聚焦窗口写，避免两个窗口每帧互相覆盖。
     pub(crate) fn bind_window_document(&mut self, window: &mut Window, authoritative: bool, cx: &mut App) {
         let doc_uids: Vec<u64> = self.app.session.docs.iter().map(|d| d.uid).collect();
+        // 演示正在显示时它借用的源文档 uid：即使设计标签已经关掉（藏起来了），也要允许绑定，
+        // 否则预览一打开就会被下面的回落逻辑切走文档（用户 2026-11-17）。
+        let presenting_uid = if self.present.is_some() {
+            self.present_tabs.iter().find(|t| Some(t.id) == self.present_active).map(|t| t.uid)
+        } else {
+            None
+        };
+        // 显式切到一份「设计标签已关」的文档（例如从最近文件重新打开）：恢复它的设计标签。
+        // ⛔ 首页 / 「+」临时页时不能恢复：这两处只是临时视图，文档仍是全局 active，
+        // 无条件恢复会让设计标签立刻弹回来（用户 2026-11-17：设计页关不掉 / 点加号冒出原标签）。
+        if !self.tabs.home
+            && self.new_active.is_none()
+            && let Some(uid) = self.app.session.ds().ok().map(|d| d.uid)
+            && Some(uid) != presenting_uid
+        {
+            self.tabs.hidden.retain(|u| *u != uid);
+        }
+        let hidden = self.tabs.hidden.clone();
         let mut wins = self.windows.borrow_mut();
         let wid = window_id_of(&wins, window);
         windows::set_current(wid);
@@ -881,16 +957,25 @@ impl CanvasView {
         // 表现就是「拉开多个窗口后点标签切不过去」（用户 2026-11-16）。
         // 正确做法：每帧都按**本窗口的记录**把 active 写回来，各窗口各自画各自的文档。
         let cur = self.app.session.ds().ok().map(|d| d.uid);
-        let owned = |uid: u64| wins.of(uid) == wid && doc_uids.contains(&uid);
+        // 一个窗口可以**借用**别的窗口的文档（把演示标签拖出成独立窗口时，设计标签要留在
+        // 原窗口）：所以「可绑定」= 拥有它，或作为预览窗口借用了它（用户 2026-11-17）。
+        // 借用只影响绑定，不影响归属：`Windows::of` 里它仍属于原窗口，因此预览窗口的
+        // 标签栏不会冒出设计页。
+        let owned = |uid: u64| {
+            wins.shows_uid(wid, uid)
+                && doc_uids.contains(&uid)
+                && (!hidden.contains(&uid) || Some(uid) == presenting_uid)
+        };
         let show = want
             .filter(|uid| owned(*uid))
             .or_else(|| cur.filter(|uid| owned(*uid)))
             .or_else(|| {
                 if wid == 0 {
                     // 主窗口的文档 = 不属于任何额外窗口的那些（按 session 的打开顺序）。
-                    doc_uids.iter().copied().find(|uid| wins.of(*uid) == 0)
+                    doc_uids.iter().copied().find(|uid| wins.of(*uid) == 0 && !hidden.contains(uid))
                 } else {
-                    wins.entry(wid).and_then(|w| w.docs.first().copied()).filter(|uid| doc_uids.contains(uid))
+                    wins.entry(wid)
+                        .and_then(|w| w.docs.iter().copied().find(|uid| doc_uids.contains(uid) && !hidden.contains(uid)))
                 }
             });
         // 只能绑定**本窗口拥有**的文档：否则主窗口会把「已经被拖到别的窗口」的文档设成
@@ -916,6 +1001,25 @@ impl CanvasView {
         drop(wins);
         // 进入这个窗口的上下文：换入它自己的 UI 状态（首页 / 弹层 / 面板宽度 / 指针 …）。
         self.enter_pane(wid, cx);
+        // 用户真的在操作这个窗口了：别的窗口里残留的「+」空白页收掉（设计要求）。
+        if authoritative {
+            self.dismiss_other_new_tabs(wid);
+        }
+        // 本窗口一份文档都不剩（最后一个标签被拖出成新窗口 / 关闭）→ 回首页。
+        // 否则画布还画着已经属于别的窗口的那份文档（用户 2026-11-17）。
+        let (empty, no_owns) = {
+            let wins = self.windows.borrow();
+            let listed = |uid: u64| wins.shows_uid(wid, uid);
+            let showable = |uid: u64| listed(uid);
+            let empty = !self.app.session.docs.iter().any(|d| showable(d.uid));
+            // 借用型窗口（预览）没有自己拥有的设计文档：播放器一关，它就没有可显示的内容，
+            // 只能回首页 —— 绝不能挂着一个「幽灵窗口」把设计文件整窗画出来（用户 2026-11-17）。
+            let no_owns = !self.app.session.docs.iter().any(|d| wins.of(d.uid) == wid);
+            (empty, no_owns)
+        };
+        if (empty || (no_owns && self.present_active.is_none())) && !self.tabs.home && self.new_tabs.is_empty() {
+            self.show_home();
+        }
     }
 
     /// 标签点击：按 **uid** 当场切文档。
@@ -924,8 +1028,11 @@ impl CanvasView {
     /// 守卫据此判定「这是别的窗口的文档」并丢弃，表现就是「点标签切不过去」
     /// （用户 2026-11-16）。uid 不漂移，且这里仍校验归属，不会切到别的窗口的文档。
     pub(crate) fn select_doc(&mut self, uid: u64, cx: &mut Context<Self>) {
+        // 重新打开 / 显式切到一份「数据已移交预览」的文档：把设计标签恢复出来。
+        self.tabs.hidden.retain(|u| *u != uid);
         // eGUI：点文件 tab 切走时，在屏的演示播放器收进它的 tab（下次点演示 tab 恢复）。
         self.pause_present();
+        self.dismiss_new_tabs();
         let Some(i) = self.app.session.docs.iter().position(|d| d.uid == uid) else { return };
         let res = self.app.session.execute("doc.switch", &serde_json::json!({ "index": i }));
         // 引擎命令可能因为正在编辑文字等原因拒绝执行；此时直接把活动文档切过去，
@@ -1087,8 +1194,6 @@ impl CanvasView {
 
             draw_mode: false,
 
-            draw_brush_ink: None,
-
             board_panel: false,
 
             tpl_pics: std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new())),
@@ -1180,6 +1285,9 @@ impl CanvasView {
             present_tabs: Vec::new(),
             present_active: None,
             present_next: 1,
+            new_tabs: Vec::new(),
+            new_active: None,
+            new_next: 1,
 
             layer_tree: layer_tree::LayerTreeState::default(),
 
@@ -1686,11 +1794,16 @@ impl CanvasView {
 
     /// 才真正有 UI 反应（以前 GPUI 完全不消费这些请求，我只能用右栏状态硬同步）。
 
-    fn sync_ui_requests(&mut self, cx: &mut Context<Self>) {
-        if *self.extra_state.dismiss.borrow() {
+    fn sync_ui_requests(&mut self, cx: &mut Context<Self>) {        if *self.extra_state.dismiss.borrow() {
             *self.extra_state.dismiss.borrow_mut() = false;
 
-            self.extra = None;
+            // 「+」临时页里点了动作（新建 / 打开 / 最近文件）或者按了 X：临时页要让位，
+            // 不能继续盖着刚创建 / 打开的画布。
+            if self.new_active.is_some() {
+                self.dismiss_new_tabs();
+            } else {
+                self.extra = None;
+            }
         }
 
         // 通用对话框：X / 遮罩 / 按钮统一置位，下一帧由这里收掉（与 four extra 面板同一机制）。
@@ -1700,6 +1813,15 @@ impl CanvasView {
         }
 
         let reqs = std::mem::take(&mut self.app.session.ui_requests);
+        // 所有窗口共享一个 `session`，但请求属于**发起命令的那个窗口**：不标归属时先渲染
+        // 的窗口（通常是主窗口）会把别的窗口的请求（典型：`proto.present`）抢进自己的
+        // pane，表现是「在某个窗口演示，标签却跑到首页/别的窗口」（用户 2026-11-17）。
+        let wid = crate::windows::current();
+        let (reqs, others): (Vec<_>, Vec<_>) = reqs
+            .into_iter()
+            .partition(|r| r.data.get("__window").and_then(serde_json::Value::as_u64).map_or(true, |w| w == wid));
+        // 别的窗口的请求先放回去，等它自己的渲染帧消费。
+        self.app.session.ui_requests = others;
 
         if reqs.is_empty() {
             return;
@@ -1968,6 +2090,12 @@ impl CanvasView {
                         } else {
                             Some(present::PresentState::new(id, preview))
                         };
+                        // 预览自带一份文档快照：源设计稿关掉之后预览标签仍可打开（用户 2026-11-17）。
+                        let snapshot =
+                            self.app.session.ds().ok().filter(|ds| ds.uid == uid).map(|ds| ds.doc.clone());
+                        if let (Some(p), Some(d)) = (self.present.as_mut(), snapshot) {
+                            p.doc = Some(d);
+                        }
                     }
                 }
 
@@ -2125,8 +2253,15 @@ impl CanvasView {
     /// 演示 tab 的源文档在 `session.docs` 里的下标（eGUI `tabs::owner`）：
     /// 只有源文档是本窗口前台文档时，演示才读改那份文件。
     fn present_owner_index(&self, uid: u64) -> Option<usize> {
+        // 「本窗口可见」= 拥有，或作为预览窗口借用它。演示拖出成的独立窗口**借用**
+        // 源文档（设计标签留在原窗口），按归属判断会让它立刻把自己 pause 掉，
+        // 画布就退回成原来的设计图（用户 2026-11-17）。
         let wins = self.windows.borrow();
-        self.app.session.docs.iter().position(|d| d.uid == uid && wins.shows(uid))
+        let wid = crate::windows::current();
+        if !wins.shows_uid(wid, uid) {
+            return None;
+        }
+        self.app.session.docs.iter().position(|d| d.uid == uid)
     }
 
     /// 把在屏播放器收进当前 active 的演示 tab（eGUI `pause_present`）。
@@ -2140,27 +2275,118 @@ impl CanvasView {
 
     /// 点演示 tab：先把当前播放器存回旧 tab，再把目标 tab 的播放器取出上屏（eGUI `show_present`）。
     pub(crate) fn switch_present_tab(&mut self, id: u64) {
-        if self.present_active == Some(id) && self.present.is_some() {
+        // 已经在屏且不在首页：重复点击不用做事。首页时不能提前返回，否则「从首页点回预览」
+        // 切不回去（用户 2026-11-17）。
+        if self.present_active == Some(id) && self.present.is_some() && !self.tabs.home {
             return;
         }
         self.pause_present();
         self.present_active = Some(id);
         self.tabs.home = false;
+        self.dismiss_new_tabs();
         // eGUI show_present：演示属于哪个文件，就把那个文件切到前台（总 tab 联动）。
         let owner = self.present_tabs.iter().find(|t| t.id == id).map(|t| t.uid);
         if let Some(uid) = owner
             && let Some(i) = self.present_owner_index(uid).filter(|i| *i != self.app.session.active)
         {
-            let _ = self.app.session.execute("doc.switch", &serde_json::json!({ "index": i }));
+            if self.app.session.execute("doc.switch", &serde_json::json!({ "index": i })).is_err() {
+                self.app.session.active = i;
+            }
+            // 和 `select_doc` 一样，把前台文档记到**本窗口**：否则下一帧
+            // `bind_window_document` 会用本窗口的旧记录把 active 覆盖回去，
+            // 表现就是「演示 tab 点了没反应」。
+            let wid = crate::windows::current();
+            {
+                let mut wins = self.windows.borrow_mut();
+                if wid == 0 {
+                    wins.main_active = Some(uid);
+                } else if let Some(entry) = wins.entry_mut(wid) {
+                    entry.active = Some(uid);
+                }
+            }
         }
         if let Some(tab) = self.present_tabs.iter_mut().find(|t| t.id == id) {
             self.present = tab.pres.take();
+        }
+        // 源文档还开着就刷新快照（预览显示最新设计）；关掉了就继续用旧快照。
+        let snapshot = owner
+            .and_then(|uid| self.app.session.ds().ok().filter(|ds| ds.uid == uid).map(|ds| ds.doc.clone()));
+        if let (Some(p), Some(d)) = (self.present.as_mut(), snapshot) {
+            p.doc = Some(d);
+        }
+    }
+
+    /// 标签条统一顺序重排（拖拽落位）：文档、演示、空白页共用一条顺序。
+    /// `slot` 是「除被拖标签和空白页之外」的目标槽位；空白页永远留在末尾。
+    fn reorder_tab(&mut self, id: tabs_view::TabId, slot: usize) {
+        let order = &mut self.tabs.order;
+        let Some(from) = order.iter().position(|t| *t == id) else { return };
+        order.remove(from);
+        let mut seen = 0;
+        let mut at = order.len();
+        for (i, key) in order.iter().enumerate() {
+            if matches!(key, tabs_view::TabId::New(_)) {
+                at = i;
+                break;
+            }
+            if seen == slot {
+                at = i;
+                break;
+            }
+            seen += 1;
+        }
+        order.insert(at, id);
+    }
+
+    /// 应用标签条拖拽回调记下的操作（见 `tabs_view::TabOp`）。
+    ///
+    /// ⛔ 拖拽回调里不能 `Entity::update`（二次租借 → panic → abort，用户 2026-11-17
+    /// 「拖出窗口时闪退」）；回调只入队，这里在渲染帧里直接改状态。
+    fn apply_tab_ops(&mut self, cx: &mut Context<Self>) {
+        let ops: Vec<tabs_view::TabOp> = self.tabs.pending.borrow_mut().drain(..).collect();
+        for op in ops {
+            match op {
+                tabs_view::TabOp::Reorder { id, slot } => self.reorder_tab(id, slot),
+                tabs_view::TabOp::DetachPresent { id, uid } => {
+                    // 演示标签拖出成新窗口：tab（含播放器）先寄存到 `Windows`，新窗口建 pane 时接手。
+                    // 先把在屏播放器存回 tab，否则交出去的是个空壳（见 `pause_present`）。
+                    if self.present_active == Some(id) {
+                        self.pause_present();
+                    }
+                    let Some(mut tab) = self.present_tabs.iter().find(|t| t.id == id).cloned() else { continue };
+                    // 兜底：个别路径下 `tab.pres` 是空的（播放器状态只在 `present` 上），
+                    // 那样交出去的会是个空壳，新窗口只能画设计画布（用户 2026-11-17 实测）。
+                    if tab.pres.is_none() {
+                        tab.pres = self.present.clone();
+                    }
+                    if tab.pres.is_none() {
+                        continue;
+                    }
+                    self.present_tabs.retain(|t| t.id != id);
+                    if self.present_active == Some(id) {
+                        self.present_active = None;
+                        self.present = None;
+                    }
+                    self.windows.borrow_mut().pending_present = Some((uid, None, tab));
+                    let root = cx.entity();
+                    let _ = windows::requests(
+                        &self.windows,
+                        cx,
+                        root,
+                        &mut self.app.session,
+                        "window.new",
+                        &serde_json::json!({ "uid": uid, "keep": true }),
+                    );
+                }
+            }
         }
     }
 
     /// 关演示 tab：从标签栏移除；若关的是在屏的，恢复下一个演示（eGUI `close_present`）。
     pub(crate) fn close_present_tab(&mut self, id: u64) {
         let Some(tab) = self.present_tabs.iter().find(|t| t.id == id).cloned() else { return };
+        // 源设计标签已经被关掉、数据移交给了这个预览（见 `close_doc_to_present`）。
+        let hidden_owner = self.tabs.hidden.contains(&tab.uid);
         self.present_tabs.retain(|t| t.id != id);
         if self.present_active == Some(id) {
             self.present = None;
@@ -2170,9 +2396,17 @@ impl CanvasView {
                 let pres = self.present_tabs.last_mut().and_then(|t| t.pres.take());
                 self.present_active = Some(nid);
                 self.present = pres;
+            } else if hidden_owner {
+                // 设计标签已关：不能把隐藏文档切回来（那会画出没有标签的「幽灵设计页」）。
+                self.show_home();
             } else {
                 // eGUI close_present：关掉在屏演示后，源文档置前；文档没了就回 Home。
-                if let Some(i) = self.present_owner_index(tab.uid) {
+                // 预览窗口只是**借用**源文档：它没有任何自己的标签，关掉播放器后必须回首页，
+                // 否则会挂着一个把设计文件整窗画出来的「幽灵窗口」（用户 2026-11-17）。
+                let wid = crate::windows::current();
+                let owns = self.windows.borrow().of(tab.uid) == wid;
+                let i = self.present_owner_index(tab.uid);
+                if owns && let Some(i) = i {
                     if i != self.app.session.active {
                         let _ = self.app.session.execute("doc.switch", &serde_json::json!({ "index": i }));
                     }
@@ -2182,18 +2416,155 @@ impl CanvasView {
                 }
             }
         }
+        // 预览也关了，且没有别的预览还借用这份数据：现在真正把文档关掉。
+        if hidden_owner && !self.present_tabs.iter().any(|t| t.uid == tab.uid) {
+            self.tabs.hidden.retain(|u| *u != tab.uid);
+            if let Some(i) = self.app.session.docs.iter().position(|d| d.uid == tab.uid) {
+                let _ = self.app.session.execute("file.close", &serde_json::json!({ "index": i, "force": false }));
+            }
+        }
+    }
+
+    /// 关设计标签，但数据移交给仍然开着的预览标签（用户 2026-11-17：「直接把数据移交给它」）。
+    ///
+    /// 文档留在 `session.docs` 里，只是这个窗口不再画它的设计标签；切进预览时照常绑定它。
+    /// 等最后一个借用它的预览标签也关了，才真正走 `file.close`。
+    pub(crate) fn close_doc_to_present(&mut self, uid: u64, cx: &mut Context<Self>) {
+        if !self.tabs.hidden.contains(&uid) {
+            self.tabs.hidden.push(uid);
+        }
+        // 预览正把这份文档播在屏上：只让设计标签从标签栏消失，活跃文档 / 播放器都别动，
+        // 否则预览会被一起收掉（用户 2026-11-17）。
+        let previewing = !self.tabs.home
+            && self.present.is_some()
+            && self.present_tabs.iter().find(|t| Some(t.id) == self.present_active).is_some_and(|t| t.uid == uid);
+        // 它正好在前台且没有预览在播：切到本窗口下一个可见文档，没有就回首页；数据仍留给预览。
+        if !previewing && self.app.session.ds().ok().map(|d| d.uid) == Some(uid) {
+            self.pause_present();
+            let wid = crate::windows::current();
+            let next = {
+                let wins = self.windows.borrow();
+                tabs_view::read_docs(&self.app.session, &wins, wid, &self.tabs.hidden).first().map(|d| d.uid)
+            };
+            if let Some(next) = next {
+                self.select_doc(next, cx);
+            } else {
+                self.show_home();
+            }
+        }
+        cx.notify();
     }
 
     /// Show the Home screen (the tab strip's Home button): the Home panel plus the tab state.
 
     pub(crate) fn show_home(&mut self) {
         self.tabs.home = true;
+        // 回首页只是**切换视图**：演示是标签栏里的一个标签，不能因为看了一眼首页就被销毁
+        // （用户 2026-11-17：点首页把预览直接关掉了）。播放器状态留在 `present` / 标签里，
+        // 点回预览标签即可继续；首页渲染时会跳过播放器层（见 render 的 `present_el`）。
+        // 空白页（「+」）是临时入口：回首页就等于关掉它，不能把它留在标签栏里
+        // （用户 2026-11-17：点首页关不掉这个临时的页）。
+        self.new_tabs.clear();
+        self.new_active = None;
 
         // A leftover `dismiss` (set when a previous extra panel was closed) would make
         // `sync_ui_requests` clear `extra` on the very next frame — reset it so Home stays.
         *self.extra_state.dismiss.borrow_mut() = false;
 
         self.extra = Some(panels::extra::ExtraKind::Home);
+    }
+
+    /// 「+」：开一个空白标签页。内容复用首页（创建 / 导入 + 当前文件），**不直接建画板**。
+    pub(crate) fn open_new_tab(&mut self) {
+        // 空白页同一时刻只留一个：已经开着就复用，不再堆一串关不掉的临时页
+        // （用户 2026-11-17：在临时页里点加号又开一个，旧的还关不掉）。
+        self.new_tabs.clear();
+        let id = self.new_next;
+        self.new_next += 1;
+        self.new_tabs.push(id);
+        self.select_new_tab(id);
+    }
+
+    /// 切到一个空白标签页：它是窗口私有页，不是文档，所以只切 UI 状态、不动 `session`。
+    pub(crate) fn select_new_tab(&mut self, id: u64) {
+        // 空白页显示的是首页内容，在屏的演示播放器先收进它的 tab。
+        self.pause_present();
+        self.tabs.home = false;
+        self.new_active = Some(id);
+        *self.extra_state.dismiss.borrow_mut() = false;
+        self.extra = Some(panels::extra::ExtraKind::Home);
+    }
+
+    /// 关掉空白标签页：还有别的就切过去，否则回到本窗口的文档；一份都没有就回首页。
+    pub(crate) fn close_new_tab(&mut self, id: u64) {
+        self.new_tabs.retain(|t| *t != id);
+        if self.new_active != Some(id) {
+            return;
+        }
+        self.new_active = None;
+        if let Some(next) = self.new_tabs.last().copied() {
+            self.select_new_tab(next);
+            return;
+        }
+        let wid = crate::windows::current();
+        let has_doc = {
+            let wins = self.windows.borrow();
+            self.app.session.docs.iter().any(|d| wins.of(d.uid) == wid || wins.entry(wid).is_some_and(|e| e.docs.contains(&d.uid)))
+        };
+        if has_doc {
+            self.tabs.home = false;
+            self.extra = None;
+        } else {
+            self.show_home();
+        }
+    }
+
+    /// 关掉本窗口的空白标签页（「+」打开的临时页）。
+    ///
+    /// 它只是「选一个创建类型 / 导入 / 打开最近文件」的临时入口：用户一旦切到别的标签
+    /// 或去操作别的窗口，它就应该消失并让位（用户 2026-11-17 的设计要求），不需要手动 X。
+    pub(crate) fn dismiss_new_tabs(&mut self) {
+        if self.new_tabs.is_empty() && self.new_active.is_none() {
+            return;
+        }
+        self.new_tabs.clear();
+        self.new_active = None;
+        if matches!(self.extra, Some(panels::extra::ExtraKind::Home)) {
+            self.extra = None;
+        }
+        // 本窗口一份文档都没有（从临时页点 Open 但对话框被取消）：回到首页，别留一个空画布。
+        let wid = crate::windows::current();
+        let has_doc = {
+            let wins = self.windows.borrow();
+            self.app
+                .session
+                .docs
+                .iter()
+                .any(|d| wins.of(d.uid) == wid || wins.entry(wid).is_some_and(|e| e.docs.contains(&d.uid)))
+        };
+        self.tabs.home = !has_doc;
+    }
+
+    /// 用户去操作**别的窗口**时，把那些窗口里残留的空白标签页收掉（设计要求同上）。
+    /// 收掉后该窗口按自己的文档记录重绘（见 `bind_window_document`）。
+    fn dismiss_other_new_tabs(&mut self, wid: u64) {
+        let mut any = false;
+        for (id, p) in self.panes.iter_mut() {
+            if *id == wid || p.new_active.is_none() {
+                continue;
+            }
+            p.new_tabs.clear();
+            p.new_active = None;
+            if matches!(p.extra, Some(panels::extra::ExtraKind::Home)) {
+                p.extra = None;
+            }
+            p.tabs.home = false;
+            any = true;
+        }
+        // 那个窗口自己不会收到通知：借共享实体的唤醒让所有窗口重绘一帧。
+        if any {
+            self.fields.queue().wake();
+        }
     }
 
     /// Leave the Home screen when a file tab is picked (the Home panel is the `extra` one).
@@ -2223,8 +2594,12 @@ impl CanvasView {
                 .present_tabs
                 .iter()
                 .find(|t| t.id == tid)
-                .and_then(|t| self.present_owner_index(t.uid))
-                .is_some_and(|i| i == self.app.session.active);
+                .is_some_and(|t| match self.present_owner_index(t.uid) {
+                    Some(i) => i == self.app.session.active,
+                    // 源设计稿已被关掉：播放器里有文档快照就继续放着，
+                    // 否则一开预览就会被这里 pause 掉（用户 2026-11-17「预览标签点不开」）。
+                    None => self.present.as_ref().is_some_and(|p| p.doc.is_some()),
+                });
             if !owner_ok {
                 present::ACTION.with(|a| a.replace(0));
                 self.pause_present();
@@ -2234,31 +2609,72 @@ impl CanvasView {
 
         let action = present::ACTION.with(|a| a.replace(0));
 
+        // 导航栏下拉：设备 / 缩放（eGUI `navigation_bar` 的两个 ComboBox）。
+        if let Some(device) = present::take_device_choice() {
+            let _ = self.app.session.execute("proto.settings", &serde_json::json!({ "device": device }));
+            if let Some(st) = self.present.as_mut() {
+                st.device_open = false;
+                // 换设备后旧视口的滚动 / 拖拽全部作废（eGUI `reset_for_device`）。
+                st.reset_for_device();
+            }
+        }
+        if let Some(scale) = present::take_scale_choice() {
+            if let Some(st) = self.present.as_mut() {
+                st.scale = scale;
+                st.scale_open = false;
+                // eGUI `set_scale`：换档后丢掉平移 / 滚动。
+                st.pan = None;
+                st.stop_scrolling();
+            }
+        }
+
         if action == 3 {
             // 顶栏 Close 退出演示：状态收进 tab，tab 本身保留在标签栏。
             self.pause_present();
             return;
         }
 
-        let doc = self.app.session.doc().ok().cloned();
+        // 演示优先读自己的文档快照（源设计稿关掉后仍能播放）；源文档在前台时每帧跟随编辑。
+        let snap = self.present.as_ref().and_then(|p| p.doc.clone());
+        let live = if snap.is_none() { self.app.session.doc().ok().cloned() } else { None };
+        let doc = snap.as_deref().or(live.as_ref());
 
-        if let (Some(st), Some(doc)) = (self.present.as_mut(), doc.as_ref()) {
+        // P6：源设计稿在屏时跟随文档变化（布局 / 删帧 / 改交互）。源文件关掉后只用快照。
+        let live_arc = if self.present_active.is_some_and(|tid| {
+            self.present_tabs
+                .iter()
+                .find(|t| t.id == tid)
+                .and_then(|t| self.present_owner_index(t.uid))
+                .is_some_and(|i| i == self.app.session.active)
+        }) {
+            self.app.session.ds().ok().map(|ds| ds.doc.clone())
+        } else {
+            None
+        };
+        if let (Some(st), Some(arc)) = (self.present.as_mut(), live_arc.as_ref()) {
+            st.sync_source(arc, st.clock);
+        }
+
+        if let (Some(doc), Some(mut st)) = (doc, self.present.take()) {
             // ACTION 对齐 eGUI `present::chrome::BarAction` 的接线：
             // 1=播放/暂停 2=后退 3=退出(上面已处理) 4=Restart 5=Comments 6=Inspect
-            // 7=HideUi 8=上一帧 9=下一帧。
+            // 7=HideUi 8=上一帧 9=下一帧 12=预览窗格转整窗演示（eGUI `Present 按钮`）。
             match action {
                 1 => st.playing = !st.playing,
                 2 => st.back(),
-                4 => {
-                    st.time_ms = 0.0;
-                    st.current = st.start;
-                    st.history.clear();
-                    st.from = None;
-                    st.playing = false;
-                }
+                4 => st.restart(st.start, st.clock),
                 5 => st.comments = !st.comments,
                 6 => st.inspect = !st.inspect,
                 7 => st.hide_ui = !st.hide_ui,
+                12 => st.preview = false,
+                10 => {
+                    st.device_open = !st.device_open;
+                    st.scale_open = false;
+                }
+                11 => {
+                    st.scale_open = !st.scale_open;
+                    st.device_open = false;
+                }
                 8 | 9 => {
                     // 真帧导航：top_frames(page) 的相邻帧，走 go() 保留过渡语义。
                     let page = doc.page_of(st.current).unwrap_or(st.current);
@@ -2273,11 +2689,16 @@ impl CanvasView {
                 _ => {}
             }
 
-            // 画面点击：命中子图层 hotspot 就执行它自己的交互（含 Action::Animation），
-            // 没命中回退到画框自身第一条交互。坐标换算与命中都在 present 侧完成。
-            present::consume_click(doc, st);
-
             st.advance(doc);
+            // P1–P5：指针 / 滚轮 / 键盘 + 惯性 / 定时器。
+            let now = st.now();
+            present::tick_input(&mut st, now);
+            st.tick(now);
+            // 本帧点到的 widget：插件回调在帧后跑（eGUI `click_widgets`）。
+            if let Some(e) = st.click_widgets(&self.app.session) {
+                eprintln!("[present] widget: {e}");
+            }
+            self.present = Some(st);
         }
     }
 
@@ -2505,6 +2926,8 @@ impl CanvasView {
                         }
                     }
                 }
+                // 命令触发的面板 / 演示请求归属发起窗口（见 stamp_ui_requests）。
+                self.stamp_ui_requests();
             }
 
             // Command ran: the panel's snapshot, the canvas and the header all depend on the
@@ -3119,6 +3542,7 @@ impl CanvasView {
             Ok(result) => {
                 self.capture_import_report(id, &params, &result, cx);
                 self.adopt_opened_doc(id, &docs_before);
+                self.stamp_ui_requests();
             }
 
             Err(e) => {
@@ -3264,6 +3688,7 @@ impl CanvasView {
                 self.capture_import_report(id, &params, &result, cx);
                 // 文件选择器 / 拖放也经这里打开文档：登记到发起窗口（见 adopt_opened_doc）。
                 self.adopt_opened_doc(id, &docs_before);
+                self.stamp_ui_requests();
 
                 Some(result)
             }
@@ -3546,11 +3971,8 @@ impl CanvasView {
             }
 
             toolbar::Intent::DrawColor => {
-                // Pen, Pencil and Brush all take their stroke colour from `tool.drawStyle.color`.
-                // This engine has no `ToolId::Brush` — the brush is the pencil carrying a preset —
-                // so it shares the pencil's colour. Writing the brush colour to a separate UI-only
-                // slot never reaches the stroke the engine draws, which was the "colour doesn't
-                // come through" bug: the brush kept painting in the pencil's (default black) colour.
+                // Each freehand tool keeps its own colour in its own `DrawStyle`, so the swatch and
+                // the picker read the current tool and nothing leaks between them.
                 let style_color = self
                     .app
                     .session
@@ -3571,17 +3993,23 @@ impl CanvasView {
                 self.run_command("tool.drawStyle", serde_json::json!({ "weight": w }), cx);
             }
 
-            toolbar::Intent::DrawLine(id) => {
-                self.run_command("tool.drawStyle", serde_json::json!({ "tool": "pencil", "lineStyle": id }), cx);
+            toolbar::Intent::DrawParam(key, v) => {
+                let tool = self.app.session.tool.tool;
+                self.run_command("tool.drawStyle", serde_json::json!({ "tool": tool.id(), key: v }), cx);
             }
 
             toolbar::Intent::DrawPreset(preset) => {
-                self.run_command("tool.drawStyle", serde_json::json!({ "preset": preset }), cx);
+                self.run_command("tool.drawStyle", serde_json::json!({ "tool": "brush", "preset": preset }), cx);
+            }
+
+            toolbar::Intent::PenKind(kind) => {
+                self.run_command("tool.penKind", serde_json::json!({ "kind": kind }), cx);
+                self.run_command("tool.set", serde_json::json!({ "tool": "pencil" }), cx);
             }
 
             toolbar::Intent::DrawPresetMenu(rect) => {
                 // Every brush comes from an external `.abr` file; "Plain" clears the preset.
-                let current = self.app.session.tool.pencil_brush.as_ref().map(|b| b.preset.clone());
+                let current = self.app.session.tool.brush_style.preset.as_ref().map(|b| b.preset.clone());
                 let mut rows = Vec::new();
                 let mut ids: std::collections::HashMap<String, Option<String>> = std::collections::HashMap::new();
                 let plain = figcraft_i18n::tr("Plain").to_string();
@@ -3599,7 +4027,7 @@ impl CanvasView {
                 let cmds = self.fields.queue();
                 let on_pick = std::rc::Rc::new(move |label: &str, _w: &mut Window, _cx: &mut App| {
                     if let Some(preset) = ids.get(label) {
-                        cmds.push(panels::Cmd { id: "tool.drawStyle", params: Some(serde_json::json!({ "preset": preset })) });
+                        cmds.push(panels::Cmd { id: "tool.drawStyle", params: Some(serde_json::json!({ "tool": "brush", "preset": preset })) });
                     }
                 });
                 let anchor = crate::widgets::dropdown::menu_anchor("draw-brush-preset");
@@ -3608,20 +4036,6 @@ impl CanvasView {
 
             toolbar::Intent::DrawDone => {
                 self.run_command("tool.set", serde_json::json!({ "tool": "move" }), cx);
-            }
-
-            toolbar::Intent::DrawBrush => {
-                // No `ToolId::Brush` in this engine: the illustrated Brush nib activates the
-                // pencil with its ink brush preset — the same path the Draw toolbar's presets use.
-                self.run_command("tool.set", serde_json::json!({ "tool": "pencil" }), cx);
-                self.run_command("tool.drawStyle", serde_json::json!({ "preset": "ink" }), cx);
-            }
-
-            toolbar::Intent::DrawPencil => {
-                // Plain pencil: clear the brush preset too. Without this, `pencil_brush` stays
-                // set, the Brush nib keeps its active plate and the Pencil nib never lifts.
-                self.run_command("tool.set", serde_json::json!({ "tool": "pencil" }), cx);
-                self.run_command("tool.drawStyle", serde_json::json!({ "preset": serde_json::Value::Null }), cx);
             }
 
             toolbar::Intent::Mode(i) => {
@@ -4193,6 +4607,7 @@ impl CanvasView {
         if self.app.session.execute(cmd, &params).is_ok() {
             // 主菜单里的 New / Open 也要把文档登记到发起窗口（见 adopt_opened_doc）。
             self.adopt_opened_doc(cmd, &docs_before);
+            self.stamp_ui_requests();
         } else {
             eprintln!("[menu] {cmd}: failed");
         }
@@ -5431,7 +5846,7 @@ impl Render for CanvasView {
 
         let motion_playing = self.motion && self.motion_ui.playing;
 
-        let present_playing = self.present.as_ref().is_some_and(|p| p.playing || p.from.is_some());
+        let present_playing = self.present.as_ref().is_some_and(|p| p.animating());
 
         // 时长手柄停在时间轴右端滚动区时，指针不动也要继续伸长（egui `request_repaint`）。
 
@@ -6185,10 +6600,10 @@ impl Render for CanvasView {
                     return;
                 }
 
-                // 演示层：Escape 退出（egui present 的 Esc 语义）。
-
+                // 演示层：Escape 退出（egui present 的 Esc 语义）。播放器收进 tab 而不是丢掉，
+                // 否则 present_active 还指着它、再点演示 tab 会拿到空播放器。
                 if e.keystroke.key == "escape" && this.present.is_some() {
-                    this.present = None;
+                    this.pause_present();
 
                     cx.notify();
 
@@ -6589,9 +7004,8 @@ impl Render for CanvasView {
             cb
         };
 
-        // Each nib is tinted with **its own** tool's `tool.drawStyle.color`, not one shared
-        // colour: Pen uses `pen_style`; Brush and Pencil use `pencil_style` (this engine has no
-        // `ToolId::Brush`). The blue/red/yellow in the Figma SVGs are just placeholders.
+        // Each nib is tinted with **its own** tool's `tool.drawStyle.color` — three tools, three
+        // slots, nothing shared. The blue/red/yellow in the nib SVGs are just placeholders.
         let nib_inks = {
             let ts = &self.app.session.tool;
             let rgb = |tool: figcraft_engine::ToolId| {
@@ -6602,11 +7016,10 @@ impl Render for CanvasView {
                 let q = crate::widgets::swatch::color32(c);
                 [q.0[0], q.0[1], q.0[2]]
             };
-            let pencil = rgb(figcraft_engine::ToolId::Pencil);
             [
                 rgb(figcraft_engine::ToolId::Pen),
-                self.draw_brush_ink.unwrap_or(pencil),
-                pencil,
+                rgb(figcraft_engine::ToolId::Brush),
+                rgb(figcraft_engine::ToolId::Pencil),
             ]
         };
 
@@ -6624,10 +7037,6 @@ impl Render for CanvasView {
             board,
             self.board_panel,
             self.draw_mode,
-            // Brush is only active when the Pencil tool is actually selected. `pencil_brush`
-            // persists after switching away, so testing it alone kept the middle nib lifted.
-            self.app.session.tool.tool == figcraft_engine::ToolId::Pencil
-                && self.app.session.tool.pencil_brush.is_some(),
             nib_inks,
         );
 
@@ -6649,15 +7058,10 @@ impl Render for CanvasView {
             None
         } else {
             let t = self.app.session.tool.tool;
-            if matches!(t, figcraft_engine::ToolId::Pencil | figcraft_engine::ToolId::Pen) {
+            if matches!(t, figcraft_engine::ToolId::Pencil | figcraft_engine::ToolId::Brush | figcraft_engine::ToolId::Pen) {
                 self.app.session.tool.draw_style(t).map(|style| {
-                    let brush = self.app.session.tool.pencil_brush.as_ref().map(|b| b.preset.to_string());
-                    let swatch_ink = if t == figcraft_engine::ToolId::Pencil && brush.is_some() {
-                        self.draw_brush_ink
-                    } else {
-                        None
-                    };
-                    toolbar::drawing_bar(t, style, brush.as_deref(), swatch_ink, canvas_x, canvas_w, on_intent.clone())
+                    let brush = self.app.session.tool.brush_style.preset.as_ref().map(|b| b.preset.to_string());
+                    toolbar::drawing_bar(t, style, brush.as_deref(), canvas_x, canvas_w, on_intent.clone())
                 })
             } else {
                 None
@@ -6718,23 +7122,28 @@ impl Render for CanvasView {
         // ── 系统级窗口标题区域（kit `TitleBar::new().child(TabBar)`）────────────────────
         // 标签条塞在标题栏里，不是画布里的一条；标题栏是 Root 的第一个 child，
         // 客户区（Dock）从 y = TITLE_H 起，几何由 dock::DockLayout 统一推导。
+        // 拖拽松手时只入队，这里在渲染帧应用（见 `apply_tab_ops`）。
+        self.apply_tab_ops(cx);
         let tab_docs = {
             let wins = self.windows.borrow();
-            tabs_view::read_docs(&self.app.session, &wins, wins.current)
+            tabs_view::read_docs(&self.app.session, &wins, wins.current, &self.tabs.hidden)
         };
         let tabs_active = self.app.session.active;
         let tabs_dark = self.app.theme.dark;
         let tabs_reduce_motion = self.app.session.prefs.reduce_motion;
         // 演示 tab（eGUI `app.ui.presents`）：`(id, file - page, 是否在屏)`。
-        let present_tabs: Vec<(u64, String, bool)> = self
+        let present_tabs: Vec<(u64, String, bool, u64)> = self
             .present_tabs
             .iter()
-            .map(|t| (t.id, t.name(), Some(t.id) == self.present_active && self.present.is_some()))
+            .map(|t| (t.id, t.name(), Some(t.id) == self.present_active && self.present.is_some(), t.uid))
             .collect();
         let viewport_w = f32::from(vp.width);
         let content_w = title_bar::content_width(viewport_w);
         let tabs_cmds = self.fields.queue();
         let tabs_me = cx.entity();
+        // `tab_strip` 要 `&mut self.tabs`，空白页列表先拷出来避免同时借用 `self`。
+        let new_tabs = self.new_tabs.clone();
+        let new_active = self.new_active;
         let tab_bar = title_bar::title_bar(
             tabs_view::tab_strip(
                 &mut self.tabs,
@@ -6742,6 +7151,8 @@ impl Render for CanvasView {
                 &tab_docs,
                 tabs_active,
                 &present_tabs,
+                &new_tabs,
+                new_active,
                 tabs_dark,
                 tabs_reduce_motion,
                 content_w,
@@ -7182,7 +7593,7 @@ impl Render for CanvasView {
                     // （`ui-egui/src/toolbar.rs::options_flyout`）。
 
                     if let Some(g) = toolbar::group(key) {
-                        let items = crate::board_bar::choices(g.options, &board_tool);
+                        let items = crate::board_bar::choices(g.options, &board_tool, self.app.session.tool.pencil_kind);
 
                         let (cell, pad) = (32.0f32, 8.0f32);
 
@@ -7505,13 +7916,41 @@ impl Render for CanvasView {
 
                 let cmds = self.fields.queue();
 
-                vec![panels::extra::render(kind, &self.app, &cmds, &self.extra_state, cx, close).into_any_element()]
+                vec![panels::extra::render(kind, &self.app, &cmds, &self.extra_state, self.new_active.is_some(), cx, close).into_any_element()]
             }
 
             None => Vec::new(),
         };
 
-        let present_el: Vec<AnyElement> = self.present.as_ref().map(|st| present::render(&self.app, st).into_any_element()).into_iter().collect();
+        // 首页 / 空白创建页是整窗面板：这两者在前时不能把播放器层铺上去，否则「点首页」
+        // 画面不变、看起来像没反应（用户 2026-11-17）。
+        let present_el: Vec<AnyElement> = self
+            .present
+            .as_ref()
+            .filter(|_| !self.tabs.home && self.new_active.is_none())
+            .map(|st| {
+                // 预览窗格要贴着画布区放（eGUI 的 pane 是 CentralPanel 里的浮动 Window）；
+                // 整窗演示则直接用视口。
+                let dock = self.dock();
+                let vw = f32::from(vp.width);
+                let vh = f32::from(vp.height);
+                let canvas = (
+                    dock.center_x(),
+                    dock.titlebar_h,
+                    dock.center_w(vw),
+                    (vh - dock.titlebar_h - dock.bottom_h).max(1.0),
+                );
+                present::render(&self.app, st, (vw, vh), canvas).into_any_element()
+            })
+            .into_iter()
+            .collect();
+
+        // 演示里点了「打开链接」：取走待办 URL 交给系统浏览器（与 devmode 同一道闸）。
+        if let Some(url) = self.present.as_mut().and_then(|st| st.pending_url.take())
+            && figcraft_engine::doc_urls::openable(&url)
+        {
+            cx.open_url(&url);
+        }
 
         // A21：键盘所在区域的焦点环（F6 / Shift+F6 切区域时显示，指针一按即消失）。
         // 只标区域边界：GPUI 0.2 没有控件级 AccessKit 树，环是用户唯一能看到的落点提示。
@@ -7707,7 +8146,24 @@ impl Render for CanvasView {
             )
             // Capture 阶段的按键：早于焦点链上的每个控件 handler，先把本窗口换入并绑定
             // 本窗口的文档（Bubble 里的根节点 handler 太晚，输入框已经按别的窗口的文档处理过）。
-            .capture_key_down(cx.listener(|this: &mut CanvasView, _e: &KeyDownEvent, window, cx| {
+            .capture_key_down(cx.listener(|this: &mut CanvasView, e: &KeyDownEvent, window, cx| {
+                // 演示在屏：原型按键触发器优先，其次播放器快捷键（R / Z / ← / → / Space / N）。
+                if let Some(st) = this.present.as_ref() {
+                    let key = canonical_key(&e.keystroke.key);
+                    let m = &e.keystroke.modifiers;
+                    let mods = figcraft_doc::proto::KeyMods { ctrl: m.control, alt: m.alt, shift: m.shift, cmd: m.platform };
+                    let pane = st.preview;
+                    let root = st.overlays.last().map_or(st.current, |o| o.id);
+                    let uses = st
+                        .display()
+                        .or(st.doc.as_deref())
+                        .is_some_and(|d| present::wants_key(d, root, &key, mods, pane));
+                    if uses {
+                        present::push_key(key, mods);
+                        cx.stop_propagation();
+                        return;
+                    }
+                }
                 this.bind_window_document(window, true, cx);
             }))
             // Local styles 列表的键盘（↑/↓ / Enter / Delete / Ctrl+C / Ctrl+V / Ctrl+D）。
@@ -7900,9 +8356,17 @@ impl Render for CanvasView {
             )
             // 时间轴 hover 标记：与拖拽无关，但仍需每次 move 更新。
             .on_mouse_move(cx.listener(|this: &mut CanvasView, e: &MouseMoveEvent, window, cx| {
+                if this.present.is_some() {
+                    present::push_move(f64::from(e.position.x), f64::from(e.position.y));
+                }
                 this.bind_window_document(window, true, cx);
                 let vh = f32::from(window.viewport_size().height);
                 crate::motion::timeline::set_pointer_in_bar(this.motion && f32::from(e.position.y) >= vh - this.motion_bar_h());
+            }))
+            .on_mouse_up(MouseButton::Left, cx.listener(|this: &mut CanvasView, e: &MouseUpEvent, _window, _cx| {
+                if this.present.is_some() {
+                    present::push_up(f64::from(e.position.x), f64::from(e.position.y));
+                }
             }))
             // 通用窗口级拖拽层：paint 阶段每帧注册 move / up / down 监听并转给
             // `WindowDragTarget`。所有拖拽统一从这里按窗口坐标推进，不再依赖任何

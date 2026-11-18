@@ -377,6 +377,9 @@ pub(super) fn ink_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let high = boolean(p, "highlighter").unwrap_or(false);
     let color = color_param(cmd, p)?.unwrap_or(if high { s.tool.board.highlighter } else { s.tool.board.marker });
     let (weight, opacity) = if high { HIGHLIGHTER } else { MARKER };
+    // The pen picks its own weight; a bare `board.ink` (automation, older documents) keeps the
+    // marker / highlighter default.
+    let weight = num(p, "weight").filter(|w| w.is_finite() && *w > 0.0).unwrap_or(weight);
     if get(p, "path").is_none() && get(p, "points").is_none() {
         return Err(bad(cmd, "`path` or `points` is required"));
     }

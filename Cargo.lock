@@ -2411,6 +2411,7 @@ dependencies = [
  "figcraft-color",
  "figcraft-doc",
  "figcraft-engine",
+ "figcraft-format",
  "figcraft-geom",
  "figcraft-i18n",
  "figcraft-layout",

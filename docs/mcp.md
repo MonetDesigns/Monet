@@ -1916,12 +1916,19 @@ through the outlines of its layers.
   from `seed`. The stroke weight sets the brush's size and a width profile scales it along the
   path. Brushes draw on the canvas, in PNG, SVG and PDF (as filled outlines) and `vector.outlineStroke`
   flattens them; dashes don't apply to brushes.
-- **Pen pressure**: the Pencil records pressure into the stroke's width profile (up to 32 points by
-  length; medium pressure, 0.5, draws the stroke weight, from a tenth of it to twice it); without
-  pressure (a mouse) the stroke stays uniform. `pointer` takes `pressure` and, for drags,
-  `pressureTo`. `tool.pencilBrush {preset?, …}` sets the brush new Pencil strokes get (`null`
-  clears it; no `preset` reads it). The desktop app reads pressure from pen input on Windows; in the
-  browser from stylus touch events that report a force; macOS and Linux tablets report none.
+- **Three freehand tools**: `pen` (the bezier pen), `brush` (a vector curve painted with an external
+  `.abr` tip — `stroke.brush`) and `pencil` (the pen: a plain stroked vector curve). `marker` and
+  `highlighter` are no longer tools: they are the pen's two styles (`tool.penKind {kind}`), so
+  `tool.set {tool: "marker"}` still selects the pen, drawing ink.
+- **Pen pressure**: only the **brush** records it, into the stroke's width profile (up to 48 points
+  by length, averaged along the stroke; medium pressure, 0.5, draws the stroke weight, from a tenth
+  of it to twice it). The pen and the bezier pen draw one width the whole way. Without pressure (a
+  mouse) the stroke stays uniform. `pointer` takes `pressure` and, for drags, `pressureTo`.
+  `tool.brushPreset {preset?, …}` sets the brush's tip (`null` clears it; no `preset` reads it);
+  `tool.pencilBrush` is the old name and still works. Smoothing and the fit tolerance are screen
+  distances, so a stroke drawn at 400% is the same stroke as at 100%. The desktop app reads pressure
+  from pen input on Windows; in the browser from stylus touch events that report a force; macOS and
+  Linux tablets report none.
 
 ### Selection colors
 

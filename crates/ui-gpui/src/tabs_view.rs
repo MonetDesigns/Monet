@@ -27,8 +27,8 @@ use serde_json::json;
 
 use crate::panels::{Cmd, Cmds};
 use crate::tabs::{
-    BAR_BUTTON, BAR_ICON, CLOSE_ICON, HEIGHT, LIVE_MARK_WIDTH, LiveBadge, OVERFLOW_WIDTH, TabMotion, VisibleTab, live_badge,
-    preferred_width, tab_drop_position, tab_layout,
+    BAR_BUTTON, BAR_ICON, CLOSE_ICON, HEIGHT, LIVE_MARK_WIDTH, LiveBadge, NEW_TAB_MARGIN_X, OVERFLOW_WIDTH, TAB_BUTTON, TAB_BUTTON_RADIUS,
+    TAB_FONT, TAB_GAP, TAB_LABEL_MAX, TAB_PAD_X, TabMotion, VisibleTab, live_badge, preferred_width, tab_drop_position, tab_layout,
 };
 use crate::title_bar;
 use crate::widgets::icon::{self, Icon};
@@ -38,7 +38,7 @@ use crate::{CanvasView, panels};
 /// 一个文档标签的数据快照：每帧从 `Session.docs` 现读，照右栏 `PanelData` 的模式。
 #[derive(Clone, Debug)]
 pub(crate) struct TabDoc {
-    /// `Session.docs` 里的真实下标（`doc.switch` / `file.close` / `file.moveTab` 都用它）。
+    /// `Session.docs` 里的真实下标（`doc.switch` / `file.close` 都用它；重排一律按 uid）。
     pub index: usize,
     pub uid: u64,
     pub name: String,
@@ -53,12 +53,17 @@ pub(crate) struct TabDoc {
 /// 每个 OS 窗口挂同一个 `CanvasView`，所以「有哪些文档」是共享的，但「这个窗口显示哪几个」
 /// 由 `windows.of(uid)` 决定：主窗口显示不属于任何额外窗口的文档，额外窗口只显示自己 `docs`
 /// 里的。拖出标签后归属立刻变化，于是**原窗口的标签消失、新窗口只有那一个**。
-pub(crate) fn read_docs(session: &figcraft_engine::Session, windows: &crate::windows::Windows, current: u64) -> Vec<TabDoc> {
+pub(crate) fn read_docs(
+    session: &figcraft_engine::Session,
+    windows: &crate::windows::Windows,
+    current: u64,
+    hidden: &[u64],
+) -> Vec<TabDoc> {
     session
         .docs
         .iter()
         .enumerate()
-        .filter(|(_, d)| windows.of(d.uid) == current)
+        .filter(|(_, d)| windows.of(d.uid) == current && !hidden.contains(&d.uid))
         .map(|(index, d)| {
             // `live_of` 给的是「这个 uid 的会话」，但会话还带着它同步的 `doc_uid`；
             // 两个条件都满足才在标签上画徽标（上游 tabs.rs:688/694 的 filter）。
@@ -75,6 +80,33 @@ pub(crate) fn read_docs(session: &figcraft_engine::Session, windows: &crate::win
         .collect()
 }
 
+/// 标签条上的一个条目：文件文档或演示标签。
+///
+/// ⚠️ 这是标签条唯一的「身份」类型：排布、溢出、拖拽、点击、关闭都按它分发，
+/// 不再给演示标签单开一套几何 / 行为（用户 2026-11-17：演示标签必须进原来的标签系统）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TabKey {
+    Doc { index: usize },
+    Present { id: u64 },
+    /// 「+」打开的空白标签页（内容 = 首页那套创建/导入入口 + 当前文件），窗口私有。
+    New { id: u64 },
+}
+
+/// 标签条的**稳定身份**：`TabKey::Doc` 里的 `Session.docs` 下标会随增删漂移，
+/// 不能存进跨帧的顺序表；这里存 uid / 演示 id（用户 2026-11-17：统一顺序）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TabId {
+    Doc(u64),
+    Present(u64),
+    New(u64),
+}
+
+impl TabKey {
+    fn is_doc(self) -> bool {
+        matches!(self, TabKey::Doc { .. })
+    }
+}
+
 /// 拖拽状态由**跨帧共享的 Rc** 持有，而不是在 `drag_router` 的回调里 `Entity::update`：
 /// 根视图的 `cx.listener` 已经借出了 `CanvasView`，回调里再 `me.update(cx, …)` 会二次借用同一
 /// entity 并 panic。现有 `panels/extra.rs::dev-split` 也是用共享状态 + `wake()` 这个模式。
@@ -85,16 +117,21 @@ pub(crate) struct TabDragState(Rc<RefCell<DragInner>>);
 struct DragInner {
     current: Option<TabDrag>,
     /// 本帧可见标签的窗口 x 区间（`tab_drop_position` 的输入）。
-    visible: Vec<VisibleTab>,
-    /// 本帧算出的落点（最终文档下标），松手时**原样提交**：判定与画面必须同源，
-    /// 否则「看到了让位、松手却回原位」。
-    to: Option<usize>,
-    /// 本帧被拖标签是否已整体拖出标签条（左右越界）→ 松手变成新窗口。
+    visible: Vec<(TabKey, (f32, f32))>,
+    /// 本帧算出的落点；松手时**原样提交**：判定与画面必须同源，
+    /// 否则「看到了让位、松手却回原位」。`usize` 是同类标签里的目标槽位
+    /// （文档 = 目标文档下标，演示 = 目标槽位）。
+    to: Option<(TabKey, usize)>,
+    /// 本帧被拖标签是否已整体拖出标签条（左右越界）→ 松手变成新窗口（仅文档）。
     detach: bool,
+    /// 标签条可见区间的窗口 x 范围（`tabs_x0 .. tabs_x0 + tabs_w`）。
+    /// 松手时用指针**当场**判越界：只依赖渲染帧的 `detach` 会漏掉「指针移出后立刻松开、
+    /// 中间没来得及重绘」这一拍，表现成拖出去却只是重排（用户 2026-11-17）。
+    strip: (f32, f32),
 }
 
 struct TabDrag {
-    from: usize,
+    from: TabKey,
     start: Point<Pixels>,
     pointer: Point<Pixels>,
     /// 超过 3pt 死区才算拖拽，否则这一下仍是「点击切换标签」。
@@ -102,26 +139,30 @@ struct TabDrag {
 }
 
 impl TabDragState {
-    fn begin(&self, from: usize, at: Point<Pixels>) {
+    fn begin(&self, from: TabKey, at: Point<Pixels>) {
         *self.0.borrow_mut() = DragInner {
             current: Some(TabDrag { from, start: at, pointer: at, moved: false }),
             visible: Vec::new(),
             to: None,
             detach: false,
+            strip: (0.0, f32::MAX),
         };
     }
-    fn set_visible(&self, visible: Vec<VisibleTab>) {
+    fn set_strip(&self, x0: f32, x1: f32) {
+        self.0.borrow_mut().strip = (x0, x1);
+    }
+    fn set_visible(&self, visible: Vec<(TabKey, (f32, f32))>) {
         self.0.borrow_mut().visible = visible;
     }
-    fn set_to(&self, to: Option<usize>) {
+    fn set_to(&self, to: Option<(TabKey, usize)>) {
         self.0.borrow_mut().to = to;
     }
     fn set_detach(&self, detach: bool) {
         self.0.borrow_mut().detach = detach;
     }
-    /// 拖拽中的 `(被拖文档, 指针相对按下点的 x 位移, 指针 x)`；没超过 3pt 死区时是 `None`
+    /// 拖拽中的 `(被拖标签, 指针相对按下点的 x 位移, 指针 x)`；没超过 3pt 死区时是 `None`
     /// （这时仍然是「点击切换」而不是拖拽）。
-    fn offset(&self) -> Option<(usize, f32, f32)> {
+    fn offset(&self) -> Option<(TabKey, f32, f32)> {
         let b = self.0.borrow();
         let d = b.current.as_ref()?;
         if !d.moved {
@@ -131,13 +172,49 @@ impl TabDragState {
     }
 }
 
+/// 标签条上、由拖拽回调**延迟提交**的操作。
+///
+/// ⛔ 拖拽回调（`drag_router` 的 on_mouse_up）里**绝对不能** `Entity::update`：那是二次租借
+/// 同一个 `CanvasView`，GPUI 直接 panic → 进程 abort。表现就是「拖出窗口时闪退」
+/// （用户 2026-11-17）。回调只把操作记进共享队列，由 `CanvasView::render` 在持有
+/// `&mut self` 的那一帧直接应用（`CanvasView::apply_tab_ops`）。
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum TabOp {
+    /// 标签挪到本窗口统一顺序的第 `slot` 位：`slot` 是「除被拖标签和空白页之外」的目标槽位，
+    /// 文档和演示标签共用一条顺序（用户 2026-11-17：两类标签按统一顺序自由换位）。
+    Reorder { id: TabId, slot: usize },
+    /// 演示标签拖出成独立窗口：把 tab 连同播放器交给新窗口（见 `Windows::pending_present`）。
+    DetachPresent { id: u64, uid: u64 },
+}
+
 /// 跨帧的标签条状态；`home` / `motion` / 拖拽都由 `CanvasView` 持有。
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(crate) struct TabState {
     pub home: bool,
     pub motion: TabMotion,
     pub drag: TabDragState,
+    /// 本窗口标签条的统一顺序（文档 / 演示 / 空白混排）。窗口私有，关掉的标签下一帧自动剔除。
+    pub order: Vec<TabId>,
+    /// 设计标签已关、但数据被预览标签接管的文档 uid：不画设计标签，切进预览时照常绑定
+    /// （用户 2026-11-17：关掉设计稿后把数据直接移交给预览）。
+    pub hidden: Vec<u64>,
+    /// 拖拽回调记下的待应用操作（见 [`TabOp`]）。
+    pub pending: Rc<RefCell<Vec<TabOp>>>,
     started: Option<Instant>,
+}
+
+impl Default for TabState {
+    fn default() -> Self {
+        Self {
+            home: false,
+            motion: TabMotion::default(),
+            drag: TabDragState::default(),
+            order: Vec::new(),
+            hidden: Vec::new(),
+            pending: Default::default(),
+            started: None,
+        }
+    }
 }
 
 impl TabState {
@@ -158,12 +235,13 @@ fn name_width(width: f32) -> f32 {
 
 /// 标签条上的一次拖拽：注册到窗口级 `drag_router`（项目铁律：GPUI 0.2.1 无鼠标捕获，
 /// 跨元素拖拽必须走覆盖整窗的根 `on_mouse_move` / `on_mouse_up`）。
-fn begin_tab_drag(state: &TabDragState, cmds: &Cmds, from: usize, at: Point<Pixels>) {
+fn begin_tab_drag(state: &TabDragState, cmds: &Cmds, pending: &Rc<RefCell<Vec<TabOp>>>, from: TabKey, uid: u64, at: Point<Pixels>) {
     state.begin(from, at);
     let on_move = state.clone();
     let on_end = state.clone();
     let wake = cmds.clone();
     let wake_end = cmds.clone();
+    let commit = pending.clone();
     crate::drag_router::begin(
         "tab",
         move |pos, _pressed, _window, _cx| {
@@ -178,22 +256,41 @@ fn begin_tab_drag(state: &TabDragState, cmds: &Cmds, from: usize, at: Point<Pixe
             wake.wake();
         },
         move |_window, _cx| {
-            let (from, pointer_y, to, detach, moved) = {
+            let (from, pointer_x, pointer_y, to, detach, strip, moved) = {
                 let b = on_end.0.borrow();
                 let Some(d) = b.current.as_ref() else { return };
-                (d.from, f32::from(d.pointer.y), b.to, b.detach, d.moved)
+                (d.from, f32::from(d.pointer.x), f32::from(d.pointer.y), b.to, b.detach, b.strip, d.moved)
             };
             on_end.0.borrow_mut().current = None;
             // A16：标签拖出标签条下方 2 行，或**左右整体拖出标签条**，都脱离成独立 OS 窗口
-            // （用户 2026-11-16：向左/向右超出范围也要变新窗口）。
-            if moved && (pointer_y > HEIGHT * 3.0 || detach) {
-                wake_end.push(Cmd { id: "window.new", params: Some(json!({ "index": from })) });
+            // （用户 2026-11-16：向左/向右超出范围也要变新窗口）。演示标签同样可以拖出去，
+            // 由新窗口接管它的源文档与播放器（用户 2026-11-17）。
+            // `detach` 来自渲染帧，`pointer_x` 越界是当场判定，两者取或。
+            let out = pointer_x < strip.0 || pointer_x > strip.1;
+            if moved && (pointer_y > HEIGHT * 3.0 || detach || out) {
+                match from {
+                    TabKey::Doc { index } => {
+                        wake_end.push(Cmd { id: "window.new", params: Some(json!({ "index": index })) });
+                    }
+                    TabKey::Present { id } => {
+                        commit.borrow_mut().push(TabOp::DetachPresent { id, uid });
+                    }
+                    // 「+」空白页不参与拖拽（见 `on_mouse_down` 的过滤）。
+                    TabKey::New { .. } => {}
+                }
                 wake_end.wake();
                 return;
             }
             // 落点用**渲染时算好的那个**（见 `tab_strip`）：拖拽画面和松手结果必须一致。
-            if moved && let Some(to) = to && to != from {
-                wake_end.push(Cmd { id: "file.moveTab", params: Some(json!({ "from": from, "to": to })) });
+            // 文档和演示标签共用一条统一顺序，所以不再按「同类」过滤；重排记进共享队列，
+            // 下一帧由 `CanvasView::apply_tab_ops` 直接改状态（⛔ 不能在这里 `Entity::update`，会 panic 闪退）。
+            if moved && let Some((_, slot)) = to {
+                let id = match from {
+                    TabKey::Doc { .. } => TabId::Doc(uid),
+                    TabKey::Present { id } => TabId::Present(id),
+                    TabKey::New { .. } => return,
+                };
+                commit.borrow_mut().push(TabOp::Reorder { id, slot });
             }
             wake_end.wake();
         },
@@ -201,22 +298,74 @@ fn begin_tab_drag(state: &TabDragState, cmds: &Cmds, from: usize, at: Point<Pixe
 }
 
 /// 溢出菜单：所有文档（含未显示的）都能从这里切换，勾选当前文档。
-fn open_overflow_menu(me: &Entity<CanvasView>, _cmds: &Cmds, docs: &[TabDoc], active: usize, home: bool, at_x: f32, cx: &mut App) {
-    let labels: Vec<(String, usize, u64)> =
-        docs.iter().map(|d| (if d.dirty { format!("{} •", d.name) } else { d.name.clone() }, d.index, d.uid)).collect();
-    let rows: Vec<MenuRow> = labels.iter().map(|(label, i, _)| MenuRow::new(label.clone()).checked(Some(*i == active && !home))).collect();
+fn open_overflow_menu(
+    me: &Entity<CanvasView>,
+    _cmds: &Cmds,
+    docs: &[TabDoc],
+    present: &[(u64, String, bool, u64)],
+    active: usize,
+    home: bool,
+    at_x: f32,
+    cx: &mut App,
+) {
+    // 文档和演示标签共用这个溢出菜单；演示行加 ▶ 前缀，避免与同名文档行撞 label。
+    let mut labels: Vec<(String, Option<u64>, u64)> =
+        docs.iter().map(|d| (if d.dirty { format!("{} •", d.name) } else { d.name.clone() }, Some(d.uid), 0)).collect();
+    for (id, name, _, _) in present {
+        labels.push((format!("▶ {name}"), None, *id));
+    }
+    let rows: Vec<MenuRow> = labels
+        .iter()
+        .map(|(label, uid, pid)| {
+            let checked = match uid {
+                Some(_) => !home && docs.iter().any(|d| d.index == active && Some(d.uid) == *uid),
+                None => present.iter().any(|(id, _, on, _)| *on && id == pid),
+            };
+            MenuRow::new(label.clone()).checked(Some(checked))
+        })
+        .collect();
     let me_pick = me.clone();
     let on_pick: Rc<dyn Fn(&str, &mut Window, &mut App)> = Rc::new(move |label: &str, window, cx| {
-        let Some((_, _, uid)) = labels.iter().find(|(l, _, _)| l == label) else { return };
-        let uid = *uid;
+        let Some((_, uid, pid)) = labels.iter().find(|(l, _, _)| l == label) else { return };
         me_pick.update(cx, |cv, cx| {
             cv.bind_window_document(window, true, cx);
-            cv.select_doc(uid, cx);
+            match uid {
+                Some(uid) => cv.select_doc(*uid, cx),
+                None => {
+                    cv.switch_present_tab(*pid);
+                    cx.notify();
+                }
+            }
         });
     });
     // 通用 Menu 自己按「锚点底边 + 4pt」定位；给 40pt 高的锚点正好落在标签条下方 4pt。
     let anchor = Bounds { origin: Point::new(px(at_x), px(0.0)), size: size(px(OVERFLOW_WIDTH), px(HEIGHT)) };
     me.update(cx, |cv, cx| cv.open_menu(anchor, Some(200.0), rows, on_pick, cx));
+}
+
+/// Figma 桌面壳标签页的颜色语义 → 项目现有 theme token 的映射（1:1 语义，不写死色值）。
+///
+/// `desktop_shell.css` 用的是 `--color-*` 语义变量，这里逐条对到 `theme::Tokens`：
+///   `--color-text`            → t.text           （主文字）
+///   `--color-text-secondary`  → t.text_secondary （次文字 / 普通标签文字）
+///   `--color-icon-brand`      → t.accent         （hover/active 图标）
+///   `--color-bghovertransparent`→ t.hover        （标签 hover 底）
+///   `--color-bg`              → t.panel          （active 标签不透明底）
+///   `--color-bordertranslucent`→ t.border        （标签分隔线 / active 底线）
+/// 按钮的 hover/active 分别用 t.hover / t.pressed。这样换主题 / 换品牌色时标签自动跟随。
+struct TabInk {
+    text: crate::canvas::geom::Color32,
+    secondary: crate::canvas::geom::Color32,
+    brand: crate::canvas::geom::Color32,
+    hover: crate::canvas::geom::Color32,
+    pressed: crate::canvas::geom::Color32,
+    panel: crate::canvas::geom::Color32,
+    border: crate::canvas::geom::Color32,
+}
+
+fn tab_ink() -> TabInk {
+    let t = tokens();
+    TabInk { text: t.text, secondary: t.text_secondary, brand: t.accent, hover: t.hover, pressed: t.pressed, panel: t.panel, border: t.border }
 }
 
 /// 一条 32pt 方形按钮（新标签 / 主题）：上游 `BAR_BUTTON=32` / `BAR_ICON=20`。
@@ -235,6 +384,27 @@ fn bar_button(icon: Icon, t: crate::theme::Tokens, id: &'static str) -> Stateful
         .child(icon::paint(icon, rgba(t.icon), BAR_ICON))
 }
 
+/// Figma `.tab_bar--newTabButtonUI3`：24×24、圆角 5、左右外边距 7，
+/// 图标 text-secondary、hover 变 text 并铺 hover 底、active 铺 pressed 底。
+/// 颜色全部走 tab_ink() 映射，不写死色值。
+fn new_tab_button(id: &'static str) -> Stateful<Div> {
+    let ink = tab_ink();
+    let (normal, hover) = (ink.secondary, ink.hover);
+    let ink_text = ink.text;
+    div()
+        .id(id)
+        .flex_none()
+        .w(pt(TAB_BUTTON))
+        .h(pt(TAB_BUTTON))
+        .mx(pt(NEW_TAB_MARGIN_X))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(pt(TAB_BUTTON_RADIUS))
+        .hover(move |s| s.bg(rgba(hover)).text_color(rgba(ink_text)))
+        .child(icon::paint(Icon::Plus, rgba(normal), TAB_BUTTON - 8.0))
+}
+
 /// 画 40pt 标签条，并把本帧的可见标签矩形同步进拖拽状态。
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn tab_strip(
@@ -242,8 +412,11 @@ pub(crate) fn tab_strip(
     window: &Window,
     docs: &[TabDoc],
     active: usize,
-    // 演示标签（eGUI `app.ui.presents`）：`(id, 显示名, 是否在屏)`，画在文件 tab 之后。
-    present_tabs: &[(u64, String, bool)],
+    // 演示标签（eGUI `app.ui.presents`）：`(id, 显示名, 是否在屏, 源文档 uid)`，画在文件 tab 之后。
+    present_tabs: &[(u64, String, bool, u64)],
+    // 「+」空白标签页的 id 列表 与 当前激活项。
+    new_tabs: &[u64],
+    new_active: Option<u64>,
     dark: bool,
     reduce_motion: bool,
     // 标题栏壳留给 TabBar 内容的宽度（已扣掉左留白与右侧窗口按钮）。
@@ -254,6 +427,8 @@ pub(crate) fn tab_strip(
     // 根视图在后面还要借 `self.tabs` / `self.render_left_panel(...)`，会直接 E0502/E0499。
 ) -> Stateful<Div> {
     let t = tokens();
+    // Figma 标签页语义色 → 项目 token（见 tab_ink）。逐条映射，换主题自动跟随。
+    let ink = tab_ink();
     let now = state.now();
     state.motion.begin_frame(crate::windows::current(), docs.iter().map(|d| d.uid), now, reduce_motion);
     // 不再做新标签的渐显：点 `+` 时新标签正好落在指针底下，半透明会一直挂着，
@@ -272,16 +447,91 @@ pub(crate) fn tab_strip(
     // 上游 `room = rect.max.x - buttons_w - 70 - x - 34`；`content_w` 已扣掉壳的两侧，
     // 于是等价 `content_w - 70 - home_w - 34`（新标签 / 主题 / 空白区留位）。
     let room = (content_w - 70.0 - home_w - 34.0).max(0.0);
-    // eGUI `tabs.rs:134-144`：present tabs 先分走 room（有文件 tab 时最多一半），
-    // 文件 tab 用剩下的 available。present tab 的排布独立算（active 是 present_active）。
-    let present_pref: Vec<f32> = present_tabs.iter().map(|(_, name, _)| crate::present::present_tab_width(name)).collect();
-    let present_room = present_pref.iter().sum::<f32>().min(if docs.is_empty() { room } else { room / 2.0 });
-    let present_layout = tab_layout(&present_pref, present_room, present_tabs.iter().position(|(_, _, on)| *on));
-    let present_used = present_layout.widths.iter().sum::<f32>() + if present_layout.overflow { OVERFLOW_WIDTH } else { 0.0 };
-    let available = (room - present_used).max(0.0);
-    let preferred: Vec<f32> = docs.iter().map(|d| preferred_width(&d.name, d.live.visible(), d.dirty)).collect();
-    let active_tab = docs.iter().position(|d| d.index == active);
-    let layout = tab_layout(&preferred, available, active_tab);
+    // ── 统一标签模型（用户 2026-11-17）────────────────────────────────────────────
+    // 文件标签和演示标签是**同一种标签**：同一个条目列表、同一套宽度收缩 / 溢出 / 拖拽 /
+    // 关闭 / 激活态。演示 tab 不再单开一套几何与回调（之前它什么原有行为都没有）。
+    #[derive(Clone)]
+    struct StripTab {
+        key: TabKey,
+        /// 文档 uid（演示标签为 0）；点击切换按 uid，不按下标。
+        uid: u64,
+        name: String,
+        board: bool,
+        dirty: bool,
+        live: LiveBadge,
+        /// 文档：本窗口当前文档；演示：正在演示的那个。
+        active: bool,
+        on_screen: bool,
+    }
+    impl StripTab {
+        fn id(&self) -> TabId {
+            match self.key {
+                TabKey::Doc { .. } => TabId::Doc(self.uid),
+                TabKey::Present { id } => TabId::Present(id),
+                TabKey::New { id } => TabId::New(id),
+            }
+        }
+    }
+    let mut entries: Vec<StripTab> = Vec::with_capacity(docs.len() + present_tabs.len());
+    for d in docs {
+        entries.push(StripTab {
+            key: TabKey::Doc { index: d.index },
+            uid: d.uid,
+            name: d.name.clone(),
+            board: d.board,
+            dirty: d.dirty,
+            live: d.live,
+            active: !state.home && new_active.is_none() && d.index == active,
+            on_screen: false,
+        });
+    }
+    for (id, name, on_screen, uid) in present_tabs {
+        entries.push(StripTab {
+            key: TabKey::Present { id: *id },
+            uid: *uid,
+            name: name.clone(),
+            board: false,
+            dirty: false,
+            live: LiveBadge::default(),
+            active: false,
+            on_screen: *on_screen,
+        });
+    }
+    for id in new_tabs {
+        entries.push(StripTab {
+            key: TabKey::New { id: *id },
+            uid: 0,
+            name: "New Tab".to_string(),
+            board: false,
+            dirty: false,
+            live: LiveBadge::default(),
+            active: !state.home && new_active == Some(*id),
+            on_screen: false,
+        });
+    }
+    // ── 统一顺序（用户 2026-11-17）────────────────────────────────────────────
+    // 文档、演示、空白页在**同一条**顺序里混排：拖预览标签经过设计标签时也要能换位。
+    // 每帧先按上帧顺序挑出仍存在的项，再按默认顺序（文档 → 演示 → 空白）追加新出现的。
+    let mut ordered: Vec<StripTab> = Vec::with_capacity(entries.len());
+    let mut rest = entries;
+    for id in state.order.drain(..) {
+        if let Some(i) = rest.iter().position(|e| e.id() == id) {
+            ordered.push(rest.remove(i));
+        }
+    }
+    ordered.append(&mut rest);
+    state.order = ordered.iter().map(|e| e.id()).collect();
+    let entries = ordered;
+
+    let preferred: Vec<f32> = entries
+        .iter()
+        .map(|e| match e.key {
+            TabKey::Doc { .. } | TabKey::New { .. } => preferred_width(&e.name, e.live.visible(), e.dirty),
+            TabKey::Present { .. } => crate::present::present_tab_width(&e.name),
+        })
+        .collect();
+    let active_tab = entries.iter().position(|e| e.active || e.on_screen);
+    let layout = tab_layout(&preferred, room, active_tab);
 
     // Home 键（active / hover 底色 + 32pt 图标：图标本身等比放大，线宽在 SVG 里按比例
     // 退回去保持视觉粗细不变，用户 2026-11-16）。
@@ -325,108 +575,160 @@ pub(crate) fn tab_strip(
         .child(div().flex_none().w(pt(1.0)).h_full().bg(rgba(t.border)));
 
     // ── 标签排布 ────────────────────────────────────────────────────────────────
-    // 先算每个可见标签的**自然位置**（doc index, x, 宽）。拖拽重排时标签要互相让位，
+    // 先算每个可见标签的**自然位置**（TabKey, x, 宽）。拖拽重排时标签要互相让位，
     // flex 表达不了「B 整体挪到 A 前面」，所以标签统一放进一个相对容器里按绝对坐标摆。
     let tabs_x0 = x;
-    let mut natural: Vec<(usize, f32, f32)> = Vec::with_capacity(layout.widths.len());
+    let mut natural: Vec<(TabKey, f32, f32)> = Vec::with_capacity(layout.widths.len());
     let mut nx = tabs_x0;
     for (slot, &w) in layout.widths.iter().enumerate() {
-        natural.push((docs[layout.first + slot].index, nx, w));
+        natural.push((entries[layout.first + slot].key, nx, w));
         // 每个标签自带右侧 1pt 分隔线，宽度已经算进间距里。
         nx += w + 1.0;
     }
     let tabs_w = (nx - tabs_x0).max(0.0);
-    let visible: Vec<VisibleTab> = natural.iter().map(|(i, x0, w)| (*i, (*x0, *x0 + *w))).collect();
-    state.drag.set_visible(visible.clone());
+    state.drag.set_visible(natural.iter().map(|(k, x0, w)| (*k, (*x0, *x0 + *w))).collect());
+    state.drag.set_strip(tabs_x0, tabs_x0 + tabs_w);
 
     // 拖拽中：被拖的标签跟着指针走，其余标签按「插槽」依次让位（用户 2026-11-16）。
-    // 判定口径：向右拖时看被拖标签的**左边缘**是否盖住邻居的中点（盖住一半就让位），
-    // 向左拖时对称地用右边缘。用中心判定要盖得更多才换位，用户实测手感不对。
-    // 松手时提交的就是这里算出的 `to`（见 `begin_tab_drag` 的 on_end）。
+    // 判定口径：向右拖时看被拖标签的**右边缘**、向左拖时看**左边缘**（前缘）是否盖住邻居
+    // 中点——盖住一半就让位，邻居整体滑到本标签原来的位置（用户 2026-11-17）。
+    // 文档和演示标签走同一条顺序，可以互相换位。
+    // 松手时提交的就是这里算出的落点（见 `begin_tab_drag` 的 on_end）。
     let (dragged, ghost_x, display_x) = match state.drag.offset() {
-        Some((from, dx, _)) if natural.iter().any(|(i, _, _)| *i == from) => {
-            let drag_w = natural.iter().find(|(i, _, _)| *i == from).map_or(0.0, |(_, _, w)| *w);
-            let natural_x = natural.iter().find(|(i, _, _)| *i == from).map_or(tabs_x0, |(_, x0, _)| *x0);
-            let others: Vec<(usize, f32, f32)> = natural.iter().copied().filter(|(i, _, _)| *i != from).collect();
+        Some((from, dx, _)) if natural.iter().any(|(k, _, _)| *k == from) => {
+            let drag_w = natural.iter().find(|(k, _, _)| *k == from).map_or(0.0, |(_, _, w)| *w);
+            let natural_x = natural.iter().find(|(k, _, _)| *k == from).map_or(tabs_x0, |(_, x0, _)| *x0);
+            // 空白页是临时入口，不参与让位，永远留在末尾。
+            let others: Vec<(TabKey, f32, f32)> = natural
+                .iter()
+                .copied()
+                .filter(|(k, _, _)| *k != from && !matches!(k, TabKey::New { .. }))
+                .collect();
             // 不再把幽灵夹在标签条内：夹住会让第一/最后一项在两端「拖不动」。
             let ghost = natural_x + dx;
-            let edge = if dx >= 0.0 { ghost } else { ghost + drag_w };
+            let edge = if dx >= 0.0 { ghost + drag_w } else { ghost };
             let slot = others.partition_point(|(_, x0, w)| x0 + w / 2.0 < edge);
-            state.drag.set_to(tab_drop_position(&visible, from, edge).map(|(to, _)| to));
-            // 整个标签左右拖出标签条 → 松手脱离成新窗口（用户 2026-11-16）。
-            state.drag.set_detach(ghost + drag_w < tabs_x0 || ghost > tabs_x0 + tabs_w);
-            let mut display: Vec<(usize, f32)> = Vec::with_capacity(natural.len());
+            let target = if slot < others.len() { Some(others[slot].0) } else { others.last().map(|(k, _, _)| *k) };
+            state.drag.set_to(target.map(|t| (t, slot)));
+            // 整个标签左右拖出标签条 → 松手脱离成新窗口（用户 2026-11-16；仅文档）。
+            state.drag.set_detach(from.is_doc() && (ghost + drag_w < tabs_x0 || ghost > tabs_x0 + tabs_w));
+            // 让位后整条标签从 `tabs_x0` 重新顺序摆放：总宽度不变，末尾的空白页位置不受影响。
+            let mut display: Vec<(TabKey, f32)> = natural.iter().map(|(k, x0, _)| (*k, *x0)).collect();
+            let set = |display: &mut Vec<(TabKey, f32)>, key: TabKey, x: f32| {
+                if let Some(d) = display.iter_mut().find(|(k, _)| *k == key) {
+                    d.1 = x;
+                }
+            };
             let mut pos = tabs_x0;
-            for (i, (index, _, w)) in others.iter().enumerate() {
+            let mut placed = false;
+            for (i, (key, _, w)) in others.iter().enumerate() {
                 if i == slot {
                     // 空出来的这一格就是松手后的落点。
-                    display.push((from, pos));
+                    set(&mut display, from, pos);
                     pos += drag_w + 1.0;
+                    placed = true;
                 }
-                display.push((*index, pos));
+                set(&mut display, *key, pos);
                 pos += *w + 1.0;
             }
-            if slot >= others.len() {
-                display.push((from, pos));
+            if !placed {
+                set(&mut display, from, pos);
             }
             (Some(from), ghost, display)
         }
         _ => {
             state.drag.set_to(None);
             state.drag.set_detach(false);
-            (None, 0.0, natural.iter().map(|(i, x0, _)| (*i, *x0)).collect())
+            (None, 0.0, natural.iter().map(|(k, x0, _)| (*k, *x0)).collect())
         }
     };
 
-    let mut elements: Vec<(usize, gpui::AnyElement)> = Vec::with_capacity(natural.len());
+    let mut elements: Vec<(TabKey, gpui::AnyElement)> = Vec::with_capacity(natural.len());
     for (slot, &w) in layout.widths.iter().enumerate() {
-        let d = &docs[layout.first + slot];
-        let is_active = d.index == active && !state.home;
-        let tab_x = if Some(d.index) == dragged {
-            ghost_x
-        } else {
-            display_x.iter().find(|(i, _)| *i == d.index).map_or(tabs_x0, |(_, x)| *x)
-        };
+        let e = entries[layout.first + slot].clone();
+        let key = e.key;
+        let is_active = e.active || e.on_screen;
+        // Figma 按钮态色（Copy 的 Color32），供下面的 hover/active 闭包 move。
+        let ink_hover = ink.hover;
+        let ink_panel = ink.panel;
+        let ink_border = ink.border;
+        let ink_text = ink.text;
+        // Figma hover 联动：body 作为 group，图标与文字用 group_hover 变蓝/变深。
+        let tab_group = SharedString::from(format!("tabgrp-{key:?}"));
+        let tab_x = if Some(key) == dragged { ghost_x } else { display_x.iter().find(|(k, _)| *k == key).map_or(tabs_x0, |(_, x)| *x) };
 
         let me_switch = me.clone();
+        let me_down = me.clone();
+        let me_close_present = me.clone();
         let cmds_close = cmds.clone();
         let cmds_middle = cmds.clone();
         let drag = state.drag.clone();
+        let drag_pending = state.pending.clone();
         let drag_cmds = cmds.clone();
-        let index = d.index;
-        let uid = d.uid;
-        // `w` 含右侧 1pt 分隔线：body + close 只能占 `w - 1`。
-        let body_w = (w - 32.0 - 1.0).max(0.0);
+        let uid = e.uid;
+        let doc_index = match key {
+            TabKey::Doc { index } => index,
+            TabKey::Present { .. } | TabKey::New { .. } => 0,
+        };
+        // `w` 含右侧 1pt 分隔线：body + close 只能占 `w - 1`（close 按 Figma 24pt）。
+        let body_w = (w - TAB_BUTTON - 1.0).max(0.0);
         // 上游 `bidi::paint_name` 的可用宽度也要扣掉 live 标记与未保存点，否则名字会压到徽标上。
-        let name_w = (w - if d.live.visible() { LIVE_MARK_WIDTH } else { 0.0 } - if d.dirty { 12.0 } else { 0.0 }).max(0.0);
-        let name = crate::bidi::fit(window, &d.name, 12.0, name_width(name_w));
-        let badge = d.live;
+        let name_w = (w - if e.live.visible() { LIVE_MARK_WIDTH } else { 0.0 } - if e.dirty { 12.0 } else { 0.0 }).max(0.0);
+        let name = crate::bidi::fit(window, &e.name, 12.0, name_width(name_w));
+        let badge = e.live;
 
-        let body = div()
+        let mut body = div()
             .flex()
             .flex_row()
             .items_center()
             .h_full()
             .w(pt(body_w))
             .min_w(pt(0.0))
-            .pl(pt(10.0))
-            .gap(pt(6.0))
+            .pl(pt(TAB_PAD_X))
+            .gap(pt(TAB_GAP))
             .overflow_hidden()
-            .id(("tab-body", uid as usize))
+            // 文档 body 的 id 必须先于 on_click 设置（Stateful 才有 on_click）。
+            .id(SharedString::from(format!("tab-body-{key:?}")))
+            .group(tab_group.clone())
             .on_click(move |_e: &ClickEvent, window, cx: &mut App| {
-                // 直接按 uid 切（不排队）：多窗口增删文档后 `session.docs` 下标会漂移，
-                // 用 render 时记下的 `index` 排队会被判成别的窗口的文档而丢弃 ——
-                // 表现就是「点标签切不过去」（用户 2026-11-16）。
                 me_switch.update(cx, |cv, cx| {
                     cv.bind_window_document(window, true, cx);
-                    cv.select_doc(uid, cx);
+                    match key {
+                        // 直接按 uid 切（不排队）：多窗口增删文档后 `session.docs` 下标会漂移。
+                        TabKey::Doc { .. } => cv.select_doc(uid, cx),
+                        // 演示标签：切到它所属的文件 + 恢复播放器。
+                        TabKey::Present { id } => {
+                            cv.switch_present_tab(id);
+                            cx.notify();
+                        }
+                        // 「+」空白标签页：内容就是首页（创建 / 导入 + 当前文件）。
+                        TabKey::New { id } => {
+                            cv.select_new_tab(id);
+                            cx.notify();
+                        }
+                    }
                 });
             })
-            .on_mouse_down(MouseButton::Left, move |e: &MouseDownEvent, _window, _cx| {
-                begin_tab_drag(&drag, &drag_cmds, index, e.position);
-            })
-            // A16：标签右键的 "Open in new window"（egui `tabs.rs` 同款菜单项）。
-            .on_mouse_down(MouseButton::Right, {
+            .on_mouse_down(MouseButton::Left, move |e: &MouseDownEvent, window, cx: &mut App| {
+                // 「+」空白页不是可重排的实体，别让它进入拖拽模型。
+                if !matches!(key, TabKey::New { .. }) {
+                    // 空白页是临时入口：一按别的标签（哪怕接着就要拖出去）就把它关掉，
+                    // 并立刻切到被按的标签上（用户 2026-11-17 的设计要求）。
+                    me_down.update(cx, |cv, cx| {
+                        cv.bind_window_document(window, true, cx);
+                        match key {
+                            TabKey::Doc { .. } => cv.select_doc(uid, cx),
+                            TabKey::Present { id } => cv.switch_present_tab(id),
+                            TabKey::New { .. } => {}
+                        }
+                        cx.notify();
+                    });
+                    begin_tab_drag(&drag, &drag_cmds, &drag_pending, key, uid, e.position);
+                }
+            });
+        // A16：标签右键的 "Open in new window"（egui `tabs.rs` 同款菜单项）。仅文档。
+        if key.is_doc() {
+            body = body.on_mouse_down(MouseButton::Right, {
                 let me_menu = me.clone();
                 let cmds_menu = cmds.clone();
                 move |e: &MouseDownEvent, _window, cx: &mut App| {
@@ -440,29 +742,53 @@ pub(crate) fn tab_strip(
                     let cmds_pick = cmds_menu.clone();
                     let on_pick: Rc<dyn Fn(&str, &mut Window, &mut App)> = Rc::new(move |label: &str, _window, _cx| {
                         let id = if label == "Move to main window" { "window.merge" } else { "window.new" };
-                        cmds_pick.push(Cmd { id, params: Some(json!({ "index": index })) });
+                        cmds_pick.push(Cmd { id, params: Some(json!({ "index": doc_index })) });
                     });
                     let anchor = Bounds { origin: e.position, size: size(px(1.0), px(1.0)) };
                     me_menu.update(cx, |cv, cx| cv.open_menu(anchor, Some(200.0), rows, on_pick, cx));
                 }
-            })
-            .child(icon::paint(file_mark(d.board), rgba(t.accent), BAR_ICON))
+            });
+        }
+        let glyph = match key {
+            TabKey::Doc { .. } => file_mark(e.board),
+            TabKey::Present { .. } => Icon::Play,
+            TabKey::New { .. } => Icon::Plus,
+        };
+        body = body
+            // Figma `.tab--tab`：图标普通 = text-secondary，active = icon-brand；
+            // 非 active 标签 hover 时图标也变品牌蓝（叠一层 group_hover 显隐）。
+            .child(
+                div()
+                    .relative()
+                    .flex_none()
+                    .w(pt(BAR_ICON))
+                    .h(pt(BAR_ICON))
+                    .child(icon::paint(glyph, rgba(if is_active { ink.brand } else { ink.secondary }), BAR_ICON))
+                    .when(!is_active, |d| {
+                        d.child(
+                            div()
+                                .absolute()
+                                .inset_0()
+                                .opacity(0.0)
+                                .group_hover(tab_group.clone(), |s| s.opacity(1.0))
+                                .child(icon::paint(glyph, rgba(ink.brand), BAR_ICON)),
+                        )
+                    }),
+            )
             .child(
                 div()
                     .flex_1()
                     .min_w(pt(0.0))
                     .overflow_hidden()
                     .whitespace_nowrap()
-                    .text_size(pt(12.0))
-                    .text_color(rgba(if is_active { t.text } else { t.text_secondary }))
+                    .text_size(pt(TAB_FONT))
+                    .text_color(rgba(if is_active { ink.text } else { ink.secondary }))
+                    .when(!is_active, |d| d.group_hover(tab_group.clone(), |s| s.text_color(rgba(ink_text))))
                     .child(SharedString::from(name)),
             )
-            .when(d.dirty, |d| d.child(div().flex_none().text_size(pt(12.0)).text_color(rgba(t.text)).child("•")))
+            .when(e.dirty, |d| d.child(div().flex_none().text_size(pt(TAB_FONT)).text_color(rgba(ink.text)).child("•")))
             .when(badge.visible(), move |d| {
                 // 上游 `paint_tab`：先判 lost（danger），否则按 shared 画 online::mark。
-                // `widgets/icon.rs` 是 FROZEN 文件，本次不新增 LiveShared / LivePrivate 变体，
-                // 复用现有的 LinkOn / LinkOff 表达「别人能进 / 只有自己」；要与上游图标一致，
-                // 需用户明确授权解冻后再补变体。
                 let (glyph, color) = if badge.lost {
                     (Icon::LiveDisconnected, t.danger)
                 } else if badge.shared == Some(true) {
@@ -473,31 +799,76 @@ pub(crate) fn tab_strip(
                 d.child(icon::paint(glyph, rgba(color), BAR_ICON))
             });
 
-        // 关闭区独占 32pt，不压在可拖拽的 body 上（上游 `close_r`）。
-        let close = div()
+        // Figma `.tab--button`：24×24、圆角 5px、图标 text-secondary；hover 铺 hover 色，
+        // active 铺 pressed 色（映射到项目 token）。独占 24pt，不压在可拖拽的 body 上。
+        let mut close = div()
             .flex_none()
-            .w(pt(32.0))
-            .h_full()
+            .w(pt(TAB_BUTTON))
+            .h(pt(TAB_BUTTON))
             .flex()
             .items_center()
             .justify_center()
-            .hover(move |s| s.bg(rgba(t.pressed)))
-            // A18：普通关闭不带 force，让引擎判断文档是否脏 —— 脏了会发 `dialog.unsaved`，
-            // 由通用对话框弹 Don't Save / Cancel / Save。只有 Alt+close 才直接丢弃
-            // （`e.modifiers.alt`），与 ui-egui 的 Alt+close 语义一致。
-            .on_mouse_down(MouseButton::Left, move |e: &MouseDownEvent, _window, cx: &mut App| {
-                cmds_close.push(Cmd { id: "file.close", params: Some(json!({ "index": index, "force": e.modifiers.alt })) });
-                cx.stop_propagation();
-            })
-            .on_mouse_down(MouseButton::Middle, move |e: &MouseDownEvent, _window, cx: &mut App| {
-                cmds_middle.push(Cmd { id: "file.close", params: Some(json!({ "index": index, "force": e.modifiers.alt })) });
-                cx.stop_propagation();
-            })
-            .child(icon::paint(Icon::Close, rgba(t.text_secondary), CLOSE_ICON));
+            .rounded(pt(TAB_BUTTON_RADIUS))
+            .hover(move |s| s.bg(rgba(ink_hover)));
+        match key {
+            TabKey::Doc { index } => {
+                // 有预览标签在借用这份文档时，关设计标签 = 把数据移交给预览：不真关文档，
+                // 只把设计标签藏起来（用户 2026-11-17）。否则按引擎流程关，脏了会弹 `dialog.unsaved`。
+                let keeps_preview = present_tabs.iter().any(|(_, _, _, uid)| *uid == e.uid);
+                let close_uid = e.uid;
+                let me_left = me_close_present.clone();
+                let me_mid = me_close_present;
+                close = close
+                    .on_mouse_down(MouseButton::Left, move |e: &MouseDownEvent, _window, cx: &mut App| {
+                        if keeps_preview {
+                            me_left.update(cx, |cv, cx| {
+                                cv.close_doc_to_present(close_uid, cx);
+                                cx.notify();
+                            });
+                        } else {
+                            cmds_close.push(Cmd { id: "file.close", params: Some(json!({ "index": index, "force": e.modifiers.alt })) });
+                        }
+                        cx.stop_propagation();
+                    })
+                    .on_mouse_down(MouseButton::Middle, move |e: &MouseDownEvent, _window, cx: &mut App| {
+                        if keeps_preview {
+                            me_mid.update(cx, |cv, cx| {
+                                cv.close_doc_to_present(close_uid, cx);
+                                cx.notify();
+                            });
+                        } else {
+                            cmds_middle.push(Cmd { id: "file.close", params: Some(json!({ "index": index, "force": e.modifiers.alt })) });
+                        }
+                        cx.stop_propagation();
+                    });
+            }
+            TabKey::Present { id } => {
+                close = close.on_mouse_down(MouseButton::Left, move |_e: &MouseDownEvent, _window, cx: &mut App| {
+                    me_close_present.update(cx, |cv, cx| {
+                        cv.close_present_tab(id);
+                        cx.notify();
+                    });
+                    cx.stop_propagation();
+                });
+            }
+            TabKey::New { id } => {
+                close = close.on_mouse_down(MouseButton::Left, move |_e: &MouseDownEvent, _window, cx: &mut App| {
+                    me_close_present.update(cx, |cv, cx| {
+                        cv.close_new_tab(id);
+                        cx.notify();
+                    });
+                    cx.stop_propagation();
+                });
+            }
+        }
+        let close = close.child(icon::paint(Icon::Close, rgba(ink.secondary), CLOSE_ICON));
 
-        // 标签外观（用户 2026-11-16，参照 Figma）：整条标题栏统一灰色，标签之间只有一根
-        // 右侧竖线；**选中的标签底色变白**（暗色主题取比灰底更亮的 `hover`），未选中透明。
-        let active_bg = if t.dark { t.hover } else { t.panel };
+        // Figma `.tab--tab` + `.tab--activeTab`（desktop_shell.css）语义 → 项目 token：
+        //   普通：透明底、右侧 1px `--color-bordertranslucent` → t.border；
+        //   hover：底 `--color-bghovertransparent` → t.hover（文字/图标态已在 body 上）；
+        //   active：底 `--color-bg` → t.panel + 底部 1px 弱线（Figma 的
+        //     color-mix(opposite 10%, bg 90%) 亮=#E6E6E6/暗=#444，正好是 t.border）+ padding-top 1。
+        // active 标签 hover 不改底色（Figma `.activeTab:hover` 仍是 bg），故 hover 只挂非 active。
         let tab = div()
             .absolute()
             .left(px(tab_x - tabs_x0))
@@ -508,17 +879,17 @@ pub(crate) fn tab_strip(
             .flex_row()
             .items_center()
             .border_r_1()
-            .border_color(rgba(t.border))
-            .when(is_active, move |d| d.bg(rgba(active_bg)))
-            .when(!is_active, move |d| d.hover(move |s| s.bg(rgba(t.hover))))
+            .border_color(rgba(ink.border))
+            .when(is_active, move |d| d.bg(rgba(ink_panel)).border_b_1().border_color(rgba(ink_border)).pt(pt(1.0)))
+            .when(!is_active, move |d| d.hover(move |s| s.bg(rgba(ink_hover))))
             .child(body)
             .child(close);
-        elements.push((d.index, tab.into_any_element()));
+        elements.push((key, tab.into_any_element()));
     }
 
     // 被拖的标签最后画：要压在其它标签之上，否则经过别的标签时会被盖住。
     if let Some(from) = dragged
-        && let Some(pos) = elements.iter().position(|(i, _)| *i == from)
+        && let Some(pos) = elements.iter().position(|(k, _)| *k == from)
     {
         let dragged_el = elements.remove(pos);
         elements.push(dragged_el);
@@ -528,88 +899,8 @@ pub(crate) fn tab_strip(
         layer = layer.child(el);
     }
 
-    // ── 演示标签（eGUI `tabs.rs:228-244`）：与文件标签同一套 body/close 结构，
-    // 画在同一个 `layer` 容器内、跟在文件标签之后（absolute left 相对 layer）。
-    {
-        let active_bg = if t.dark { t.hover } else { t.panel };
-        let mut px0 = tabs_x0 + tabs_w;
-        for (slot, &w) in present_layout.widths.iter().enumerate() {
-            let Some((tid, name, on_screen)) = present_tabs.get(present_layout.first + slot) else { break };
-            let (tid, name, on_screen) = (*tid, name.clone(), *on_screen);
-            let body_w = (w - 32.0 - 1.0).max(0.0);
-            let name = crate::bidi::fit(window, &name, 12.0, name_width(body_w));
-            let left = px0 - tabs_x0;
-
-            let me_switch = me.clone();
-            let body = div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .h_full()
-                .w(pt(body_w))
-                .min_w(pt(0.0))
-                .pl(pt(10.0))
-                .gap(pt(6.0))
-                .overflow_hidden()
-                .on_mouse_down(MouseButton::Left, move |_: &MouseDownEvent, _window, cx: &mut App| {
-                    me_switch.update(cx, |cv, cx| {
-                        cv.switch_present_tab(tid);
-                        cx.notify();
-                    });
-                })
-                .child(icon::paint(Icon::Play, rgba(t.accent), BAR_ICON))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(pt(0.0))
-                        .overflow_hidden()
-                        .whitespace_nowrap()
-                        .text_size(pt(12.0))
-                        .text_color(rgba(if on_screen { t.text } else { t.text_secondary }))
-                        .child(SharedString::from(name)),
-                );
-
-            let me_close = me.clone();
-            let close = div()
-                .flex_none()
-                .w(pt(32.0))
-                .h_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .hover(move |s| s.bg(rgba(t.pressed)))
-                .on_mouse_down(MouseButton::Left, move |_: &MouseDownEvent, _window, cx: &mut App| {
-                    me_close.update(cx, |cv, cx| {
-                        cv.close_present_tab(tid);
-                        cx.notify();
-                    });
-                    cx.stop_propagation();
-                })
-                .child(icon::paint(Icon::Close, rgba(t.text_secondary), CLOSE_ICON));
-
-            let hover = t.hover;
-            let tab = div()
-                .absolute()
-                .left(px(left))
-                .top(pt(0.0))
-                .w(pt(w))
-                .h_full()
-                .flex()
-                .flex_row()
-                .items_center()
-                .border_r_1()
-                .border_color(rgba(t.border))
-                .when(on_screen, move |d| d.bg(rgba(active_bg)))
-                .when(!on_screen, move |d| d.hover(move |s| s.bg(rgba(hover))))
-                .child(body)
-                .child(close);
-            layer = layer.child(tab);
-            px0 += w;
-        }
-    }
-
     strip = strip.child(layer);
-    x = tabs_x0 + tabs_w + present_used;
+    x = tabs_x0 + tabs_w;
 
     // 溢出 chevron + 菜单（菜单的防溢出 / 400pt 内部滚动由通用 `menu_popup_in` 负责）。
     if layout.overflow {
@@ -617,6 +908,7 @@ pub(crate) fn tab_strip(
         let me_menu = me.clone();
         let cmds_menu = cmds.clone();
         let docs_menu = docs.to_vec();
+        let present_menu = present_tabs.to_vec();
         let home_menu = state.home;
         strip = strip.child(
             div()
@@ -629,24 +921,22 @@ pub(crate) fn tab_strip(
                 .justify_center()
                 .hover(move |s| s.bg(rgba(t.hover)))
                 .on_click(move |_e: &ClickEvent, _window, cx: &mut App| {
-                    open_overflow_menu(&me_menu, &cmds_menu, &docs_menu, active, home_menu, chevron_x, cx);
+                    open_overflow_menu(&me_menu, &cmds_menu, &docs_menu, &present_menu, active, home_menu, chevron_x, cx);
                 })
                 .child(icon::paint(Icon::ChevronDown, rgba(t.icon), BAR_ICON)),
         );
     }
 
-    // 新标签 +。
-    let cmds_new = cmds.clone();
+    // 新标签 +：开一个空白标签页（首页那套创建 / 导入入口），**不再直接 new 画板**。
     let me_new = me.clone();
-    strip = strip.child(div().flex_none().h_full().flex().items_center().pl(pt(6.0)).child(bar_button(Icon::Plus, t, "tab-new").on_click(
-        move |_e: &ClickEvent, window, cx: &mut App| {
-            // 新标签属于**当前窗口**：`file.new` 之后由 `sync_panel` 把新文档并入发起窗口，
-            // 不先绑定窗口的话它会按「最后渲染的窗口」归属（点 + 加到别的窗口里）。
-            me_new.update(cx, |cv, cx| cv.bind_window_document(window, true, cx));
-            cmds_new.push(Cmd { id: "file.new", params: Some(json!({})) });
-            me_new.update(cx, |cv, _| cv.close_home());
-        },
-    )));
+    strip = strip.child(new_tab_button("tab-new").on_click(move |_e: &ClickEvent, window, cx: &mut App| {
+        // 新标签属于**当前窗口**：先绑定，否则会写进最后渲染的那个窗口的 pane。
+        me_new.update(cx, |cv, cx| {
+            cv.bind_window_document(window, true, cx);
+            cv.open_new_tab();
+            cx.notify();
+        });
+    }));
 
     // 空白区 = 系统标题栏的拖拽区（上游 `drag_free_space()` 的 `StartDrag`）。
     // 壳整条已标 `WindowControlArea::Drag`；这里再标一次，保证这块 flex_1 hitbox

@@ -132,36 +132,63 @@ pub fn normalize(doc: &mut Document, before: &Document) {
     }
     touched.extend(doc.take_dirty());
     // 4. Auto layout for frames where something that sizes or places layers changed.
-    let mut frames: BTreeSet<NodeId> = BTreeSet::new();
-    let moved = live(doc, &touched).into_iter().filter(|id| affects_layout(before, doc, *id));
-    for id in moved.chain(removed_parents) {
+    let moved: Vec<NodeId> =
+        live(doc, &touched).into_iter().filter(|id| affects_layout(before, doc, *id)).collect();
+    let unchanged_box = |a: &Node, b: &Node| {
+        a.transform == b.transform && a.width == b.width && a.height == b.height && a.parent == b.parent
+    };
+    let run = |frames: BTreeSet<NodeId>, doc: &mut Document| {
+        let mut frames: Vec<NodeId> = frames.into_iter().collect();
+        frames.sort_by_key(|id| std::cmp::Reverse(doc.ancestors(*id).len()));
+        for f in frames {
+            // Layers the layout leaves where they were stay untouched.
+            let kept: Vec<(Arc<Node>, bool)> = doc
+                .node(f)
+                .map(|n| std::iter::once(f).chain(n.children.iter().copied()).collect::<Vec<_>>())
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|i| doc.node_arc(i).map(|a| (a.clone(), doc.dirty().contains(&i))))
+                .collect();
+            figcraft_layout::layout_frame(doc, f, &m);
+            for (a, was_dirty) in kept {
+                doc.keep_if_unchanged(a, was_dirty);
+            }
+        }
+    };
+    // The changed layers' own frames first: a frame that only moved (or turned) keeps its contents
+    // where they are, so it runs again only for a change that can move or resize them.
+    let mut own: BTreeSet<NodeId> = BTreeSet::new();
+    for id in moved.iter().copied().chain(removed_parents.iter().copied()) {
         if !doc.contains(id) {
             continue;
         }
-        // A frame that only moved (or turned) keeps its contents where they are: its own layout
-        // runs again only for a change that can move or resize them. Its parent's still runs.
-        let own = (!moved_only(before, doc, id)).then_some(id);
-        for c in own.into_iter().chain(doc.ancestors(id)) {
-            if doc.node(c).is_some_and(|n| n.layout.is_some()) {
-                frames.insert(c);
-            }
+        if !moved_only(before, doc, id) && doc.node(id).is_some_and(|n| n.layout.is_some()) {
+            own.insert(id);
         }
     }
-    let mut frames: Vec<NodeId> = frames.into_iter().collect();
-    frames.sort_by_key(|id| std::cmp::Reverse(doc.ancestors(*id).len()));
-    for f in frames {
-        // Layers the layout leaves where they were stay untouched.
-        let kept: Vec<(Arc<Node>, bool)> = doc
-            .node(f)
-            .map(|n| std::iter::once(f).chain(n.children.iter().copied()).collect::<Vec<_>>())
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|i| doc.node_arc(i).map(|a| (a.clone(), doc.dirty().contains(&i))))
-            .collect();
-        figcraft_layout::layout_frame(doc, f, &m);
-        for (a, was_dirty) in kept {
-            doc.keep_if_unchanged(a, was_dirty);
+    let own: BTreeSet<NodeId> = own;
+    run(own.clone(), doc);
+    // Parents follow only a frame whose box the layout left different: their arrangement is the
+    // same when it didn't, and re-running it would re-place layers the edit never touched. Each
+    // frame that does change lets its own parent decide the same way, level by level.
+    let box_changed = |id: NodeId, doc: &Document| {
+        before.node(id).zip(doc.node(id)).is_none_or(|(a, b)| {
+            a.transform != b.transform || a.width != b.width || a.height != b.height || a.parent != b.parent
+        })
+    };
+    let mut frontier: Vec<NodeId> = own.into_iter().collect();
+    while !frontier.is_empty() {
+        let mut up: BTreeSet<NodeId> = BTreeSet::new();
+        for f in frontier.drain(..) {
+            if !doc.contains(f) || !box_changed(f, doc) {
+                continue;
+            }
+            if let Some(p) = doc.ancestors(f).into_iter().find(|c| doc.node(*c).is_some_and(|n| n.layout.is_some())) {
+                up.insert(p);
+            }
         }
+        run(up.clone(), doc);
+        frontier.extend(up);
     }
     touched.extend(doc.take_dirty());
     // 4b. Board connectors follow the layers they join; their labels sit at their middles.

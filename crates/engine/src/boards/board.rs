@@ -187,7 +187,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "board.ink",
             "Marker stroke",
-            "{path (SVG path data on the page) | points [[x,y],..], highlighter? (wide and see-through), color?, select? (default true)} → {id}",
+            "{path (SVG path data on the page) | points [[x,y],..], highlighter? (wide and see-through), color?, weight?, select? (default true)} → {id}",
             true,
             ink_cmd
         ),
@@ -223,17 +223,19 @@ pub fn specs() -> Vec<CommandSpec> {
             }
             board_tool(s, ToolId::Connector)
         }),
-        spec!("tool.marker", "Marker", "{color?}", false, |s, p| {
+        spec!("tool.marker", "Pen (ink)", "{color?} (the pen, drawing board ink)", false, |s, p| {
             if let Some(c) = color_param("tool.marker", p)? {
                 s.tool.board.marker = c;
             }
-            board_tool(s, ToolId::Marker)
+            s.tool.pencil_kind = crate::tools::PenKind::Ink;
+            board_tool(s, ToolId::Pencil)
         }),
-        spec!("tool.highlighter", "Highlighter", "{color?}", false, |s, p| {
+        spec!("tool.highlighter", "Highlighter", "{color?} (the pen's highlighter style: wide, see-through, multiplied)", false, |s, p| {
             if let Some(c) = color_param("tool.highlighter", p)? {
                 s.tool.board.highlighter = c;
             }
-            board_tool(s, ToolId::Highlighter)
+            s.tool.pencil_kind = crate::tools::PenKind::Highlighter;
+            board_tool(s, ToolId::Pencil)
         }),
         spec!("tool.eraser", "Eraser", "{} (drag over marker and highlighter strokes to remove them)", false, |s, _| board_tool(s, ToolId::Eraser)),
         spec!("tool.stamp", "Stamp", "{stamp?} (a click places the stamp)", false, |s, p| {

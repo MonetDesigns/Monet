@@ -30,7 +30,26 @@ const SMOOTHING: f64 = 3.0;
 /// `points` fitted with cubics that stay within `accuracy` of them, as an open path starting at the
 /// first sample and ending at the last. `None` when there is nothing to draw.
 pub fn fit_polyline(points: &[Point], accuracy: f64) -> Option<BezPath> {
-    let mut pts = dedupe(points);
+    let (pts, _) = prepare_samples(points, SMOOTHING);
+    fit_ready(&pts, accuracy)
+}
+
+/// The samples a fit is made from — deduped, then averaged with their neighbours within
+/// `smoothing` — and, for each, the index of the sample it came from.
+///
+/// A width profile (pressure, tilt) is keyed by length along the stroke, and the curve that is
+/// finally drawn is built from these samples: measuring the profile on the raw samples instead
+/// makes it slide against the fitted curve (the two have different lengths), which shows up as
+/// taper that does not line up with the hand.
+pub fn prepare_samples(points: &[Point], smoothing: f64) -> (Vec<Point>, Vec<usize>) {
+    let (mut pts, from) = dedupe_with_index(points);
+    smooth(&mut pts, smoothing);
+    (pts, from)
+}
+
+/// `points` (already through [`prepare_samples`]) fitted with cubics within `accuracy` of them.
+pub fn fit_ready(points: &[Point], accuracy: f64) -> Option<BezPath> {
+    let pts = points;
     if pts.len() < 2 {
         return None;
     }
@@ -40,8 +59,6 @@ pub fn fit_polyline(points: &[Point], accuracy: f64) -> Option<BezPath> {
         out.line_to(pts[1]);
         return Some(out);
     }
-    // A shaky hand should be smoothed, not traced: average each sample with its neighbours first.
-    smooth(&mut pts, SMOOTHING);
     let accuracy = if accuracy.is_finite() { accuracy.max(1e-3) } else { 1.0 };
     // The end directions come from one step of the *smoothed* samples: the step is already an
     // average of the hand's tremor, and a direction measured over a longer stretch of an arc is
@@ -49,7 +66,7 @@ pub fn fit_polyline(points: &[Point], accuracy: f64) -> Option<BezPath> {
     // split the arc into more segments.
     let t0 = unit(pts[1] - pts[0]);
     let t1 = unit(pts[pts.len() - 1] - pts[pts.len() - 2]);
-    let mut fitter = Fitter { pts: &pts, accuracy, out: BezPath::new(), cubics: 0 };
+    let mut fitter = Fitter { pts, accuracy, out: BezPath::new(), cubics: 0 };
     fitter.out.move_to(pts[0]);
     if !fitter.fit(0, pts.len() - 1, t0, t1) {
         // Not fittable within the segment budget: keep the samples rather than guess.
@@ -74,16 +91,23 @@ pub fn smooth_points(points: &[Point], sigma: f64) -> Vec<Point> {
 
 /// The samples without consecutive repeats (and without points that are not finite).
 fn dedupe(points: &[Point]) -> Vec<Point> {
+    dedupe_with_index(points).0
+}
+
+/// [`dedupe`], keeping the index each kept sample came from.
+fn dedupe_with_index(points: &[Point]) -> (Vec<Point>, Vec<usize>) {
     let mut out: Vec<Point> = Vec::with_capacity(points.len());
-    for p in points {
+    let mut from: Vec<usize> = Vec::with_capacity(points.len());
+    for (i, p) in points.iter().enumerate() {
         if !(p.x.is_finite() && p.y.is_finite()) {
             continue;
         }
         if out.last().is_none_or(|l| (*l - *p).hypot() > SAME) {
             out.push(*p);
+            from.push(i);
         }
     }
-    out
+    (out, from)
 }
 
 /// `v` as a unit vector; the x axis for a vector of no length.

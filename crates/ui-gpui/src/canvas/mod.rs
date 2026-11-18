@@ -404,12 +404,24 @@ pub fn show(app: &mut CanvasApp, worker: &mut Worker, ppp: f32, t: &Tokens, rena
     }
 
     // 整页兜底图：铺在清晰贴图**下面**（`image` 之后画，会盖住它没覆盖的部分）。
-    let overview = app.canvas.overview.as_ref().map(|(tex, v)| {
-        let tl = app.to_screen(v.origin.0, v.origin.1);
-        let zoom = app.session.ds().map(|d| d.view.zoom).unwrap_or(1.0);
-        let r = presented_image_rect(tl, v, zoom, ppp, false);
-        (tex.clone(), r.translate(-rect.min.to_vec2()))
-    });
+    // ⛔ 必须和当前文件/页面一致：切换标签后旧的整页图还在台上，不过滤就会在新画布上
+    // 闪一下上一个（最先打开的）文件的内容（用户 2026-11-17）。
+    let overview_current = app
+        .session
+        .ds()
+        .ok()
+        .zip(app.canvas.overview_of)
+        .is_some_and(|(ds, (doc, page, _))| doc == Arc::as_ptr(&ds.doc) as usize && page == ds.page);
+    let overview = if overview_current {
+        app.canvas.overview.as_ref().map(|(tex, v)| {
+            let tl = app.to_screen(v.origin.0, v.origin.1);
+            let zoom = app.session.ds().map(|d| d.view.zoom).unwrap_or(1.0);
+            let r = presented_image_rect(tl, v, zoom, ppp, false);
+            (tex.clone(), r.translate(-rect.min.to_vec2()))
+        })
+    } else {
+        None
+    };
 
     // 叠加层（标尺；后续的选中框/手柄/参考线/标签也在这一层）。
     draw_overlays(app, &mut painter, t, renaming);

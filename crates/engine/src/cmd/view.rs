@@ -553,11 +553,20 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "tool.set",
             "Choose tool",
-            "{tool: move|scale|hand|frame|section|slice|rectangle|line|arrow|ellipse|polygon|star|pen|pencil|text|comment|shapeBuilder | on boards: sticky|shape|connector|marker|highlighter|eraser|stamp}",
+            "{tool: move|scale|hand|frame|section|slice|rectangle|line|arrow|ellipse|polygon|star|pen|brush|pencil|text|comment|shapeBuilder | on boards: sticky|shape|connector|eraser|stamp | old names: marker (=pen, ink), highlighter (=pen, highlighter style)}",
             false,
             |s, p| {
                 let t = req_string("tool.set", p, "tool")?;
-                let t = ToolId::from_id(&t).ok_or_else(|| bad("tool.set", format!("unknown tool `{t}`")))?;
+                // `marker` and `highlighter` were tools of their own; they are the pen's two styles
+                // now. The names still work so older scripts and shortcuts keep landing on ink.
+                let (t, kind) = match t.as_str() {
+                    "marker" => (ToolId::Pencil, Some(crate::tools::PenKind::Ink)),
+                    "highlighter" => (ToolId::Pencil, Some(crate::tools::PenKind::Highlighter)),
+                    _ => (ToolId::from_id(&t).ok_or_else(|| bad("tool.set", format!("unknown tool `{t}`")))?, None),
+                };
+                if let Some(kind) = kind {
+                    s.tool.pencil_kind = kind;
+                }
                 if t.on_boards() {
                     crate::board::require(s, &format!("tool.{}", t.id()))?;
                 }
@@ -617,29 +626,55 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!(
             "tool.pencilBrush",
-            "Pencil brush",
-            "{preset? (an external .abr brush id from `brush.list` | null: plain), spacing?, sizeJitter?, rotationJitter?, scatter?, seed?} (the brush new Pencil strokes get; omit `preset` to read it)",
+            "Pen brush (old name)",
+            "{preset? (an external .abr brush id | null: none)} — the brush preset of the brush tool; `tool.brushPreset` is the name now",
             false,
             |s, p| {
                 // `null` (unlike a missing preset) clears the brush.
                 if let Some(v) = p.get("preset") {
                     let v = if v.is_null() { Value::Null } else { p.clone() };
-                    s.tool.pencil_brush = super::props::brush_of(&v).ok_or_else(|| bad("tool.pencilBrush", super::props::BRUSH_HELP))?;
+                    s.tool.brush_style.preset = super::props::brush_of(&v).ok_or_else(|| bad("tool.pencilBrush", super::props::BRUSH_HELP))?;
                 }
-                Ok(json!({"brush": s.tool.pencil_brush}))
+                Ok(json!({"brush": s.tool.brush_style.preset}))
+            }
+        ),
+        spec!(
+            "tool.brushPreset",
+            "Brush preset",
+            "{preset? (an external .abr brush id from `brush.list` | null: no tip), spacing?, sizeJitter?, rotationJitter?, scatter?, seed?} (the brush new Brush strokes get; omit `preset` to read it)",
+            false,
+            |s, p| {
+                if let Some(v) = p.get("preset") {
+                    let v = if v.is_null() { Value::Null } else { p.clone() };
+                    s.tool.brush_style.preset = super::props::brush_of(&v).ok_or_else(|| bad("tool.brushPreset", super::props::BRUSH_HELP))?;
+                }
+                Ok(json!({"brush": s.tool.brush_style.preset}))
+            }
+        ),
+        spec!(
+            "tool.penKind",
+            "Pen style",
+            "{kind?: ink|highlighter} (the pen's style: plain ink, or wide, see-through and multiplied)",
+            false,
+            |s, p| {
+                if let Some(id) = string(p, "kind") {
+                    s.tool.pencil_kind = crate::tools::PenKind::from_id(&id)
+                        .ok_or_else(|| bad("tool.penKind", format!("unknown pen style `{id}` (ink|highlighter)")))?;
+                }
+                Ok(json!({"kind": s.tool.pencil_kind.id()}))
             }
         ),
         spec!(
             "tool.drawStyle",
             "Drawing tool style",
-            "{tool?: pen|pencil, color?: CSS colour, weight?: 0.1..500, lineStyle?: solid|dashed|dotted, preset?: brush preset} (settings for the next drawn stroke; omit properties to read)",
+            "{tool?: pen|brush|pencil, color?: CSS colour, weight?: 0.1..500, preset?: brush preset, flow?: 0..1 (ink per dab), opacity?: 0..1 (the whole stroke's ceiling), smoothing?: 0..1 (the stabilizer)} (settings for the next stroke of one freehand tool; omit properties to read)",
             false,
             |s, p| {
                 let tool = match string(p, "tool") {
                     Some(id) => ToolId::from_id(&id).ok_or_else(|| bad("tool.drawStyle", format!("unknown tool `{id}`")))?,
                     None => s.tool.tool,
                 };
-                let mut style = s.tool.draw_style(tool).cloned().ok_or_else(|| bad("tool.drawStyle", "choose pen or pencil"))?;
+                let mut style = s.tool.draw_style(tool).cloned().ok_or_else(|| bad("tool.drawStyle", "choose pen, brush or pencil"))?;
                 if let Some(value) = p.get("color") {
                     style.color = Some(crate::params::color_of(value).ok_or_else(|| bad("tool.drawStyle", "invalid colour"))?);
                 }
@@ -650,23 +685,33 @@ pub fn specs() -> Vec<CommandSpec> {
                     }
                     style.weight = Some(weight);
                 }
-                // A brush preset still lives in `pencil_brush`, which `tool.pencilBrush` owns.
+                // The preset is the brush's own: the pen and the plain pencil never carry one.
                 if let Some(v) = p.get("preset") {
-                    s.tool.pencil_brush = super::props::brush_of(v).ok_or_else(|| bad("tool.drawStyle", super::props::BRUSH_HELP))?;
-                }
-                if let Some(id) = string(p, "lineStyle") {
-                    if tool != ToolId::Pencil {
-                        return Err(bad("tool.drawStyle", "line style belongs to the pencil tool"));
+                    if tool != ToolId::Brush {
+                        return Err(bad("tool.drawStyle", "only the brush takes a preset"));
                     }
-                    style.line_style = crate::tools::DrawLineStyle::from_id(&id)
-                        .ok_or_else(|| bad("tool.drawStyle", "lineStyle: solid, dashed or dotted"))?;
+                    style.preset = super::props::brush_of(v).ok_or_else(|| bad("tool.drawStyle", super::props::BRUSH_HELP))?;
+                }
+                if p.get("lineStyle").is_some() {
+                    return Err(bad("tool.drawStyle", "no freehand tool has a line style any more"));
+                }
+                for (key, slot) in [("flow", &mut style.flow), ("opacity", &mut style.opacity), ("smoothing", &mut style.smoothing)] {
+                    if p.get(key).is_some() {
+                        let v = req_num("tool.drawStyle", p, key)?;
+                        if !(0.0..=1.0).contains(&v) {
+                            return Err(bad("tool.drawStyle", format!("{key} must be between 0 and 1")));
+                        }
+                        *slot = v;
+                    }
                 }
                 let response = json!({
                     "tool": tool.id(),
                     "color": style.color().to_css_hex(),
                     "weight": style.weight(tool),
-                    "lineStyle": style.line_style.id(),
-                    "brush": s.tool.pencil_brush,
+                    "brush": style.preset,
+                    "flow": style.flow,
+                    "opacity": style.opacity,
+                    "smoothing": style.smoothing,
                 });
                 if let Some(slot) = s.tool.draw_style_mut(tool) {
                     *slot = style;
@@ -701,8 +746,24 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("tool.ellipse", "Ellipse", "{}", false, |s, _| tool(s, ToolId::Ellipse)),
         spec!("tool.polygon", "Polygon", "{}", false, |s, _| tool(s, ToolId::Polygon)),
         spec!("tool.star", "Star", "{}", false, |s, _| tool(s, ToolId::Star)),
-        spec!("tool.pen", "Pen", "{}", false, |s, _| tool(s, ToolId::Pen)),
-        spec!("tool.pencil", "Pencil", "{}", false, |s, _| tool(s, ToolId::Pencil)),
+        spec!("tool.pen", "Pen tool", "{} (the bezier pen)", false, |s, _| tool(s, ToolId::Pen)),
+        spec!("tool.brush", "Brush", "{} (freehand: a vector curve painted with a brush tip)", false, |s, _| tool(s, ToolId::Brush)),
+        spec!(
+            "tool.pencil",
+            "Pen",
+            "{kind?: ink|highlighter, color?} (freehand: a plain stroked curve; on a board its ink is erasable and the highlighter style is wide and see-through)",
+            false,
+            |s, p| {
+                if let Some(k) = string(p, "kind") {
+                    s.tool.pencil_kind = crate::tools::PenKind::from_id(&k)
+                        .ok_or_else(|| bad("tool.pencil", format!("unknown pen style `{k}` (ink|highlighter)")))?;
+                }
+                if let Some(c) = crate::params::color_of(&p["color"]) {
+                    s.tool.pencil_style.color = Some(c);
+                }
+                tool(s, ToolId::Pencil)
+            }
+        ),
         spec!("tool.text", "Text", "{}", false, |s, _| tool(s, ToolId::Text)),
         spec!("tool.textOnPath", "Text on a path", "{}  a click on a shape's or vector's path puts new text on it", false, |s, _| {
             tool(s, ToolId::TextOnPath)

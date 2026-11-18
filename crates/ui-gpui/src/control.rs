@@ -223,6 +223,36 @@ pub fn handle(app: &mut CanvasApp, method: &str, p: &Value) -> Result<Value, Str
         }
         "ui.inspect" => Ok(inspect(app)),
         "ui.pointer" => pointer(app, p),
+        // 调试：设定演示缩放档。
+        "present.scale" => {
+            let id = p.get("id").and_then(Value::as_u64).ok_or("`id` required")? as u8;
+            crate::present::set_scale(id);
+            Ok(json!({ "ok": true }))
+        }
+        // 调试：上一帧演示层的 hotspot 矩形（窗口坐标）。
+        "present.hot" => {
+            let (pos, hover, hot) = crate::present::debug_hot();
+            Ok(json!({
+                "pointer": pos,
+                "hovered": hover,
+                "hot": hot.into_iter().map(|(id, x, y, w, h)| json!({ "id": id, "x": x, "y": y, "w": w, "h": h })).collect::<Vec<_>>(),
+            }))
+        }
+        // 给演示层喂合成指针（调试用：OS 级鼠标在无焦点窗口上不可靠）。
+        "present.pointer" => {
+            let x = p.get("x").and_then(Value::as_f64).ok_or("`x` required")?;
+            let y = p.get("y").and_then(Value::as_f64).ok_or("`y` required")?;
+            match p.get("kind").and_then(Value::as_str).unwrap_or("move") {
+                "move" => crate::present::push_move(x, y),
+                "down" => {
+                    crate::present::push_move(x, y);
+                    crate::present::push_down(x, y);
+                }
+                "up" => crate::present::push_up(x, y),
+                other => return Err(format!("unknown present pointer kind `{other}`")),
+            }
+            Ok(json!({ "ok": true }))
+        }
         "ui.key" => {
             let key = p.get("key").and_then(Value::as_str).ok_or("`key` required")?;
             let m = figcraft_engine::keymap::Mods { shift: b(p, "shift"), alt: b(p, "alt"), cmd: b(p, "cmd"), ctrl: b(p, "ctrl") };

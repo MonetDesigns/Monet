@@ -145,9 +145,9 @@ pub enum Icon {
     Comment,
     /// A board sticky note (`ToolId::Sticky`).
     Board,
-    /// A marker (`ToolId::Marker`).
+    /// A marker tip — the brush tool's glyph.
     Marker,
-    /// A highlighter (`ToolId::Highlighter`).
+    /// A highlighter tip (the pen's highlighter style's mark).
     Highlighter,
     /// An eraser (`ToolId::Eraser`).
     Eraser,

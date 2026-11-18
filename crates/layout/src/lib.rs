@@ -161,10 +161,23 @@ pub fn layout_up(doc: &mut Document, id: NodeId, m: &dyn Measure) {
     }
 }
 
-/// The children an auto layout frame places: visible and not ignoring auto layout.
+/// The children an auto layout frame places: visible and not ignoring auto layout. A grid child
+/// without a cell was placed by hand (the format records the cell of every layer the grid flows),
+/// so it keeps its place and stays out of the flow.
 pub fn flow_children(doc: &Document, frame: NodeId) -> Vec<NodeId> {
     let Some(f) = doc.node(frame) else { return Vec::new() };
-    f.children.iter().copied().filter(|c| doc.node(*c).is_some_and(|n| n.visible && !n.child_layout.absolute)).collect()
+    let grid = f.layout.as_ref().is_some_and(|l| matches!(l.mode, LayoutMode::Grid));
+    f.children
+        .iter()
+        .copied()
+        .filter(|c| {
+            doc.node(*c).is_some_and(|n| {
+                n.visible
+                    && !n.child_layout.absolute
+                    && (!grid || n.child_layout.grid_column.is_some() || n.child_layout.grid_row.is_some())
+            })
+        })
+        .collect()
 }
 
 /// Make a layer's sizing coherent with where it sits (after an edit). Fill needs room to fill: a
@@ -465,11 +478,20 @@ pub fn layout_frame(doc: &mut Document, frame: NodeId, m: &dyn Measure) {
     let mut line_extents: Vec<(f64, f64)> = Vec::new();
     for line in &lines {
         let gaps = gap * line.len().saturating_sub(1) as f64;
-        // Baseline alignment: the line's baseline sits at the deepest first baseline.
-        let line_base = line.iter().filter_map(|i| items.get(*i)).filter_map(|it| it.baseline).fold(0.0, f64::max);
-        for i in line {
-            if let Some(it) = items.get_mut(*i) {
-                it.base_off = it.baseline.map(|b| line_base - b).unwrap_or(0.0);
+        // Baseline alignment: the line's baseline sits at the deepest first baseline. A layer
+        // without a text baseline (icons, rects, frames without text) uses its bottom edge as
+        // its baseline, so bottoms line up (Figma/CSS behaviour, #1825).
+        if baseline {
+            let line_base = line
+                .iter()
+                .filter_map(|i| items.get(*i))
+                .filter(|it| !it.fill_cross)
+                .map(|it| it.baseline.unwrap_or(it.cross))
+                .fold(0.0, f64::max);
+            for i in line {
+                if let Some(it) = items.get_mut(*i) {
+                    it.base_off = if it.fill_cross { 0.0 } else { line_base - it.baseline.unwrap_or(it.cross) };
+                }
             }
         }
         let in_line = || line.iter().filter_map(|i| items.get(*i));
@@ -632,13 +654,15 @@ fn resize_child(doc: &mut Document, id: NodeId, w: f64, h: f64, m: &dyn Measure)
         set_size(doc, id, w, th);
     } else {
         let old = doc.node(id).map(|n| (n.width, n.height));
+        let resized = old.is_none_or(|(ow, oh)| (ow - w).abs() > 1e-6 || (oh - h).abs() > 1e-6);
         set_size(doc, id, w, h);
         if let Some((ow, oh)) = old
             && doc.node(id).is_some_and(|n| n.kind.is_frame_like())
         {
             apply_constraints(doc, id, ow, oh);
         }
-        if doc.node(id).is_some_and(|n| n.layout.is_some()) {
+        // A child whose box the parent didn't move or resize keeps its own layout as it was.
+        if resized && doc.node(id).is_some_and(|n| n.layout.is_some()) {
             layout_frame(doc, id, m);
         }
     }

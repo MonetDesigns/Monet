@@ -165,6 +165,8 @@ pub(crate) struct ExtraState {
     pub home_view_grid: Rc<RefCell<bool>>,
     /// 首页模板卡片的缩略图缓存（`template id → 图`）：渲一次就留着。
     pub template_thumbs: Rc<RefCell<std::collections::HashMap<&'static str, Option<std::sync::Arc<gpui::RenderImage>>>>>,
+    /// 「+」临时页最近文件的缩略图 + 类型缓存（`path → (图, 是否是 FigJam 画板)`）：读盘一次就留着。
+    pub recent_thumbs: Rc<RefCell<std::collections::HashMap<String, (Option<std::sync::Arc<gpui::RenderImage>>, bool)>>>,
     /// Recents sort: 0 name / 1 edited (egui `home_recents::SortKey`).
     pub home_sort: Rc<RefCell<u8>>,
     // ── A5 Icons (egui `icons_panel.rs`) ──
@@ -245,6 +247,7 @@ impl ExtraState {
             home_search,
             home_view_grid: Rc::new(RefCell::new(true)),
             template_thumbs: Rc::new(RefCell::new(std::collections::HashMap::new())),
+            recent_thumbs: Rc::new(RefCell::new(std::collections::HashMap::new())),
             home_sort: Rc::new(RefCell::new(1)),
             icons_query,
             icons_search,
@@ -253,14 +256,23 @@ impl ExtraState {
     }
 }
 
-/// 居中浮层（chrome）+ 对应面板的 body。
-pub(crate) fn render(kind: &ExtraKind, app: &CanvasApp, cmds: &Cmds, state: &ExtraState, cx: &mut App, close: Rc<dyn Fn()>) -> gpui::Stateful<Div> {
+/// 居中浮层（chrome）+ 对应面板的 body。`new_page`：Home 是「+」打开的临时页（Figma 桌面首页）。
+pub(crate) fn render(
+    kind: &ExtraKind,
+    app: &CanvasApp,
+    cmds: &Cmds,
+    state: &ExtraState,
+    new_page: bool,
+    cx: &mut App,
+    close: Rc<dyn Fn()>,
+) -> gpui::Stateful<Div> {
     let t = tokens();
     let body = match kind {
         ExtraKind::Shortcuts => shortcuts_body(state, cmds, cx),
         ExtraKind::Versions => versions_body(app, cmds, state, cx),
         ExtraKind::DevCompare { id, version } => compare_body(app, cmds, state, *id, version.as_deref()),
-        ExtraKind::Home => crate::home::body(app, cmds, state),
+        // 「+」打开的临时页（`new_active`）用 Figma 桌面首页的样子：居中分类 + 搜索 + 最近文件。
+        ExtraKind::Home => crate::home::body(app, cmds, state, new_page),
     };
     if matches!(kind, ExtraKind::Home) {
         // 1:1 with `ui-egui/src/home.rs`: `CentralPanel` fills the window, with the sidebar on

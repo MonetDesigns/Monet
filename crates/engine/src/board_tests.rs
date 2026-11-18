@@ -66,7 +66,7 @@ fn a_board_is_a_kind_of_file_that_saves_and_reopens() {
 fn board_commands_refuse_on_design_files_and_prototyping_refuses_on_boards() {
     let mut d = Session::new();
     d.execute("file.new", &json!({})).unwrap();
-    for (cmd, p) in [("board.sticky", json!({"x": 0, "y": 0})), ("tool.sticky", json!({})), ("tool.set", json!({"tool": "marker"}))] {
+    for (cmd, p) in [("board.sticky", json!({"x": 0, "y": 0})), ("tool.sticky", json!({})), ("board.ink", json!({"path": "M0 0 L10 0"}))] {
         assert!(matches!(d.execute(cmd, &p), Err(EngineError::Disabled(..))), "{cmd} on a design file");
     }
     let mut s = board();

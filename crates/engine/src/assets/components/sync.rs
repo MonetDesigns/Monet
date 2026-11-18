@@ -373,6 +373,16 @@ fn fresh_root(doc: &Document, root: &mut Node, comp: &Node, inst: NodeId, compon
         follow_variant_resizing(&mut fresh.child_layout, &prev.child_layout, &comp.child_layout);
     }
     carry_overrides(root, &mut fresh, Carry::Root);
+    // A size the instance derives from its content or its parent (hug / fill) is its own: the
+    // main's nominal size only fills in for axes the instance sizes itself.
+    if !root.overrides.contains("size") {
+        if fresh.child_layout.sizing_h != Sizing::Fixed {
+            fresh.width = root.width;
+        }
+        if fresh.child_layout.sizing_v != Sizing::Fixed {
+            fresh.height = root.height;
+        }
+    }
     fresh
 }
 

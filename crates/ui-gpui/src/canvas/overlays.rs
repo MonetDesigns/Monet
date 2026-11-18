@@ -357,13 +357,32 @@ pub(super) fn overlays(app: &CanvasApp, painter: &mut Painter, t: &Tokens, doc: 
     // ── 钢笔/铅笔路径。
     if !ov.pen.is_empty() {
         let pts: Vec<Pos2> = ov.pen.iter().map(|[x, y]| app.to_screen(*x, *y)).collect();
-        if app.session.tool.tool == ToolId::Pencil {
+        if matches!(app.session.tool.tool, ToolId::Pencil | ToolId::Brush) {
             // 将要生成的笔画：用 `tool.drawStyle` 的颜色与粗细（缩到很小时至少 1px），
             // 与 `pencil_finish` 真正写入文档的笔触一致（lizard `drawing_toolbar`）。
+            // 笔刷的每一段还带自己的宽度系数（`pen_widths`，来自压力），逐段画才看得出压感——
+            // 以前这里是一条等宽折线，压感只在抬手后才"跳"出来。
             let tool = app.session.tool.tool;
             let style = app.session.tool.draw_style(tool).cloned().unwrap_or_default();
-            let (color, weight) = (style.color(), style.weight(tool));
-            painter.add_shape(pts, false, Color32::TRANSPARENT, s(crate::theme::doc_c32(color), ((weight * zoom) as f32).max(1.0)));
+            // The engine knows the colour the stroke will really have (a board's ink is the pen's
+            // ink colour, not the tool's drawing colour), so it wins over the style's.
+            let color = crate::theme::doc_c32(ov.pen_color.unwrap_or_else(|| style.color()));
+            let weight = ov.pen_weight.unwrap_or_else(|| style.weight(tool));
+            let widths = &ov.pen_widths;
+            if widths.len() == pts.len() && widths.iter().any(|w| (*w - 1.0).abs() > 1e-3) {
+                for (i, seg) in pts.windows(2).enumerate() {
+                    let (a, b) = (widths[i], widths[i + 1]);
+                    let w = (((a + b) / 2.0 * weight * zoom) as f32).max(1.0);
+                    painter.line_segment([seg[0], seg[1]], s(color, w));
+                }
+                // Round joints: segments of different widths meet with a notch otherwise.
+                for (p, w) in pts.iter().zip(widths) {
+                    let r = ((w * weight * zoom) as f32 / 2.0).max(0.5);
+                    painter.circle_filled(*p, r, color);
+                }
+            } else {
+                painter.add_shape(pts, false, Color32::TRANSPARENT, s(color, ((weight * zoom) as f32).max(1.0)));
+            }
         } else {
             for [x0, y0, x1, y1] in &ov.pen_handles {
                 bezier_handle(painter, app.to_screen(*x0, *y0), app.to_screen(*x1, *y1), 3.5, Color32::WHITE);

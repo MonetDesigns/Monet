@@ -41,6 +41,8 @@ figcraft-color = { path = "../color" }
 figcraft-i18n = { path = "../i18n" }
 figcraft-geom = { path = "../geom" }
 figcraft-abr = { path = "../abr" }
+# 最近文件缩略图：读 `.figcraft` / `.fig` / `.sketch` 里的 thumbnail.png。
+figcraft-format = { path = "../format" }
 # 文字排版代数（字体到位后重排，与原文的 JobKey.fonts 一致）。
 figcraft-text = { path = "../text" }
 figcraft-collab-net = { path = "../collab-net" }

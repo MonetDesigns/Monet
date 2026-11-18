@@ -107,7 +107,8 @@ static ROWS: &[Row] = &[
     doc(Tools, "Arrow tool", &["Shift+L"], &[], Bound("tool.arrow"), ""),
     doc(Tools, "Ellipse tool", &["O"], &[], Bound("tool.ellipse"), ""),
     doc(Tools, "Pen tool", &["P"], &[], Bound("tool.pen"), ""),
-    doc(Tools, "Pencil tool", &["Shift+P"], &[], Bound("tool.pencil"), ""),
+    doc(Tools, "Brush tool", &["B"], &[], Bound("tool.brush"), "freehand: a vector curve painted with a brush tip"),
+    doc(Tools, "Pen", &["Shift+P"], &[], Bound("tool.pencil"), "freehand: a plain stroked curve (the old pencil, marker and highlighter)"),
     doc(Tools, "Text tool", &["T"], &[], Bound("tool.text"), ""),
     doc(Tools, "Comment mode", &["C"], &[], Bound("tool.comment"), ""),
     doc(Tools, "Hand tool while held", &["Space"], &[], Gesture("Pan the canvas"), "held, not pressed"),
@@ -122,7 +123,7 @@ static ROWS: &[Row] = &[
     pin(Tools, "tool.shapeBuilder", &["Shift+M"], &[]),
     // Board tools (boards only), on keys no design-file shortcut uses.
     pin(Tools, "tool.sticky", &["Q"], &[]),
-    pin(Tools, "tool.shape", &["B"], &[]),
+    pin(Tools, "tool.shape", &["Shift+B"], &[]),
     pin(Tools, "tool.connector", &["X"], &[]),
     pin(Tools, "tool.marker", &["M"], &[]),
     pin(Tools, "tool.highlighter", &["U"], &[]),
@@ -416,7 +417,7 @@ fn counts_match_the_docs() {
     let reserved = documented.iter().filter(|r| !r.reserved.is_empty()).count();
     let pinned = ROWS.len() - documented.len();
     // docs/ui-parity.md quotes these.
-    assert_eq!((documented.len(), bound, moved, missing, reserved, pinned), (136, 135, 1, 0, 2, 57));
+    assert_eq!((documented.len(), bound, moved, missing, reserved, pinned), (137, 136, 1, 0, 2, 57));
 }
 
 #[test]

@@ -370,7 +370,7 @@ fn local_dropdown_impl(f: &RightFields, label: SharedString, width: f32, rows: V
 }
 
 /// 一组属性（标题 + 若干行：标签 | 色块? 值 | 来源 chip）。
-fn inspect_section(s: &InspectSection) -> PanelSection {
+pub(crate) fn inspect_section(s: &InspectSection) -> PanelSection {
     let t = tokens();
     let mut sec = PanelSection::new(s.title);
     for row in &s.rows {

@@ -20,6 +20,10 @@ pub(crate) struct Entry {
     pub(crate) handle: AnyWindowHandle,
     /// Documents this window owns (others drop the same uid on detach).
     pub(crate) docs: Vec<u64>,
+    /// **借用**的文档：演示拖出成的独立预览窗口只显示播放器，要有源文档才能渲染，
+    /// 但它不是这个窗口的设计标签（`docs` 里不放，标签栏就不会冒出设计页）
+    /// （用户 2026-11-17：拖出预览时设计页不能被一起带出来）。
+    pub(crate) borrowed: Option<u64>,
     pub(crate) active: Option<u64>,
     pub(crate) title: String,
 }
@@ -33,6 +37,8 @@ pub(crate) struct Pending {
     pub(crate) window_id: WindowId,
     pub(crate) id: u64,
     pub(crate) uid: u64,
+    /// `true` = 只借用（预览窗口），不能因此抢走文档归属 / 冒出设计标签。
+    pub(crate) borrow: bool,
 }
 
 #[derive(Default)]
@@ -43,6 +49,10 @@ pub(crate) struct Windows {
     pub(crate) focused: u64,
     /// The main window's active file while another window draws.
     pub(crate) main_active: Option<u64>,
+    /// 演示标签被拖出成新窗口时寄存在这里：新窗口建 pane 时接手（用户 2026-11-17）。
+    /// `(源文档 uid, 目标窗口 id, 标签)`：借用模式下 `of(uid)` 仍指向原窗口，只能靠
+    /// 目标窗口 id 判断谁该接手（否则新窗口永远接不到，显示成原来的设计画布）。
+    pub(crate) pending_present: Option<(u64, Option<u64>, crate::present::PresentTab)>,
     next_id: u64,
 }
 
@@ -63,10 +73,24 @@ impl Windows {
     pub(crate) fn of(&self, uid: u64) -> u64 {
         // Pending 优先：文档刚要转到新窗口时，其它窗口的 `docs` 还没清理，但归属必须
         // 已经是新窗口（否则首帧里新窗口写不进 active、旧窗口还会认领它）。
-        if let Some(p) = self.pending.iter().find(|p| p.uid == uid) {
+        // 借用型 pending（预览窗口）不参与归属：原窗口继续拥有，预览窗口也不冒出设计标签。
+        if let Some(p) = self.pending.iter().find(|p| p.uid == uid && !p.borrow) {
             return p.id;
         }
         self.list.iter().find(|w| w.docs.contains(&uid)).map_or(0, |w| w.id)
+    }
+
+    /// 窗口 `id` 是否**显示**这份文档：自己拥有，或作为预览窗口借用它。
+    /// 与 [`Self::of`] 的区别：借用不算归属，但绑定 `session.active` / 画布仍然需要它。
+    pub(crate) fn shows_uid(&self, id: u64, uid: u64) -> bool {
+        if self.pending.iter().any(|p| p.id == id && p.uid == uid) {
+            return true;
+        }
+        if id == 0 {
+            // 主窗口没有 Entry：没被任何额外窗口拥有的文档就是它显示的。
+            return self.of(uid) == 0;
+        }
+        self.entry(id).is_some_and(|e| e.docs.contains(&uid) || e.borrowed == Some(uid))
     }
 
     pub(crate) fn exists(&self, id: u64) -> bool {
@@ -135,6 +159,8 @@ fn open_now(
     title: String,
     // 主窗口在文档被抢走后应该显示的另一份文档（没有就 None）。
     main_fallback: Option<u64>,
+    // 是否把文档从原窗口**搬走**；false = 只借用（演示拖出成独立窗口，原窗口保留设计标签）。
+    steal: bool,
 ) {
     // 新窗口**必须**和原窗口错开：`Bounds::centered` 会把新窗口正好盖在同样居中的主窗口上，
     // 看起来像「切不过去」（点哪里都还是同一个位置），也看不出新窗口出来了。
@@ -166,13 +192,23 @@ fn open_now(
             let mut w = build_windows.borrow_mut();
             // 文档从其它窗口转过来：首帧之前完成转移，否则首帧里 `of(uid)` 还指向旧窗口，
             // 新窗口绑不上自己的文档；旧窗口也会继续认领它。
-            for e in &mut w.list {
-                e.docs.retain(|u| *u != uid);
-                if e.active == Some(uid) {
-                    e.active = e.docs.first().copied();
+            // `steal == false` 时只登记 pending，原窗口保留这份文档（演示窗口借用）。
+            if steal {
+                for e in &mut w.list {
+                    e.docs.retain(|u| *u != uid);
+                    if e.active == Some(uid) {
+                        e.active = e.docs.first().copied();
+                    }
                 }
             }
-            w.pending.push(Pending { window_id: window.window_handle().window_id(), id, uid });
+            // 寄存在 `pending_present` 的演示标签：**首帧之前**写好目标窗口 id，
+            // 否则新窗口的 `enter_pane` 认不出该由谁接手（借用模式下归属仍是原窗口）。
+            if let Some(p) = w.pending_present.as_mut()
+                && p.0 == uid
+            {
+                p.1 = Some(id);
+            }
+            w.pending.push(Pending { window_id: window.window_handle().window_id(), id, uid, borrow: !steal });
         }
         root.clone()
     }) {
@@ -187,9 +223,19 @@ fn open_now(
     // 注意：`open_window` 的首次 draw 已经跑完（也读写过 `self.windows`），此刻才能借。
     let mut w = windows.borrow_mut();
     w.pending.retain(|p| p.id != id);
-    w.list.push(Entry { id, window_id, handle, docs: vec![uid], active: Some(uid), title });
+    // `steal == false`（预览窗口）只**借用**：文档不进 `docs`，原窗口的设计标签保持不动，
+    // 预览窗口的标签栏也不会冒出设计页（用户 2026-11-17）。
+    w.list.push(Entry {
+        id,
+        window_id,
+        handle,
+        docs: if steal { vec![uid] } else { Vec::new() },
+        borrowed: (!steal).then_some(uid),
+        active: Some(uid),
+        title,
+    });
     // 首帧期间归属已经正确（pending），但主窗口若在这之前就被写脏，这里兜一次底。
-    if w.main_active == Some(uid) {
+    if steal && w.main_active == Some(uid) {
         w.main_active = main_fallback;
     }
     w.focused = id;
@@ -243,24 +289,28 @@ pub(crate) fn requests(
     match kind {
         "window.new" => {
             let index = data.get("index").and_then(Value::as_u64).map(|i| i as usize);
+            let uid_by_id = data.get("uid").and_then(Value::as_u64);
             let path = data.get("path").and_then(Value::as_str);
             // 文档先备好：这一步只动 `session`，在 render 里做是安全的。
-            let uid = match index {
-                Some(i) => doc_uid(session, i)?,
-                None => open_doc(session, path)?,
+            let uid = match (uid_by_id, index, path) {
+                (Some(uid), _, _) => uid,
+                (None, Some(i), _) => doc_uid(session, i)?,
+                (None, None, path) => open_doc(session, path)?,
             };
             let title = title_of(session.docs.iter().find(|d| d.uid == uid).map(|d| d.doc.name.to_string()).as_deref());
-            // 被拖出去的文档如果正是当前活动文档，把活动项挪到另一个文档：否则原窗口会
-            // 显示「没有任何标签高亮」（它的标签已经过滤掉了）。
-            if session.docs.get(session.active).map(|d| d.uid) == Some(uid)
+            // `keep` = 新窗口**只借用**这份文档（演示拖出成独立窗口）：原窗口的标签要留着，
+            // 不能把设计一起搬过去（用户 2026-11-17：拖出演示时设计窗口跟着跑进新窗口）。
+            let keep = data.get("keep").and_then(Value::as_bool).unwrap_or(false);
+            if !keep
+                && session.docs.get(session.active).map(|d| d.uid) == Some(uid)
                 && let Some(i) = session.docs.iter().position(|d| d.uid != uid)
             {
                 session.active = i;
             }
             // 建窗必须推迟到本次更新之后（见 `open_now` 的说明）。
-            let main_fallback = session.docs.iter().find(|d| d.uid != uid).map(|d| d.uid);
+            let main_fallback = if keep { None } else { session.docs.iter().find(|d| d.uid != uid).map(|d| d.uid) };
             let wins = windows.clone();
-            cx.defer(move |cx| open_now(&wins, cx, root, uid, title, main_fallback));
+            cx.defer(move |cx| open_now(&wins, cx, root, uid, title, main_fallback, !keep));
             Ok(())
         }
         "window.merge" => {

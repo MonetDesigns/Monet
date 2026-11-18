@@ -1,7 +1,7 @@
 use super::handles::selected_end_at;
 use super::{
-    Affine, Document, Gesture, Guide, Node, NodeId, NodeKind, PenPath, Point, PointerEvent, Result, Session, StrokeAlign, ToolId, Vec2,
-    VectorNetwork, at_45_degrees, frame_at, json, pen_handles,
+    Affine, Document, Gesture, Guide, Node, NodeId, NodeKind, PENCIL_STROKE, PenPath, Point, PointerEvent, Result, Session, StrokeAlign, ToolId,
+    Vec2, VectorNetwork, at_45_degrees, frame_at, json, pen_handles,
 };
 use crate::vectoredit::VTool;
 
@@ -9,36 +9,185 @@ use crate::vectoredit::VTool;
 /// that looks just like a pencil stroke, so a brush starts wider unless the user sets a weight.
 const BRUSH_DEFAULT_WEIGHT: f64 = 8.0;
 
-/// Pen pressure along drawn samples as width profile points `[t, scale]`: `t` by length, at most
-/// 32 points, medium pressure (0.5) at the stroke weight, from a tenth to twice it. `None` when no
-/// sample has pressure.
-pub(crate) fn pressure_profile(points: &[Point], pressure: &[Option<f32>]) -> Option<Vec<[f64; 2]>> {
-    if pressure.iter().all(Option::is_none) {
-        return None;
-    }
-    let mut lengths = vec![0.0];
+/// How far, in screen pixels, the hand's tremor is averaged out before a freehand stroke is fitted.
+/// A pointer's tremor is a pixel or two on screen whatever the zoom, so the kernel is a *screen*
+/// distance: a kernel in page units (which is what this used to be) smoothed a stroke four times as
+/// hard at 400% as at 100%, and shrank a stroke drawn zoomed in out of existence.
+pub(crate) const SMOOTH_PX: f64 = 3.0;
+
+/// How far, in screen pixels, the fitted curve may miss the samples. In page units it did the same
+/// thing to detail: at 400% a 1 pt tolerance is 4 screen pixels of corner cutting.
+const FIT_PX: f64 = 1.0;
+
+/// The pressure a sample is taken to have when it reports none but the stroke has pressure (a pen
+/// that only reports pressure on some events): the middle of the range, which draws the weight.
+const NOMINAL_PRESSURE: f64 = 0.5;
+
+/// The narrowest and widest a pressure of 0 / 1 draws, as multiples of the stroke weight.
+const PRESSURE_MIN: f64 = 0.1;
+const PRESSURE_MAX: f64 = 2.0;
+
+/// How far, in page units, the pressure signal is averaged. A pen's reading is noisy and it is a
+/// physical quantity, so the kernel is a distance on the page, not on the screen: a width that
+/// follows the signal sample by sample is a jagged edge, not a brush.
+const PRESSURE_SMOOTH: f64 = 2.0;
+
+/// The most knots a pressure profile keeps (`WidthProfile::MAX_POINTS` is 64).
+const PROFILE_KNOTS: usize = 48;
+
+/// How far the ends of a brush stroke thin out, in screen pixels, and how much a faster stroke
+/// lengthens that ramp. A hand that stops moving leaves less ink behind: a slow lift lifts short,
+/// a flick carries a long thin tail.
+const TAPER_PX: f64 = 8.0;
+const TAPER_SPEED_GAIN: f64 = 12.0;
+/// The narrowest a tapered end goes, as a multiple of the stroke weight.
+const TAPER_MIN: f64 = 0.55;
+/// How far the taper may reach into a stroke, as a fraction of its length (a short stroke would
+/// otherwise be all taper).
+const TAPER_SHARE: f64 = 0.3;
+
+/// The arc length at each point, and the stroke's total length. `None` when the stroke has none.
+fn lengths_of(points: &[Point]) -> Option<(Vec<f64>, f64)> {
+    let mut lengths = Vec::with_capacity(points.len());
+    lengths.push(0.0);
     for w in points.windows(2) {
         let (Some(a), Some(b)) = (w.first(), w.get(1)) else { continue };
         lengths.push(lengths.last().copied().unwrap_or(0.0) + (*b - *a).hypot());
     }
     let total = lengths.last().copied().unwrap_or(0.0);
-    if !(total.is_finite() && total > 0.0) {
+    (total.is_finite() && total > 0.0).then_some((lengths, total))
+}
+
+/// `p` (0..1) as a multiple of the stroke weight: half pressure draws the weight itself, none a
+/// hairline, full pressure twice it.
+fn scale_of_pressure(p: f64) -> f64 {
+    (p / NOMINAL_PRESSURE).clamp(PRESSURE_MIN, PRESSURE_MAX)
+}
+
+/// Average `v` along the stroke by a Gaussian of the distance between samples.
+fn smooth_signal(v: &[f64], lengths: &[f64], sigma: f64) -> Vec<f64> {
+    if v.len() < 3 || !(sigma.is_finite() && sigma > 0.0) || v.len() != lengths.len() {
+        return v.to_vec();
+    }
+    let reach = sigma * 3.0;
+    let mut out = Vec::with_capacity(v.len());
+    for (i, here) in lengths.iter().enumerate() {
+        let (mut sum, mut wsum) = (0.0, 0.0);
+        let mut lo = i;
+        while lo > 0 && here - lengths[lo - 1] <= reach {
+            lo -= 1;
+        }
+        let mut hi = i;
+        while hi + 1 < v.len() && lengths[hi + 1] - here <= reach {
+            hi += 1;
+        }
+        for (m, at) in lengths.iter().enumerate().take(hi + 1).skip(lo) {
+            let d = at - here;
+            let w = (-(d * d) / (2.0 * sigma * sigma)).exp();
+            sum += w * v[m];
+            wsum += w;
+        }
+        out.push(if wsum > 0.0 { sum / wsum } else { v[i] });
+    }
+    out
+}
+
+/// The value of `values` at arc length `s`, interpolated between the samples around it.
+fn at_length(values: &[f64], lengths: &[f64], s: f64) -> f64 {
+    let i = lengths.partition_point(|l| *l < s).min(lengths.len().saturating_sub(1));
+    let (Some(&b), Some(&vb)) = (lengths.get(i), values.get(i)) else { return 1.0 };
+    match i.checked_sub(1).and_then(|j| lengths.get(j).zip(values.get(j))) {
+        Some((&a, &va)) if b > a => va + (vb - va) * ((s - a) / (b - a)),
+        _ => vb,
+    }
+}
+
+/// The pressure of every point as a multiple of the stroke weight, averaged along the stroke.
+/// `None` when no sample carries pressure (a mouse draws a plain stroke).
+pub(crate) fn pressure_scales(points: &[Point], pressure: &[Option<f32>]) -> Option<Vec<f64>> {
+    if pressure.iter().all(Option::is_none) {
         return None;
     }
-    let at = |i: usize| f64::from(pressure.get(i).copied().flatten().filter(|p| p.is_finite()).unwrap_or(0.5).clamp(0.0, 1.0));
-    let n = points.len().clamp(2, 32);
-    let profile = (0..n).map(|k| {
-        let t = k as f64 / (n - 1) as f64;
-        let s = t * total;
-        let i = lengths.partition_point(|l| *l < s).min(lengths.len().saturating_sub(1));
-        let p = match (i.checked_sub(1).and_then(|j| lengths.get(j)), lengths.get(i)) {
-            (Some(a), Some(b)) if b > a => at(i - 1) + (at(i) - at(i - 1)) * ((s - a) / (b - a)),
-            _ => at(i),
-        };
-        [t, (p / 0.5).clamp(0.1, 2.0)]
-    });
-    Some(profile.collect())
+    let (lengths, _) = lengths_of(points)?;
+    let mut raw: Vec<f64> = (0..points.len())
+        .map(|i| pressure.get(i).copied().flatten().filter(|p| p.is_finite()).map_or(NOMINAL_PRESSURE, |p| f64::from(p).clamp(0.0, 1.0)))
+        .collect();
+    // A pen reports its pressure collapsing as it leaves the tablet. Kept, the stroke ends in a
+    // needle the hand never drew; the strike is dropped and the stroke ends where the pen still was.
+    let n = raw.len();
+    if n >= 2 && raw[n - 1] < 0.08 && raw[n - 2] > 0.25 {
+        raw[n - 1] = raw[n - 2];
+    }
+    let smoothed = smooth_signal(&raw, &lengths, PRESSURE_SMOOTH);
+    Some(smoothed.iter().map(|p| scale_of_pressure(*p)).collect())
 }
+
+/// How fast the hand was moving at each end of the stroke, in screen pixels per sample: the
+/// average step over the first and last few samples. The pointer reports a sample every frame, so
+/// the spacing between samples *is* the speed — and measuring it on the screen keeps a stroke drawn
+/// at 400% as fast as the same gesture at 100%.
+fn end_speeds(points: &[Point], zoom: f64) -> (f64, f64) {
+    let n = points.len();
+    let step = |i: usize| -> f64 { (points[i] - points[i - 1]).hypot() * zoom };
+    let take = n.saturating_sub(1).min(3);
+    if take == 0 {
+        return (0.0, 0.0);
+    }
+    let head: f64 = (1..=take).map(step).sum::<f64>() / take as f64;
+    let tail: f64 = ((n - take)..n).map(step).sum::<f64>() / take as f64;
+    (head, tail)
+}
+
+/// The taper along a stroke: 1 in the middle, [`TAPER_MIN`] at the two ends, ramping in over a
+/// length that grows with how fast the hand was moving there.
+fn taper_scales(points: &[Point], lengths: &[f64], total: f64, zoom: f64) -> Vec<f64> {
+    let (head, tail) = end_speeds(points, zoom);
+    let reach = (total * zoom * TAPER_SHARE).max(1.0);
+    let ramp_len = |speed: f64| (TAPER_PX + TAPER_SPEED_GAIN * speed.clamp(0.0, 4.0)).min(reach).max(1.0);
+    let (len_in, len_out) = (ramp_len(head), ramp_len(tail));
+    let ramp = |d: f64, len: f64| {
+        let u = (d / len).clamp(0.0, 1.0);
+        // Smoothstep: a taper with a corner at each end looks like a broken tip.
+        let k = u * u * (3.0 - 2.0 * u);
+        TAPER_MIN + (1.0 - TAPER_MIN) * k
+    };
+    lengths.iter().map(|s| ramp(*s * zoom, len_in).min(ramp((total - s) * zoom, len_out))).collect()
+}
+
+/// The width of a brush stroke at every sample: the pressure (1.0 when the pen reports none) times
+/// the end taper. This is what the preview draws and what the stroke is written with.
+pub(crate) fn brush_scales(points: &[Point], pressure: &[Option<f32>], zoom: f64) -> Option<Vec<f64>> {
+    let (lengths, total) = lengths_of(points)?;
+    let pressure = pressure_scales(points, pressure);
+    let taper = taper_scales(points, &lengths, total, zoom);
+    Some(taper.iter().enumerate().map(|(i, t)| pressure.as_ref().map_or(1.0, |p| p.get(i).copied().unwrap_or(1.0)) * t).collect())
+}
+
+/// The brush stroke's shape as width profile points `[t, scale]`, at most [`PROFILE_KNOTS`] of them,
+/// keyed by length along the stroke.
+pub(crate) fn brush_profile(points: &[Point], pressure: &[Option<f32>], zoom: f64) -> Option<Vec<[f64; 2]>> {
+    let scales = brush_scales(points, pressure, zoom)?;
+    profile_knots(points, &scales)
+}
+
+/// Pen pressure along drawn samples as width profile points `[t, scale]`: `t` by length, at most
+/// [`PROFILE_KNOTS`] points, medium pressure (0.5) at the stroke weight, from a tenth to twice it.
+/// `None` when no sample has pressure.
+pub(crate) fn pressure_profile(points: &[Point], pressure: &[Option<f32>]) -> Option<Vec<[f64; 2]>> {
+    let scales = pressure_scales(points, pressure)?;
+    profile_knots(points, &scales)
+}
+
+/// `scales` as width profile knots: [`PROFILE_KNOTS`] of them, evenly spaced by length.
+fn profile_knots(points: &[Point], scales: &[f64]) -> Option<Vec<[f64; 2]>> {
+    let (lengths, total) = lengths_of(points)?;
+    let n = points.len().clamp(2, PROFILE_KNOTS);
+    Some((0..n).map(|k| {
+        let t = k as f64 / (n - 1) as f64;
+        [t, at_length(scales, &lengths, t * total)]
+    }).collect())
+}
+
 
 /// Drop samples that cannot be a hand movement.
 ///
@@ -384,60 +533,67 @@ impl Session {
         Ok(())
     }
 
-    pub(super) fn pencil_finish(&mut self, points: &[Point], pressure: &[Option<f32>]) -> Result<()> {
+    /// A finished freehand stroke: the samples cleaned up, fitted to a vector curve, and the
+    /// pressure that made it — one geometry for both the brush and the pen, so the two can never
+    /// disagree about where the line went.
+    fn freehand(&mut self, points: &[Point], pressure: &[Option<f32>], zoom: f64) -> Option<(figcraft_geom::BezPath, Vec<Point>, Vec<Option<f32>>)> {
         // A hand never teleports: a sample many times the stroke's own pace is a stray pointer
         // position (a captured move over a panel, a display change, the position the button came
         // up at). Fitting a curve through it puts a spike in the stroke — "the circle flies off".
         let (clean, clean_pressure) = despike(points, pressure);
-        let (points, pressure) = (&clean[..], &clean_pressure[..]);
-        if points.len() < 2 {
-            return Ok(());
+        if clean.len() < 2 {
+            return None;
+        }
+        // Prepare the samples once — deduped, then the tremor averaged out — and fit *and* measure
+        // the pressure on that one set. Measuring the profile on the raw samples put it on a
+        // different length from the fitted curve, so the taper slid along the stroke instead of
+        // sitting where the hand pressed.
+        //
+        // Both distances are screen distances: a kernel and a tolerance in page units smoothed and
+        // rounded the stroke differently at every zoom (four times coarser at 400%).
+        let zoom = if zoom.is_finite() && zoom > 1e-6 { zoom } else { 1.0 };
+        let sigma = self.smoothing_px();
+        let (prepared, from) = figcraft_geom::prepare_samples(&clean, sigma / zoom);
+        if prepared.len() < 2 {
+            return None;
         }
         // Fit a curve through the samples. kurbo's `simplify_bezpath` only fits across joins whose
         // tangents are nearly parallel, so a hand-drawn stroke came out as one straight line per
-        // sample — hundreds of points, visibly faceted. `fit_polyline` fits the whole stroke with
-        // the fewest cubics that stay within a point of it (it smooths the hand's tremor first, so
-        // the fit is not chasing noise), and each segment carries its own curvature handles.
-        let Some(fitted) = figcraft_geom::fit_polyline(points, 1.0) else {
+        // sample — hundreds of points, visibly faceted. `fit_ready` fits the whole stroke with the
+        // fewest cubics that stay within a screen pixel of it, and each segment carries its own
+        // curvature handles.
+        let fitted = figcraft_geom::fit_ready(&prepared, FIT_PX / zoom)?;
+        let carried: Vec<Option<f32>> = from.iter().map(|i| clean_pressure.get(*i).copied().flatten()).collect();
+        Some((fitted, prepared, carried))
+    }
+
+    /// A finished brush stroke (`ToolId::Brush`): the vector curve, painted with the brush preset
+    /// and the pressure taper. Only the brush writes `stroke.brush` and `widthProfile`.
+    pub(super) fn brush_finish(&mut self, points: &[Point], pressure: &[Option<f32>], zoom: f64) -> Result<()> {
+        let Some((fitted, prepared, carried)) = self.freehand(points, pressure, zoom) else {
             return Ok(());
         };
-        let d = fitted.to_svg();
-        if matches!(self.tool.tool, ToolId::Marker | ToolId::Highlighter) {
-            return self.ink_finish(&d);
-        }
         let page = self.page()?;
         let parent = frame_at(self.doc()?, page, points.first().copied().unwrap_or_default(), &[]).unwrap_or(page);
-        let pw = self.doc()?.world_transform(parent);
         let mut local = fitted.clone();
-        local.apply_affine(pw.inverse());
-        let _ = d;
-        // lizard `pencil_finish`: the next stroke takes colour / weight / line style from the
-        // tool's `DrawStyle` (`tool.drawStyle`). Unset fields keep the old defaults — black (or
-        // white on a dark parent, #1741) and `PENCIL_STROKE`'s 2 pt.
-        let tool = self.tool.tool;
-        let style = self.tool.draw_style(tool).cloned().unwrap_or_default();
-        // A brush paints wider than a pencil: the pencil's 2 pt default reads as a thin line that
-        // looks just like a pencil stroke (the "brush isn't great" report). Lift the default, but
-        // only when the user hasn't set a weight, so an explicit thin brush still draws thin.
-        let brush = self.tool.pencil_brush.is_some();
-        let weight = if brush && style.weight.is_none() {
-            BRUSH_DEFAULT_WEIGHT
-        } else {
-            style.weight(tool)
-        };
+        local.apply_affine(self.doc()?.world_transform(parent).inverse());
+        let style = self.tool.brush_style.clone();
+        let weight = self.brush_weight();
         let color = match style.color {
             Some(c) => c,
             None => super::handles::pencil_color(self.doc()?, parent),
         };
         let mut props = json!({"fills": [], "strokes": [color.to_css_hex()], "strokeWeight": weight, "strokeCap": "round", "strokeJoin": "round", "strokeAlign": "center"});
-        // Pen pressure becomes the stroke's width profile (brushes follow it too).
-        if let Some(points) = pressure_profile(points, pressure) {
-            props["widthProfile"] = json!(points);
+        if let Some(profile) = brush_profile(&prepared, &carried, zoom) {
+            props["widthProfile"] = json!(profile);
         }
-        if let Some(b) = &self.tool.pencil_brush {
+        if let Some(b) = &style.preset {
+            // Flow and opacity ride on the stroke's brush: they shape what the dabs do to each
+            // other, so they belong to the stroke, not to the tool that drew it.
+            let mut b = b.clone();
+            b.flow = style.flow;
+            b.opacity = style.opacity;
             props["brush"] = serde_json::to_value(b).unwrap_or_default();
-        } else if style.line_style != crate::tools::DrawLineStyle::Solid {
-            props["dashes"] = json!(style.line_style.dashes(weight));
         }
         self.execute(
             "node.create",
@@ -446,12 +602,73 @@ impl Session {
         Ok(())
     }
 
-    /// The colour a Pencil stroke starting at `p` will have: it goes into the frame under `p`
-    /// (else the page), and is white when that is dark (`pencil_color`).
-    pub(super) fn pencil_color_at(&self, p: figcraft_geom::Point) -> Result<figcraft_color::Color> {
+    /// A finished pen stroke (`ToolId::Pencil`): one width the whole way — a plain stroked vector
+    /// curve. On a board it is board ink (erasable, and the highlighter style is see-through and
+    /// multiplied); on a design page it is an ordinary vector stroke.
+    pub(super) fn pencil_finish(&mut self, points: &[Point], pressure: &[Option<f32>], zoom: f64) -> Result<()> {
+        let Some((fitted, _, _)) = self.freehand(points, pressure, zoom) else {
+            return Ok(());
+        };
+        let page = self.page()?;
+        let parent = frame_at(self.doc()?, page, points.first().copied().unwrap_or_default(), &[]).unwrap_or(page);
+        let weight = self.pen_weight();
+        let color = self.pen_color(parent);
+        if crate::board::is_board(self.doc()?) {
+            return self.ink_finish(&fitted.to_svg(), self.tool.pencil_kind, color, weight);
+        }
+        let mut local = fitted.clone();
+        local.apply_affine(self.doc()?.world_transform(parent).inverse());
+        let props = json!({"fills": [], "strokes": [color.to_css_hex()], "strokeWeight": weight, "strokeCap": "round", "strokeJoin": "round", "strokeAlign": "center"});
+        self.execute(
+            "node.create",
+            &json!({"type": "vector", "path": local.to_svg(), "closed": false, "parent": parent, "name": "Vector", "props": props}),
+        )?;
+        Ok(())
+    }
+
+    /// How far, in screen pixels, the hand's tremor is smoothed before the stroke is fitted: the
+    /// stabilizer's amount. Preview and committed stroke both take it from here, so what is under
+    /// the pointer is what lands.
+    pub(crate) fn smoothing_px(&self) -> f64 {
+        let s = self.tool.draw_style(self.tool.tool).map_or(0.0, |d| d.smoothing.clamp(0.0, 1.0));
+        SMOOTH_PX * (1.0 + 3.0 * s)
+    }
+
+    /// The weight a brush stroke draws with: the tool's own, else the brush's wide default (so an
+    /// explicit thin brush still draws thin).
+    pub(crate) fn brush_weight(&self) -> f64 {
+        self.tool.brush_style.weight.unwrap_or(BRUSH_DEFAULT_WEIGHT)
+    }
+
+    /// The weight the pen draws with: the tool's own, else the canvas default (2 pt) or, on a
+    /// board, the ink / highlighter default (4 / 20 pt).
+    pub(crate) fn pen_weight(&self) -> f64 {
+        let (board, _, _) = self.tool.pencil_kind.defaults();
+        let fallback = if self.doc().is_ok_and(crate::board::is_board) { board } else { PENCIL_STROKE.1 };
+        self.tool.pencil_style.weight.unwrap_or(fallback)
+    }
+
+    /// The colour the pen draws with in `parent`: on a board the ink or highlighter colour, on a
+    /// page the tool's own (white over a dark background, #1741).
+    pub(crate) fn pen_color(&self, parent: NodeId) -> figcraft_color::Color {
+        let Ok(doc) = self.doc() else { return PENCIL_STROKE.0 };
+        if crate::board::is_board(doc) {
+            return match self.tool.pencil_kind {
+                crate::tools::PenKind::Ink => self.tool.board.marker,
+                crate::tools::PenKind::Highlighter => self.tool.board.highlighter,
+            };
+        }
+        self.tool.pencil_style.color.unwrap_or_else(|| super::handles::pencil_color(doc, parent))
+    }
+
+    /// The colour the freehand stroke starting at `p` will have (the canvas previews it).
+    pub(super) fn pen_color_at(&self, p: figcraft_geom::Point) -> Result<figcraft_color::Color> {
         let page = self.page()?;
         let doc = self.doc()?;
         let parent = frame_at(doc, page, p, &[]).unwrap_or(page);
-        Ok(super::handles::pencil_color(doc, parent))
+        if self.tool.tool == ToolId::Brush {
+            return Ok(self.tool.brush_style.color.unwrap_or_else(|| super::handles::pencil_color(doc, parent)));
+        }
+        Ok(self.pen_color(parent))
     }
 }

@@ -68,6 +68,11 @@ pub enum ToolId {
     Polygon,
     Star,
     Pen,
+    /// The brush: freehand, a vector curve whose stroke carries an external `.abr` tip and the
+    /// pressure taper (`stroke.brush` + `widthProfile`).
+    Brush,
+    /// The pen: freehand, a plain stroked vector curve — no brush, no taper. This is what the
+    /// pencil, the marker and the highlighter became: one pen, with a style (`PenKind`).
     Pencil,
     Text,
     TextOnPath,
@@ -78,14 +83,12 @@ pub enum ToolId {
     Sticky,
     BoardShape,
     Connector,
-    Marker,
-    Highlighter,
     Eraser,
     Stamp,
 }
 
 impl ToolId {
-    pub const ALL: [ToolId; 26] = [
+    pub const ALL: [ToolId; 25] = [
         ToolId::Move,
         ToolId::Scale,
         ToolId::Hand,
@@ -99,6 +102,7 @@ impl ToolId {
         ToolId::Polygon,
         ToolId::Star,
         ToolId::Pen,
+        ToolId::Brush,
         ToolId::Pencil,
         ToolId::Text,
         ToolId::TextOnPath,
@@ -108,8 +112,6 @@ impl ToolId {
         ToolId::Sticky,
         ToolId::BoardShape,
         ToolId::Connector,
-        ToolId::Marker,
-        ToolId::Highlighter,
         ToolId::Eraser,
         ToolId::Stamp,
     ];
@@ -129,6 +131,7 @@ impl ToolId {
             ToolId::Polygon => "polygon",
             ToolId::Star => "star",
             ToolId::Pen => "pen",
+            ToolId::Brush => "brush",
             ToolId::Pencil => "pencil",
             ToolId::Text => "text",
             ToolId::TextOnPath => "textOnPath",
@@ -138,8 +141,6 @@ impl ToolId {
             ToolId::Sticky => "sticky",
             ToolId::BoardShape => "shape",
             ToolId::Connector => "connector",
-            ToolId::Marker => "marker",
-            ToolId::Highlighter => "highlighter",
             ToolId::Eraser => "eraser",
             ToolId::Stamp => "stamp",
         }
@@ -161,8 +162,9 @@ impl ToolId {
             ToolId::Ellipse => "Ellipse",
             ToolId::Polygon => "Polygon",
             ToolId::Star => "Star",
-            ToolId::Pen => "Pen",
-            ToolId::Pencil => "Pencil",
+            ToolId::Pen => "Pen tool",
+            ToolId::Brush => "Brush",
+            ToolId::Pencil => "Pen",
             ToolId::Text => "Text",
             ToolId::TextOnPath => "Text on a path",
             ToolId::Comment => "Comment",
@@ -171,8 +173,6 @@ impl ToolId {
             ToolId::Sticky => "Sticky note",
             ToolId::BoardShape => "Shapes",
             ToolId::Connector => "Connector",
-            ToolId::Marker => "Marker",
-            ToolId::Highlighter => "Highlighter",
             ToolId::Eraser => "Eraser",
             ToolId::Stamp => "Stamp",
         }
@@ -182,7 +182,7 @@ impl ToolId {
     pub fn on_boards(self) -> bool {
         matches!(
             self,
-            ToolId::Sticky | ToolId::BoardShape | ToolId::Connector | ToolId::Marker | ToolId::Highlighter | ToolId::Eraser | ToolId::Stamp
+            ToolId::Sticky | ToolId::BoardShape | ToolId::Connector | ToolId::Eraser | ToolId::Stamp
         )
     }
     /// The tool's key (from [`crate::keymap`]; empty when it has none).
@@ -343,6 +343,13 @@ pub struct Overlay {
     pub cursor: Cursor,
     /// Pen tool: the in-progress path's anchor points and the rubber band to the pointer.
     pub pen: Vec<[f64; 2]>,
+    /// Freehand strokes: the width at each of `pen`'s points as a multiple of [`Self::pen_weight`],
+    /// so the preview shows the pressure taper there and then instead of only at the release.
+    /// Empty when the stroke is one width the whole way (a plain pencil, a mouse).
+    pub pen_widths: Vec<f64>,
+    /// Freehand strokes: the weight the stroke being drawn will have (`ink_weight`), which a brush
+    /// lifts above the pencil's default.
+    pub pen_weight: Option<f64>,
     /// Pencil: the colour of the stroke in progress, for its preview (white over a dark page or
     /// frame); None outside a Pencil stroke.
     pub pen_color: Option<figcraft_color::Color>,
@@ -581,48 +588,65 @@ pub struct PenPath {
     pub undone: Vec<(Point, Vec2, Vec2)>,
 }
 
-/// How the Pencil dashes a stroke (ported from lizard `crates/engine/src/tools.rs`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum DrawLineStyle {
+/// The pen's style: one pen, two ways of putting ink down. The highlighter is not another tool —
+/// it is the same vector curve, drawn wide, see-through and multiplied over what is under it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+pub enum PenKind {
     #[default]
-    Solid,
-    Dashed,
-    Dotted,
+    Ink,
+    Highlighter,
 }
 
-impl DrawLineStyle {
+impl PenKind {
+    pub const ALL: [PenKind; 2] = [PenKind::Ink, PenKind::Highlighter];
+
     pub fn id(self) -> &'static str {
         match self {
-            Self::Solid => "solid",
-            Self::Dashed => "dashed",
-            Self::Dotted => "dotted",
+            Self::Ink => "ink",
+            Self::Highlighter => "highlighter",
         }
     }
     pub fn from_id(id: &str) -> Option<Self> {
-        match id {
-            "solid" => Some(Self::Solid),
-            "dashed" => Some(Self::Dashed),
-            "dotted" => Some(Self::Dotted),
-            _ => None,
+        Self::ALL.into_iter().find(|k| k.id().eq_ignore_ascii_case(id))
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Ink => "Pen",
+            Self::Highlighter => "Highlighter",
         }
     }
-    pub fn dashes(self, weight: f64) -> Vec<f64> {
+    /// The default weight, opacity and multiply-blend of a stroke in this style (the old marker
+    /// and highlighter constants).
+    pub fn defaults(self) -> (f64, f32, bool) {
         match self {
-            Self::Solid => Vec::new(),
-            Self::Dashed => vec![weight * 3.0, weight * 2.0],
-            Self::Dotted => vec![0.1, weight * 1.5],
+            Self::Ink => (4.0, 1.0, false),
+            Self::Highlighter => (20.0, 0.45, true),
         }
     }
 }
 
-/// Settings for the next Pen / Pencil stroke (ported from lizard's `DrawStyle`; figcraft has no
-/// `ToolId::Brush`, so the brush preset stays in `ToolState::pencil_brush` / `tool.pencilBrush`).
-/// `None` means the design default in `PENCIL_STROKE`.
-#[derive(Clone, Debug, Default)]
+/// Settings for the next stroke of one freehand tool. `None` means the design default in
+/// `PENCIL_STROKE`.
+#[derive(Clone, Debug)]
 pub struct DrawStyle {
     pub color: Option<figcraft_color::Color>,
     pub weight: Option<f64>,
-    pub line_style: DrawLineStyle,
+    /// The brush a `Brush` stroke paints with (`None`: a plain outline). Only the brush reads it.
+    pub preset: Option<figcraft_doc::Brush>,
+    /// How much ink one dab lays down, 0..1: a see-through brush builds up where it crosses
+    /// itself instead of painting solid (the paint program's "flow").
+    pub flow: f64,
+    /// The most the whole stroke paints, 0..1: a ceiling over the built-up dabs.
+    pub opacity: f64,
+    /// The stabilizer, 0..1: how hard the hand's tremor is smoothed out (0: the raw hand, 1:
+    /// several screen pixels of it). Input handling, so it is never written into the document.
+    pub smoothing: f64,
+}
+
+impl Default for DrawStyle {
+    fn default() -> Self {
+        Self { color: None, weight: None, preset: None, flow: 1.0, opacity: 1.0, smoothing: 0.0 }
+    }
 }
 
 impl DrawStyle {
@@ -666,11 +690,13 @@ pub struct ToolState {
     /// corners on the page, turned with its frame): the Move and Scale tools treat a press or
     /// hover on one as on its frame.
     pub labels: Vec<(NodeId, [Point; 4])>,
-    /// The brush the Pencil draws with (`tool.pencilBrush`; `None`: a plain stroke).
-    pub pencil_brush: Option<figcraft_doc::Brush>,
-    /// Settings for the next Pen / Pencil stroke (`tool.drawStyle`, lizard `DrawStyle`).
+    /// Settings for the next stroke of each freehand tool (`tool.drawStyle`, lizard `DrawStyle`):
+    /// one per tool, so a brush's colour, weight and preset never leak into the pen's.
     pub pen_style: DrawStyle,
+    pub brush_style: DrawStyle,
     pub pencil_style: DrawStyle,
+    /// The pen's style (`tool.penKind`): plain ink, or the wide see-through highlighter.
+    pub pencil_kind: PenKind,
     /// The board tools' colours and choices.
     pub board: crate::board::BoardTool,
     /// The eyedropper samples for a colour picker (`edit.pickColor` with `apply: false`): the
@@ -690,10 +716,12 @@ pub struct ToolState {
 }
 
 impl ToolState {
-    /// The per-tool drawing style (`Pen` / `Pencil` only); mirrors lizard `draw_style`.
+    /// The per-tool drawing style (the three freehand tools: Pen, Brush and the pen); mirrors
+    /// lizard `draw_style`.
     pub fn draw_style(&self, tool: ToolId) -> Option<&DrawStyle> {
         match tool {
             ToolId::Pen => Some(&self.pen_style),
+            ToolId::Brush => Some(&self.brush_style),
             ToolId::Pencil => Some(&self.pencil_style),
             _ => None,
         }
@@ -701,6 +729,7 @@ impl ToolState {
     pub fn draw_style_mut(&mut self, tool: ToolId) -> Option<&mut DrawStyle> {
         match tool {
             ToolId::Pen => Some(&mut self.pen_style),
+            ToolId::Brush => Some(&mut self.brush_style),
             ToolId::Pencil => Some(&mut self.pencil_style),
             _ => None,
         }
@@ -748,22 +777,23 @@ impl ToolState {
 mod draw_style_tests {
     use super::*;
 
-    /// The ported lizard defaults / dash patterns and the per-tool style slots.
+    /// The pen's two styles, the per-tool style slots, and the fact that no freehand tool has a
+    /// line style any more (a pencil's dashes were the marker of it being a different tool).
     #[test]
-    fn draw_style_defaults_and_dashes() {
-        assert_eq!(DrawLineStyle::default(), DrawLineStyle::Solid);
-        assert_eq!(DrawLineStyle::Solid.id(), "solid");
-        assert_eq!(DrawLineStyle::from_id("dotted"), Some(DrawLineStyle::Dotted));
-        assert_eq!(DrawLineStyle::Dashed.dashes(2.0), vec![6.0, 4.0]);
-        assert_eq!(DrawLineStyle::Dotted.dashes(2.0), vec![0.1, 3.0]);
-        assert!(DrawLineStyle::Solid.dashes(2.0).is_empty());
+    fn draw_style_slots_and_pen_kinds() {
+        assert_eq!(PenKind::default(), PenKind::Ink);
+        assert_eq!(PenKind::from_id("highlighter"), Some(PenKind::Highlighter));
+        assert_eq!(PenKind::Ink.defaults(), (4.0, 1.0, false));
+        assert_eq!(PenKind::Highlighter.defaults(), (20.0, 0.45, true));
 
         let s = DrawStyle::default();
         assert_eq!(s.color().to_css_hex(), PENCIL_STROKE.0.to_css_hex());
         assert_eq!(s.weight(ToolId::Pencil), PENCIL_STROKE.1);
+        assert!(s.preset.is_none(), "a style starts without a brush preset");
 
         let t = ToolState::default();
         assert!(t.draw_style(ToolId::Pen).is_some());
+        assert!(t.draw_style(ToolId::Brush).is_some());
         assert!(t.draw_style(ToolId::Pencil).is_some());
         assert!(t.draw_style(ToolId::Move).is_none());
     }

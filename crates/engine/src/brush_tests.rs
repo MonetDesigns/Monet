@@ -6,7 +6,8 @@ use serde_json::{Value, json};
 
 use crate::Session;
 use crate::params::id_of;
-use crate::tools::{PointerEvent, PointerKind, pressure_profile};
+use crate::ToolId;
+use crate::tools::{PenKind, PointerEvent, PointerKind, pressure_profile};
 use figcraft_doc::{NodeId, NodeKind};
 use figcraft_geom::Point;
 
@@ -106,6 +107,99 @@ fn brush_commands_list_and_import_the_external_library() {
     assert!(s.execute("brush.import", &json!({})).is_err(), "import needs a path");
 }
 
+/// The three freehand tools are three tools, not one tool wearing two hats: the brush has its own
+/// preset slot, the pen refuses one, and the old marker / highlighter names still land on the pen
+/// in the right style.
+#[test]
+fn the_brush_owns_the_preset_and_the_old_names_are_pen_styles() {
+    let mut s = Session::new();
+    let set = |s: &mut Session, tool: &str| s.execute("tool.set", &json!({ "tool": tool })).unwrap()["tool"].clone();
+    assert_eq!(set(&mut s, "brush"), json!("brush"));
+    assert_eq!(s.tool.tool, ToolId::Brush);
+    assert!(s.execute("tool.drawStyle", &json!({ "tool": "pencil", "preset": "ink" })).is_err(), "the pen has no brush preset");
+    assert!(s.execute("tool.drawStyle", &json!({ "tool": "brush", "preset": "ink" })).is_ok());
+
+    for (name, kind) in [("marker", PenKind::Ink), ("highlighter", PenKind::Highlighter), ("pencil", PenKind::Ink)] {
+        assert_eq!(set(&mut s, name), json!("pencil"), "{name} is the pen");
+        assert_eq!(s.tool.tool, ToolId::Pencil);
+        if name != "pencil" {
+            assert_eq!(s.tool.pencil_kind, kind, "{name} picks the style");
+        }
+    }
+}
+
+/// Flow and opacity are the paint program's split: flow is how much one dab carries (so a stroke
+/// that doubles back over itself builds up), opacity is the ceiling over the whole stroke.
+#[test]
+fn flow_builds_up_and_opacity_caps_the_stroke() {
+    install_test_brushes();
+    let at_crossing = |extra: serde_json::Value| -> u8 {
+        let mut s = Session::new();
+        let v = id(s.execute("vector.create", &json!({"path": "M0 0 L60 0 L0 0", "x": 0, "y": 0})).unwrap());
+        s.execute("node.set", &json!({"id": v, "props": {"strokes": ["#000000"], "strokeWeight": 10, "strokeAlign": "center"}})).unwrap();
+        // One 10 pt tip every 20 units: the way back lands dabs exactly on the way out's.
+        let mut q = json!({"ids": [v], "preset": "dots", "spacing": 2.0});
+        for (k, val) in extra.as_object().expect("an object").clone() {
+            q[k] = val;
+        }
+        s.execute("stroke.brush", &q).unwrap();
+        alpha(&s, 40.0, 0.0)
+    };
+    assert_eq!(at_crossing(json!({})), 255, "two full dabs paint solid");
+    let flow = at_crossing(json!({"flow": 0.5}));
+    assert!(flow > 120 && flow < 240, "half flow over itself is denser than one pass but not solid: {flow}");
+    assert_eq!(at_crossing(json!({"opacity": 0.5})), 128, "opacity caps the stroke");
+}
+
+/// A brush stroke lifts its tip at both ends, and a faster flick carries a longer, thinner tail:
+/// the ramp grows with how far the pointer moved between samples.
+#[test]
+fn a_brush_stroke_tapers_at_the_ends() {
+    let stroke = |step: f64| -> figcraft_doc::WidthProfile {
+        let mut s = Session::new();
+        s.execute("tool.set", &json!({"tool": "brush"})).unwrap();
+        let mut x = 0.0;
+        s.pointer(&PointerEvent::at(PointerKind::Down, x, 40.0, 1.0)).unwrap();
+        while x < 240.0 {
+            x += step;
+            s.pointer(&PointerEvent::at(PointerKind::Move, x, 40.0, 1.0)).unwrap();
+        }
+        s.pointer(&PointerEvent::at(PointerKind::Up, x, 40.0, 1.0)).unwrap();
+        let doc = s.doc().unwrap();
+        let n = doc.nodes().find(|n| matches!(n.kind, NodeKind::Vector { .. })).expect("a brush stroke");
+        n.stroke.profile().expect("the brush tapers").clone()
+    };
+    let slow = stroke(1.0);
+    let fast = stroke(8.0);
+    assert!(slow.scale_at(0.0) < 0.6, "the slow stroke lifts its tip: {:?}", slow.scale_at(0.0));
+    assert!(slow.scale_at(0.5) > 0.98, "and is full width in the middle: {:?}", slow.scale_at(0.5));
+    assert!(fast.scale_at(0.15) < slow.scale_at(0.15) - 0.1, "a flick tapers farther in: {:?} vs {:?}", fast.scale_at(0.15), slow.scale_at(0.15));
+}
+
+/// The stabilizer is input handling: the same shaky hand lands a smoother stroke with it up, and
+/// it never reaches the document (no extra property, just a calmer curve).
+#[test]
+fn the_stabilizer_smooths_the_stroke() {
+    let height = |smoothing: f64| -> f64 {
+        let mut s = Session::new();
+        s.execute("tool.set", &json!({"tool": "brush"})).unwrap();
+        s.execute("tool.drawStyle", &json!({"tool": "brush", "smoothing": smoothing})).unwrap();
+        let mut x = 0.0;
+        s.pointer(&PointerEvent::at(PointerKind::Down, x, 40.0, 1.0)).unwrap();
+        while x < 120.0 {
+            x += 2.0;
+            // A hand's tremor: a few points either side of the line.
+            let y = 40.0 + if (x / 2.0) as i32 % 2 == 0 { 5.0 } else { -5.0 };
+            s.pointer(&PointerEvent::at(PointerKind::Move, x, y, 1.0)).unwrap();
+        }
+        s.pointer(&PointerEvent::at(PointerKind::Up, x, 40.0, 1.0)).unwrap();
+        let doc = s.doc().unwrap();
+        doc.nodes().find(|n| matches!(n.kind, NodeKind::Vector { .. })).expect("a stroke").height
+    };
+    let (raw, steady) = (height(0.0), height(1.0));
+    assert!(steady < raw * 0.7, "the stabilizer flattens the shake: {raw} vs {steady}");
+}
+
 #[test]
 fn pressure_becomes_a_width_profile() {
     let pts: Vec<Point> = (0..=10).map(|i| Point::new(f64::from(i) * 10.0, 0.0)).collect();
@@ -119,12 +213,111 @@ fn pressure_becomes_a_width_profile() {
     assert!(pressure_profile(&[Point::ZERO, Point::ZERO], &[Some(0.5), Some(0.5)]).is_none(), "no length");
 }
 
+/// The profile is keyed by *length along the stroke*, not by sample index: a fast stroke has few
+/// samples where a slow one has many, and a profile keyed by index would put the pressure in the
+/// wrong place. This stroke presses hard for its first 9 pt (9 of 19 samples — nearly half the
+/// indices) and then runs 90 pt light: measured by length the hard part is 9% of the profile,
+/// measured by index it would be 47%.
 #[test]
-fn the_pencil_records_pressure_and_its_brush() {
+fn pressure_is_placed_by_length_along_the_stroke() {
+    let dense: Vec<f64> = (0..=9).map(f64::from).collect();
+    let tail: Vec<f64> = (1..=10).map(|i| f64::from(i) * 10.0).collect();
+    let xs: Vec<f64> = dense.iter().chain(tail.iter()).copied().collect();
+    let pts: Vec<Point> = xs.iter().map(|x| Point::new(*x, 0.0)).collect();
+    let pressure: Vec<Option<f32>> = xs.iter().map(|x| Some(if *x <= 9.0 { 1.0 } else { 0.0 })).collect();
+    let prof = pressure_profile(&pts, &pressure).unwrap();
+    assert_eq!(prof.first(), Some(&[0.0, 2.0]), "full pressure at the start");
+    let light = prof.iter().find(|p| p[1] < 0.5).expect("the stroke ends light");
+    assert!(light[0] < 0.25, "light within the first quarter of the stroke, not at half: {prof:?}");
+    assert_eq!(prof.last(), Some(&[1.0, 0.1]), "no pressure at the end");
+}
+
+/// A pen reports its pressure collapsing as it leaves the tablet. That last reading is not a
+/// gesture: a stroke must not end in a needle the hand never drew.
+#[test]
+fn the_lift_does_not_end_the_stroke_in_a_needle() {
+    let pts: Vec<Point> = (0..=10).map(|i| Point::new(f64::from(i) * 10.0, 0.0)).collect();
+    let mut pressure: Vec<Option<f32>> = (0..=10).map(|_| Some(0.5)).collect();
+    pressure[10] = Some(0.0);
+    let prof = pressure_profile(&pts, &pressure).unwrap();
+    assert!(prof.last().is_some_and(|p| p[1] > 0.9), "the stroke ends at the pen's last pressure: {prof:?}");
+}
+
+/// A pencil without a brush is one width the whole way: swelling under pressure is the brush's
+/// job, and the brush is its own tool.
+#[test]
+fn a_pencil_without_a_brush_ignores_pressure() {
     let mut s = Session::new();
     s.execute("tool.set", &json!({"tool": "pencil"})).unwrap();
-    assert!(s.execute("tool.pencilBrush", &json!({"preset": ""})).is_err(), "an empty brush id is rejected");
-    s.execute("tool.pencilBrush", &json!({"preset": "taper"})).unwrap();
+    let ev = |kind, x: f64, p: f32| PointerEvent { pressure: Some(p), ..PointerEvent::at(kind, x, 20.0, 1.0) };
+    s.pointer(&ev(PointerKind::Down, 0.0, 0.1)).unwrap();
+    for i in 1..=20 {
+        s.pointer(&ev(PointerKind::Move, f64::from(i) * 10.0, 0.1 + 0.04 * i as f32)).unwrap();
+    }
+    s.pointer(&ev(PointerKind::Up, 200.0, 1.0)).unwrap();
+    let doc = s.doc().unwrap();
+    let n = doc.nodes().find(|n| matches!(n.kind, NodeKind::Vector { .. })).expect("a pencil stroke");
+    assert!(n.stroke.profile().is_none(), "a pencil stroke keeps one width");
+    assert!(n.stroke.brush.is_none());
+}
+
+/// The hand's tremor is a distance on the *screen*, so a stroke drawn at 400% must come out the
+/// same as the same gesture at 100% — a page-unit kernel made the zoomed-in one four times as
+/// smooth (and a page-unit fit tolerance four times as coarse), which is what made the line feel
+/// different at every zoom.
+#[test]
+fn the_same_hand_at_any_zoom_makes_the_same_stroke() {
+    // The stroke's width, in screen points, drawn at `zoom`: the page coordinates are the screen
+    // ones over the zoom.
+    let drawn_at = |zoom: f64| -> f64 {
+        let mut s = Session::new();
+        s.execute("tool.set", &json!({"tool": "pencil"})).unwrap();
+        let ev = |kind, x: f64| PointerEvent::at(kind, x / zoom, (60.0 + (x / 26.0).sin() * 12.0) / zoom, zoom);
+        s.pointer(&ev(PointerKind::Down, 0.0)).unwrap();
+        let mut x = 0.0;
+        while x < 240.0 {
+            x += 1.5;
+            s.pointer(&ev(PointerKind::Move, x)).unwrap();
+        }
+        s.pointer(&ev(PointerKind::Up, x)).unwrap();
+        let doc = s.doc().unwrap();
+        let n = doc.nodes().find(|n| matches!(n.kind, NodeKind::Vector { .. })).expect("a stroke");
+        n.width * zoom
+    };
+    let (one, four) = (drawn_at(1.0), drawn_at(4.0));
+    let (lo, hi) = (one.min(four), one.max(four));
+    assert!(hi - lo <= 0.01 * hi, "the same stroke at 100% and 400%: {one} vs {four}");
+}
+
+/// Pressure has to reach the pixels, not just the document: the same stroke drawn light and hard
+/// must paint different widths. This is the whole chain — pressure → `widthProfile` → the dab size
+/// of every ABR stamp (`pathops::brush::stamps`) → the composited mask.
+#[test]
+fn pressure_reaches_the_painted_width() {
+    install_test_brushes();
+    let stroke = |pressure: f32| -> u8 {
+        let mut s = Session::new();
+        s.execute("tool.set", &json!({"tool": "brush"})).unwrap();
+        s.execute("tool.brushPreset", &json!({"preset": "taper"})).unwrap();
+        let ev = |kind, x: f64| PointerEvent { pressure: Some(pressure), ..PointerEvent::at(kind, x, 0.0, 1.0) };
+        s.pointer(&ev(PointerKind::Down, 0.0)).unwrap();
+        for i in 1..=10 {
+            s.pointer(&ev(PointerKind::Move, f64::from(i) * 10.0)).unwrap();
+        }
+        s.pointer(&ev(PointerKind::Up, 100.0)).unwrap();
+        // 3 pt off the centre line: inside a hard stroke's 8 pt tip, outside a light one's.
+        alpha(&s, 50.0, 3.0)
+    };
+    assert_eq!(stroke(1.0), 255, "hard pressure paints wide");
+    assert_eq!(stroke(0.2), 0, "light pressure paints narrow");
+}
+
+#[test]
+fn the_brush_records_pressure_and_the_pen_does_not() {
+    let mut s = Session::new();
+    s.execute("tool.set", &json!({"tool": "brush"})).unwrap();
+    assert!(s.execute("tool.brushPreset", &json!({"preset": ""})).is_err(), "an empty brush id is rejected");
+    s.execute("tool.brushPreset", &json!({"preset": "taper"})).unwrap();
     let ev = |kind, x: f64, p: f32| PointerEvent { pressure: Some(p), ..PointerEvent::at(kind, x, 50.0 + (x / 20.0).sin() * 10.0, 1.0) };
     s.pointer(&ev(PointerKind::Down, 0.0, 0.2)).unwrap();
     for i in 1..=40 {
@@ -132,13 +325,16 @@ fn the_pencil_records_pressure_and_its_brush() {
     }
     s.pointer(&ev(PointerKind::Up, 200.0, 1.0)).unwrap();
     let doc = s.doc().unwrap();
-    let n = doc.nodes().find(|n| matches!(n.kind, NodeKind::Vector { .. })).expect("a pencil stroke");
+    let n = doc.nodes().find(|n| matches!(n.kind, NodeKind::Vector { .. })).expect("a brush stroke");
     let prof = n.stroke.profile().expect("pressure recorded");
-    assert!(prof.scale_at(0.0) < 0.5 && prof.scale_at(1.0) > 1.9, "light to hard: {prof:?}");
+    // Light at the start, hard three quarters of the way in (the pen presses as it goes), and the
+    // tip lifting again at the very end: pressure times the end taper.
+    assert!(prof.scale_at(0.0) < 0.5, "light at the start: {prof:?}");
+    assert!(prof.scale_at(0.75) > 1.5, "hard by three quarters: {prof:?}");
+    assert!(prof.scale_at(1.0) < prof.scale_at(0.75), "the end lifts: {prof:?}");
     assert_eq!(n.stroke.brush.as_ref().map(|b| b.preset.as_str()), Some("taper"));
-    // A mouse (no pressure) draws a plain uniform stroke.
-    s.execute("tool.pencilBrush", &json!({"preset": null})).unwrap();
-    s.execute("edit.selectAll", &json!({})).ok();
+    // The same hand with the pen: one width, no brush, and the pen keeps its own style.
+    s.execute("tool.set", &json!({"tool": "pencil"})).unwrap();
     let before = s.doc().unwrap().nodes().count();
     s.pointer(&PointerEvent::at(PointerKind::Down, 0.0, 200.0, 1.0)).unwrap();
     s.pointer(&PointerEvent::at(PointerKind::Move, 50.0, 220.0, 1.0)).unwrap();
@@ -147,7 +343,7 @@ fn the_pencil_records_pressure_and_its_brush() {
     let doc = s.doc().unwrap();
     assert_eq!(doc.nodes().count(), before + 1);
     let last = doc.nodes().filter(|n| matches!(n.kind, NodeKind::Vector { .. })).max_by_key(|n| n.id).unwrap();
-    assert!(last.stroke.profile().is_none() && last.stroke.brush.is_none());
+    assert!(last.stroke.profile().is_none() && last.stroke.brush.is_none(), "the pen has no brush and no taper");
 }
 
 /// The Pencil draws black on a light page and white on a dark page or inside a dark frame, the
@@ -208,14 +404,14 @@ fn brush_strokes_render_in_a_full_page_view() {
     assert!(painted > 0, "a brush stroke painted nothing in a full-page view");
 }
 
-/// Draw with the pointer exactly like the canvas does (Pencil + an ABR brush), then render the
-/// page: this is the "I draw and nothing shows up" path end to end.
+/// Draw with the pointer exactly like the canvas does (the brush tool + an ABR tip), then render
+/// the page: this is the "I draw and nothing shows up" path end to end.
 #[test]
-fn a_pencil_brush_stroke_shows_up_on_the_canvas() {
+fn a_brush_stroke_shows_up_on_the_canvas() {
     install_test_brushes();
     let mut s = Session::new();
-    s.execute("tool.set", &json!({"tool": "pencil"})).unwrap();
-    s.execute("tool.pencilBrush", &json!({"preset": "dots"})).unwrap();
+    s.execute("tool.set", &json!({"tool": "brush"})).unwrap();
+    s.execute("tool.brushPreset", &json!({"preset": "dots"})).unwrap();
     s.pointer(&PointerEvent::at(PointerKind::Down, 10.0, 100.0, 1.0)).unwrap();
     for i in 1..=20 {
         s.pointer(&PointerEvent::at(PointerKind::Move, 10.0 + f64::from(i) * 5.0, 100.0, 1.0)).unwrap();
@@ -225,7 +421,7 @@ fn a_pencil_brush_stroke_shows_up_on_the_canvas() {
     let view = figcraft_render::View { origin: (0.0, 0.0), scale: 1.0, width: 200, height: 200 };
     let pix = figcraft_render::render_view(doc, s.page().unwrap(), &view, &figcraft_render::Options::default()).unwrap();
     let painted = pix.data().chunks_exact(4).filter(|p| p[3] > 0).count();
-    assert!(painted > 0, "a pencil brush stroke painted nothing on the canvas");
+    assert!(painted > 0, "a brush stroke painted nothing on the canvas");
 }
 
 /// The canvas pans to fractional origins and zooms; dabs must land there too.

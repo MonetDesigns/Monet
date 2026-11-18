@@ -15,7 +15,7 @@ pub mod fit;
 pub mod measure;
 pub mod simplify;
 mod transform;
-pub use fit::{fit_polyline, smooth_points};
+pub use fit::{fit_polyline, fit_ready, prepare_samples, smooth_points};
 pub use simplify::simplify_path;
 pub use transform::*;
 

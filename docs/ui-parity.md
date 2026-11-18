@@ -102,7 +102,7 @@ interaction feel not yet compared.
 | Eyedropper (I) | done | picks the colour seen under the pointer (opaque) into the selection's fill and the recent colours, one undo step (`fx_behaviour_tests`); with Cmd/Ctrl+Shift held it makes a colour style or variable of it instead, as the reference app's eyedropper does: a Create from color window asks which, its name (the next free "Color n") and a variable's collection (the file's first, or a new one made with it in the same undo step), and leaves the selection's fills alone (`eyedropper_create_tests`, `sampled_color_tests`) |
 | Comment (C), Shift+C to show/hide | done | local only |
 | Text on a path (Figma Draw) | done | the Text on a path tool in the Text flyout (`tool.textOnPath`) shows the I-beam over a shape's or vector's path, and a click there puts new text on the path, starting at the click, with the path's effects and its fill when one shows; the path layer is removed, and the path comes back if nothing is typed. Also from the Design panel or `text.onPath`; the path is edited by resizing only |
-| Stretch and scatter brushes (Figma Draw) | done | eight presets drawn in code; the Pencil's brush is set by `tool.pencilBrush`, not from the toolbar |
+| Stretch and scatter brushes (Figma Draw) | done | eight presets drawn in code; the Brush tool's tip is set by `tool.brushPreset` (old name `tool.pencilBrush`); the pen and the bezier pen have no tip list |
 | Image crop handles; Crop image | done | Object ▸ Crop image, the right-click menu and the crop button on an image fill row (`image.crop`) switch the image to Crop where it already shows and enter crop mode: the whole image shows, dimmed outside the layer; the layer's box carries L-shaped corner brackets and edge bars in the selection colour (in place of the square handles), and its edges and corners crop it with the picture held still (as Cmd/Ctrl-resizing does anywhere), the image drags to move and its corners scale it (Shift: freely); Enter, Escape or a click outside finishes (`image_crop_tests`, `crop_image_tests`). Not compared side by side |
 
 ## Canvas
@@ -137,9 +137,9 @@ in the table. `crates/ui-egui/src/shortcut_keys_tests.rs` drives the keys a look
 
 | | Count | Notes |
 |---|---|---|
-| Documented shortcuts (rows) | 136 | each with macOS and Windows/Linux keys |
-| Bound as documented | 135 (110 before this suite) | 112 keymap bindings, 15 held keys, gestures and presentation keys, 6 vector edit tool keys |
-| Bound as documented | 135 (110 before this suite) | 112 keymap bindings, 16 held keys, gestures and presentation keys, 6 vector edit tool keys |
+| Documented shortcuts (rows) | 137 | each with macOS and Windows/Linux keys |
+| Bound as documented | 136 (110 before this suite) | 113 keymap bindings, 15 held keys, gestures and presentation keys, 6 vector edit tool keys |
+| Bound as documented | 136 (110 before this suite) | 113 keymap bindings, 16 held keys, gestures and presentation keys, 6 vector edit tool keys |
 | Bound on other keys (documented conflict) | 1 | Run last plugin: the documentation also gives Ctrl+Alt+P to pixel preview on Windows; the plugin takes Ctrl+Alt+Shift+P there |
 | Missing | 0 | moving the rotation origin (Alt+R, `transform.rotationOrigin`) and placing an object with Enter after choosing its tool (`tool.place`) were the last two |
 | Documented keys a platform keeps | 2 | Ctrl+Space (Windows/Linux keyboard box selection) switches some CJK input methods; F6 goes to a browser's address bar in the web build |

@@ -23,7 +23,7 @@ use crate::menu_card::Item;
 use crate::widgets::icon::{Icon, paint as paint_icon};
 use crate::widgets::{pt, rgba, tokens};
 use figcraft_engine::ToolId;
-use figcraft_engine::tools::{DrawLineStyle, DrawStyle};
+use figcraft_engine::tools::DrawStyle;
 use figcraft_engine::vectoredit::VTool;
 use figcraft_i18n::tr;
 use gpui::{App, Bounds, BoxShadow, Div, ImageSource, MouseButton, MouseDownEvent, Pixels, SharedString, Stateful, Window, div, img, point, prelude::*, px};
@@ -69,6 +69,8 @@ pub(crate) enum Options {
     Colors,
     Shapes,
     Stamps,
+    /// The pen's two styles: ink and the highlighter.
+    PenKinds,
 }
 
 impl Group {
@@ -109,7 +111,7 @@ pub(crate) const GROUPS: &[Group] = &[
     Group {
         key: "pen",
         name: "Drawing tools",
-        tools: &[(ToolId::Pen, Icon::Pen), (ToolId::Pencil, Icon::Pencil), (ToolId::ShapeBuilder, Icon::ShapeBuilder)],
+        tools: &[(ToolId::Pen, Icon::Pen), (ToolId::Brush, Icon::Marker), (ToolId::Pencil, Icon::Pencil), (ToolId::ShapeBuilder, Icon::ShapeBuilder)],
         options: Options::None,
     },
     Group { key: "text", name: "Text", tools: &[(ToolId::Text, Icon::Text), (ToolId::TextOnPath, Icon::TextOnPath)], options: Options::None },
@@ -122,8 +124,9 @@ pub(crate) const BOARD_GROUPS: &[Group] = &[
     Group {
         key: "ink",
         name: "Drawing tools",
-        tools: &[(ToolId::Marker, Icon::Marker), (ToolId::Highlighter, Icon::Highlighter), (ToolId::Eraser, Icon::Eraser)],
-        options: Options::None,
+        // One pen (ink or highlighter: the caret picks the style) and the eraser.
+        tools: &[(ToolId::Pencil, Icon::Pencil), (ToolId::Eraser, Icon::Eraser)],
+        options: Options::PenKinds,
     },
     Group { key: "sticky", name: "Sticky note colors", tools: &[(ToolId::Sticky, Icon::Board)], options: Options::Colors },
     Group { key: "bshape", name: "Shapes", tools: &[(ToolId::BoardShape, Icon::Shapes)], options: Options::Shapes },
@@ -170,15 +173,14 @@ pub(crate) enum Intent {
     VectorDone,
     /// Toggle the vector edit row's "More" dropdown (Shape builder / Variable width).
     VectorMore,
-    /// Draw mode's illustrated Brush nib: pencil + its ink brush preset.
-    DrawBrush,
-    /// Draw mode's illustrated Pencil nib: plain pencil, clearing any brush preset.
-    DrawPencil,
+    /// The pen's style (`tool.penKind`), from a board's pen flyout.
+    PenKind(&'static str),
     /// Draw toolbar: open the stroke colour picker.
     DrawColor,
-    /// Draw toolbar: `tool.drawStyle` weight / lineStyle / brush preset.
+    /// Draw toolbar: `tool.drawStyle` weight / brush preset.
     DrawWeight(f64),
-    DrawLine(&'static str),
+    /// Draw toolbar: a 0..1 setting of `tool.drawStyle` — `flow`, `opacity` or `smoothing`.
+    DrawParam(&'static str, f64),
     DrawPreset(Option<&'static str>),
     /// Draw toolbar: open the brush-preset popup at the clicked trigger's rectangle.
     DrawPresetMenu(Bounds<Pixels>),
@@ -260,16 +262,15 @@ fn draw_art(inks: [[u8; 3]; 3]) -> NibArt {
     art
 }
 
-/// The Draw-only part of the main pill: Pen / Brush / Pencil as illustrated nibs. This crate has
-/// no `ToolId::Brush`, so Brush activates the pencil with its ink brush preset (the same
-/// `pencil_brush` / `tool.drawStyle` path the Draw toolbar already uses).
-fn draw_section(tool: ToolId, brush: bool, inks: [[u8; 3]; 3], on: &OnIntent) -> Div {
+/// The Draw-only part of the main pill: Pen / Brush / Pencil as illustrated nibs — three tools,
+/// three cells, no borrowing (the brush used to be "the pencil plus a preset").
+fn draw_section(tool: ToolId, inks: [[u8; 3]; 3], on: &OnIntent) -> Div {
     let t = tokens();
     let art = draw_art(inks);
     let entries: [(&str, bool, Intent); 3] = [
         ("pen", tool == ToolId::Pen, Intent::Tool("pen")),
-        ("brush", brush, Intent::DrawBrush),
-        ("pencil", tool == ToolId::Pencil && !brush, Intent::DrawPencil),
+        ("brush", tool == ToolId::Brush, Intent::Tool("brush")),
+        ("pencil", tool == ToolId::Pencil, Intent::Tool("pencil")),
     ];
     let mut row = div().flex_none().w(pt(DRAW_SECTION_W)).h(pt(PILL_H)).flex().flex_row().items_center().justify_between().px(pt(8.0)).child(divider());
     for (i, (id, active, intent)) in entries.into_iter().enumerate() {
@@ -277,7 +278,7 @@ fn draw_section(tool: ToolId, brush: bool, inks: [[u8; 3]; 3], on: &OnIntent) ->
         let (iw, ih) = (art[i].size(0).width.0 as f32, art[i].size(0).height.0 as f32);
         let w = 60.0 * iw / ih;
         let on_click = on.clone();
-        let label: SharedString = tr(match id { "pen" => "Pen", "brush" => "Brush", _ => "Pencil" }).into();
+        let label: SharedString = tr(match id { "pen" => "Pen tool", "brush" => "Brush", _ => "Pen" }).into();
         // A per-cell group makes the whole 54 pt cell (not just the narrow art) drive the lift.
         let group: SharedString = SharedString::from(format!("draw-nib-{i}"));
         let lift_group = group.clone();
@@ -469,8 +470,6 @@ pub(crate) fn bar(
     // 真正的 Draw 模式（模式切换器第 0 段）。**不**从「当前工具 == Pencil」推断：
     // Design 模式里点出铅笔/钢笔只是换工具，不能把模式显示成 Draw、更不能弹出 Draw 专属栏。
     draw_mode: bool,
-    // 铅笔已挂上笔刷预设（`pencil_brush`）：本仓没有 `ToolId::Brush`，用它点亮 Brush 笔尖。
-    draw_brush: bool,
     // 每个笔尖各自的 `tool.drawStyle.color`：Pen / Brush / Pencil 依次。
     nib_inks: [[u8; 3]; 3],
 ) -> Div {
@@ -557,7 +556,7 @@ pub(crate) fn bar(
         }
         pill = pill.child(group);
         if draw_mode && !board && g.key == "move" {
-            pill = pill.child(draw_section(tool, draw_brush, nib_inks, &on));
+            pill = pill.child(draw_section(tool, nib_inks, &on));
         }
     }
 
@@ -642,6 +641,36 @@ fn centred(pill: Div, canvas_left: f32, canvas_w: f32) -> Div {
 }
 
 /// A labelled button in one of the two extra toolbars (40 pt tall surfaces).
+/// A 0..1 setting with its name on the control: name, −, value, + (the bar has no room for a
+/// slider, and a stroke is drawn with the mouse, not while dragging a control).
+fn param_cell(row: Div, label: String, value: f64, key: &'static str, on: OnIntent) -> Div {
+    let t = tokens();
+    let name: SharedString = SharedString::from(label);
+    row.child(divider())
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(pt(2.0))
+                .child(extra_button("−", false, Intent::DrawParam(key, (value - 0.1).max(0.0)), on.clone()))
+                .child(
+                    div()
+                        .flex_none()
+                        .w(pt(72.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .gap(pt(3.0))
+                        .text_size(pt(crate::widgets::TEXT_PT - 1.0))
+                        .text_color(rgba(t.text))
+                        .child(name)
+                        .child(SharedString::from(format!("{:.0}%", value * 100.0))),
+                )
+                .child(extra_button("+", false, Intent::DrawParam(key, (value + 0.1).min(1.0)), on.clone())),
+        )
+}
+
 fn extra_button(label: impl Into<SharedString>, active: bool, intent: Intent, on: OnIntent) -> Div {
     let t = tokens();
     let mut d = div()
@@ -666,20 +695,10 @@ fn extra_button(label: impl Into<SharedString>, active: bool, intent: Intent, on
 
 /// The Draw mode's own toolbar, 8 pt above the main pill.
 ///
-/// Ported from lizard `ui-egui/src/toolbar.rs::drawing_toolbar`: a stroke swatch, the weight,
-/// the Pencil's line style and brush presets, and the Pen's Done. Lizard uses dropdowns for the
-/// last two; here they are segmented buttons so no extra popup state is needed, but every button
-/// runs the real `tool.drawStyle` / `tool.pencilBrush` command.
-pub(crate) fn drawing_bar(
-    tool: ToolId,
-    style: &DrawStyle,
-    brush: Option<&str>,
-    // Brush nib's own colour; `None` for Pen / Pencil (their swatch reads `draw_style`).
-    swatch_ink: Option<[u8; 3]>,
-    canvas_left: f32,
-    canvas_w: f32,
-    on: OnIntent,
-) -> Div {
+/// Ported from lizard `ui-egui/src/toolbar.rs::drawing_toolbar`: a stroke swatch and the weight for
+/// all three freehand tools, the brush's tip, and the bezier pen's Done. Every control runs the real
+/// `tool.drawStyle` / `tool.brushPreset` command.
+pub(crate) fn drawing_bar(tool: ToolId, style: &DrawStyle, brush: Option<&str>, canvas_left: f32, canvas_w: f32, on: OnIntent) -> Div {
     let t = tokens();
     let mut row = div()
         .flex()
@@ -700,12 +719,10 @@ pub(crate) fn drawing_bar(
         }])
         .occlude();
 
-    // Stroke colour → the shared colour picker. The Brush nib has its own colour slot, so its
-    // swatch and the picker must both show that instead of the pencil's `draw_style` colour.
+    // Stroke colour → the shared colour picker, showing *this* tool's own colour (every freehand
+    // tool has its own `DrawStyle` now, so a brush's colour never shows on the pen's swatch).
     let on_color = on.clone();
-    let c = swatch_ink
-        .map(|[r, g, b]| crate::canvas::geom::Color32::from_rgba_unmultiplied(r, g, b, 255))
-        .unwrap_or_else(|| crate::widgets::swatch::color32(style.color()));
+    let c = crate::widgets::swatch::color32(style.color());
     row = row.child(
         div()
             .flex_none()
@@ -735,19 +752,19 @@ pub(crate) fn drawing_bar(
         )
         .child(extra_button("+", false, Intent::DrawWeight((weight + 1.0).min(500.0)), on.clone()));
 
-    if tool == ToolId::Pencil {
-        // Brush nib = the pencil plus an ABR preset; Pencil nib = a plain pencil. Their bars
-        // differ (a brush tip has no line style), but **both** keep the brush popup: without it,
-        // picking the Pencil nib cleared the preset and there was no way back to a brush.
-        if brush.is_some() {
-            row = row.child(divider());
-        } else {
-            row = row.child(divider());
-            for (ls, label) in [(DrawLineStyle::Solid, "Solid"), (DrawLineStyle::Dashed, "Dashed"), (DrawLineStyle::Dotted, "Dotted")] {
-                row = row.child(extra_button(label, style.line_style == ls, Intent::DrawLine(ls.id()), on.clone()));
-            }
-            row = row.child(divider());
-        }
+    if tool == ToolId::Brush {
+        // Flow and opacity: what one dab does, and the ceiling over the whole stroke. A pen lays
+        // down no dabs, so these would do nothing to it.
+        row = param_cell(row, tr("Flow").to_string(), style.flow, "flow", on.clone());
+        row = param_cell(row, tr("Opacity").to_string(), style.opacity, "opacity", on.clone());
+    }
+    // The stabilizer shapes the input, so all three freehand tools have it.
+    row = param_cell(row, tr("Smoothing").to_string(), style.smoothing, "smoothing", on.clone());
+
+    if tool == ToolId::Brush {
+        // The brush's own control: which external `.abr` tip it paints with. The pen and the plain
+        // pencil have no tip list at all — that is the whole difference between the three tools.
+        row = row.child(divider());
         // One popup of every installed `.abr` preset (the engine has no built-in shapes).
         // `Dropdown`'s width is a fixed point width (0 renders an invisible button and a
         // zero-width menu anchor — the "no width / flies away" report).
