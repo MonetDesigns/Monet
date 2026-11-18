@@ -184,9 +184,9 @@ pub(crate) fn rows(
     // 悬停某一行时回调（`MenuAim` 的输入）：子菜单的展开 / 收起由通用状态机裁决，
     // 不再靠点击切换。工具栏飞出 / palette 传空闭包即可。
     on_hover: OnSub,
-    // true = 行画在深色菜单表面上（右键菜单/工具栏飞出，用 t.menu_text）；
-    // false = 画在面板底的动作库 palette（用 t.text）。
-    menu_surface: bool,
+    // Kept for call sites' readability; every menu is the dark surface now, so the row's ink no
+    // longer depends on it (user 2026-11-18).
+    _menu_surface: bool,
     window: &Window,
     vh: f32,
 ) -> (Vec<AnyElement>, Vec<AnyElement>) {
@@ -215,11 +215,11 @@ pub(crate) fn rows(
             .rounded(pt(ITEM_RADIUS))
             .pl(pt(inset))
             .pr(pt(8.0))
-            // 菜单表面是深底（t.menu，通主题 #1E1E1E），文字必须用 t.menu_text（白）；
-            // 只有面板底的动作库 palette 才用 t.text（亮主题深墨）。此前两者都用 t.text，
-            // 亮主题下菜单文字和菜单底同色、整行消失（CodeRabbit PR#28）。
+            // Every menu is the dark surface (`t.menu`, #1E1E1E in both themes), so labels are
+            // always `t.menu_text`. The actions palette used to be a light card with dark text;
+            // it is a dark card too now (user 2026-11-18).
             .text_size(pt(PALETTE_TEXT_PT))
-            .text_color(rgba(if menu_surface { t.menu_text } else { t.text }))
+            .text_color(rgba(t.menu_text))
             .when(item.disabled, |d| d.opacity(0.4));
         if !item.disabled {
             row = row.hover(|s| s.bg(rgba(t.field))).cursor_pointer();

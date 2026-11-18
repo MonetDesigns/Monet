@@ -4009,7 +4009,10 @@ impl CanvasView {
 
             toolbar::Intent::DrawPresetMenu(rect) => {
                 // Every brush comes from an external `.abr` file; "Plain" clears the preset.
-                let current = self.app.session.tool.brush_style.preset.as_ref().map(|b| b.preset.clone());
+                let selected = self.app.session.doc().ok().and_then(|doc| {
+                    self.app.session.selection().iter().find_map(|id| doc.node(*id).and_then(|n| n.stroke.brush.as_ref()).map(|b| b.preset.clone()))
+                });
+                let current = selected.or_else(|| self.app.session.tool.brush_style.preset.as_ref().map(|b| b.preset.clone()));
                 let mut rows = Vec::new();
                 let plain = figcraft_i18n::tr("Plain").to_string();
                 // The row's pick value is its `key`, never its label: the label is "group / name"
@@ -4026,10 +4029,18 @@ impl CanvasView {
                     rows.push(MenuRow::new(label).key(b.id.clone()).checked(Some(current.as_deref() == Some(b.id.as_str()))));
                 }
                 let cmds = self.fields.queue();
+                let sel: Vec<figcraft_doc::NodeId> = self.app.session.selection();
                 let on_pick = std::rc::Rc::new(move |key: &str, _w: &mut Window, _cx: &mut App| {
                     // "" = Plain (clear the tip); anything else is the full ABR id.
                     let preset = if key.is_empty() { None } else { Some(key.to_string()) };
-                    cmds.push(panels::Cmd { id: "tool.drawStyle", params: Some(serde_json::json!({ "tool": "brush", "preset": preset })) });
+                    // Always update the tool slot: the next stroke reads it. When something is
+                    // selected also write the brush onto those nodes, so the pick applies to the
+                    // selection *and* to what is drawn next (user 2026-11-18: picking a brush then
+                    // drawing came out Plain because only the nodes had been written).
+                    cmds.push(panels::Cmd { id: "tool.drawStyle", params: Some(serde_json::json!({ "tool": "brush", "preset": preset.clone() })) });
+                    if !sel.is_empty() {
+                        cmds.push(panels::Cmd { id: "stroke.brush", params: Some(serde_json::json!({ "ids": sel.clone(), "preset": preset })) });
+                    }
                 });
                 let anchor = crate::widgets::dropdown::menu_anchor("draw-brush-preset");
                 self.open_dropdown_menu(Some(anchor), rect, Some(160.0), rows, on_pick, cx);
@@ -7061,7 +7072,15 @@ impl Render for CanvasView {
             let t = self.app.session.tool.tool;
             if matches!(t, figcraft_engine::ToolId::Pencil | figcraft_engine::ToolId::Brush | figcraft_engine::ToolId::Pen) {
                 self.app.session.tool.draw_style(t).map(|style| {
-                    let brush = self.app.session.tool.brush_style.preset.as_ref().map(|b| b.preset.to_string());
+                    // A selected brush stroke shows its own preset; with nothing selected the tool's
+                    // next-stroke preset is shown. Before this the bar only read the tool slot, so
+                    // selecting a brush stroke still showed the tool's brush (user 2026-11-18).
+                    let selected = self.app.session.doc().ok().and_then(|doc| {
+                        self.app.session.selection().iter().find_map(|id| {
+                            doc.node(*id).and_then(|n| n.stroke.brush.as_ref()).map(|b| b.preset.clone())
+                        })
+                    });
+                    let brush = selected.or_else(|| self.app.session.tool.brush_style.preset.as_ref().map(|b| b.preset.to_string()));
                     toolbar::drawing_bar(t, style, brush.as_deref(), canvas_x, canvas_w, on_intent.clone())
                 })
             } else {
@@ -7743,7 +7762,7 @@ impl Render for CanvasView {
                         pick,
                         hover,
                         std::rc::Rc::new(|_, _, _| {}),
-                        false, // palette 画在面板底，用 t.text（menu_surface=true 才用 t.menu_text）
+                        true, // every menu is the dark surface (user 2026-11-18)
                         window,
                         vh,
                     );
@@ -7815,7 +7834,7 @@ impl Render for CanvasView {
                             .flex_col()
                             .gap(widgets::pt(8.0))
                             .p(widgets::pt(8.0))
-                            .bg(widgets::rgba(t.panel))
+                            .bg(widgets::rgba(t.menu))
                             .rounded(widgets::pt(13.0))
                             .border_1()
                             .border_color(widgets::rgba(t.border))

@@ -583,16 +583,18 @@ impl Session {
             Some(c) => c,
             None => super::handles::pencil_color(self.doc()?, parent),
         };
-        let mut props = json!({"fills": [], "strokes": [color.to_css_hex()], "strokeWeight": weight, "strokeCap": "round", "strokeJoin": "round", "strokeAlign": "center"});
+        // The stroke's transparency is its colour's alpha: the toolbar's Opacity folds straight
+        // into the stroke paint, so it reads back (and exports) as an ordinary translucent stroke.
+        let ink = color.with_alpha(color.a * style.opacity.clamp(0.0, 1.0) as f32);
+        let mut props = json!({"fills": [], "strokes": [ink.to_css_hex()], "strokeWeight": weight, "strokeCap": "round", "strokeJoin": "round", "strokeAlign": "center"});
         if let Some(profile) = brush_profile(&prepared, &carried, zoom) {
             props["widthProfile"] = json!(profile);
         }
         if let Some(b) = &style.preset {
-            // Flow and opacity ride on the stroke's brush: they shape what the dabs do to each
-            // other, so they belong to the stroke, not to the tool that drew it.
+            // Flow rides on the stroke's brush: it shapes what the dabs do to each other. The
+            // stroke's opacity is the colour's alpha (above), not a separate brush field.
             let mut b = b.clone();
             b.flow = style.flow;
-            b.opacity = style.opacity;
             props["brush"] = serde_json::to_value(b).unwrap_or_default();
         }
         self.execute(

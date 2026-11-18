@@ -753,8 +753,9 @@ pub(crate) fn drawing_bar(tool: ToolId, style: &DrawStyle, brush: Option<&str>, 
         .child(extra_button("+", false, Intent::DrawWeight((weight + 1.0).min(500.0)), on.clone()));
 
     if tool == ToolId::Brush {
-        // Flow and opacity: what one dab does, and the ceiling over the whole stroke. A pen lays
-        // down no dabs, so these would do nothing to it.
+        // Flow: what one dab does (it builds up where the stroke crosses itself). Opacity is the
+        // stroke colour's alpha, so the stroke reads back as an ordinary translucent one. A pen
+        // lays down no dabs, so these would do nothing to it.
         row = param_cell(row, tr("Flow").to_string(), style.flow, "flow", on.clone());
         row = param_cell(row, tr("Opacity").to_string(), style.opacity, "opacity", on.clone());
     }

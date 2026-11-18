@@ -894,16 +894,19 @@ impl WindowState {
         let mut w = Self::base(WindowKind::Stroke, tr("Stroke"), cmds.clone(), Open::Anchor(anchor));
         w.pad = 12.0;
         w.height = 320.0;
-        w.tabs = Some((vec!["Basic".into(), tr("Brush").into()], Rc::new(RefCell::new(0u8))));
+        // The Basic / Brush switch is the stroke's *type*: open on the one it already is, so a
+        // brush stroke opens on Brush (user 2026-11-18).
+        let initial_tab = if data.brush.is_some() { 1 } else { 0 };
+        w.tabs = Some((vec!["Basic".into(), tr("Brush").into()], Rc::new(RefCell::new(initial_tab))));
         let weight = data.stroke_weight.unwrap_or(1.0);
         let dash = Rc::new(RefCell::new([weight * 4.0, weight * 4.0]));
-        let mk_number = |cx: &mut App, value: f64, apply: Rc<dyn Fn(f64) -> Value>| -> Entity<TextField> {
+        let mk_number = |cx: &mut App, value: f64, cmd: &'static str, apply: Rc<dyn Fn(f64) -> Value>| -> Entity<TextField> {
             let f = number_field(cx, 100.0, Some(value), "", 1.0, Slot::None);
             let queue = cmds.clone();
             f.update(cx, move |tf, _| {
                 tf.set_on_commit(move |text, _, _| {
                     if let Ok(v) = text.trim().parse::<f64>() {
-                        queue.push(Cmd { id: "node.set", params: Some(apply(v)) });
+                        queue.push(Cmd { id: cmd, params: Some(apply(v)) });
                     }
                 });
             });
@@ -914,6 +917,7 @@ impl WindowState {
         let dash_field = mk_number(
             cx,
             dash_value,
+            "node.set",
             Rc::new(move |v| {
                 let mut pair = *d.borrow();
                 pair[0] = v.max(0.0);
@@ -926,6 +930,7 @@ impl WindowState {
         let gap_field = mk_number(
             cx,
             gap_value,
+            "node.set",
             Rc::new(move |v| {
                 let mut pair = *g.borrow();
                 pair[1] = v.max(0.0);
@@ -933,7 +938,7 @@ impl WindowState {
                 json!({ "props": { "dashes": pair } })
             }),
         );
-        let miter_field = mk_number(cx, 28.6, Rc::new(|v| json!({ "props": { "miterAngle": v } })));
+        let miter_field = mk_number(cx, 28.6, "node.set", Rc::new(|v| json!({ "props": { "miterAngle": v } })));
         let profiles = vec![
             Opt::new(tr("Uniform"), "stroke.widthProfile", json!({ "preset": "uniform" })),
             Opt::new(tr("Wedge"), "stroke.widthProfile", json!({ "preset": "wedge" })),
@@ -943,71 +948,153 @@ impl WindowState {
         // Brushes are read from external `.abr` files in the user's brushes directory; the engine
         // contains no built-in shapes. Group / folder / name keeps packs of hundreds selectable.
         let installed = figcraft_abr::infos();
-        let brush_label = if installed.is_empty() { "No .abr brushes — import a file".to_string() } else { tr("None").to_string() };
         let mut brush_options = vec![Opt::new(tr("None"), "stroke.brush", json!({ "preset": Value::Null }))];
+        // Show the selection's real brush, not a hardcoded "None" (user 2026-11-18).
+        let mut selected_label = tr("None").to_string();
         for b in &installed {
             let label = if b.folder.is_empty() {
                 format!("{} / {}", b.group, b.name)
             } else {
                 format!("{} / {} / {}", b.group, b.folder.join(" / "), b.name)
             };
+            if data.brush.as_ref().is_some_and(|sel| sel.preset == b.id) {
+                selected_label = label.clone();
+            }
             brush_options.push(Opt::new(label, "stroke.brush", json!({ "preset": b.id })));
         }
-        let settings = vec![
+        // A preset the library no longer has (its .abr file was removed) still shows its id.
+        let brush_label = if installed.is_empty() {
+            "No .abr brushes — import a file".to_string()
+        } else if let Some(sel) = data.brush.as_ref().filter(|b| !b.preset.is_empty()) {
+            if selected_label == tr("None") { sel.preset.clone() } else { selected_label }
+        } else {
+            selected_label
+        };
+        // Brush tab: the brush's own fields (ui-egui `stroke::brush_row`): spacing, scatter,
+        // size jitter and rotation jitter. Only when the selection has a brush.
+        let brush_fields = data.brush.clone().map(|b| {
+            let spacing = {
+                let b = b.clone();
+                mk_number(cx, b.spacing, "node.set", Rc::new(move |v| {
+                    let mut nb = b.clone();
+                    nb.spacing = v;
+                    json!({ "props": { "brush": serde_json::to_value(nb.sanitized()).unwrap_or_default() } })
+                }))
+            };
+            let scatter = {
+                let b = b.clone();
+                mk_number(cx, b.scatter, "node.set", Rc::new(move |v| {
+                    let mut nb = b.clone();
+                    nb.scatter = v;
+                    json!({ "props": { "brush": serde_json::to_value(nb.sanitized()).unwrap_or_default() } })
+                }))
+            };
+            let size_jitter = {
+                let b = b.clone();
+                mk_number(cx, b.size_jitter * 100.0, "node.set", Rc::new(move |v| {
+                    let mut nb = b.clone();
+                    nb.size_jitter = v / 100.0;
+                    json!({ "props": { "brush": serde_json::to_value(nb.sanitized()).unwrap_or_default() } })
+                }))
+            };
+            let rotation_jitter = {
+                let b = b.clone();
+                mk_number(cx, b.rotation_jitter * 100.0, "node.set", Rc::new(move |v| {
+                    let mut nb = b.clone();
+                    nb.rotation_jitter = v / 100.0;
+                    json!({ "props": { "brush": serde_json::to_value(nb.sanitized()).unwrap_or_default() } })
+                }))
+            };
+            [spacing, scatter, size_jitter, rotation_jitter]
+        });
+        // Behaviour, not a static list (ui-egui `stroke_settings_body`): the dash fields only
+        // exist while the stroke is dashed, the miter angle only for a miter join, and the end
+        // caps only on open paths. Pattern / Join / End caps read the selection's own values
+        // instead of always lighting the first cell (user 2026-11-18).
+        let dashed = data.dashes.as_ref().is_some_and(|d| !d.is_empty());
+        let pattern_active = match &data.dashes {
+            Some(d) if d.is_empty() => Some(0),
+            Some(_) => Some(1),
+            None => None,
+        };
+        let join_active = data.join.map(|j| match j {
+            figcraft_doc::StrokeJoin::Miter => 0,
+            figcraft_doc::StrokeJoin::Bevel => 1,
+            figcraft_doc::StrokeJoin::Round => 2,
+        });
+        let cap_active = data.cap_start.and_then(|c| match c {
+            figcraft_doc::StrokeCap::None => Some(0),
+            figcraft_doc::StrokeCap::Round => Some(1),
+            figcraft_doc::StrokeCap::Square => Some(2),
+            _ => None,
+        });
+        let mut settings = vec![
             Setting::Caption { tab: 0, text: tr("Stroke style").into() },
             Setting::Options {
                 tab: 0,
                 label: tr("Pattern").into(),
-                active: Some(0),
+                active: pattern_active,
                 options: vec![
                     Opt::new(tr("Solid"), "node.set", json!({ "props": { "dashes": [] } })),
                     Opt::new(tr("Dash"), "node.set", json!({ "props": { "dashes": [weight * 4.0, weight * 4.0] } })),
                 ],
             },
-            Setting::Number { tab: 0, label: tr("Dash").into(), field: dash_field },
-            Setting::Number { tab: 0, label: tr("Gap").into(), field: gap_field },
-            Setting::Options {
-                tab: 0,
-                label: tr("Join").into(),
-                active: Some(0),
-                options: vec![
-                    Opt::new(tr("Miter"), "node.set", json!({ "props": { "strokeJoin": "miter" } })),
-                    Opt::new(tr("Bevel"), "node.set", json!({ "props": { "strokeJoin": "bevel" } })),
-                    Opt::new(tr("Round"), "node.set", json!({ "props": { "strokeJoin": "round" } })),
-                ],
-            },
-            Setting::Number { tab: 0, label: tr("Miter angle").into(), field: miter_field },
-            Setting::Options {
+        ];
+        if dashed {
+            settings.push(Setting::Number { tab: 0, label: tr("Dash").into(), field: dash_field });
+            settings.push(Setting::Number { tab: 0, label: tr("Gap").into(), field: gap_field });
+        }
+        settings.push(Setting::Options {
+            tab: 0,
+            label: tr("Join").into(),
+            active: join_active,
+            options: vec![
+                Opt::new(tr("Miter"), "node.set", json!({ "props": { "strokeJoin": "miter" } })),
+                Opt::new(tr("Bevel"), "node.set", json!({ "props": { "strokeJoin": "bevel" } })),
+                Opt::new(tr("Round"), "node.set", json!({ "props": { "strokeJoin": "round" } })),
+            ],
+        });
+        if data.join == Some(figcraft_doc::StrokeJoin::Miter) {
+            settings.push(Setting::Number { tab: 0, label: tr("Miter angle").into(), field: miter_field });
+        }
+        if data.is_open_path {
+            settings.push(Setting::Options {
                 tab: 0,
                 label: "End caps".into(),
-                active: Some(0),
+                active: cap_active,
                 options: vec![
                     Opt::new(tr("None"), "node.set", json!({ "props": { "strokeCap": "butt" } })),
                     Opt::new(tr("Round"), "node.set", json!({ "props": { "strokeCap": "round" } })),
                     Opt::new(tr("Square"), "node.set", json!({ "props": { "strokeCap": "square" } })),
                 ],
-            },
-            Setting::Options { tab: 0, label: tr("Width profile").into(), active: Some(0), options: profiles.clone() },
-            Setting::Caption { tab: 1, text: tr("Brush").into() },
-            // Every brush comes from an external `.abr` file; "None" keeps a plain vector stroke.
-            Setting::Dropdown {
-                tab: 1,
-                label: tr("Brush").into(),
-                current: Rc::new(RefCell::new(SharedString::from(brush_label))),
-                anchor: Rc::new(RefCell::new(None)),
-                options: brush_options,
-            },
-            Setting::Options {
-                tab: 1,
-                label: tr("Brush library").into(),
-                active: None,
-                options: vec![
-                    Opt::new(tr("Import brushes…"), "brush.import", json!({})),
-                    Opt::new(tr("Reload"), "brush.reload", json!({})),
-                ],
-            },
-            Setting::Options { tab: 1, label: tr("Width profile").into(), active: Some(0), options: profiles },
-        ];
+            });
+        }
+        settings.push(Setting::Options { tab: 0, label: tr("Width profile").into(), active: Some(0), options: profiles.clone() });
+        settings.push(Setting::Caption { tab: 1, text: tr("Brush").into() });
+        // Every brush comes from an external `.abr` file; "None" keeps a plain vector stroke.
+        settings.push(Setting::Dropdown {
+            tab: 1,
+            label: tr("Brush").into(),
+            current: Rc::new(RefCell::new(SharedString::from(brush_label))),
+            anchor: Rc::new(RefCell::new(None)),
+            options: brush_options,
+        });
+        if let Some([spacing, scatter, size_jitter, rotation_jitter]) = brush_fields {
+            settings.push(Setting::Number { tab: 1, label: tr("Spacing").into(), field: spacing });
+            settings.push(Setting::Number { tab: 1, label: tr("Scatter").into(), field: scatter });
+            settings.push(Setting::Number { tab: 1, label: tr("Size jitter").into(), field: size_jitter });
+            settings.push(Setting::Number { tab: 1, label: tr("Rotation jitter").into(), field: rotation_jitter });
+        }
+        settings.push(Setting::Options {
+            tab: 1,
+            label: tr("Brush library").into(),
+            active: None,
+            options: vec![
+                Opt::new(tr("Import brushes…"), "brush.import", json!({})),
+                Opt::new(tr("Reload"), "brush.reload", json!({})),
+            ],
+        });
+        settings.push(Setting::Options { tab: 1, label: tr("Width profile").into(), active: Some(0), options: profiles });
         w.settings = Rc::new(RefCell::new(settings));
         w
     }
@@ -3365,27 +3452,24 @@ impl WindowState {
         if self.kind != WindowKind::TypeSettings {
             if let Some((names, active)) = &self.tabs {
                 let tab = *active.borrow();
-                let mut row = div().w_full().h(pt(24.0)).flex().flex_row().gap(pt(4.0));
-                for (i, name) in names.iter().enumerate() {
-                    let a = active.clone();
-                    let name = name.clone();
-                    row = row.child(
-                        div()
-                            .flex_1()
-                            .h_full()
-                            .rounded(pt(4.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .text_size(pt(11.0))
-                            .text_color(rgba(if i as u8 == tab { t.accent } else { t.text_secondary }))
-                            .bg(rgba(if i as u8 == tab { t.selected_row } else { t.field }))
-                            .cursor_pointer()
-                            .on_mouse_down(MouseButton::Left, move |_, _, _| *a.borrow_mut() = i as u8)
-                            .child(name),
-                    );
-                }
-                col = col.child(row);
+                let a = active.clone();
+                let cmds = self.cmds.clone();
+                // The stroke popover's Basic / Brush switch is also the stroke's *type*: Basic
+                // clears the brush, Brush puts one back. Other popovers only switch pages.
+                let is_stroke = self.kind == WindowKind::Stroke;
+                let items = names.iter().map(|n| SegItem::Text(n.clone())).collect();
+                let seg = Segmented::new(items).active(Some(tab as usize)).on_pick(move |i, _, _| {
+                    *a.borrow_mut() = i as u8;
+                    if is_stroke {
+                        let preset = if i == 0 {
+                            Value::Null
+                        } else {
+                            figcraft_abr::infos().first().map(|b| serde_json::json!(b.id.clone())).unwrap_or(Value::Null)
+                        };
+                        cmds.push(Cmd { id: "stroke.brush", params: Some(serde_json::json!({ "preset": preset })) });
+                    }
+                });
+                col = col.child(seg);
             }
         }
         let tab = self.tabs.as_ref().map(|(_, a)| *a.borrow()).unwrap_or(0);

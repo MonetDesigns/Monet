@@ -133,10 +133,10 @@ fn the_brush_owns_the_preset_and_the_old_names_are_pen_styles() {
 #[test]
 fn flow_builds_up_and_opacity_caps_the_stroke() {
     install_test_brushes();
-    let at_crossing = |extra: serde_json::Value| -> u8 {
+    let at_crossing = |extra: serde_json::Value, ink: &str| -> u8 {
         let mut s = Session::new();
         let v = id(s.execute("vector.create", &json!({"path": "M0 0 L60 0 L0 0", "x": 0, "y": 0})).unwrap());
-        s.execute("node.set", &json!({"id": v, "props": {"strokes": ["#000000"], "strokeWeight": 10, "strokeAlign": "center"}})).unwrap();
+        s.execute("node.set", &json!({"id": v, "props": {"strokes": [ink], "strokeWeight": 10, "strokeAlign": "center"}})).unwrap();
         // One 10 pt tip every 20 units: the way back lands dabs exactly on the way out's.
         let mut q = json!({"ids": [v], "preset": "dots", "spacing": 2.0});
         for (k, val) in extra.as_object().expect("an object").clone() {
@@ -145,10 +145,11 @@ fn flow_builds_up_and_opacity_caps_the_stroke() {
         s.execute("stroke.brush", &q).unwrap();
         alpha(&s, 40.0, 0.0)
     };
-    assert_eq!(at_crossing(json!({})), 255, "two full dabs paint solid");
-    let flow = at_crossing(json!({"flow": 0.5}));
+    assert_eq!(at_crossing(json!({}), "#000000"), 255, "two full dabs paint solid");
+    let flow = at_crossing(json!({"flow": 0.5}), "#000000");
     assert!(flow > 120 && flow < 240, "half flow over itself is denser than one pass but not solid: {flow}");
-    assert_eq!(at_crossing(json!({"opacity": 0.5})), 128, "opacity caps the stroke");
+    // Opacity is the stroke colour's alpha now, not a brush field: #00000080 is 50 % ink.
+    assert_eq!(at_crossing(json!({}), "#00000080"), 128, "the stroke colour's alpha caps the stroke");
 }
 
 /// A brush stroke lifts its tip at both ends, and a faster flick carries a longer, thinner tail:

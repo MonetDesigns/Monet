@@ -83,9 +83,8 @@ fn cache_key(geom: &BezPath, def: &BrushDef, b: &Brush, props: &StrokeProps, xf:
         (p.t.to_bits(), p.scale.to_bits(), p.bias.to_bits()).hash(&mut h);
     }
     (s.spacing.to_bits(), s.size_jitter.to_bits(), s.angle_jitter.to_bits(), s.scatter.to_bits(), s.seed).hash(&mut h);
-    // Flow and opacity change the mask itself, not just how it is composited.
+    // Flow changes the mask itself, not just how it is composited.
     b.flow.to_bits().hash(&mut h);
-    b.opacity.to_bits().hash(&mut h);
     // The view's translation belongs in the key: two small previews at different page positions
     // share x0/y0/w/h, and without the coefficients the first mask is reused at the wrong place.
     let coeffs = xf.as_coeffs().map(|v| (v * 1000.0) as i64);
@@ -128,11 +127,11 @@ fn stroke_rect(dabs: &[Stamp], def: &BrushDef, xf: Affine, pix: &Pixmap) -> Opti
 
 /// Stamp every dab into an 8-bit alpha plane of `area.w × area.h` device pixels at its origin.
 ///
-/// Dabs are laid down over each other (`flow` is how much ink one dab carries), and the finished
-/// plane is scaled by `opacity` — the paint program's split: flow builds up, opacity caps. Taking
-/// the maximum instead (what this did) meant no dab ever added to another, so a see-through brush
-/// could not darken where it crossed itself, and flow had nothing to do.
-fn build_mask(dabs: &[Stamp], def: &BrushDef, xf: Affine, scale: f64, area: &MaskArea, flow: f64, opacity: f64) -> Vec<u8> {
+/// Dabs are laid down over each other (`flow` is how much ink one dab carries), so a see-through
+/// brush builds up where it crosses itself. The whole stroke's transparency is the colour's own
+/// alpha, applied when the mask is used as a paint's stencil — not here. Taking the maximum
+/// instead (what this did) meant no dab ever added to another, and flow had nothing to do.
+fn build_mask(dabs: &[Stamp], def: &BrushDef, xf: Affine, scale: f64, area: &MaskArea, flow: f64) -> Vec<u8> {
     let mut alpha = vec![0u8; (area.w as usize).saturating_mul(area.h as usize)];
     let aspect = def.tip.aspect().clamp(0.01, 100.0);
     let roundness = f64::from(def.roundness.clamp(0.01, 1.0));
@@ -183,12 +182,6 @@ fn build_mask(dabs: &[Stamp], def: &BrushDef, xf: Affine, scale: f64, area: &Mas
             }
         }
     }
-    if opacity < 1.0 {
-        let o = opacity.clamp(0.0, 1.0);
-        for a in &mut alpha {
-            *a = (f64::from(*a) * o + 0.5) as u8;
-        }
-    }
     alpha
 }
 
@@ -215,7 +208,7 @@ pub fn paint(ctx: &Ctx<'_, '_>, pix: &mut Pixmap, n: &Node, geom: &BezPath, xf: 
         if let Some(hit) = c.get(&key) {
             hit.clone()
         } else {
-            let built = Arc::new(build_mask(&dabs, &def, xf, scale, &area, b.flow.clamp(0.0, 1.0), b.opacity.clamp(0.0, 1.0)));
+            let built = Arc::new(build_mask(&dabs, &def, xf, scale, &area, b.flow.clamp(0.0, 1.0)));
             if c.len() >= MAX_CACHED_MASKS {
                 c.clear();
             }

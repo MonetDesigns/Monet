@@ -1236,6 +1236,17 @@ pub struct PanelData {
     /// 选中节点的共同描边宽度（egui `paints.rs` 的 `weight.unwrap_or(1.0)`）：
     /// 「Individual strokes」菜单里每个边的权重必须用它，不能硬编码 1.0。
     pub stroke_weight: Option<f64>,
+    /// 选中节点的共同笔刷（`None`：多选不一致或无笔刷）。画笔线选中后右栏据此显示真实 preset。
+    pub brush: Option<figcraft_doc::Brush>,
+    /// 选中节点的共同 dash 模式（`None`：多选不一致）。空数组 = Solid。
+    pub dashes: Option<Vec<f64>>,
+    /// 选中节点的共同 join（`None`：多选不一致）。
+    pub join: Option<figcraft_doc::StrokeJoin>,
+    /// 选中节点的共同起止端帽（`None`：多选不一致）。
+    pub cap_start: Option<figcraft_doc::StrokeCap>,
+    pub cap_end: Option<figcraft_doc::StrokeCap>,
+    /// 选中的都是开放路径（Line / 未闭合 Vector），端帽才有意义。
+    pub is_open_path: bool,
     pub effects: Option<Vec<EffectRow>>,
     /// WGSL 材质绑定（单选时来自该节点的 plugin_data；多选不一致时按「无绑定」处理）。
     pub wgsl: WgslPanelData,
@@ -1613,6 +1624,13 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
         figcraft_doc::StrokeAlign::Outside => tr("Outside"),
     });
     d.stroke_weight = common(doc, ids, |n| n.stroke.weight);
+    // The selection's real brush, so a brush stroke reads back as one (user 2026-11-18).
+    d.brush = common(doc, ids, |n| n.stroke.brush.clone()).flatten();
+    d.dashes = common(doc, ids, |n| n.stroke.dashes.clone());
+    d.join = common(doc, ids, |n| n.stroke.join);
+    d.cap_start = common(doc, ids, |n| n.stroke.cap_start);
+    d.cap_end = common(doc, ids, |n| n.stroke.cap_end);
+    d.is_open_path = ids.iter().all(|i| doc.node(*i).is_some_and(|n| matches!(n.kind, NodeKind::Line | NodeKind::Vector { .. })));
 
     // ── Effects（`effects.rs::effects`） ──
     d.effects = common(doc, ids, |n| n.effects.clone()).map(|list| {

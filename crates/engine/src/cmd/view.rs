@@ -667,7 +667,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "tool.drawStyle",
             "Drawing tool style",
-            "{tool?: pen|brush|pencil, color?: CSS colour, weight?: 0.1..500, preset?: brush preset, flow?: 0..1 (ink per dab), opacity?: 0..1 (the whole stroke's ceiling), smoothing?: 0..1 (the stabilizer)} (settings for the next stroke of one freehand tool; omit properties to read)",
+            "{tool?: pen|brush|pencil, color?: CSS colour, weight?: 0.1..500, preset?: brush preset, flow?: 0..1 (ink per dab), opacity?: 0..1 (the stroke colour's alpha), smoothing?: 0..1 (the stabilizer)} (settings for the next stroke of one freehand tool; omit properties to read)",
             false,
             |s, p| {
                 let tool = match string(p, "tool") {

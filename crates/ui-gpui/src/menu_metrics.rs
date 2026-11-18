@@ -19,17 +19,20 @@ fn white(pct: f32) -> Rgba {
     rgba(Color32::from_white_alpha((255.0 * pct).round() as u8))
 }
 
-/// Labels, check marks and leading icons: white 90%.
+// Every menu is the dark surface (`t.menu`), so its ink is always white — including the actions
+// palette, which used to sit on a light card and read dark (user 2026-11-18: one surface only).
+
+/// Labels, check marks and leading icons: white 90 %.
 pub(crate) fn ink() -> Rgba {
     white(0.9)
 }
 
-/// Trailing shortcut hints and the submenu chevron: white 70%.
+/// Trailing shortcut hints and the submenu chevron: white 70 %.
 pub(crate) fn trail_ink() -> Rgba {
     white(0.7)
 }
 
-/// Dividers: white 10%.
+/// Dividers: white 10 %.
 pub(crate) fn divider_ink() -> Rgba {
     white(0.1)
 }

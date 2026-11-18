@@ -443,8 +443,10 @@ pub(crate) fn tab_strip(
     let content_x0 = title_bar::LEFT_PAD;
     // 少 1pt 的分隔线宽度：标题栏这条竖线要和下面左竖栏的右边框（在 `RAIL_W - 1 .. RAIL_W`）
     // 严丝合缝对齐，否则两条线错开 1pt（用户 2026-11-16）。
-    let home_w = (panels::RAIL_W - content_x0 - 1.0).max(0.0);
-    let mut x = content_x0 + home_w;
+    // The home tab owns the whole rail width, including the 8 pt window-control pad: its hover /
+    // active surface must reach the rail's left edge, not start after the pad (user 2026-11-18).
+    let home_w = (panels::RAIL_W - 1.0).max(0.0);
+    let mut x = home_w;
     // 上游 `room = rect.max.x - buttons_w - 70 - x - 34`；`content_w` 已扣掉壳的两侧，
     // 于是等价 `content_w - 70 - home_w - 34`（新标签 / 主题 / 空白区留位）。
     let room = (content_w - 70.0 - home_w - 34.0).max(0.0);
@@ -548,12 +550,19 @@ pub(crate) fn tab_strip(
         .flex()
         .items_center()
         .justify_center()
-        // Home 的盒子右边缘要让给 1pt 分隔线，所以内容再右缩 `content_x0`：
-        // 这样图标中心落在整条左竖栏（0..RAIL_W）的中心，而不是盒子中心（偏右 4pt）。
+        // Pull left over the 8 pt window-control pad so the surface reaches the rail edge, then
+        // pad the content back so the icon still centres on the rail (0..RAIL_W) rather than on
+        // the widened box. The 1 pt divider keeps the right edge.
+        .ml(pt(-content_x0))
+        .pl(pt(content_x0))
         .pr(pt(content_x0))
         .group("tab-home-grp")
-        .when(home_active, move |d| d.bg(rgba(t.pressed)))
-        .hover(move |s| s.bg(rgba(t.hover)))
+        // Active is the Figma file-browser tab's own surface (white); hover only tints an
+        // inactive tab. A plain `when` loses to the `hover` pseudo-class whatever its order, so
+        // the hover tint is gated on `!home_active` to keep the active tab white under the
+        // pointer (user 2026-11-18).
+        .when(home_active, move |d| d.bg(rgba(t.panel)))
+        .when(!home_active, move |d| d.hover(move |s| s.bg(rgba(t.hover))))
         .on_click(move |_e: &ClickEvent, window, cx: &mut App| {
             me_home.update(cx, |cv, cx| {
                 // ⛔ 先绑定本窗口：`show_home` 改的是**窗口私有**状态，不绑定就会写进

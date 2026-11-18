@@ -119,16 +119,15 @@ pub struct Brush {
     /// Scatter: how far copies stray from the path, in stroke weights, 0..4.
     pub scatter: f64,
     /// How much ink one dab lays down, 0..1. Below 1 the dabs build up where the stroke crosses
-    /// itself or moves slowly — the "flow" of a paint program, as opposed to [`Self::opacity`].
+    /// itself or moves slowly — the "flow" of a paint program. The stroke's overall transparency
+    /// is the colour's own alpha (the paint's opacity), not a separate brush field.
     pub flow: f64,
-    /// The most the whole stroke paints, 0..1: a ceiling over the built-up dabs.
-    pub opacity: f64,
     pub seed: u32,
 }
 
 impl Default for Brush {
     fn default() -> Self {
-        Self { preset: String::new(), spacing: 1.5, size_jitter: 0.0, rotation_jitter: 0.0, scatter: 0.0, flow: 1.0, opacity: 1.0, seed: 0 }
+        Self { preset: String::new(), spacing: 1.5, size_jitter: 0.0, rotation_jitter: 0.0, scatter: 0.0, flow: 1.0, seed: 0 }
     }
 }
 
@@ -148,7 +147,6 @@ impl Brush {
             rotation_jitter: c(self.rotation_jitter, 0.0, 1.0, 0.0),
             scatter: c(self.scatter, 0.0, 4.0, 0.0),
             flow: c(self.flow, 0.0, 1.0, 1.0),
-            opacity: c(self.opacity, 0.0, 1.0, 1.0),
             seed: self.seed,
         }
     }
