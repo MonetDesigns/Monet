@@ -13,9 +13,6 @@ reviews:
   auto_review:
     enabled: true
     drafts: false
-    # Only auto-review PRs targeting the default branch.
-    base_branches:
-      - main
     # Dependabot bumps are checked by CI; skip CodeRabbit reviews on them.
     ignore_usernames:
       - "dependabot[bot]"
