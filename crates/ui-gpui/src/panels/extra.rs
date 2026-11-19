@@ -262,6 +262,7 @@ pub(crate) fn render(
     app: &CanvasApp,
     cmds: &Cmds,
     state: &ExtraState,
+    root: Option<Entity<crate::CanvasView>>,
     new_page: bool,
     cx: &mut App,
     close: Rc<dyn Fn()>,
@@ -269,10 +270,10 @@ pub(crate) fn render(
     let t = tokens();
     let body = match kind {
         ExtraKind::Shortcuts => shortcuts_body(state, cmds, cx),
-        ExtraKind::Versions => versions_body(app, cmds, state, cx),
+        ExtraKind::Versions => versions_body(app, cmds, state, root, cx),
         ExtraKind::DevCompare { id, version } => compare_body(app, cmds, state, *id, version.as_deref()),
         // 「+」打开的临时页（`new_active`）用 Figma 桌面首页的样子：居中分类 + 搜索 + 最近文件。
-        ExtraKind::Home => crate::home::body(app, cmds, state, new_page),
+        ExtraKind::Home => crate::home::body(app, cmds, state, root, new_page),
     };
     if matches!(kind, ExtraKind::Home) {
         // 1:1 with `ui-egui/src/home.rs`: `CentralPanel` fills the window, with the sidebar on
@@ -493,7 +494,13 @@ fn icon_act(icon: Icon, size: f32, on_click: impl Fn(&ClickEvent, &mut Window, &
 // Versions（egui `versions.rs`）
 // ───────────────────────────────────────────────────────────────────────────────────────────────
 
-fn versions_body(app: &CanvasApp, cmds: &Cmds, state: &ExtraState, cx: &mut App) -> Div {
+fn versions_body(
+    app: &CanvasApp,
+    cmds: &Cmds,
+    state: &ExtraState,
+    root: Option<Entity<crate::CanvasView>>,
+    cx: &mut App,
+) -> Div {
     let t = tokens();
     let Ok(ds) = app.session.ds() else { return note("No document open.") };
 
@@ -643,8 +650,54 @@ fn versions_body(app: &CanvasApp, cmds: &Cmds, state: &ExtraState, cx: &mut App)
             .w_full()
             .on_mouse_down(MouseButton::Left, move |_e: &MouseDownEvent, _w, _cx| {
                 cm_preview.push(Cmd { id: "version.preview", params: Some(json!({ "id": vcp })) });
+            });
+        // EGUI `versions.rs`: a version row's context menu shares the More button's four actions.
+        let row = if let Some(root) = root.clone() {
+            let cmds = cmds.clone();
+            let wake = cmds.clone();
+            let vt = state.ver_form.clone();
+            let vp = state.ver_prefilled.clone();
+            let vc = state.ver_confirm.clone();
+            let vid_menu = vid.clone();
+            row.on_mouse_down(MouseButton::Right, move |e, _, cx: &mut App| {
+                let restore = tr("Restore this version");
+                let rename = tr("Rename");
+                let duplicate = tr("Duplicate");
+                let delete = tr("Delete");
+                let rows = vec![
+                    MenuRow::new(restore),
+                    MenuRow::new(rename),
+                    MenuRow::new(duplicate),
+                    MenuRow::new(delete),
+                ];
+                let anchor = Bounds::new(e.position, gpui::size(px(0.0), px(0.0)));
+                let cmds = cmds.clone();
+                let wake = wake.clone();
+                let vt = vt.clone();
+                let vp = vp.clone();
+                let vc = vc.clone();
+                let id = vid_menu.clone();
+                let on_pick = Rc::new(move |label: &str, _: &mut Window, _: &mut App| {
+                    if label == restore {
+                        cmds.push(Cmd { id: "version.restore", params: Some(json!({ "id": id })) });
+                    } else if label == rename {
+                        *vt.borrow_mut() = Some(Some(id.clone()));
+                        *vp.borrow_mut() = None;
+                        wake.wake();
+                    } else if label == duplicate {
+                        cmds.push(Cmd { id: "version.duplicate", params: Some(json!({ "id": id })) });
+                    } else if label == delete {
+                        *vc.borrow_mut() = Some(id.clone());
+                        wake.wake();
+                    }
+                });
+                root.update(cx, |cv, cx| cv.open_menu(anchor, Some(200.0), rows, on_pick, cx));
+                cx.stop_propagation();
             })
-            .child(
+        } else {
+            row
+        };
+        let row = row.child(
                 div()
                     .flex_1()
                     .min_w(px(0.0))
@@ -971,7 +1024,13 @@ fn compare_body(app: &CanvasApp, cmds: &Cmds, state: &ExtraState, id: Option<fig
 // Assets（egui `assets_panel.rs`）
 // ───────────────────────────────────────────────────────────────────────────────────────────────
 
-pub(crate) fn assets_body(app: &CanvasApp, cmds: &Cmds, state: &ExtraState, _cx: &mut App) -> Div {
+pub(crate) fn assets_body(
+    app: &CanvasApp,
+    cmds: &Cmds,
+    state: &ExtraState,
+    root: Option<Entity<crate::CanvasView>>,
+    _cx: &mut App,
+) -> Div {
     let t = tokens();
     let Ok(ds) = app.session.ds() else { return note("No document open.") };
     let doc = &ds.doc;
@@ -1007,7 +1066,11 @@ pub(crate) fn assets_body(app: &CanvasApp, cmds: &Cmds, state: &ExtraState, _cx:
         .child(div().flex_1().min_w(px(0.0)))
         .child(state.assets_search.clone());
 
-    let body = if on_components { assets_components(doc, cmds, &q) } else { assets_styles(doc, cmds, &q) };
+    let body = if on_components {
+        assets_components(doc, cmds, &q, root)
+    } else {
+        assets_styles(doc, cmds, &q)
+    };
     wrap_header(body, header)
 }
 
@@ -1017,7 +1080,7 @@ fn wrap_header(body: Div, header: Div) -> Div {
 }
 
 /// Components tab：本地组件/组件集缩略图网格（2 列，GPUI 无 flex_wrap），点一下创建实例。
-fn assets_components(doc: &figcraft_doc::Document, cmds: &Cmds, q: &str) -> Div {
+fn assets_components(doc: &figcraft_doc::Document, cmds: &Cmds, q: &str, root: Option<Entity<crate::CanvasView>>) -> Div {
     let comps: Vec<figcraft_doc::NodeId> = figcraft_engine::library::local_components(doc)
         .into_iter()
         .filter(|id| doc.node(*id).is_some_and(|n| n.name.to_lowercase().contains(q)))
@@ -1033,7 +1096,7 @@ fn assets_components(doc: &figcraft_doc::Document, cmds: &Cmds, q: &str) -> Div 
     for chunk in comps.chunks(2) {
         let mut row = div().flex().flex_row().w_full().gap(pt(10.0));
         for id in chunk {
-            row = row.child(component_tile(doc, cmds, *id));
+            row = row.child(component_tile(doc, cmds, *id, root.clone()));
         }
         // 末行若只有一列，补一个占位保持两列等高对齐。
         if chunk.len() == 1 {
@@ -1045,7 +1108,12 @@ fn assets_components(doc: &figcraft_doc::Document, cmds: &Cmds, q: &str) -> Div 
 }
 
 /// 单个组件缩略图卡片：渲染缩略图 + 名称，整卡点击创建实例。
-fn component_tile(doc: &figcraft_doc::Document, cmds: &Cmds, id: figcraft_doc::NodeId) -> Div {
+fn component_tile(
+    doc: &figcraft_doc::Document,
+    cmds: &Cmds,
+    id: figcraft_doc::NodeId,
+    root: Option<Entity<crate::CanvasView>>,
+) -> Div {
     let t = tokens();
     let Some(n) = doc.node(id) else { return div() };
     let shown = if matches!(n.kind, NodeKind::ComponentSet { .. }) { default_variant(doc, id).unwrap_or(id) } else { id };
@@ -1068,7 +1136,8 @@ fn component_tile(doc: &figcraft_doc::Document, cmds: &Cmds, id: figcraft_doc::N
     let create = move |_e: &MouseDownEvent, _w: &mut Window, _cx: &mut App| {
         c.push(Cmd { id: "instance.create", params: Some(json!({ "component": id })) });
     };
-    div()
+    let hidden = figcraft_engine::library::hidden_name(&name);
+    let mut tile = div()
         .flex_1()
         .min_w(px(0.0))
         .rounded(pt(8.0))
@@ -1103,7 +1172,28 @@ fn component_tile(doc: &figcraft_doc::Document, cmds: &Cmds, id: figcraft_doc::N
                 } else {
                     tr("Component")
                 }))),
-        )
+        );
+    // EGUI `assets_panel.rs`: a local component tile's context menu toggles "Hide when
+    // publishing" (a check row), using the same shared `MenuRow` + `open_menu` control.
+    if let Some(root) = root {
+        let c = cmds.clone();
+        let label = tr("Hide when publishing");
+        let on = !hidden;
+        tile = tile.on_mouse_down(MouseButton::Right, move |e, _, cx: &mut App| {
+            let rows = vec![MenuRow::new(label).checked(Some(hidden))];
+            let anchor = Bounds::new(e.position, gpui::size(px(0.0), px(0.0)));
+            let cmds = c.clone();
+            let on_pick = Rc::new(move |_: &str, _: &mut Window, _: &mut App| {
+                cmds.push(Cmd {
+                    id: "component.hideWhenPublishing",
+                    params: Some(json!({ "id": id.0, "on": on })),
+                });
+            });
+            root.update(cx, |cv, cx| cv.open_menu(anchor, Some(180.0), rows, on_pick, cx));
+            cx.stop_propagation();
+        });
+    }
+    tile
 }
 
 /// Styles tab：本地样式列表，按类型给图标/色板，点一行把样式应用到当前选区。

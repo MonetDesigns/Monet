@@ -1250,6 +1250,11 @@ pub struct PanelData {
     /// 选中的都是开放路径（Line / 未闭合 Vector），端帽才有意义。
     pub is_open_path: bool,
     pub effects: Option<Vec<EffectRow>>,
+    /// 引擎剪贴板里有没有可粘贴的 fill / stroke / effect。面板右键菜单照 egui 的
+    /// `paints.rs` / `effects.rs` 只在能粘贴时列出 Paste 行；快照在这里算，渲染期不读根视图。
+    pub can_paste_fill: bool,
+    pub can_paste_stroke: bool,
+    pub can_paste_effect: bool,
     /// WGSL 材质绑定（单选时来自该节点的 plugin_data；多选不一致时按「无绑定」处理）。
     pub wgsl: WgslPanelData,
     pub grids: Option<Vec<GridRow>>,
@@ -1577,7 +1582,7 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
     // More actions：右键菜单的顶层行（子菜单 / 不可运行的命令跳过，分隔线顺延到下一行）。
     let mut more_actions: Vec<(String, &'static str, bool)> = Vec::new();
     let mut carry_sep = false;
-    for it in crate::context_menu::items(Some(doc), ids, &[]) {
+    for it in crate::context_menu::items(Some(doc), ids, &[], ids) {
         let sep = it.separator_before || carry_sep;
         if it.sub.is_empty() && !it.disabled && !it.id.is_empty() {
             more_actions.push((it.label.to_string(), it.id, sep));

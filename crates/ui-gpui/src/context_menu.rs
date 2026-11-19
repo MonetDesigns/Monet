@@ -106,7 +106,7 @@ fn copy_as() -> Item {
         ("edit.copyAsCss", tr("Copy as CSS")),
         ("edit.copyAsSvg", tr("Copy as SVG")),
         ("edit.copyAsPng", tr("Copy as PNG")),
-        ("edit.copyLink", tr("Copy link")),
+        ("edit.copyLink", tr("Copy link to selection")),
     ]
     .into_iter()
     .map(|(id, label)| cmd(id, label))
@@ -127,9 +127,17 @@ fn group(rows: &mut Vec<Item>, items: Vec<Item>) {
     }
 }
 
-/// The menu's rows for `ids` (the selection the menu was opened on). `layers` is what the click
-/// landed on: the Select-layer submenu only appears when it isn't empty.
-pub(crate) fn items(doc: Option<&Document>, ids: &[NodeId], layers: &[(NodeId, usize, String)]) -> Vec<Item> {
+/// The menu's rows for `ids` (the layer(s) the menu was opened on). `selection` is what the
+/// engine commands act on: the canvas and the Design panel use the same `ids`, while a layer row
+/// right-clicked inside a multi-selection passes just that row (egui `panels/layers.rs`) but the
+/// commands still see the whole selection. `layers` is what the canvas click landed on: the
+/// Select-layer submenu only appears when it isn't empty.
+pub(crate) fn items(
+    doc: Option<&Document>,
+    ids: &[NodeId],
+    layers: &[(NodeId, usize, String)],
+    selection: &[NodeId],
+) -> Vec<Item> {
     let mut rows: Vec<Item> = Vec::new();
     // The original puts Select layer first, with the rest of the menu below it.
     if !layers.is_empty() {
@@ -182,10 +190,13 @@ pub(crate) fn items(doc: Option<&Document>, ids: &[NodeId], layers: &[(NodeId, u
     structure.push(cmd("vector.flatten", tr("Flatten")));
     structure.push(cmd("vector.outlineStroke", tr("Outline stroke")));
     structure.push(cmd("object.mask", tr("Use as mask")));
+    if doc.is_some_and(|d| selection.len() == 1 && d.node(selection[0]).and_then(figcraft_engine::cmd::image::top_image_fill).is_some()) {
+        structure.push(cmd("image.crop", tr("Crop image")));
+    }
     group(&mut rows, structure);
-    let mut components = vec![cmd("layout.add", tr("Add auto layout"))];
+    let mut components = vec![cmd("layout.add", tr("Add auto layout")), cmd("layout.removeAll", tr("Remove all auto layout"))];
     components.push(component_row(doc, ids).unwrap_or_else(|| cmd("component.create", tr("Create component"))));
-    if doc.is_some_and(|d| figcraft_engine::cmd::component::can_combine_variants(d, ids)) {
+    if doc.is_some_and(|d| figcraft_engine::cmd::component::can_combine_variants(d, selection)) {
         components.push(cmd("component.combineVariants", tr("Combine as variants")));
     }
     components.push(cmd("component.detach", tr("Detach instance")));
@@ -251,7 +262,7 @@ mod tests {
     /// first row.
     #[test]
     fn empty_canvas_offers_the_page_commands() {
-        let rows = items(None, &[], &[]);
+        let rows = items(None, &[], &[], &[]);
         assert_eq!(ids(&rows), ["edit.paste", "select.all", "view.toggleUi", "view.zoomFit", "view.rulers", "view.pixelGrid"]);
         assert!(!rows[0].separator_before);
         assert!(rows[1..].iter().all(|r| r.separator_before));
@@ -261,7 +272,7 @@ mod tests {
     /// with the dividers the original puts between them.
     #[test]
     fn a_selection_offers_the_layer_commands() {
-        let rows = items(None, &[NodeId(1)], &[]);
+        let rows = items(None, &[NodeId(1)], &[], &[NodeId(1)]);
         let list = ids(&rows);
         assert_eq!(list.first(), Some(&"edit.copy"));
         assert_eq!(list.last(), Some(&"edit.delete"));
@@ -270,6 +281,7 @@ mod tests {
         let copy_as_row = rows.iter().find(|r| r.id == COPY_AS).expect("copy as");
         assert_eq!(copy_as_row.sub.len(), 4);
         assert!(copy_as_row.sub.iter().all(|r| r.disabled), "the clipboard formats are UI-side");
+        assert!(list.contains(&"layout.removeAll"), "egui's Remove all auto layout row");
         assert_eq!(rows.iter().filter(|r| r.separator_before).count(), 7, "eight groups, seven dividers between them");
     }
 
@@ -287,7 +299,7 @@ mod tests {
     #[test]
     fn layers_under_the_click_offer_the_select_layer_submenu() {
         let layers = [(NodeId(3), 0, "Card".to_string()), (NodeId(4), 1, "Title".to_string())];
-        let rows = items(None, &[NodeId(3)], &layers);
+        let rows = items(None, &[NodeId(3)], &layers, &[NodeId(3)]);
         assert_eq!(rows[0].id, SELECT_LAYER);
         assert_eq!(rows[0].sub.len(), 2);
         assert_eq!(rows[0].sub[0].label, "Card");

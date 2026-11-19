@@ -240,7 +240,7 @@ impl CanvasView {
                     .border_r_1()
                     .border_color(rgba(if divider_hot { t.accent } else { t.border }))
                     .child(SectionHeader::new(tr("Assets")).variant(SectionHeaderVariant::Normal))
-                    .child(crate::panels::extra::assets_body(&self.app, &cmds, &self.extra_state, cx));
+                    .child(crate::panels::extra::assets_body(&self.app, &cmds, &self.extra_state, Some(cx.entity()), cx));
             }
             2 => {
                 let cmds = self.fields.queue();
@@ -494,6 +494,15 @@ impl CanvasView {
                         });
                     }
                 })
+                // EGUI `panels/layers.rs`: a page row's secondary click opens its own four-row
+                // popup (Rename / Duplicate / Set as opening / Delete), not the canvas menu.
+                .on_mouse_down(MouseButton::Right, {
+                    let me_row = me.clone();
+                    move |e, _, cx| {
+                        me_row.update(cx, |cv, cx| cv.open_page_context_menu(id, divider, e.position, cx));
+                        cx.stop_propagation();
+                    }
+                })
                 .child(name_cell);
             list = list.child(row);
         }
@@ -664,10 +673,13 @@ impl CanvasView {
                 .justify_end()
                 .on_mouse_down(MouseButton::Left, {
                     let me = me.clone();
-                    move |_e: &MouseDownEvent, _w: &mut Window, app: &mut App| {
-                        me.update(app, |this: &mut CanvasView, cx: &mut Context<CanvasView>| {
+                    move |_e: &MouseDownEvent, _w: &mut Window, cx: &mut App| {
+                        me.update(cx, |this: &mut CanvasView, cx: &mut Context<CanvasView>| {
                             this.layer_toggle_expand(id, cx);
                         });
+                        // The chevron owns this press: never let the row's selection/drag candidate
+                        // claim it too.
+                        cx.stop_propagation();
                     }
                 })
                 .child(paint_icon(if expanded { Icon::ChevronDown } else { Icon::ChevronRight }, ink(), ICON_GLYPH))
@@ -685,10 +697,11 @@ impl CanvasView {
             .when(visible, |d| d.opacity(0.0).group_hover(group.clone(), |s| s.opacity(1.0)))
             .on_mouse_down(MouseButton::Left, {
                 let me = me.clone();
-                move |_e: &MouseDownEvent, _w: &mut Window, app: &mut App| {
-                    me.update(app, |this: &mut CanvasView, cx: &mut Context<CanvasView>| {
+                move |_e: &MouseDownEvent, _w: &mut Window, cx: &mut App| {
+                    me.update(cx, |this: &mut CanvasView, cx: &mut Context<CanvasView>| {
                         this.layer_toggle_visible(id, cx);
                     });
+                    cx.stop_propagation();
                 }
             })
             .child(paint_icon(if visible { Icon::Eye } else { Icon::EyeOff }, ink(), ICON_GLYPH));
@@ -703,10 +716,11 @@ impl CanvasView {
             .when(!locked, |d| d.opacity(0.0).group_hover(group.clone(), |s| s.opacity(1.0)))
             .on_mouse_down(MouseButton::Left, {
                 let me = me.clone();
-                move |_e: &MouseDownEvent, _w: &mut Window, app: &mut App| {
-                    me.update(app, |this: &mut CanvasView, cx: &mut Context<CanvasView>| {
+                move |_e: &MouseDownEvent, _w: &mut Window, cx: &mut App| {
+                    me.update(cx, |this: &mut CanvasView, cx: &mut Context<CanvasView>| {
                         this.layer_toggle_lock(id, cx);
                     });
+                    cx.stop_propagation();
                 }
             })
             .child(paint_icon(if locked { Icon::Lock } else { Icon::Unlock }, ink(), ICON_GLYPH));
@@ -800,6 +814,29 @@ impl CanvasView {
             // The inset layer: an overlay the size of the row whose padding squeezes the highlight into an 8/4 inset block.
             .child(div().absolute().top_0().left_0().size_full().px(pt(ROW_INSET)).pt(pt(inset_top)).pb(pt(inset_bottom)).child(highlight))
             .when(is_dragging, |d| d.opacity(0.5))
+            // EGUI's row `Response` covers the whole row, not just the name cell. Keep the
+            // candidate from any part of the row so Cmd/Ctrl-click and Shift-click still work
+            // when the pointer is over the type icon or the row's empty space.
+            .on_mouse_down(MouseButton::Left, {
+                let me_select = me.clone();
+                move |e: &MouseDownEvent, _w: &mut Window, cx: &mut App| {
+                    me_select.update(cx, |this: &mut CanvasView, cx: &mut Context<CanvasView>| {
+                        this.layer_on_row_mouse_down(id, e);
+                    });
+                }
+            })
+            // EGUI `panels/layers.rs`: right-clicking a row selects it (unless already selected)
+            // and opens the very same selection context menu as the canvas. Uses `Popup::Context`
+            // / `menu_card`, so the Copy-as submenu and menu aim behave identically.
+            .on_mouse_down(MouseButton::Right, {
+                let me_menu = me.clone();
+                move |e, _, cx| {
+                    me_menu.update(cx, |this: &mut CanvasView, cx: &mut Context<CanvasView>| {
+                        this.open_layer_context_menu(id, e.position, cx);
+                    });
+                    cx.stop_propagation();
+                }
+            })
             .on_drag(LayerDrag(id), move |_val, _offset, _window, app| {
                 me_start.update(app, |this: &mut CanvasView, cx: &mut Context<CanvasView>| {
                     this.begin_layer_drag(id, index, cx);
@@ -1109,14 +1146,36 @@ impl CanvasView {
         let Ok(ds) = self.app.session.ds() else { return };
         let order: Vec<NodeId> = self.layer_tree.rows.iter().map(|r| r.id).collect();
         let sel: Vec<NodeId> = ds.selection.iter().copied().collect();
+        let (new_sel, set_anchor) = Self::selection_after_click(&order, &sel, self.layer_tree.anchor, id, m);
+        if set_anchor {
+            self.layer_tree.anchor = Some(id);
+        }
+        // 重复点击已选中的行：选区没变就别再发 select.set —— 引擎内部先清后设，
+        // 触发两次变更，表现成选中块「取消又选中」闪一下（用户 2026-11-15）。
+        if new_sel == sel {
+            return;
+        }
+        let _ = self.app.session.execute("select.set", &json!({ "ids": new_sel }));
+        cx.notify();
+    }
+
+    /// Pure selection transition for a layer-row click. Kept separate so the modifier rules can
+    /// be tested without a window: plain replaces, Cmd/Ctrl toggles, Shift selects the visible
+    /// range from the anchor, and Shift+Cmd/Ctrl adds that range to the current selection.
+    fn selection_after_click(
+        order: &[NodeId],
+        sel: &[NodeId],
+        anchor: Option<NodeId>,
+        id: NodeId,
+        m: Modifiers,
+    ) -> (Vec<NodeId>, bool) {
         let pos = |x: NodeId| order.iter().position(|o| *o == x);
-        let anchor = self.layer_tree.anchor.filter(|a| sel.contains(a)).and_then(|a| pos(a));
-        let (ai, bi) = (anchor, pos(id));
-        // The range needs both the anchor and the clicked row in the visible order.
+        let ai = anchor.filter(|a| sel.contains(a)).and_then(|a| pos(a));
+        let bi = pos(id);
         let mut set_anchor = false;
         let new_sel = if m.shift && ai.is_some() && bi.is_some() {
             let (lo, hi) = (ai.unwrap().min(bi.unwrap()), ai.unwrap().max(bi.unwrap()));
-            let mut s: Vec<NodeId> = if m.platform || m.control { sel.clone() } else { Vec::new() };
+            let mut s: Vec<NodeId> = if m.platform || m.control { sel.to_vec() } else { Vec::new() };
             for x in order.get(lo..=hi).unwrap_or_default() {
                 if !s.contains(x) {
                     s.push(*x);
@@ -1124,7 +1183,7 @@ impl CanvasView {
             }
             s
         } else if m.shift || m.platform || m.control {
-            let mut s = sel.clone();
+            let mut s = sel.to_vec();
             if let Some(p) = s.iter().position(|x| *x == id) {
                 s.remove(p);
             } else {
@@ -1136,16 +1195,7 @@ impl CanvasView {
             set_anchor = true;
             vec![id]
         };
-        if set_anchor {
-            self.layer_tree.anchor = Some(id);
-        }
-        // 重复点击已选中的行：选区没变就别再发 select.set —— 引擎内部先清后设，
-        // 触发两次变更，表现成选中块「取消又选中」闪一下（用户 2026-11-15）。
-        if new_sel == sel {
-            return;
-        }
-        let _ = self.app.session.execute("select.set", &json!({ "ids": new_sel }));
-        cx.notify();
+        (new_sel, set_anchor)
     }
 
     fn layer_select(&mut self, id: NodeId, cx: &mut Context<Self>) {
@@ -1408,7 +1458,9 @@ mod shape_glyph {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use crate::CanvasView;
         use figcraft_doc::{NodeId, StrokeCap};
+        use gpui::Modifiers;
 
         fn node(kind: NodeKind, w: f64, h: f64) -> Node {
             Node::new(NodeId(1), kind, "shape", w, h)
@@ -1493,6 +1545,45 @@ mod shape_glyph {
         fn non_shape_nodes_have_no_geometry_icon() {
             assert!(from_node(&node(NodeKind::Frame, 80.0, 80.0)).is_none());
             assert!(from_node(&node(NodeKind::Group, 80.0, 80.0)).is_none());
+        }
+
+        fn ids(v: &[u64]) -> Vec<NodeId> {
+            v.iter().copied().map(NodeId).collect()
+        }
+
+        #[test]
+        fn ctrl_click_toggles_a_layer_without_dropping_the_others() {
+            let order = ids(&[1, 2, 3, 4]);
+            let (next, anchor) = CanvasView::selection_after_click(&order, &ids(&[1]), Some(NodeId(1)), NodeId(3), Modifiers { control: true, ..Default::default() });
+            assert_eq!(next, ids(&[1, 3]));
+            assert!(anchor, "the toggled row becomes the shift anchor");
+
+            let (next, _) = CanvasView::selection_after_click(&order, &ids(&[1, 3]), Some(NodeId(3)), NodeId(1), Modifiers { control: true, ..Default::default() });
+            assert_eq!(next, ids(&[3]), "a second ctrl-click removes it again");
+        }
+
+        #[test]
+        fn shift_click_selects_the_visible_range_and_cmd_shift_extends_it() {
+            let order = ids(&[1, 2, 3, 4]);
+            let (next, _) = CanvasView::selection_after_click(&order, &ids(&[1]), Some(NodeId(1)), NodeId(4), Modifiers { shift: true, ..Default::default() });
+            assert_eq!(next, order, "plain shift replaces with the range");
+
+            let (next, _) = CanvasView::selection_after_click(
+                &order,
+                &ids(&[7, 1]),
+                Some(NodeId(1)),
+                NodeId(3),
+                Modifiers { shift: true, control: true, ..Default::default() },
+            );
+            assert_eq!(next, ids(&[7, 1, 2, 3]), "cmd-shift merges the range into the selection");
+        }
+
+        #[test]
+        fn plain_click_replaces_the_selection() {
+            let order = ids(&[1, 2, 3]);
+            let (next, anchor) = CanvasView::selection_after_click(&order, &ids(&[1, 2]), Some(NodeId(1)), NodeId(3), Modifiers::default());
+            assert_eq!(next, ids(&[3]));
+            assert!(anchor);
         }
     }
 }

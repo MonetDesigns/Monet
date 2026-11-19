@@ -36,6 +36,40 @@ fn push(f: &RightFields, id: &'static str, params: Value) {
     f.cmds.push(Cmd { id, params: Some(params) });
 }
 
+/// 右键菜单入口：与 `pick_dropdown` 共用 `MenuRow` + 根视图 `open_menu` 这套通用控件，
+/// 只是锚点取当前指针而不是触发按钮（`ui-egui/right/menu.rs::context_popup`）。
+/// `entries` 是 (显示名, 命令, 参数)；`extra` 由调用方先把「剪贴板里有没有可粘贴项」算进去。
+fn context_menu_at(f: &RightFields, at: Point<Pixels>, width: f32, entries: Vec<(String, &'static str, Value)>, cx: &mut App) {
+    let Some(root) = f.root.clone() else { return };
+    let rows: Vec<MenuRow> = entries.iter().map(|(label, _, _)| MenuRow::new(label.clone())).collect();
+    let cmds = f.cmds.clone();
+    let on_pick = Rc::new(move |label: &str, _w: &mut Window, _cx: &mut App| {
+        if let Some((_, cmd, params)) = entries.iter().find(|(l, _, _)| l == label) {
+            cmds.push(Cmd { id: cmd, params: Some(params.clone()) });
+        }
+    });
+    let anchor = Bounds { origin: at, size: size(px(1.0), px(0.0)) };
+    root.update(cx, |cv, cx| cv.open_menu(anchor, Some(width), rows, on_pick, cx));
+}
+
+/// The header's trailing icon row, with the same right-click menu as egui's section header.
+/// Returns a fresh element so callers with two rendering branches do not need a clonable `Div`.
+fn context_header_row(
+    f: &RightFields,
+    icons: Vec<gpui::AnyElement>,
+    width: f32,
+    entries: Vec<(String, &'static str, Value)>,
+) -> gpui::Div {
+    let f = f.clone();
+    let menu_entries = entries.clone();
+    icon_row(icons).on_mouse_down(MouseButton::Right, move |e, _, cx: &mut App| {
+        if !menu_entries.is_empty() {
+            context_menu_at(&f, e.position, width, menu_entries.clone(), cx);
+            cx.stop_propagation();
+        }
+    })
+}
+
 /// 右栏一节（Fill / Stroke / Effects / Layout grid / Export …）的两种呈现。
 ///
 /// **空节只有一行置灰头部**：没有 body、没有提示文字、没有底边距 —— 视觉上就是「这一节
@@ -1092,12 +1126,24 @@ pub(crate) fn paints(
         .into_any_element());
     }
     icons.push(icon_cmd(Icon::Plus, add_cmd, json!({}), f, false).into_any_element());
+    // EGUI `paints.rs`: the section header's context menu pastes a paint of the same kind.
+    let paste_cmd: &'static str = if fills { "fill.paste" } else { "stroke.paste" };
+    let can_paste_header = if fills { d.can_paste_fill } else { d.can_paste_stroke };
+    let header_entries: Vec<(String, &'static str, Value)> = if can_paste_header {
+        vec![(
+            if fills { tr("Paste fill") } else { tr("Paste stroke") }.to_string(),
+            paste_cmd,
+            json!({}),
+        )]
+    } else {
+        Vec::new()
+    };
     // 空 / Mixed（多选混合，`list == None`）：**只有置灰头部**——不写提示文字、不给 body、
     // 也就没有 `PanelSection` 那 12 pt 底边距。`+` 图标照旧可点，功能没少。
     let Some(rows) = list.filter(|v| !v.is_empty()) else {
-        return Section::empty(title, icon_row(icons));
+        return Section::empty(title, context_header_row(f, icons, 160.0, header_entries));
     };
-    let mut sec = PanelSection::new(title).header_trail(icon_row(icons));
+    let mut sec = PanelSection::new(title).header_trail(context_header_row(f, icons, 160.0, header_entries));
     // egui `paints.rs`：header 之后、paint 行之前先画链接样式的 chip（`style_picker::chip`）。
     if let Some(chip) = style_chip(f, d.style_chips[if fills { 0 } else { 1 }].as_ref(), if fills { "fill" } else { "stroke" }) {
         sec = sec.child(chip);
@@ -1172,6 +1218,22 @@ pub(crate) fn paints(
             ),
             None => cf,
         };
+        // EGUI `paints.rs::paint_row`: right-clicking anywhere on a fill/stroke row offers Copy
+        // that paint and — only when the clipboard holds the same kind — Paste at this index.
+        let copy_cmd: &'static str = if fills { "fill.copy" } else { "stroke.copy" };
+        let paste_cmd: &'static str = if fills { "fill.paste" } else { "stroke.paste" };
+        let copy_label = if fills { tr("Copy fill") } else { tr("Copy stroke") };
+        let paste_label = if fills { tr("Paste fill") } else { tr("Paste stroke") };
+        let mut entries = vec![(copy_label.to_string(), copy_cmd, json!({ "index": index }))];
+        let can_paste = if fills { d.can_paste_fill } else { d.can_paste_stroke };
+        if can_paste {
+            entries.push((paste_label.to_string(), paste_cmd, json!({ "index": index })));
+        }
+        let f_for_menu = f.clone();
+        let cf = cf.into_element().on_mouse_down(MouseButton::Right, move |e, _, cx: &mut App| {
+            context_menu_at(&f_for_menu, e.position, 180.0, entries.clone(), cx);
+            cx.stop_propagation();
+        });
         let cf = crate::popovers::with_button_bounds(cf, swatch_hit);
         let eye = icon_cmd(if row.visible { Icon::Eye } else { Icon::EyeOff }, cmd, json!({ "index": index, "visible": !row.visible }), f, false);
         let minus = icon_cmd(Icon::Minus, if fills { "fill.remove" } else { "stroke.remove" }, json!({ "index": index }), f, false);
@@ -1388,7 +1450,14 @@ pub(crate) fn effects(
     // `[Styles, Plus]`；`+` 点开是「添加效果」菜单：7 种内置效果 + 分隔线 + 固定目录里每个
     // `.wgsl` 文件项（有多少文件就多少项）。选中文件写 plugin_data 绑定，其参数才在下方展开。
     // WGSL 与内置效果同处一个菜单，不再另起独立下拉行。
-    let icons = vec![style_menu(f, d, "effect", None, Icon::Dot), add_effect_menu(f).into_any_element()];
+    let make_icons = || vec![style_menu(f, d, "effect", None, Icon::Dot), add_effect_menu(f).into_any_element()];
+    // EGUI `effects.rs`: the Effects header's context menu pastes a copied effect.
+    let can_paste_effect_header = d.can_paste_effect;
+    let header_entries: Vec<(String, &'static str, Value)> = if can_paste_effect_header {
+        vec![(tr("Paste effect").to_string(), "effect.paste", json!({}))]
+    } else {
+        Vec::new()
+    };
 
     // WGSL 材质：只在「已绑定」时于下方就地展开参数输入框（选中文件由上面的 `+` 菜单写入）。
     // 空态（0 效果、未绑定）连参数行都不画，Effects 节就是一行置灰头部 + 可点的 `+`。
@@ -1398,7 +1467,7 @@ pub(crate) fn effects(
         // 没有普通效果、但已绑定材质时，Effects 节仍要画出来以承载其参数行；
         // 未绑定时这里是空节（置灰头部 + 可点的 `+`，`+` 菜单里能选内置效果或 wgsl 文件）。
         if !wgsl_rows.is_empty() {
-            let mut sec = PanelSection::new(tr("Effects")).header_trail(icon_row(icons));
+            let mut sec = PanelSection::new(tr("Effects")).header_trail(context_header_row(f, make_icons(), 160.0, header_entries.clone()));
             if let Some(chip) = style_chip(f, d.style_chips[2].as_ref(), "effect") {
                 sec = sec.child(chip);
             }
@@ -1407,9 +1476,9 @@ pub(crate) fn effects(
             }
             return Section::Full(sec);
         }
-        return Section::empty(tr("Effects"), icon_row(icons));
+        return Section::empty(tr("Effects"), context_header_row(f, make_icons(), 160.0, header_entries.clone()));
     };
-    let mut sec = PanelSection::new(tr("Effects")).header_trail(icon_row(icons));
+    let mut sec = PanelSection::new(tr("Effects")).header_trail(context_header_row(f, make_icons(), 160.0, header_entries));
     // egui `effects.rs`：`style_picker::chip(StyleSlot::Effect)` 紧跟在 header 后面。
     if let Some(chip) = style_chip(f, d.style_chips[2].as_ref(), "effect") {
         sec = sec.child(chip);
@@ -1422,7 +1491,18 @@ pub(crate) fn effects(
         // 点效果行的方框 → 效果设置小窗；原先这里点开的是「切换效果类型」菜单。
         // 原切换实现 clone 旧 JSON 只改 `type`，残留旧类型字段会被引擎
         // `refuse_ignored_effect_keys` 整条拒收，表现为「点了没反应、画布里没效果」。
-        let dd = effect_settings_button(f, row, col);
+        // EGUI `effects.rs`: a right-click on the effect row copies that effect and, when the
+        // clipboard holds one, offers Paste effect at the same index.
+        let mut effect_entries = vec![(tr("Copy effect").to_string(), "effect.copy", json!({ "index": row.index }))];
+        let can_paste_effect = d.can_paste_effect;
+        if can_paste_effect {
+            effect_entries.push((tr("Paste effect").to_string(), "effect.paste", json!({ "index": row.index })));
+        }
+        let f_for_menu = f.clone();
+        let dd = effect_settings_button(f, row, col).into_element().on_mouse_down(MouseButton::Right, move |e, _, cx: &mut App| {
+            context_menu_at(&f_for_menu, e.position, 180.0, effect_entries.clone(), cx);
+            cx.stop_propagation();
+        });
         let mut e2 = row.effect.clone();
         if let Some(o) = e2.as_object_mut() {
             o.insert("visible".into(), json!(!row.visible));
