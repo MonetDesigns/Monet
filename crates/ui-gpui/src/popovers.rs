@@ -20,8 +20,8 @@ use crate::widgets::{Icon, IconButton, SegItem, Segmented, Slot, TextField, numb
 use crate::widgets::{MenuRow, dropdown};
 use figcraft_i18n::tr;
 use gpui::{
-    AnyElement, App, Bounds, Entity, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Point, SharedString, Size, Window, div, point,
-    prelude::*, px, size,
+    AnyElement, App, Bounds, Entity, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, PathBuilder, Pixels, Point, SharedString, Size, Window, div,
+    point, prelude::*, px, size,
 };
 use serde_json::{Value, json};
 use std::cell::RefCell;
@@ -1303,34 +1303,30 @@ impl WindowState {
                             bounds,
                             gpui::linear_gradient(180.0, gpui::linear_color_stop(clear, 0.0), gpui::linear_color_stop(black, 1.0)),
                         ));
-                        // AA 达标的「刚好及格」白线：把反解出的 (s,v) 边界点连成折线，
-                        // x = s·w, y = (1−v)·h（Figma 的 328 方块按本方块尺寸缩放）。
+                        // AA 达标的「刚好及格」白线：把反解出的 (s,v) 边界点连成**一条连续
+                        // stroke 路径**再 paint_path。GPUI 的 lyon 会自动补 join + 抗锯齿；
+                        // 早先逐像素画 1.5pt 方块拼线，既无平滑也无抗锯齿，边缘呈台阶状。
                         if let Some((lighter, darker)) = &boundary_paint {
                             let bx = f32::from(bounds.origin.x);
                             let by = f32::from(bounds.origin.y);
                             let bw = f32::from(bounds.size.width);
                             let bh = f32::from(bounds.size.height);
-                            let stroke = rgba(Color32::from_rgba_unmultiplied(255, 255, 255, 204));
-                            // 折线按 x 逐像素插值 y，画 1pt 见方的小块连成连续曲线：白线是 s 单调
-                            // 的，这样不依赖旋转 quad，视觉上仍是一条顺滑的白色边界。
+                            let stroke_color = rgba(Color32::from_rgba_unmultiplied(255, 255, 255, 217));
                             for line in [lighter, darker] {
-                                for pair in line.windows(2) {
-                                    let (a, b) = (pair[0], pair[1]);
-                                    let (x1, y1) = (a.s * bw, (1.0 - a.v) * bh);
-                                    let (x2, y2) = (b.s * bw, (1.0 - b.v) * bh);
-                                    let steps = ((x2 - x1).abs() / 1.5).ceil().max(1.0) as usize;
-                                    for i in 0..=steps {
-                                        let f = i as f32 / steps as f32;
-                                        let x = x1 + (x2 - x1) * f;
-                                        let y = y1 + (y2 - y1) * f;
-                                        window.paint_quad(gpui::fill(
-                                            Bounds {
-                                                origin: point(px(bx + x - 0.5), px(by + y - 0.5)),
-                                                size: size(px(1.5), px(1.5)),
-                                            },
-                                            stroke,
-                                        ));
+                                if line.len() < 2 {
+                                    continue;
+                                }
+                                let mut b = PathBuilder::stroke(px(1.25));
+                                for (i, p) in line.iter().enumerate() {
+                                    let pt = point(px(bx + p.s * bw), px(by + (1.0 - p.v) * bh));
+                                    if i == 0 {
+                                        b.move_to(pt);
+                                    } else {
+                                        b.line_to(pt);
                                     }
+                                }
+                                if let Ok(path) = b.build() {
+                                    window.paint_path(path, stroke_color);
                                 }
                             }
                         }
