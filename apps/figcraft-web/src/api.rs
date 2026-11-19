@@ -1,5 +1,4 @@
-//! `window.figcraft`: the page command API (`craft-web-api`, storytold/craft-libs#413) plus FigCraft's
-//! own file functions.
+//! `window.figcraft`: the page command API (`craft-web-api`) plus FigCraft's own file functions.
 //!
 //! The crate installs `request`, `execute`, `commands`, `docInspect`, `uiInspect` and `screenshot`
 //! over the same JSON methods as the desktop control server (`docs/control-protocol.md`), as

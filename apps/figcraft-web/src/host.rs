@@ -1,7 +1,7 @@
 //! Host modes: a page that runs FigCraft (as an `<iframe>`, or in its own document) opens
 //! documents in it and stores what it saves instead of the browser downloading. The messages
-//! and the two transports are `craft-web-host`'s (storytold/craft-libs): the same contract as
-//! the other Craft apps' bridges. This module is FigCraft's part of it.
+//! and the two transports are `craft-web-host`'s: the same contract as the other apps' bridges.
+//! This module is FigCraft's part of it.
 //!
 //! - `?host=parent` (an `<iframe>`, such as a Nextcloud app) talks to the same-origin parent over
 //!   `postMessage`; `data-host="page"` on the canvas (the page's own document) uses DOM

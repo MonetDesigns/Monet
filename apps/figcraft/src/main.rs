@@ -139,7 +139,7 @@ impl eframe::App for App {
             fig.start_pending_update();
         });
         // Everything is kept: end before the windows' teardown, where AppKit's Touch Bar support
-        // throws on the content view AccessKit restores (craft-libs#3, #781).
+        // throws on the content view AccessKit restores.
         #[cfg(target_os = "macos")]
         std::process::exit(0);
     }

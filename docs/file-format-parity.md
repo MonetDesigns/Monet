@@ -192,7 +192,7 @@ scales and empty-style clears; they have not been checked in other software.
 | | Figma | FigCraft |
 |---|---|---|
 | Local fonts | yes (font helper / desktop app) | yes (system scan) |
-| Bundled/shared fonts | Google Fonts in the cloud | optional `CRAFT_FONTS_DIR` build input (storytold/craft-fonts) |
+| Bundled/shared fonts | Google Fonts in the cloud | optional `CRAFT_FONTS_DIR` build input |
 | Variable fonts | yes | yes (axes, named instances, per-range axis values) |
 | Missing-font replacement on open | yes | listed, not replaced: in the desktop app the Missing fonts window opens after a file that uses them opens and from Text ▸ Missing fonts (`text.missingFonts`; `figcraft-cli info` prints `missing font` lines), and their text draws in a fallback font. A family the font store has (Google Fonts, Noto) downloads from the window once the user allows downloading fonts (`font.download`, #754): pinned, checksum-verified files into the Craft apps' shared font folder, after which the text draws in it. A family is found however a file names it: by the legacy name of one of its weights ("Family Medium") or by the typographic name of a family installed one family per weight, and spelt with other case, spaces or hyphens (#1292). No substitute picker |
 

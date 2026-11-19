@@ -38,9 +38,9 @@ figcraft-plugin = { path = "crates/plugin" }
 figcraft-i18n = { path = "crates/i18n" }
 figcraft-abr = { path = "crates/abr" }
 
-# Keep coupled craft-libs crates on one rev. craft-update has no sibling-crate
-# dependencies and is pinned separately for the suite updater rollout.
-# Which paths stored in a document may be followed (craft-libs).
+# Keep coupled shared crates on one rev. craft-update has no sibling-crate
+# dependencies and is pinned separately for the updater rollout.
+# Which paths stored in a document may be followed.
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545" }
 # Who draws the window frame on Linux — the compositor or the app — so every Craft app shows the
 # same native titlebar per desktop (craft-libs). FigCraft only reads the probe result and maps it
@@ -64,7 +64,7 @@ craft-settings = { git = "https://github.com/storytold/craft-libs", rev = "e11f9
 # foundation
 kurbo = { version = "0.13", features = ["serde"] }
 thiserror = "2"
-# Command-line parsing for figcraft-cli (craft-contrib RFC-0012: clap derive, as photocraft does).
+# Command-line parsing for figcraft-cli (RFC-0012: clap derive).
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }

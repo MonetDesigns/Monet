@@ -1,6 +1,6 @@
 //! Map a parsed `.abr` file onto the tip bitmaps and settings Monet paints with.
 //!
-//! PhotoCraft's `crates/io/src/abr_map.rs` is the reference for which descriptor keys matter:
+//! Which descriptor keys matter follows the published ABR layout:
 //! `Nm  `, `Brsh` (`Dmtr`, `Angl`, `Rndn`, `Hrdn`, `Spcn`, `flipX`, `flipY`, `sampledData`),
 //! shape dynamics (`szVr`, `angleDynamics`), scattering (`scatterDynamics`) and `useTipDynamics`
 //! / `useScatter`. Settings without a Monet equivalent are reported as warnings, not invented.

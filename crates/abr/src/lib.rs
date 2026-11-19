@@ -2,8 +2,7 @@
 //!
 //! The reader covers the legacy v1/v2 layout and the sectioned v6+ layout (8BIM sections,
 //! PackBits-compressed grayscale tips, action descriptors and preset folders). It is implemented
-//! from the published layout, with `storytold/photocraft`'s ABR import pipeline as the reference
-//! for which preset settings matter. Nothing is copied from Photoshop's own code or assets.
+//! from the published layout. Nothing is copied from Photoshop's own code or assets.
 //!
 //! Monet paints with the tip bitmaps this crate decodes: see `figcraft-render`'s brush-stroke
 //! compositor. The engine no longer contains any built-in brush shapes.

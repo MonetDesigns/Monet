@@ -325,7 +325,7 @@ fn sample_files() {
 }
 
 /// A tiny PNG whose header claims 30,000 × 30,000 RGBA (3.6 GB decoded) is refused when it is read,
-/// before anything is decoded: the PDF writer is craft-libs' patched krilla.
+/// before anything is decoded: the PDF writer patches krilla's decoder caps.
 #[test]
 fn a_png_that_decodes_too_large_is_refused() {
     fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {

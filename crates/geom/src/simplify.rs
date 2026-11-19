@@ -1,7 +1,7 @@
 //! Path simplification that keeps to its input where kurbo's fit would shoot past it.
 //!
-//! Ported from upstream `storytold/figcraft` (`crates/geom/src/simplify.rs`, PR #2140, fixes
-//! #1741). kurbo's `simplify_bezpath` fits two common pointer shapes with a curve that runs far
+//! Ported from upstream figcraft. kurbo's `simplify_bezpath` fits two common pointer shapes with a
+//! curve that runs far
 //! off the samples: a stroke that goes out and back to the point it left (kurbo keeps a reversal
 //! as a smooth join) and nearly collinear samples (kurbo measures its error across the path, not
 //! along it). That is the "the circle suddenly flies off" report.

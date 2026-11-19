@@ -1,5 +1,5 @@
-//! 标签条的**纯几何与动画状态**：从 `storytold/figcraft@3635c230` 的
-//! `crates/ui-egui/src/tabs.rs`（831 行）逐式搬过来，不依赖 GPUI / egui，因而可以直接单测。
+//! 标签条的**纯几何与动画状态**：从参照实现 `crates/ui-egui/src/tabs.rs`（831 行）逐式搬过来，
+//! 不依赖 GPUI / egui，因而可以直接单测。
 //!
 //! 视图层在 `tabs_view.rs`。上游这里还有 `tab_bar` / `paint_tab` / `TabGesture` 等与 egui
 //! `Response` 绑定的绘制代码，那些按 GPUI Kit 重写在视图层；本文件只保留可测的纯函数。

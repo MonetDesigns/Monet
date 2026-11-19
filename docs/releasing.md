@@ -5,8 +5,8 @@ installers for macOS, Windows, Linux and the web, plus a FreeBSD tarball and the
 server for Linux, then creates or updates a **draft** GitHub Release named `FigCraft v<version>`.
 Nobody sees a draft until a maintainer publishes it.
 
-This is FigCraft's copy of the shared [release playbook](release-playbook.md) (PhotoCraft is the
-reference implementation). User-facing names say **FigCraft**. Files, binaries and ids stay
+This is FigCraft's [release playbook](release-playbook.md). User-facing names say **FigCraft**.
+Files, binaries and ids stay
 lowercase (`figcraft-<version>-<platform>-<arch>.<ext>`, `ai.storyteller.figcraft`).
 
 ## FigCraft's names
@@ -110,7 +110,7 @@ the sources). Linux only for now; elsewhere operators build it with
 `cargo build --release -p figcraft-server`.
 
 **Fonts.** Every build job, the web one included (`web-craft-fonts`), checks out
-[craft-fonts](https://github.com/storytold/craft-fonts) at `craft-fonts-ref` (in `release.yml`) and
+the `craft-fonts` build input at `craft-fonts-ref` (in `release.yml`) and
 builds with `CRAFT_FONTS_DIR` and `CRAFT_FONTS_REQUIRED=1`, so releases embed its fonts and fail
 rather than ship without them. The browser has no system fonts, so a web build without craft-fonts
 can't draw text.

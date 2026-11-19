@@ -12,8 +12,7 @@
 //! whenever it changes the window flags (maximize, restore, ...), so the step runs every frame; it
 //! reads each style and writes only when it differs, so it costs next to nothing.
 //!
-//! The same fix is in DesignCraft (#2139) and PhotoCraft (#2401). The long-term fix is in winit
-//! (storytold/winit#17); this module goes when the pinned winit has it.
+//! The long-term fix belongs in winit; this module goes when the pinned winit has it.
 //!
 //! The Windows calls go through safe `winsafe` wrappers (the workspace forbids `unsafe`). Which
 //! windows are ours is found by enumerating this process's top-level windows of winit's window

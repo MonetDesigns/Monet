@@ -4,7 +4,7 @@ FigCraft without a window: inspect, export, convert and render documents, run co
 commands, serve MCP, publish plugins and code connect mappings, and measure performance. Build it with
 `cargo build --release -p figcraft-cli` (binary `target/release/figcraft-cli`).
 
-The CLI follows [RFC-0012](https://github.com/storytold/craft-contrib/blob/main/rfcs/0012-cli-conventions.md),
+The CLI follows RFC-0012 (shared CLI conventions),
 the command-line conventions the Craft apps share, in how it parses its arguments (with clap). The
 rules it doesn't follow yet are listed below. `figcraft-cli --help` is the source of truth for
 the flags; this page explains what they do.
