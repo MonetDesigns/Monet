@@ -1102,6 +1102,69 @@ pub struct SectionData {
     pub color_hex: Option<String>,
 }
 
+/// 取色器 AA 对比度的选区上下文（selection → picker）。右栏拿不到 doc，所以和别的节一样
+/// 每帧由 `read()` 读成快照：`bg` 是当前色要映在其上的背景（父节点第一个可见纯色 fill，
+/// 回退到页面背景）；`is_text` + `runs` 喂给 `figcraft_color::classify` 得到 auto 类别，
+/// 这正是 Figma 下拉里「自动（图形）」那一项显示的判定结果。
+#[derive(Clone, Debug, PartialEq)]
+pub struct ContrastContext {
+    pub bg: figcraft_color::Color,
+    pub is_text: bool,
+    pub runs: Vec<figcraft_color::TextRun>,
+    pub auto_category: figcraft_color::ContrastCategory,
+}
+
+impl Default for ContrastContext {
+    fn default() -> Self {
+        Self {
+            bg: figcraft_color::Color::WHITE,
+            is_text: false,
+            runs: Vec::new(),
+            auto_category: figcraft_color::ContrastCategory::Graphics,
+        }
+    }
+}
+
+/// Read the contrast context for the current selection. Background = the first visible solid
+/// fill on the selected node's parent (what the colour sits on), falling back to the page
+/// background. Text runs = the node's base style plus every override run, each reduced to
+/// `(font_size, weight)` for the J3 large-text classifier.
+fn read_contrast_context(doc: &Document, ids: &[NodeId], page: Option<NodeId>) -> ContrastContext {
+    let page_bg = page
+        .and_then(|p| doc.node(p))
+        .and_then(|n| match &n.kind {
+            figcraft_doc::NodeKind::Page { background, .. } => Some(*background),
+            _ => None,
+        })
+        .unwrap_or(figcraft_color::Color::DEFAULT_PAGE);
+    let Some(first) = ids.first().and_then(|id| doc.node(*id)) else {
+        return ContrastContext { bg: page_bg, ..ContrastContext::default() };
+    };
+    let bg = first
+        .parent
+        .and_then(|pid| doc.node(pid))
+        .and_then(|p| p.fills.iter().find(|paint| paint.visible).and_then(|paint| paint.solid_color()))
+        .unwrap_or(page_bg);
+
+    let mut runs = Vec::new();
+    let mut is_text = true;
+    for id in ids {
+        match doc.node(*id).map(|n| &n.kind) {
+            Some(figcraft_doc::NodeKind::Text(t)) => {
+                let base = figcraft_color::TextRun { font_size: t.style.font_size as f32, font_weight: u32::from(t.style.weight()) };
+                runs.push(base);
+                runs.extend(t.runs.iter().map(|r| figcraft_color::TextRun {
+                    font_size: r.style.font_size as f32,
+                    font_weight: u32::from(r.style.weight()),
+                }));
+            }
+            _ => is_text = false,
+        }
+    }
+    let auto_category = figcraft_color::classify(is_text, &runs);
+    ContrastContext { bg, is_text, runs, auto_category }
+}
+
 /// 空选区时的 Page 节（egui `right.rs::page_section`）。
 #[derive(Clone, Debug, PartialEq)]
 pub struct PageData {
@@ -1227,6 +1290,8 @@ pub struct PanelData {
     pub dimensions: Option<DimensionsData>,
     /// 排版快照（仅全部选中都是文本节点时 `Some`）；驱动 Typography 节。
     pub text: Option<TextData>,
+    /// 取色器 AA 对比度的选区上下文（背景色 + 文字分段 + auto 类别判定）。
+    pub contrast: ContrastContext,
     /// 网格 auto layout 的轨道快照（仅单选一个 grid frame 时 `Some`）。
     pub grid_tracks: Option<GridTracksData>,
     /// Scale 工具激活时的快照；`Some` 时右栏用 Scale 节**替换** Position 节。
@@ -1398,6 +1463,8 @@ fn paint_rows(doc: &Document, ids: &[NodeId], fills: bool) -> Option<Vec<PaintRo
 /// 读取当前选区的完整快照。
 pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: usize) -> PanelData {
     let mut d = PanelData::default();
+    // 取色器的 AA 对比上下文与选区无关地先算好：空选区时也要有页面背景作对比基准。
+    d.contrast = read_contrast_context(doc, ids, page);
     // 变量编辑器的列表跟选区无关，两种分支都要有（`ids.is_empty()` 会提前 return）。
     d.variables = crate::panels::right::variables::read(doc);
     // Prototype 标签的数据跟选区无关地先算好：`ids.is_empty()` 会提前 return。

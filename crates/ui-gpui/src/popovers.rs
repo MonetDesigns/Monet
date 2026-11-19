@@ -183,8 +183,19 @@ pub(crate) enum Setting {
 
 struct ColorState {
     current: Color32,
+    /// 选色后的即时显示色（retained 跨帧）：SV/AA 选色只推命令改文档，取色器自己要同步高亮/白线/hex，
+    /// 否则点了 AA 看不到颜色「跳到白线上」。所有 pick 回调先写这里再调 on_pick。
+    display: std::rc::Rc<std::cell::RefCell<Color32>>,
     hex: Entity<TextField>,
     on_pick: Rc<dyn Fn(Color32, &mut Window, &mut App)>,
+    /// AA 对比度的选区上下文（背景色 + 文字判定），来自 `PanelData::contrast`。
+    contrast: crate::panels::right::data::ContrastContext,
+    /// 用户在下拉里选的分类（`None` = 跟随 auto 判定）与等级。用 Rc<RefCell> 让菜单回调
+    /// 能隔着 `&mut App` 修改并重绘（浮层菜单是窗口级兄弟元素，拿不到 `&mut self`）。
+    aa_category: std::rc::Rc<std::cell::RefCell<Option<figcraft_color::ContrastCategory>>>,
+    aa_level: std::rc::Rc<std::cell::RefCell<figcraft_color::ContrastLevel>>,
+    /// 对比度设置下拉的锚点矩形（`Some` = 本帧要显示菜单）。
+    aa_anchor: std::rc::Rc<std::cell::RefCell<Option<gpui::Bounds<gpui::Pixels>>>>,
 }
 
 /// Everything an open detached window needs. Kept as data on the root view (a retained tree), not
@@ -993,6 +1004,7 @@ impl WindowState {
         cx: &mut App,
         origin: Point<Pixels>,
         current: Color32,
+        contrast: crate::panels::right::data::ContrastContext,
         on_pick: Rc<dyn Fn(Color32, &mut Window, &mut App)>,
         cmds: Cmds,
     ) -> Self {
@@ -1001,7 +1013,7 @@ impl WindowState {
         // 内容自己按 240 pt 排（SV 方块 / 色相 / 透明度 / Hex / 页面色板）。
         w.width = 264.0;
         w.pad = 12.0;
-        w.height = HEADER_H + 348.0;
+        w.height = HEADER_H + 384.0;
         let hex = TextField::build(cx, 240.0, |tf, _| {
             tf.set_value(current.to_hex());
             tf.set_placeholder("Hex");
@@ -1014,7 +1026,16 @@ impl WindowState {
                 }
             });
         });
-        w.color = Some(ColorState { current, hex, on_pick });
+        w.color = Some(ColorState {
+            current,
+            display: std::rc::Rc::new(std::cell::RefCell::new(current)),
+            hex,
+            on_pick,
+            contrast,
+            aa_category: std::rc::Rc::new(std::cell::RefCell::new(None)),
+            aa_level: std::rc::Rc::new(std::cell::RefCell::new(figcraft_color::ContrastLevel::AA)),
+            aa_anchor: std::rc::Rc::new(std::cell::RefCell::new(None)),
+        });
         w
     }
 
@@ -1084,7 +1105,7 @@ impl WindowState {
         match self.kind {
             // A custom title: the current colour's swatch beside the usual label.
             WindowKind::Color => {
-                let c = self.color.as_ref().map(|c| c.current).unwrap_or(Color32::BLACK);
+                let c = self.color.as_ref().map(|c| *c.display.borrow()).unwrap_or(Color32::BLACK);
                 div()
                     .flex()
                     .flex_row()
@@ -1207,13 +1228,49 @@ impl WindowState {
 
     /// 取色器的主体：直接画在通用窗口的 body 插槽里（不再套一层旧取色器卡片）。
     /// 尺寸沿用 `ui-egui::colorpicker`：240 pt 宽的行、12 段色相、棋盘透明度、Hex、页面色板。
-    fn color_body(&self) -> AnyElement {
-        let Some(c) = &self.color else { return div().into_any_element() };
+    fn color_body(&mut self) -> AnyElement {
+        // 先克隆出本帧需要的对比度状态，后面构造菜单回调时不再借 self.color。
+        let (current, contrast, aa_category, aa_level, aa_anchor, wake, display) = {
+            let Some(c) = &self.color else { return div().into_any_element() };
+            (
+                *c.display.borrow(),
+                c.contrast.clone(),
+                c.aa_category.clone(),
+                c.aa_level.clone(),
+                c.aa_anchor.clone(),
+                self.cmds.clone(),
+                c.display.clone(),
+            )
+        };
+        let hex_field = self.color.as_ref().map(|c| c.hex.clone());
+        let on_pick_cell = self.color.as_ref().map(|c| c.on_pick.clone());
+        // 用户选的分类回退到 J3 的 auto 判定；等级决定用哪一列阈值。
+        let category = aa_category.borrow().unwrap_or(contrast.auto_category);
+        let aa_level_val = *aa_level.borrow();
+        let aa_min = figcraft_color::minimum(category, aa_level_val);
         let t = tokens();
-        let current = c.current;
         let hsb = figcraft_color::Hsb::from_color(figcraft_color::Color::from_rgba8(current.0[0], current.0[1], current.0[2], current.0[3]));
         let hue = hsb.h;
-        let pick = c.on_pick.clone();
+        let fg_color = figcraft_color::Color::from_rgba8(current.0[0], current.0[1], current.0[2], current.0[3]);
+        let ratio = figcraft_color::contrast_ratio(fg_color, contrast.bg);
+        // 每次选色（SV / 色相 / 透明度 / 色板 / AA 修正）先更新显示色与 hex、唤醒重绘，
+        // 再调调用方的 on_pick 推命令改文档。这样 AA 点击能立刻看到圆点跳到白线上。
+        let raw_pick = on_pick_cell.clone().unwrap_or_else(|| Rc::new(|_, _, _| {}));
+        let display_cell = display.clone();
+        let hex_for_pick = hex_field.clone();
+        let wake_pick = wake.clone();
+        let pick: Rc<dyn Fn(Color32, &mut Window, &mut App)> = Rc::new(move |c: Color32, window: &mut Window, cx: &mut App| {
+            *display_cell.borrow_mut() = c;
+            if let Some(hex) = &hex_for_pick {
+                hex.update(cx, |tf, _| tf.set_value(c.to_hex()));
+            }
+            raw_pick(c, window, cx);
+            wake_pick.wake();
+        });
+
+        // 白线：把选中的阈值当常量反解出的「刚好达标」亮度边界。graphics 无 AAA 阈值 → 无线。
+        let boundary = aa_min.map(|m| figcraft_color::boundary_line(contrast.bg, m, hue));
+        let boundary_paint = boundary.clone();
 
         // ① 饱和度 / 明度方块：两个线性渐变 quad（底层 白→色相，上层 透明→黑）。
         //    原来是 24×18 = 432 个逐格 quad，再叠上百个棋盘格 —— 拖动这张卡片时每帧要画
@@ -1246,6 +1303,37 @@ impl WindowState {
                             bounds,
                             gpui::linear_gradient(180.0, gpui::linear_color_stop(clear, 0.0), gpui::linear_color_stop(black, 1.0)),
                         ));
+                        // AA 达标的「刚好及格」白线：把反解出的 (s,v) 边界点连成折线，
+                        // x = s·w, y = (1−v)·h（Figma 的 328 方块按本方块尺寸缩放）。
+                        if let Some((lighter, darker)) = &boundary_paint {
+                            let bx = f32::from(bounds.origin.x);
+                            let by = f32::from(bounds.origin.y);
+                            let bw = f32::from(bounds.size.width);
+                            let bh = f32::from(bounds.size.height);
+                            let stroke = rgba(Color32::from_rgba_unmultiplied(255, 255, 255, 204));
+                            // 折线按 x 逐像素插值 y，画 1pt 见方的小块连成连续曲线：白线是 s 单调
+                            // 的，这样不依赖旋转 quad，视觉上仍是一条顺滑的白色边界。
+                            for line in [lighter, darker] {
+                                for pair in line.windows(2) {
+                                    let (a, b) = (pair[0], pair[1]);
+                                    let (x1, y1) = (a.s * bw, (1.0 - a.v) * bh);
+                                    let (x2, y2) = (b.s * bw, (1.0 - b.v) * bh);
+                                    let steps = ((x2 - x1).abs() / 1.5).ceil().max(1.0) as usize;
+                                    for i in 0..=steps {
+                                        let f = i as f32 / steps as f32;
+                                        let x = x1 + (x2 - x1) * f;
+                                        let y = y1 + (y2 - y1) * f;
+                                        window.paint_quad(gpui::fill(
+                                            Bounds {
+                                                origin: point(px(bx + x - 0.5), px(by + y - 0.5)),
+                                                size: size(px(1.5), px(1.5)),
+                                            },
+                                            stroke,
+                                        ));
+                                    }
+                                }
+                            }
+                        }
                     },
                 )
                 .size_full(),
@@ -1366,15 +1454,196 @@ impl WindowState {
                     .on_mouse_down(MouseButton::Left, move |_, window, cx| p(col, window, cx)),
             );
         }
+        // ── ⑥ AA 对比度行 + 设置下拉（Figma 的对比度检查器）──────────────────────────────
+        // 左：背景色示意圆 + 实测比值 "N : 1"；中：AA 圆标（未达标时带斜杠，点击自动修正到
+        // 白线上最近点）；右：设置图标点开下拉，分类 4 项 + 等级 2 项（图形无 AAA → 灰掉）。
+        let aa_pass = aa_min.is_some_and(|m| ratio >= m);
+        let ratio_label = format!("{ratio:.2} : 1");
+        let bg_dot = contrast.bg;
+        let ratio_canvas = gpui::canvas(
+            |_, _, _| {},
+            move |bounds, _, window, _| {
+                let c = f32::from(bounds.size.width).min(f32::from(bounds.size.height));
+                let r = c * 0.5;
+                let cx = f32::from(bounds.origin.x) + r;
+                let cy = f32::from(bounds.origin.y) + r;
+                // 半黑半白圆：左半是对比基准色，右半留白，正是 Figma 对比行的图标。
+                let bg_rgba = rgba(crate::widgets::swatch::color32(bg_dot.with_alpha(1.0)));
+                window.paint_quad(gpui::fill(
+                    Bounds { origin: point(px(cx - r), px(cy - r)), size: size(px(r), px(2.0 * r)) },
+                    bg_rgba,
+                ));
+                window.paint_quad(gpui::fill(
+                    Bounds { origin: point(px(cx), px(cy - r)), size: size(px(r), px(2.0 * r)) },
+                    rgba(Color32::WHITE),
+                ));
+            },
+        )
+        .size(pt(16.0));
+
+        // AA 圆标：达标显示实心勾底绿，未达标显示带斜杠。点击 → 取最近达标色并应用。
+        let aa_pick = pick.clone();
+        let aa_fg = fg_color;
+        let aa_bg = contrast.bg;
+        let aa_click = if !aa_pass {
+            if let Some(m) = aa_min {
+                figcraft_color::autocorrect_candidate(aa_fg, aa_bg, m, hue)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let aa_trigger = div()
+            .h(pt(20.0))
+            .px(pt(6.0))
+            .rounded(pt(4.0))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(pt(4.0))
+            .bg(rgba(if aa_pass { t.field } else { t.hover }))
+            .hover(|s| s.bg(rgba(t.selected_row)))
+            .cursor_pointer()
+            .child(
+                div()
+                    .size(pt(12.0))
+                    .rounded_full()
+                    .border_1()
+                    .border_color(rgba(if aa_pass { t.text } else { t.text_secondary }))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(if aa_pass { "✓" } else { "/" }),
+            )
+            .child(div().text_size(pt(11.0)).text_color(rgba(t.text)).child("AA"));
+        let aa_trigger = if let Some(candidate) = aa_click {
+            aa_trigger.on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                let [r, g, b, a] = candidate.to_rgba8();
+                aa_pick(Color32::from_rgba_unmultiplied(r, g, b, a), window, cx);
+            })
+        } else {
+            aa_trigger
+        };
+
+        // 设置下拉触发：把按钮矩形存进 aa_anchor，下一帧据此定位菜单。
+        let anchor_store = aa_anchor.clone();
+        let wake_menu = wake.clone();
+        let settings_trigger = div()
+            .size(pt(20.0))
+            .rounded(pt(4.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_pointer()
+            .hover(|s| s.bg(rgba(t.hover)))
+            .child(crate::widgets::icon::paint(Icon::Settings, rgba(t.text), 12.0))
+            .on_mouse_down(MouseButton::Left, {
+                let store = anchor_store.clone();
+                let wake = wake_menu.clone();
+                move |e, window, cx| {
+                    // 用点击点附近的一个小矩形作锚点（菜单落在按钮下方）。
+                    let at = Bounds {
+                        origin: e.position,
+                        size: size(px(20.0), px(20.0)),
+                    };
+                    *store.borrow_mut() = Some(at);
+                    wake.wake();
+                    let _ = window;
+                    let _ = cx;
+                }
+            });
+
+        // 菜单内容（仅展开时构造，推到窗口级 overlays）。
+        if let Some(rect) = *aa_anchor.borrow() {
+            let cat = aa_category.clone();
+            let lvl = aa_level.clone();
+            let anchor_close = aa_anchor.clone();
+            let wake2 = wake.clone();
+            let aaa_label: SharedString = tr("AAA · 仅限文本").into();
+            let auto_label: SharedString = format!("自动（{}）", category_label(contrast.auto_category)).into();
+            let large_label: SharedString = tr("大文本").into();
+            let normal_label: SharedString = tr("普通文本").into();
+            let graphics_label: SharedString = tr("图形").into();
+            let aa_label: SharedString =
+                format!("AA · Essential ({:.1} : 1)", figcraft_color::minimum(category, figcraft_color::ContrastLevel::AA).unwrap_or(3.0)).into();
+            let row_auto = auto_label.clone();
+            let row_large = large_label.clone();
+            let row_normal = normal_label.clone();
+            let row_graphics = graphics_label.clone();
+            let row_aa = aa_label.clone();
+            let row_aaa = aaa_label.clone();
+            let on_pick_menu = Rc::new(move |picked: &str, _w: &mut Window, _cx: &mut App| {
+                // graphics 没有 AAA 阈值 → 点「AAA」无效（对应下拉里灰掉的那一项）。
+                if picked == aaa_label.as_ref() && figcraft_color::minimum(category, figcraft_color::ContrastLevel::AAA).is_none() {
+                    *anchor_close.borrow_mut() = None;
+                    wake2.wake();
+                    return;
+                }
+                if picked == auto_label.as_ref() {
+                    *cat.borrow_mut() = None;
+                } else if picked == large_label.as_ref() {
+                    *cat.borrow_mut() = Some(figcraft_color::ContrastCategory::LargeText);
+                } else if picked == normal_label.as_ref() {
+                    *cat.borrow_mut() = Some(figcraft_color::ContrastCategory::NormalText);
+                } else if picked == graphics_label.as_ref() {
+                    *cat.borrow_mut() = Some(figcraft_color::ContrastCategory::Graphics);
+                } else if picked == aa_label.as_ref() {
+                    *lvl.borrow_mut() = figcraft_color::ContrastLevel::AA;
+                } else if picked == aaa_label.as_ref() {
+                    *lvl.borrow_mut() = figcraft_color::ContrastLevel::AAA;
+                }
+                *anchor_close.borrow_mut() = None;
+                wake2.wake();
+            });
+            let anchor_dismiss = aa_anchor.clone();
+            let wake3 = wake.clone();
+            let dismiss = Rc::new(move |_w: &mut Window, _cx: &mut App| {
+                *anchor_dismiss.borrow_mut() = None;
+                wake3.wake();
+            });
+            let sel_cat = *aa_category.borrow();
+            let sel_lvl = *aa_level.borrow();
+            let rows = vec![
+                MenuRow { label: row_auto, trail: None, checked: Some(sel_cat.is_none()), separator_before: false },
+                MenuRow { label: row_large, trail: None, checked: Some(sel_cat == Some(figcraft_color::ContrastCategory::LargeText)), separator_before: false },
+                MenuRow { label: row_normal, trail: None, checked: Some(sel_cat == Some(figcraft_color::ContrastCategory::NormalText)), separator_before: false },
+                MenuRow { label: row_graphics, trail: None, checked: Some(sel_cat == Some(figcraft_color::ContrastCategory::Graphics)), separator_before: false },
+                MenuRow { label: row_aa, trail: None, checked: Some(sel_lvl == figcraft_color::ContrastLevel::AA), separator_before: true },
+                MenuRow { label: row_aaa, trail: None, checked: Some(sel_lvl == figcraft_color::ContrastLevel::AAA), separator_before: false },
+            ];
+            let menu = menu_popup_in(rect, Some(180.0), rows, on_pick_menu, dismiss, 0.0, 0.0);
+            self.overlays.borrow_mut().push(menu);
+        }
+
+        let contrast_row = div()
+            .w(pt(240.0))
+            .h(pt(24.0))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(pt(6.0))
+            .child(div().size(pt(16.0)).child(ratio_canvas))
+            .child(div().flex_1().text_size(pt(11.0)).text_color(rgba(t.text)).child(ratio_label))
+            .child(aa_trigger)
+            .child(settings_trigger);
+
         div()
             .w(pt(240.0))
             .flex()
             .flex_col()
             .gap(pt(6.0))
+            .child(contrast_row)
             .child(sv)
             .child(hue_row)
             .child(alpha)
-            .child(div().w(pt(240.0)).h(pt(28.0)).child(c.hex.clone()))
+            .child({
+                let mut row = div().w(pt(240.0)).h(pt(28.0));
+                if let Some(hex) = hex_field {
+                    row = row.child(hex);
+                }
+                row
+            })
             .child(grid)
             .into_any_element()
     }
@@ -1972,6 +2241,16 @@ fn effect_setting_rows(cx: &mut App, cmds: &Cmds, index: usize, effect: &Value, 
         _ => {}
     }
     out
+}
+
+/// Figma 下拉里「自动（图形）」括号内的判定结果文案。
+fn category_label(c: figcraft_color::ContrastCategory) -> &'static str {
+    match c {
+        figcraft_color::ContrastCategory::LargeText => "大文本",
+        figcraft_color::ContrastCategory::NormalText => "普通文本",
+        figcraft_color::ContrastCategory::Graphics => "图形",
+        figcraft_color::ContrastCategory::Mixed => "混合",
+    }
 }
 
 fn wire_set(field: &Entity<TextField>, cx: &mut App, cmds: &Cmds, key: &'static str, min: f64, max: f64) {

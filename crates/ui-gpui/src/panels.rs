@@ -614,6 +614,8 @@ pub(crate) struct RightFields {
     /// Blend-mode row reveal (egui `paints.rs::appearance`'s `blend_open` local flag): the
     /// Appearance header's blend button toggles this, and the blend dropdown row shows only when set.
     blend_open: std::rc::Rc<std::cell::RefCell<bool>>,
+    /// 取色器 AA 对比上下文的最新快照，由 `right_panel` 每帧从 `PanelData` 灌入。
+    contrast: Rc<std::cell::RefCell<right::data::ContrastContext>>,
     /// The root view, set once after construction so fields can open menus through it.
     root: Option<Entity<CanvasView>>,
     /// Shared slot for detached-window requests. Buttons put a `WindowState` here and the root
@@ -1020,6 +1022,7 @@ impl RightFields {
             // Blend-mode dropdown: a button that opens the blend menu on click (egui `dropdown`).
             blend_label: std::cell::RefCell::new(SharedString::from(tr("Normal"))),
             blend_open: std::rc::Rc::new(std::cell::RefCell::new(false)),
+            contrast: Rc::new(std::cell::RefCell::new(right::data::ContrastContext::default())),
             root: None,
             popup_slot: Rc::new(std::cell::RefCell::new(None)),
             last_fill: std::cell::RefCell::new(None),
@@ -1136,6 +1139,14 @@ impl RightFields {
     /// Ready for dev 列表的过滤器下标（egui `FILTERS` 的四项）。
     pub(crate) fn dev_ready_filter(&self) -> usize {
         (*self.dev_filter.borrow()).min(3)
+    }
+
+    /// 取色器 AA 上下文：每帧由 `right_panel` 写入，`color_pick` 打开取色器时读出。
+    pub(crate) fn set_contrast(&self, ctx: right::data::ContrastContext) {
+        *self.contrast.borrow_mut() = ctx;
+    }
+    pub(crate) fn contrast(&self) -> right::data::ContrastContext {
+        self.contrast.borrow().clone()
     }
 
     /// 每帧开头清空池的上下文（未认领的槽位不能沿用上一帧的目标）。
@@ -1780,6 +1791,8 @@ pub(crate) fn right_panel(
     motion: bool,
 ) -> Stateful<Div> {
     let t = tokens();
+    // 把本帧的 AA 对比上下文（背景色 + 文字判定）灌进 fields，供 color swatch 打开取色器时用。
+    f.set_contrast(data.contrast.clone());
     // 不再手算任何列宽：字段/下拉/颜色行一律 `w_full`，列宽完全由统一网格的 `flex_1` 决定。
     // `FILL` 是传给需要宽度参数组件的哨兵值（它们内部都走 `w_full`）。
     const FILL: f32 = 0.0;

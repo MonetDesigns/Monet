@@ -612,6 +612,8 @@ fn color_pick(
 ) -> ColorField {
     let popups = f.popups();
     let cmds = f.cmds.clone();
+    // 打开取色器时带上当前选区的 AA 对比上下文（背景色 + 文字判定），由 right_panel 每帧灌入。
+    let contrast = f.contrast();
     cf.on_swatch(move |pos: Point<Pixels>, _window, cx: &mut App| {
         let on_pick = Rc::new({
             let cmds = cmds.clone();
@@ -631,7 +633,7 @@ fn color_pick(
         });
         // Synchronous request, no detached async `spawn` and no root-Entity guard: the old
         // `cx.spawn(...).detach()` delayed the picker by a frame and could be dropped entirely.
-        let w = crate::popovers::WindowState::color(cx, pos, current, on_pick, cmds.clone());
+        let w = crate::popovers::WindowState::color(cx, pos, current, contrast.clone(), on_pick, cmds.clone());
         popups.request(w);
     })
 }
