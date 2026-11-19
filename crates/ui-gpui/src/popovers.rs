@@ -640,6 +640,10 @@ struct ColorState {
     aa_level: std::rc::Rc<std::cell::RefCell<figcraft_color::ContrastLevel>>,
     /// AA 对比度设置下拉的锚点矩形（`Some` = 本帧显示菜单）。
     aa_anchor: std::rc::Rc<std::cell::RefCell<Option<Bounds<Pixels>>>>,
+    /// 跨帧保留的 HSB（EGUI 用 `ui.data` temp 存同一份东西）：拖动 SV 时 hue 必须保持稳定，
+    /// 否则每帧从 u8 颜色反算 hue 会有量化误差，色相手柄就会「微微抽动」（用户实测）。
+    /// 只有缓存的 rgba 与当前色完全一致才复用，外部改色则重新反算。
+    hsb_cache: std::rc::Rc<std::cell::Cell<Option<(f32, f32, f32, [u8; 4])>>>,
 }
 
 /// 渐变断点行里的通用输入控件：位置百分比 + 通用颜色行（Hex + 透明度）。
@@ -2546,6 +2550,7 @@ impl WindowState {
             aa_category: std::rc::Rc::new(std::cell::RefCell::new(None)),
             aa_level: std::rc::Rc::new(std::cell::RefCell::new(figcraft_color::ContrastLevel::AA)),
             aa_anchor: std::rc::Rc::new(std::cell::RefCell::new(None)),
+            hsb_cache: std::rc::Rc::new(std::cell::Cell::new(None)),
         });
         // 卡片高度按面板实际内容算（见 `color_card_height`），`render` 每帧会再同步一次，
         // 所以纯色 ↔ 渐变、色板行数变化时卡片会自己长/缩。
@@ -2946,7 +2951,13 @@ impl WindowState {
             let a = (f64::from(current.0[3]) / 255.0 * 100.0).round() as u32;
             c.alpha.update(cx, |tf, _| tf.set_value(a.to_string()));
         }
-        let hsb = figcraft_color::Hsb::from_color(picker_color(current));
+        // 拖动中复用缓存的 HSB（hue 稳定，不抖）；缓存颜色和当前色不一致（外部改色）才反算。
+        let hsb = c
+            .hsb_cache
+            .get()
+            .filter(|(_, _, _, rgba)| *rgba == current.0)
+            .map(|(h, s, b, _)| figcraft_color::Hsb { h, s, b })
+            .unwrap_or_else(|| figcraft_color::Hsb::from_color(picker_color(current)));
         let hue = hsb.h;
         let alpha = f32::from(current.0[3]) / 255.0;
         let pick = c.on_pick.clone();
@@ -2961,11 +2972,14 @@ impl WindowState {
         let sv_pick = {
             let pick = pick.clone();
             let cur = c.current.clone();
+            let cache = c.hsb_cache.clone();
             move |h: f32, s: f32, v: f32, window: &mut Window, cx: &mut App| {
                 // RGB-only 编辑要保留上一次提交色的 alpha，否则 0.4 的纯色一拖 SV 就变全不透明
                 //（CodeRabbit #30）。alpha 交给 `pick` 里的 paint 写入。
                 let a = cur.get().0[3];
-                pick(hsb_color(h, s, v).with_alpha(a), window, cx);
+                let color = hsb_color(h, s, v).with_alpha(a);
+                cache.set(Some((h, s, v, color.0)));
+                pick(color, window, cx);
             }
         };
         // ── AA 对比度：类别/等级来自 ColorState，背景来自选区快照，白线是达标边界 ──────
@@ -3078,9 +3092,14 @@ impl WindowState {
         let hue_pick = {
             let pick = pick.clone();
             let cur = c.current.clone();
+            let cache = c.hsb_cache.clone();
+            // 只改色相，保留当前饱和度/明度（EGUI 的 `hsb.h = t * 360` 其余不动）。
+            let keep = (hsb.s, hsb.b);
             move |h: f32, window: &mut Window, cx: &mut App| {
                 let a = cur.get().0[3];
-                pick(hsb_color(h, 1.0, 1.0).with_alpha(a), window, cx);
+                let color = hsb_color(h, keep.0, keep.1).with_alpha(a);
+                cache.set(Some((h, keep.0, keep.1, color.0)));
+                pick(color, window, cx);
             }
         };
         let hue_slider = crate::widgets::Slider::new(hue, 0.0, 360.0)
