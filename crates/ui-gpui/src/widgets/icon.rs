@@ -32,7 +32,9 @@
 //!   (kit's `.data(include_bytes!(...))` / `.path(...)` equivalence);
 //! - colour is applied with `.text_color()` (kit's `.text_color(cx.theme().red)`), i.e. GPUI
 //!   renders the SVG into an alpha mask and tints it with the given `Hsla`;
-//! - size is `.with_size(px(n))` over a 16x16 viewBox (here `.w().h().flex_none()`).
+//! - size is `.with_size(px(n))` (here `.w().h().flex_none()`); the SVG keeps whatever viewBox
+//!   it was authored on — the user-supplied marks are 24×24 and are drawn at 24, the legacy
+//!   generated glyphs are 16×16 and are drawn at 16. No artwork is ever rewritten or zoomed.
 //!
 //! The geometry table below is ported from `ui-egui/src/icons/draw.rs` on a 16x16 grid. It is
 //! unchanged: the helpers now emit SVG primitives in grid units instead of pixel triangles.
@@ -571,45 +573,16 @@ const FIGMA_UI_ICONS: [(Icon, &str); 28] = [
 /// 于是缩放后的线宽仍精确等于 [`ICON_STROKE`]。
 fn figma_ui_icon(icon: Icon, size: f32) -> Option<Vec<u8>> {
     let (_, src) = FIGMA_UI_ICONS.iter().find(|(i, _)| *i == icon)?;
+    // 24 网格的图稿按 24 pt 显示时 `24/size = 1`，注入的线宽就是文件里写的 1，图稿一个字节都不动。
+    // 只有在别的尺寸下（32 的槽放大、14 的小按钮）才按比例反算线宽，几何本身始终等比缩放。
     let width = ICON_STROKE * 24.0 / size.max(0.001);
-    let mut out = src.replace("__STROKE__", &format!("{}", width));
-    // 用户 2026-11-19 的两组 24 网格线框图标图稿只占中间 6.5..17.5，按 16 pt 画出来比旧的
-    // 16 网格字形小一圈。渲染色时把图稿按中心放大，viewBox 不变（描边同比变粗到约 1.4 pt，
-    // 接近旧图标的观感）。
-    let k = art_scale(icon);
-    if k != 1.0
-        && out.starts_with("<svg ")
-        && let (Some(open), Some(close)) = (out.find('>'), out.rfind("</svg>"))
-    {
-        let inner = &out[open + 1..close];
-        out = format!("{}<g transform=\"translate(12 12) scale({k}) translate(-12 -12)\">{inner}</g></svg>", &out[..=open]);
-    }
+    let out = src.replace("__STROKE__", &format!("{}", width));
     Some(out.into_bytes())
 }
 
-/// 图稿放大倍数：只有用户提供的线框图标（对齐 / 镜像 / 节点类型 / 自动布局方向）需要，
-/// 加号、箭头这些原有图标保持原样。
-fn art_scale(icon: Icon) -> f32 {
-    match icon {
-        Icon::AlignLeft
-        | Icon::AlignHCenter
-        | Icon::AlignRight
-        | Icon::AlignTop
-        | Icon::AlignVCenter
-        | Icon::AlignBottom
-        | Icon::FlipH
-        | Icon::FlipV
-        | Icon::Frame
-        | Icon::Number
-        | Icon::Boolean
-        | Icon::Text
-        | Icon::Pen
-        | Icon::Page
-        | Icon::LayoutH
-        | Icon::LayoutV
-        | Icon::LayoutGrid => 1.4,
-        _ => 1.0,
-    }
+/// 用户提供的 24 网格图标：显示尺寸就用它自己的 24，不做任何内部放大。
+pub fn is_24_grid(icon: Icon) -> bool {
+    FIGMA_UI_ICONS.iter().any(|(i, _)| *i == icon)
 }
 
 /// 每个图标按显示尺寸各有一个资源路径（`icons/<name>@<size>.svg`）。

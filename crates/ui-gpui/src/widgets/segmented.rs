@@ -146,7 +146,14 @@ impl Segmented {
             // 设计里只有「选中抬起」一种状态，光标已经是 pointer，够了；不再加 hover 水洗。
             let content: AnyElement = match item {
                 SegItem::Icon(icon) => {
-                    let glyph = if self.height <= 21.0 { 12.0 } else { crate::widgets::ICON };
+                    // 24 网格的图稿放进 24 的槽就是 1:1，不缩放、不改内部图形；旧的 16 网格字形照旧 16。
+                    let glyph = if self.height <= 21.0 {
+                        12.0
+                    } else if crate::widgets::icon::is_24_grid(*icon) {
+                        24.0
+                    } else {
+                        crate::widgets::ICON
+                    };
                     paint_icon(*icon, rgba(t.icon), glyph).into_any_element()
                 }
                 SegItem::Svg(typ) => {
