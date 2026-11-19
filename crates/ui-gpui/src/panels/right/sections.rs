@@ -9,8 +9,8 @@
 //! 动态列表的输入框由父模块的**编辑器池**提供（retained tree 不能每帧新建 `Entity`）。
 
 use figcraft_i18n::tr_noop;
-use figcraft_i18n::tr;
-use super::data::{EffectRow, LocalStyleRow, PaintRow, PanelData, ViewData};
+use figcraft_i18n::{tr, trf, trn};
+use super::data::{EffectRow, ExportRow, LocalStyleRow, PaintRow, PanelData, ViewData};
 use crate::canvas::geom::Color32;
 use crate::motion::{Act, Queue};
 use crate::panels::{Cmd, ROW_EDITORS, RightFields, RowEditCtx, visibility};
@@ -22,7 +22,10 @@ use crate::widgets::{
 use figcraft_color::PaintKind;
 use figcraft_doc::NodeId;
 use figcraft_doc::anim::motion::AnimProperty;
-use gpui::{App, Bounds, Div, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, SharedString, Window, div, prelude::*, px, size};
+use gpui::{
+    App, Bounds, Div, ImageSource, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, SharedString, Window, canvas, div, img,
+    prelude::*, px, size,
+};
 use serde_json::{Value, json};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -34,6 +37,40 @@ use std::rc::Rc;
 /// 推一条命令（等同 egui 的 `app.run(cmd, {"ids": ids, …})`）。
 fn push(f: &RightFields, id: &'static str, params: Value) {
     f.cmds.push(Cmd { id, params: Some(params) });
+}
+
+/// 右键菜单入口：与 `pick_dropdown` 共用 `MenuRow` + 根视图 `open_menu` 这套通用控件，
+/// 只是锚点取当前指针而不是触发按钮（`ui-egui/right/menu.rs::context_popup`）。
+/// `entries` 是 (显示名, 命令, 参数)；`extra` 由调用方先把「剪贴板里有没有可粘贴项」算进去。
+fn context_menu_at(f: &RightFields, at: Point<Pixels>, width: f32, entries: Vec<(String, &'static str, Value)>, cx: &mut App) {
+    let Some(root) = f.root.clone() else { return };
+    let rows: Vec<MenuRow> = entries.iter().map(|(label, _, _)| MenuRow::new(label.clone())).collect();
+    let cmds = f.cmds.clone();
+    let on_pick = Rc::new(move |label: &str, _w: &mut Window, _cx: &mut App| {
+        if let Some((_, cmd, params)) = entries.iter().find(|(l, _, _)| l == label) {
+            cmds.push(Cmd { id: cmd, params: Some(params.clone()) });
+        }
+    });
+    let anchor = Bounds { origin: at, size: size(px(1.0), px(0.0)) };
+    root.update(cx, |cv, cx| cv.open_menu(anchor, Some(width), rows, on_pick, cx));
+}
+
+/// The header's trailing icon row, with the same right-click menu as egui's section header.
+/// Returns a fresh element so callers with two rendering branches do not need a clonable `Div`.
+fn context_header_row(
+    f: &RightFields,
+    icons: Vec<gpui::AnyElement>,
+    width: f32,
+    entries: Vec<(String, &'static str, Value)>,
+) -> gpui::Div {
+    let f = f.clone();
+    let menu_entries = entries.clone();
+    icon_row(icons).on_mouse_down(MouseButton::Right, move |e, _, cx: &mut App| {
+        if !menu_entries.is_empty() {
+            context_menu_at(&f, e.position, width, menu_entries.clone(), cx);
+            cx.stop_propagation();
+        }
+    })
 }
 
 /// 右栏一节（Fill / Stroke / Effects / Layout grid / Export …）的两种呈现。
@@ -664,6 +701,66 @@ fn menu_icon(f: &RightFields, icon: Icon, width: f32, rows: Vec<(String, &'stati
     })
 }
 
+/// 带勾选 / 单选列的菜单按钮：`MenuRow::checked` 是通用的「勾选列」（egui `ui.selectable_label`）。
+/// `rows` = (标签, 勾选态, 命令, 参数, 是否在此行前画分隔线)。行用下标当 key，保证同一命令的
+/// 多行（size / 单选组）不会互相串参数。
+fn checked_menu_icon(
+    f: &RightFields,
+    icon: Icon,
+    width: f32,
+    rows: Vec<(String, Option<bool>, &'static str, Value, bool)>,
+    active: bool,
+) -> IconButton {
+    let menu: Vec<MenuRow> = rows
+        .iter()
+        .enumerate()
+        .map(|(i, (label, on, _, _, sep))| {
+            let row = MenuRow::new(label.clone()).key(i.to_string()).checked(*on);
+            if *sep { row.separator() } else { row }
+        })
+        .collect();
+    let cmds = f.cmds.clone();
+    let root = f.root.clone();
+    IconButton::new(icon).size(24.0).active(active).on_click(move |_e, window, cx: &mut App| {
+        let Some(root) = root.clone() else { return };
+        let p = window.mouse_position();
+        let anchor = Bounds { origin: p, size: size(px(0.0), px(0.0)) };
+        let menu = menu.clone();
+        let rows = rows.clone();
+        let cmds = cmds.clone();
+        let on_pick = Rc::new(move |key: &str, _w: &mut Window, _cx: &mut App| {
+            if let Some((_, _, cmd, params, _)) = key.parse::<usize>().ok().and_then(|i| rows.get(i)) {
+                cmds.push(Cmd { id: cmd, params: Some(params.clone()) });
+            }
+        });
+        root.update(cx, |cv, cx| cv.open_menu(anchor, Some(width.max(160.0)), menu, on_pick, cx));
+    })
+}
+
+/// 整行描边按钮（egui `wide_button`）：Design 区底部导出与页面导出共用。
+/// 用户 2026-11-19 明确允许这一颗按钮与预览自己写，其余控件必须复用通用组件。
+fn wide_button(f: &RightFields, label: SharedString, cmd: &'static str, params: Value) -> Div {
+    let t = tokens();
+    let cmds = f.cmds.clone();
+    div()
+        .w_full()
+        .h(px(crate::widgets::FIELD_H))
+        .rounded(px(crate::widgets::RADIUS))
+        .border_1()
+        .border_color(rgba(t.border_strong))
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .text_size(pt(11.0))
+        .text_color(rgba(t.text))
+        .hover(|s| s.bg(rgba(t.hover)))
+        .child(label)
+        .on_mouse_down(MouseButton::Left, move |_e, _w, _cx| {
+            cmds.push(Cmd { id: cmd, params: Some(params.clone()) });
+        })
+}
+
 /// 右栏 detached 窗口的**唯一**打开入口。
 ///
 /// 所有 24×24 按钮 / 色块 / 下拉都调它，行为因此只有一套：
@@ -1092,12 +1189,24 @@ pub(crate) fn paints(
         .into_any_element());
     }
     icons.push(icon_cmd(Icon::Plus, add_cmd, json!({}), f, false).into_any_element());
+    // EGUI `paints.rs`: the section header's context menu pastes a paint of the same kind.
+    let paste_cmd: &'static str = if fills { "fill.paste" } else { "stroke.paste" };
+    let can_paste_header = if fills { d.can_paste_fill } else { d.can_paste_stroke };
+    let header_entries: Vec<(String, &'static str, Value)> = if can_paste_header {
+        vec![(
+            if fills { tr("Paste fill") } else { tr("Paste stroke") }.to_string(),
+            paste_cmd,
+            json!({}),
+        )]
+    } else {
+        Vec::new()
+    };
     // 空 / Mixed（多选混合，`list == None`）：**只有置灰头部**——不写提示文字、不给 body、
     // 也就没有 `PanelSection` 那 12 pt 底边距。`+` 图标照旧可点，功能没少。
     let Some(rows) = list.filter(|v| !v.is_empty()) else {
-        return Section::empty(title, icon_row(icons));
+        return Section::empty(title, context_header_row(f, icons, 160.0, header_entries));
     };
-    let mut sec = PanelSection::new(title).header_trail(icon_row(icons));
+    let mut sec = PanelSection::new(title).header_trail(context_header_row(f, icons, 160.0, header_entries));
     // egui `paints.rs`：header 之后、paint 行之前先画链接样式的 chip（`style_picker::chip`）。
     if let Some(chip) = style_chip(f, d.style_chips[if fills { 0 } else { 1 }].as_ref(), if fills { "fill" } else { "stroke" }) {
         sec = sec.child(chip);
@@ -1172,6 +1281,22 @@ pub(crate) fn paints(
             ),
             None => cf,
         };
+        // EGUI `paints.rs::paint_row`: right-clicking anywhere on a fill/stroke row offers Copy
+        // that paint and — only when the clipboard holds the same kind — Paste at this index.
+        let copy_cmd: &'static str = if fills { "fill.copy" } else { "stroke.copy" };
+        let paste_cmd: &'static str = if fills { "fill.paste" } else { "stroke.paste" };
+        let copy_label = if fills { tr("Copy fill") } else { tr("Copy stroke") };
+        let paste_label = if fills { tr("Paste fill") } else { tr("Paste stroke") };
+        let mut entries = vec![(copy_label.to_string(), copy_cmd, json!({ "index": index }))];
+        let can_paste = if fills { d.can_paste_fill } else { d.can_paste_stroke };
+        if can_paste {
+            entries.push((paste_label.to_string(), paste_cmd, json!({ "index": index })));
+        }
+        let f_for_menu = f.clone();
+        let cf = cf.into_element().on_mouse_down(MouseButton::Right, move |e, _, cx: &mut App| {
+            context_menu_at(&f_for_menu, e.position, 180.0, entries.clone(), cx);
+            cx.stop_propagation();
+        });
         let cf = crate::popovers::with_button_bounds(cf, swatch_hit);
         let eye = icon_cmd(if row.visible { Icon::Eye } else { Icon::EyeOff }, cmd, json!({ "index": index, "visible": !row.visible }), f, false);
         let minus = icon_cmd(Icon::Minus, if fills { "fill.remove" } else { "stroke.remove" }, json!({ "index": index }), f, false);
@@ -1388,7 +1513,14 @@ pub(crate) fn effects(
     // `[Styles, Plus]`；`+` 点开是「添加效果」菜单：7 种内置效果 + 分隔线 + 固定目录里每个
     // `.wgsl` 文件项（有多少文件就多少项）。选中文件写 plugin_data 绑定，其参数才在下方展开。
     // WGSL 与内置效果同处一个菜单，不再另起独立下拉行。
-    let icons = vec![style_menu(f, d, "effect", None, Icon::Dot), add_effect_menu(f).into_any_element()];
+    let make_icons = || vec![style_menu(f, d, "effect", None, Icon::Dot), add_effect_menu(f).into_any_element()];
+    // EGUI `effects.rs`: the Effects header's context menu pastes a copied effect.
+    let can_paste_effect_header = d.can_paste_effect;
+    let header_entries: Vec<(String, &'static str, Value)> = if can_paste_effect_header {
+        vec![(tr("Paste effect").to_string(), "effect.paste", json!({}))]
+    } else {
+        Vec::new()
+    };
 
     // WGSL 材质：只在「已绑定」时于下方就地展开参数输入框（选中文件由上面的 `+` 菜单写入）。
     // 空态（0 效果、未绑定）连参数行都不画，Effects 节就是一行置灰头部 + 可点的 `+`。
@@ -1398,7 +1530,7 @@ pub(crate) fn effects(
         // 没有普通效果、但已绑定材质时，Effects 节仍要画出来以承载其参数行；
         // 未绑定时这里是空节（置灰头部 + 可点的 `+`，`+` 菜单里能选内置效果或 wgsl 文件）。
         if !wgsl_rows.is_empty() {
-            let mut sec = PanelSection::new(tr("Effects")).header_trail(icon_row(icons));
+            let mut sec = PanelSection::new(tr("Effects")).header_trail(context_header_row(f, make_icons(), 160.0, header_entries.clone()));
             if let Some(chip) = style_chip(f, d.style_chips[2].as_ref(), "effect") {
                 sec = sec.child(chip);
             }
@@ -1407,9 +1539,9 @@ pub(crate) fn effects(
             }
             return Section::Full(sec);
         }
-        return Section::empty(tr("Effects"), icon_row(icons));
+        return Section::empty(tr("Effects"), context_header_row(f, make_icons(), 160.0, header_entries.clone()));
     };
-    let mut sec = PanelSection::new(tr("Effects")).header_trail(icon_row(icons));
+    let mut sec = PanelSection::new(tr("Effects")).header_trail(context_header_row(f, make_icons(), 160.0, header_entries));
     // egui `effects.rs`：`style_picker::chip(StyleSlot::Effect)` 紧跟在 header 后面。
     if let Some(chip) = style_chip(f, d.style_chips[2].as_ref(), "effect") {
         sec = sec.child(chip);
@@ -1422,7 +1554,18 @@ pub(crate) fn effects(
         // 点效果行的方框 → 效果设置小窗；原先这里点开的是「切换效果类型」菜单。
         // 原切换实现 clone 旧 JSON 只改 `type`，残留旧类型字段会被引擎
         // `refuse_ignored_effect_keys` 整条拒收，表现为「点了没反应、画布里没效果」。
-        let dd = effect_settings_button(f, row, col);
+        // EGUI `effects.rs`: a right-click on the effect row copies that effect and, when the
+        // clipboard holds one, offers Paste effect at the same index.
+        let mut effect_entries = vec![(tr("Copy effect").to_string(), "effect.copy", json!({ "index": row.index }))];
+        let can_paste_effect = d.can_paste_effect;
+        if can_paste_effect {
+            effect_entries.push((tr("Paste effect").to_string(), "effect.paste", json!({ "index": row.index })));
+        }
+        let f_for_menu = f.clone();
+        let dd = effect_settings_button(f, row, col).into_element().on_mouse_down(MouseButton::Right, move |e, _, cx: &mut App| {
+            context_menu_at(&f_for_menu, e.position, 180.0, effect_entries.clone(), cx);
+            cx.stop_propagation();
+        });
         let mut e2 = row.effect.clone();
         if let Some(o) = e2.as_object_mut() {
             o.insert("visible".into(), json!(!row.visible));
@@ -1805,15 +1948,41 @@ pub(crate) fn export(f: &RightFields, d: &PanelData, col: f32, n: &mut usize, cx
         return Section::empty(tr("Export"), plus);
     };
     let mut sec = PanelSection::new(tr("Export")).header_trail(plus);
-    let tick = |label: &str, on: bool| format!("{label}{}", if on { " ✓" } else { "" });
+    // 预览框是整行宽（两列 + 间隙），图片再让出左右内边距与 8 pt 呼吸位。
+    let full_w = col * 2.0 + crate::widgets::GRID_GAP;
     for row in rows.iter() {
         let index = row.index;
-        // suffix / format / remove —— 照 `setting_row` 顺序。size 与高级选项放进 Dots 菜单，
-        // 避免往同一行再塞一个 `w_full` 下拉把 suffix 挤没（列宽由统一网格负责）。
-        let suffix_slot = slot(n);
+        // ① 第一行（统一网格）：Size（仅位图）+ 格式，行尾 Dots 设置小窗与删除。
+        let formats: Vec<(String, &'static str, Value)> =
+            [("PNG", "png"), ("JPG", "jpg"), ("SVG", "svg"), ("PDF", "pdf"), ("WebP", "webp"), ("XML", "xml")]
+                .into_iter()
+                .map(|(l, ext)| (l.to_string(), "export.update", json!({ "index": index, "format": ext })))
+                .collect();
+        let mut fields: Vec<gpui::AnyElement> = Vec::new();
+        if row.is_raster {
+            // egui `setting_row`: SCALES 的 label + 512w/512h，`export.update {"size": label}`。
+            let mut sizes: Vec<(String, &'static str, Value)> = Vec::new();
+            for v in figcraft_doc::ExportSize::SCALES {
+                let label = figcraft_doc::ExportSize::Scale { value: v }.label();
+                sizes.push((label.clone(), "export.update", json!({ "index": index, "size": label })));
+            }
+            for s in ["512w", "512h"] {
+                sizes.push((s.to_string(), "export.update", json!({ "index": index, "size": s })));
+            }
+            fields.push(pick_dropdown(f, row.size.clone(), col, sizes).into_any_element());
+        }
+        fields.push(pick_dropdown(f, row.format_label, col, formats).into_any_element());
+        // Dots（`export_panel.rs::advanced_options` + `print_options`）：勾选 / 单选项在下，
+        // 见 `export_options` 的排序注释。
+        let dots = checked_menu_icon(f, Icon::Menu, 240.0, export_options(row, &d.doc_profile), false);
+        let minus = icon_cmd(Icon::Minus, "export.remove", json!({ "index": index }), f, false);
+        sec = sec.child(field_row(fields, vec![dots, minus]));
+
+        // ② 第二行（统一网格）：Suffix（跨两列）。egui `setting_row` 里它夹在 size 与 format 之间；
+        // 网格一行最多两个字段列，所以 suffix 单独占一整行，仍走同一套列与行高。
         let suffix = f.row_field(
             cx,
-            suffix_slot,
+            slot(n),
             &row.suffix,
             RowEditCtx {
                 cmd: "export.update",
@@ -1827,98 +1996,106 @@ pub(crate) fn export(f: &RightFields, d: &PanelData, col: f32, n: &mut usize, cx
                 paint_color: None,
             },
         );
-        let formats: Vec<(String, &'static str, Value)> =
-            [("PNG", "png"), ("JPG", "jpg"), ("SVG", "svg"), ("PDF", "pdf"), ("WebP", "webp"), ("XML", "xml")]
-                .into_iter()
-                .map(|(l, ext)| (l.to_string(), "export.update", json!({ "index": index, "format": ext })))
-                .collect();
-        let dd = pick_dropdown(f, row.format_label, col, formats);
+        sec = sec.child(field_row_full(suffix));
+    }
 
-        // Dots（`export_panel.rs::advanced_options` + `print_options`）：之前这一行只有
-        // format/suffix/remove，size、contentsOnly、SVG/PDF/XML 选项全都没有按钮可点。
-        let mut opts: Vec<(String, &'static str, Value)> = Vec::new();
-        if row.is_raster {
-            // egui `setting_row`: SCALES 的 label + 512w/512h，`export.update {"size": label}`。
-            for v in figcraft_doc::ExportSize::SCALES {
-                let label = figcraft_doc::ExportSize::Scale { value: v }.label();
-                opts.push((format!("Size {label}"), "export.update", json!({ "index": index, "size": label })));
-            }
-            for s in ["512w", "512h"] {
-                opts.push((format!("Size {s}"), "export.update", json!({ "index": index, "size": s })));
-            }
-        }
-        opts.push((
-            tick(tr("Ignore overlapping layers"), row.contents_only),
-            "export.update",
-            json!({ "index": index, "contentsOnly": !row.contents_only }),
-        ));
-        opts.push((
-            tick(tr("Include bounding box"), row.include_bounding_box),
-            "export.update",
-            json!({ "index": index, "includeBoundingBox": !row.include_bounding_box }),
-        ));
-        if row.format == "svg" {
-            opts.push((
-                tick(tr("Outline text"), row.svg_outline_text),
-                "export.update",
-                json!({ "index": index, "svgOutlineText": !row.svg_outline_text }),
-            ));
-            opts.push((
-                tick(tr("Include id attribute"), row.svg_id_attribute),
-                "export.update",
-                json!({ "index": index, "svgIdAttribute": !row.svg_id_attribute }),
-            ));
-            opts.push((
-                tick("Simplify strokes", row.svg_simplify_stroke),
-                "export.update",
-                json!({ "index": index, "svgSimplifyStroke": !row.svg_simplify_stroke }),
-            ));
-        }
-        if row.format == "xml" {
-            opts.push((
-                tick(tr("Include id attribute"), row.svg_id_attribute),
-                "export.update",
-                json!({ "index": index, "svgIdAttribute": !row.svg_id_attribute }),
-            ));
-            for (label, key) in [
-                ("Compatibility: best effort", "bestEffort"),
-                ("Compatibility: exact only", "exact"),
-                ("Compatibility: ignore unsupported", "ignore"),
-            ] {
-                opts.push((tick(label, row.vd_compat == key), "export.update", json!({ "index": index, "vdCompat": key })));
-            }
-        }
-        if row.format == "pdf" {
-            // egui `print_params`: bleed / cropMarks / bleedMarks / cmyk 都走 `export.update`。
-            let bleed = if row.bleed > 0.0 { json!(0) } else { json!("3mm") };
-            opts.push((tick("3 mm bleed", row.bleed > 0.0), "export.update", json!({ "index": index, "bleed": bleed })));
-            opts.push((tick(tr("Crop marks"), row.crop_marks), "export.update", json!({ "index": index, "cropMarks": !row.crop_marks })));
-            opts.push((tick(tr("Bleed marks"), row.bleed_marks), "export.update", json!({ "index": index, "bleedMarks": !row.bleed_marks })));
-            opts.push((tick("CMYK", row.cmyk), "export.update", json!({ "index": index, "cmyk": !row.cmyk })));
-        }
-        let dots = menu_icon(f, Icon::Menu, 220.0, opts, false);
-        let minus = icon_cmd(Icon::Minus, "export.remove", json!({ "index": index }), f, false);
-        let line = div().flex().flex_row().items_center().gap(pt(4.0)).child(dd).child(suffix).child(dots).child(minus);
-        sec = sec.child(field_row_full(line));
-    }
-    // 「Export N layers」（egui `wide_button` + `export_layers`）：egui 有普通导出与
-    // Inspect 资源导出两条路径，Web 端多个文件打成 zip。原来只有一个硬编码 `{}` 的按钮。
-    if !rows.is_empty() {
-        let export_all = menu_icon(
-            f,
-            Icon::Plus,
-            220.0,
-            vec![
-                (tr("Export layers").into(), "file.exportLayers", json!({})),
-                ("Export assets".into(), "file.exportLayers", json!({ "assets": true })),
-                ("Export layers as ZIP".into(), "file.exportLayers", json!({ "zip": true })),
-                ("Export assets as ZIP".into(), "file.exportLayers", json!({ "assets": true, "zip": true })),
-            ],
-            false,
+    // ③ Preview（egui `export_panel::preview`）：折叠行 + 160 pt 预览框。预览图与 Inspect
+    // 缩略图同一条渲染管线（`panel_data` 只在展开时填充 `export_preview`）。
+    let open = f.export_preview_open.get();
+    let toggle = f.export_preview_open.clone();
+    let wake = f.cmds.clone();
+    let head = div()
+        .w_full()
+        .h_full()
+        .flex()
+        .items_center()
+        .gap(pt(6.0))
+        .cursor_pointer()
+        .child(crate::widgets::icon::paint(if open { Icon::ChevronDown } else { Icon::ChevronRight }, rgba(tokens().text_secondary), 12.0))
+        .child(div().text_size(pt(11.0)).text_color(rgba(tokens().text)).child(tr("Preview")))
+        .on_mouse_down(MouseButton::Left, move |_e, _w, _cx| {
+            toggle.set(!toggle.get());
+            wake.wake();
+        });
+    sec = sec.child(field_row_full(head));
+    if open {
+        let t = tokens();
+        let mut frame =
+            div().w_full().h(px(160.0)).rounded(px(crate::widgets::RADIUS)).border_1().border_color(rgba(t.border)).overflow_hidden().relative();
+        frame = frame.child(
+            canvas(|b, _w, _cx| b.size, |b, _, window, _cx| crate::widgets::checker(window, b, 8.0)).absolute().inset_0(),
         );
-        sec = sec.child(field_row(vec![SharedString::from("Export all layers")], vec![export_all]));
+        if let Some((w, h, buf)) = &d.export_preview {
+            let img = img(ImageSource::Render(crate::canvas::render_worker::wrap_bgra(*w, *h, buf.clone())))
+                .max_w(px(full_w - crate::widgets::PAD - crate::widgets::PAD_RIGHT - 16.0))
+                .max_h(px(144.0));
+            frame = frame.child(div().absolute().inset_0().flex().items_center().justify_center().child(img));
+        }
+        sec = sec
+            .child(block_row(div().w_full().pl(pt(crate::widgets::PAD)).pr(pt(crate::widgets::PAD_RIGHT)).pb(pt(8.0)).child(frame)));
     }
+
+    // ④ 底部导出按钮（egui `wide_button` + `export_layers`）：推 `file.exportLayers`，路径选择
+    // 交给通用的下载投递（单文件保存框 / 多文件选文件夹，见 `lib.rs::deliver_download`）。
+    let ids = d.ids.clone();
+    let name = d.header.as_ref().map(|h| h.label.clone()).unwrap_or_default();
+    let label: SharedString = if ids.len() == 1 && !name.is_empty() {
+        trf("Export {name}", &[("name", &name)]).into()
+    } else {
+        trn("Export {n} layers", ids.len(), &[]).into()
+    };
+    sec = sec.child(field_row_full(wide_button(f, label, "file.exportLayers", json!({ "ids": ids }))));
     Section::Full(sec)
+}
+
+/// Dots 设置小窗的内容（egui `advanced_options` + `print_options`）。
+///
+/// 顺序按用户 2026-11-19 的要求：**带勾选 / 单选状态的项全部排在下面**。尺寸已提到行内的
+/// 通用下拉，所以菜单里剩下的都是勾选项；两个单选组（Compatibility、Color profile）用
+/// 分隔线开头，Color profile 放在最末。
+fn export_options(row: &ExportRow, doc_profile: &str) -> Vec<(String, Option<bool>, &'static str, Value, bool)> {
+    let index = row.index;
+    let toggle = |label: String, on: bool, key: &str| {
+        (label, Some(on), "export.update", json!({ "index": index, key: !on }), false)
+    };
+    let mut opts: Vec<(String, Option<bool>, &'static str, Value, bool)> = Vec::new();
+    opts.push(toggle(tr("Ignore overlapping layers").to_string(), row.contents_only, "contentsOnly"));
+    opts.push(toggle(tr("Include bounding box").to_string(), row.include_bounding_box, "includeBoundingBox"));
+    if row.format == "svg" {
+        opts.push(toggle(tr("Outline text").to_string(), row.svg_outline_text, "svgOutlineText"));
+        opts.push(toggle(tr("Include id attribute").to_string(), row.svg_id_attribute, "svgIdAttribute"));
+        opts.push(toggle("Simplify strokes".to_string(), row.svg_simplify_stroke, "svgSimplifyStroke"));
+    }
+    if row.format == "xml" {
+        opts.push(toggle(tr("Include id attribute").to_string(), row.svg_id_attribute, "svgIdAttribute"));
+        for (i, (label, key)) in
+            [("Compatibility: best effort", "bestEffort"), ("Compatibility: exact only", "exact"), ("Compatibility: ignore unsupported", "ignore")]
+                .into_iter()
+                .enumerate()
+        {
+            opts.push((label.to_string(), Some(row.vd_compat == key), "export.update", json!({ "index": index, "vdCompat": key }), i == 0));
+        }
+    }
+    if row.format == "pdf" {
+        // egui `print_params`: bleed / cropMarks / bleedMarks / cmyk 都走 `export.update`。
+        let bleed = if row.bleed > 0.0 { json!(0) } else { json!("3mm") };
+        opts.push(("3 mm bleed".to_string(), Some(row.bleed > 0.0), "export.update", json!({ "index": index, "bleed": bleed }), false));
+        opts.push(toggle(tr("Crop marks").to_string(), row.crop_marks, "cropMarks"));
+        opts.push(toggle(tr("Bleed marks").to_string(), row.bleed_marks, "bleedMarks"));
+        opts.push(toggle("CMYK".to_string(), row.cmyk, "cmyk"));
+    }
+    if row.is_raster {
+        // Color profile（egui `ExportColorProfile::ALL`）：最下面的单选组。
+        for (i, p) in figcraft_doc::ExportColorProfile::ALL.into_iter().enumerate() {
+            let label = match p {
+                figcraft_doc::ExportColorProfile::SameAsFile => trf("Same as file ({profile})", &[("profile", &doc_profile)]),
+                figcraft_doc::ExportColorProfile::Srgb => "sRGB".to_string(),
+                figcraft_doc::ExportColorProfile::DisplayP3 => "Display P3".to_string(),
+            };
+            opts.push((label, Some(row.color_profile == p.key()), "export.update", json!({ "index": index, "colorProfile": p.key() }), i == 0));
+        }
+    }
+    opts
 }
 
 // ───────────────────────────────────────────────────────────────────────────────────────────────
@@ -4221,6 +4398,15 @@ pub(crate) fn page(f: &RightFields, d: &PanelData, row_w: f32, n: &mut usize, wi
         .header_trail(icon_row(vec![local_styles_add_button(f, d)]))
         .child(block_row(local_styles_block(f, d, window, cx)));
     out.push(styles_sec);
+
+    // ── ③ Export（egui `export_panel::page_section`）──────────────────────────────────────
+    // 本地样式之后就是「把整页导出为一个 PNG」；按钮与 Design 区的底部导出共用 `wide_button`。
+    // ids 传页面子层：`file.export` 收到显式 ids 就按这些层合成一张图，缺省（空页面）引擎同样
+    // 会退回到页面子层，所以这里不需要特判。
+    out.push(
+        PanelSection::new(tr("Export"))
+            .child(field_row_full(wide_button(f, tr("Export page as PNG").into(), "file.export", json!({ "ids": p.export_ids, "format": "png" })))),
+    );
     out
 }
 

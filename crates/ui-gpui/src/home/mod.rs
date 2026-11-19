@@ -8,10 +8,10 @@
 use crate::CanvasApp;
 use crate::panels::extra::ExtraState;
 use crate::panels::{Cmd, Cmds};
-use crate::widgets::{Icon, pt, rgba, tokens};
+use crate::widgets::{Icon, MenuRow, pt, rgba, tokens};
 use figcraft_i18n::tr;
 use figcraft_i18n::tr_noop;
-use gpui::{Div, MouseButton, SharedString, div, prelude::*, px};
+use gpui::{App, Bounds, Div, Entity, MouseButton, Pixels, SharedString, Window, div, prelude::*, px};
 use serde_json::json;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -28,9 +28,9 @@ const HOME_TIPS: [(&str, &str); 6] = [
 
 /// The whole Home screen: sidebar + main. `new_page` is the「+」临时标签页：它画成 Figma 桌面
 /// 首页的样子（居中分类胶囊、搜索框、最近文件带缩略图），没有左侧边栏。
-pub(crate) fn body(app: &CanvasApp, cmds: &Cmds, state: &ExtraState, new_page: bool) -> Div {
+pub(crate) fn body(app: &CanvasApp, cmds: &Cmds, state: &ExtraState, root: Option<Entity<crate::CanvasView>>, new_page: bool) -> Div {
     if new_page {
-        return new_page_body(app, cmds, state);
+        return new_page_body(app, cmds, state, root);
     }
     let t = tokens();
     let section = *state.home_section.borrow();
@@ -197,12 +197,12 @@ pub(crate) fn body(app: &CanvasApp, cmds: &Cmds, state: &ExtraState, new_page: b
             } else if grid {
                 let mut g = div().w_full().flex().flex_row().flex_wrap().gap(pt(12.0));
                 for path in files.iter().take(12) {
-                    g = g.child(recent_card(path, cmds));
+                    g = g.child(recent_card(path, cmds, state.dismiss.clone(), root.clone()));
                 }
                 main = main.child(g);
             } else {
                 for path in files.iter().take(12) {
-                    main = main.child(recent_row(path, cmds));
+                    main = main.child(recent_row(path, cmds, state.dismiss.clone(), root.clone()));
                 }
             }
         }
@@ -213,7 +213,7 @@ pub(crate) fn body(app: &CanvasApp, cmds: &Cmds, state: &ExtraState, new_page: b
 /// 「+」的临时页：顶部三个动作（新建设计稿 / 新建画板 / 打开文件，和侧栏 Recents 的那三个
 /// action card 一致），下面一个搜索框，再下面 "Recents" 和最近文件行（缩略图 + 名字 + 相对时间）。
 /// 没有侧边栏。
-fn new_page_body(app: &CanvasApp, cmds: &Cmds, state: &ExtraState) -> Div {
+fn new_page_body(app: &CanvasApp, cmds: &Cmds, state: &ExtraState, root: Option<Entity<crate::CanvasView>>) -> Div {
     let t = tokens();
     let q = state.home_query.borrow().to_lowercase();
     let mut col = div().w(px(448.0)).flex().flex_col().gap(pt(10.0));
@@ -281,7 +281,7 @@ fn new_page_body(app: &CanvasApp, cmds: &Cmds, state: &ExtraState) -> Div {
     } else {
         let mut rows = div().w_full().flex().flex_col();
         for path in files.iter().take(20) {
-            rows = rows.child(new_page_row(state, path, cmds));
+            rows = rows.child(new_page_row(state, path, cmds, root.clone()));
         }
         col = col.child(rows);
     }
@@ -303,12 +303,13 @@ fn new_page_body(app: &CanvasApp, cmds: &Cmds, state: &ExtraState) -> Div {
 }
 
 /// 临时页的一行最近文件：40×30 缩略图、文件名、右对齐的相对时间。点一行打开该文件。
-fn new_page_row(state: &ExtraState, path: &str, cmds: &Cmds) -> Div {
+fn new_page_row(state: &ExtraState, path: &str, cmds: &Cmds, root: Option<Entity<crate::CanvasView>>) -> Div {
     let t = tokens();
     let name = file_name(path);
     let edited = long_ago(path);
     let c = cmds.clone();
     let dismiss = state.dismiss.clone();
+    let dismiss_for_menu = dismiss.clone();
     let p = path.to_string();
     let pic = match recent_preview(state, path).0 {
         Some(tex) => div()
@@ -332,7 +333,7 @@ fn new_page_row(state: &ExtraState, path: &str, cmds: &Cmds) -> Div {
             .justify_center()
             .child(crate::widgets::icon::paint(Icon::Page, rgba(t.icon), 14.0)),
     };
-    div()
+    let mut row = div()
         .w_full()
         .h(px(40.0))
         .flex()
@@ -358,7 +359,80 @@ fn new_page_row(state: &ExtraState, path: &str, cmds: &Cmds) -> Div {
             c.push(Cmd { id: "file.openRecent", params: Some(json!({ "path": p.clone() })) });
             *dismiss.borrow_mut() = true;
             c.wake();
-        })
+        });
+    if let Some(root) = root {
+        let cmds = cmds.clone();
+        let p = path.to_string();
+        row = row.on_mouse_down(MouseButton::Right, move |e, _, cx: &mut App| {
+            open_recent_menu(root.clone(), cmds.clone(), dismiss_for_menu.clone(), p.clone(), e.position, cx);
+            cx.stop_propagation();
+        });
+    }
+    row
+}
+
+/// Open a path in the OS file manager with the file selected (egui `services::reveal_path`).
+#[cfg(windows)]
+fn reveal_path(path: &str) {
+    let _ = std::process::Command::new("explorer.exe").arg(format!("/select,{}", path)).spawn();
+}
+#[cfg(target_os = "macos")]
+fn reveal_path(path: &str) {
+    let _ = std::process::Command::new("open").arg("-R").arg(path).spawn();
+}
+#[cfg(all(unix, not(target_os = "macos")))]
+fn reveal_path(path: &str) {
+    let parent = std::path::Path::new(path).parent().unwrap_or_else(|| std::path::Path::new("."));
+    let _ = std::process::Command::new("xdg-open").arg(parent).spawn();
+}
+
+/// EGUI `home_recents::interact`: a recent card/row's context menu. Uses the same `MenuRow` +
+/// root `open_menu` control as every other panel menu.
+fn open_recent_menu(
+    root: Entity<crate::CanvasView>,
+    cmds: Cmds,
+    dismiss: Rc<RefCell<bool>>,
+    path: String,
+    at: gpui::Point<Pixels>,
+    cx: &mut App,
+) {
+    let open = tr("Open");
+    let remove = tr("Remove from recents");
+    let reveal = if cfg!(windows) {
+        tr("Show in Explorer")
+    } else if cfg!(target_os = "macos") {
+        tr("Show in Finder")
+    } else {
+        tr("Show in folder")
+    };
+    let exists = std::path::Path::new(&path).exists();
+    let mut rows = vec![MenuRow::new(open)];
+    if exists {
+        rows.push(MenuRow::new(reveal));
+    }
+    rows.push(MenuRow::new(remove).separator());
+
+    let cmds_pick = cmds.clone();
+    let on_pick = Rc::new(move |label: &str, _: &mut Window, _: &mut App| {
+        if label == open {
+            cmds_pick.push(Cmd {
+                id: "file.openRecent",
+                params: Some(json!({ "path": path.clone() })),
+            });
+            *dismiss.borrow_mut() = true;
+            cmds_pick.wake();
+        } else if label == reveal {
+            reveal_path(&path);
+        } else if label == remove {
+            cmds_pick.push(Cmd {
+                id: "file.openRecent",
+                params: Some(json!({ "remove": path.clone() })),
+            });
+            cmds_pick.wake();
+        }
+    });
+    let anchor = Bounds::new(at, gpui::size(px(0.0), px(0.0)));
+    root.update(cx, |cv, cx| cv.open_menu(anchor, Some(200.0), rows, on_pick, cx));
 }
 
 /// 最近文件的缩略图：文件自带的 `thumbnail.png`（EGUI 首页那条链路），读盘 + 解码一次就缓存。
@@ -462,13 +536,13 @@ fn edited_ago(path: &str) -> String {
     }
 }
 
-fn recent_card(path: &str, cmds: &Cmds) -> Div {
+fn recent_card(path: &str, cmds: &Cmds, dismiss: Rc<RefCell<bool>>, root: Option<Entity<crate::CanvasView>>) -> Div {
     let t = tokens();
     let name = file_name(path);
     let edited = edited_ago(path);
     let c = cmds.clone();
     let p = path.to_string();
-    div()
+    let mut card = div()
         .flex_none()
         .w(px(200.0))
         .h(px(154.0))
@@ -493,15 +567,25 @@ fn recent_card(path: &str, cmds: &Cmds) -> Div {
         .child(div().text_size(pt(11.0)).text_color(rgba(t.text_tertiary)).child(SharedString::from(edited)))
         .on_mouse_down(MouseButton::Left, move |_e, _, _| {
             c.push(Cmd { id: "file.openRecent", params: Some(json!({ "path": p.clone() })) });
-        })
+        });
+    if let Some(root) = root {
+        let cmds = cmds.clone();
+        let dismiss = dismiss.clone();
+        let p = path.to_string();
+        card = card.on_mouse_down(MouseButton::Right, move |e, _, cx: &mut App| {
+            open_recent_menu(root.clone(), cmds.clone(), dismiss.clone(), p.clone(), e.position, cx);
+            cx.stop_propagation();
+        });
+    }
+    card
 }
 
-fn recent_row(path: &str, cmds: &Cmds) -> Div {
+fn recent_row(path: &str, cmds: &Cmds, dismiss: Rc<RefCell<bool>>, root: Option<Entity<crate::CanvasView>>) -> Div {
     let t = tokens();
     let name = file_name(path);
     let c = cmds.clone();
     let p = path.to_string();
-    div()
+    let mut row = div()
         .w_full()
         .h(px(36.0))
         .flex()
@@ -516,7 +600,17 @@ fn recent_row(path: &str, cmds: &Cmds) -> Div {
         .child(div().text_size(pt(12.0)).text_color(rgba(t.text)).child(SharedString::from(name)))
         .on_mouse_down(MouseButton::Left, move |_e, _, _| {
             c.push(Cmd { id: "file.openRecent", params: Some(json!({ "path": p.clone() })) });
-        })
+        });
+    if let Some(root) = root {
+        let cmds = cmds.clone();
+        let dismiss = dismiss.clone();
+        let p = path.to_string();
+        row = row.on_mouse_down(MouseButton::Right, move |e, _, cx: &mut App| {
+            open_recent_menu(root.clone(), cmds.clone(), dismiss.clone(), p.clone(), e.position, cx);
+            cx.stop_propagation();
+        });
+    }
+    row
 }
 
 /// A template card (egui `home.rs::template_card`): a 148 pt thumbnail over its name and one

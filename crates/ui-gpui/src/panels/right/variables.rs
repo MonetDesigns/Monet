@@ -21,7 +21,8 @@ use crate::widgets::{
 use figcraft_i18n::tr;
 use figcraft_i18n::tr_noop;
 use gpui::{
-    AnyElement, App, Bounds, CursorStyle, Div, Entity, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle, SharedString, Size,
+    AnyElement, App, Bounds, CursorStyle, Div, Entity, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle,
+    SharedString, Size,
     Stateful, Window, div, point, prelude::*, px, size,
 };
 use serde_json::{Value, json};
@@ -99,6 +100,15 @@ impl VarKind {
             VarKind::Number => 1,
             VarKind::String => 2,
             VarKind::Boolean => 3,
+        }
+    }
+
+    fn doc_type(self) -> figcraft_doc::VariableType {
+        match self {
+            VarKind::Color => figcraft_doc::VariableType::Color,
+            VarKind::Number => figcraft_doc::VariableType::Number,
+            VarKind::String => figcraft_doc::VariableType::String,
+            VarKind::Boolean => figcraft_doc::VariableType::Boolean,
         }
     }
 }
@@ -394,6 +404,73 @@ impl MenuItem {
     }
 }
 
+/// The context menu of a row that is part of a selection of several (egui `bulk_menu`):
+/// edit / delete / move to a group / scope all act on every selected variable in one undo step.
+fn bulk_menu_items(rows: &[(String, String, VarKind)], groups: &[String]) -> Vec<MenuItem> {
+    let mut items = vec![MenuItem::new(tr("Edit variables"), "ui.details", json!({ "variable": rows[0].0 }))];
+    let n = rows.len();
+    let n_text = n.to_string();
+    let delete_steps: Vec<Value> =
+        rows.iter().map(|(id, ..)| json!({"command": "variable.delete", "params": {"variable": id}})).collect();
+    items.push(MenuItem::new(
+        figcraft_i18n::trf("Delete {n} variables", &[("n", &n_text)]),
+        "command.batch",
+        json!({"label": "Delete variables", "commands": delete_steps}),
+    ));
+    let moves = std::iter::once(None).chain(groups.iter().map(|g| Some(g.as_str())));
+    for g in moves {
+        let label = g.map_or_else(|| tr("Move out of any group").to_string(), |g| figcraft_i18n::trf("Move to group {group}", &[("group", &g)]));
+        let steps: Vec<Value> = rows
+            .iter()
+            .filter_map(|(id, full, _)| {
+                let short = full.rsplit('/').next().unwrap_or(full);
+                let name = g.map_or_else(|| short.to_string(), |g| format!("{g}/{short}"));
+                (name != *full).then(|| json!({"command": "variable.update", "params": {"variable": id, "name": name}}))
+            })
+            .collect();
+        if !steps.is_empty() {
+            items.push(MenuItem::new(label, "command.batch", json!({"label": "Move variables", "commands": steps})));
+        }
+    }
+    let mut scopes: Vec<(&'static str, &'static str)> = Vec::new();
+    for (_, _, kind) in rows {
+        for s in figcraft_doc::styles::scopes_for(kind.doc_type()) {
+            if !scopes.contains(s) {
+                scopes.push(*s);
+            }
+        }
+    }
+    let scope_item = |label: String, value: Option<&'static str>| {
+        let steps: Vec<Value> = rows
+            .iter()
+            .filter_map(|(id, _, kind)| {
+                let scopes = match value {
+                    None => Value::Null,
+                    Some("") => json!([]),
+                    Some(s) => {
+                        if figcraft_doc::styles::scopes_for(kind.doc_type()).iter().any(|(id, _)| *id == s) {
+                            json!([s])
+                        } else {
+                            return None;
+                        }
+                    }
+                };
+                Some(json!({"command": "variable.update", "params": {"variable": id, "scopes": scopes}}))
+            })
+            .collect();
+        MenuItem::new(label, "command.batch", json!({"label": "Change scope", "commands": steps}))
+    };
+    items.push(scope_item(tr("Scope: all supported properties").to_string(), None));
+    items.push(scope_item(tr("Scope: hidden from pickers").to_string(), Some("")));
+    for (id, label) in scopes {
+        items.push(scope_item(
+            figcraft_i18n::trf("Scope: only {scope}", &[("scope", &tr(label))]),
+            Some(id),
+        ));
+    }
+    items
+}
+
 #[derive(Clone)]
 pub struct Menu {
     pub x: f32,
@@ -519,7 +596,10 @@ pub struct EditorState {
     pub group: Option<String>,
     pub sidebar: bool,
     pub full: bool,
-    pub selected: Option<String>,
+    /// 选中的变量行（egui `Editor::selected`）；空 = 未选。
+    pub selected: Vec<String>,
+    /// Shift+click 的起点（egui `Editor::anchor`）。
+    pub anchor: Option<String>,
     /// 选中的整列（mode id）；与 `selected` 互斥。
     pub selected_mode: Option<String>,
     /// sidebar 里 "All variables" 是否被选中（与按组过滤区分）。
@@ -601,7 +681,8 @@ impl EditorState {
             group: None,
             sidebar: true,
             full: false,
-            selected: None,
+            selected: Vec::new(),
+            anchor: None,
             selected_mode: None,
             selected_all: true,
             sidebar_w: SIDEBAR_W,
@@ -644,6 +725,37 @@ impl EditorState {
 }
 
 pub type State = Rc<RefCell<EditorState>>;
+
+/// A click on a variable row (egui `variables_panel.rs::select_clicked`): plain selects only it,
+/// Shift extends from the anchor through the shown rows (added to the selection with Cmd/Ctrl),
+/// Cmd/Ctrl (or Shift without a valid anchor) toggles it.
+fn select_var(st: &mut EditorState, id: &str, order: &[String], m: &Modifiers) {
+    let pos = |x: &str| order.iter().position(|o| o == x);
+    let accel = m.platform || m.control;
+    let anchor = st.anchor.as_deref().filter(|a| st.selected.iter().any(|s| s == a)).and_then(pos);
+    if m.shift
+        && let (Some(ai), Some(bi)) = (anchor, pos(id))
+    {
+        let (lo, hi) = (ai.min(bi), ai.max(bi));
+        let mut s: Vec<String> = if accel { st.selected.clone() } else { Vec::new() };
+        for x in order.get(lo..=hi).unwrap_or_default() {
+            if !s.iter().any(|v| v == x) {
+                s.push(x.clone());
+            }
+        }
+        st.selected = s;
+    } else if m.shift || accel {
+        if let Some(i) = st.selected.iter().position(|x| x == id) {
+            st.selected.remove(i);
+        } else {
+            st.selected.push(id.to_string());
+        }
+        st.anchor = Some(id.to_string());
+    } else {
+        st.selected = vec![id.to_string()];
+        st.anchor = Some(id.to_string());
+    }
+}
 
 /// 完整的变量编辑器。`WindowState` 持有它，`render` 每帧调用。
 #[derive(Clone)]
@@ -1013,11 +1125,12 @@ impl VariablesEditor {
             // 没有内部状态时：先释放选中 / 关详情，再一次 Escape 才交给外层关窗口。
             let had = {
                 let s = self.state.borrow();
-                s.selected.is_some() || s.selected_mode.is_some() || s.details.is_some()
+                !s.selected.is_empty() || s.selected_mode.is_some() || s.details.is_some()
             };
             if had {
                 let mut s = self.state.borrow_mut();
-                s.selected = None;
+                s.selected.clear();
+                s.anchor = None;
                 s.selected_mode = None;
                 s.details = None;
                 return true;
@@ -1072,7 +1185,7 @@ impl VariablesEditor {
 
     /// 复制选中行：按 **mode 名** 存值，所以粘到 mode 名不同的集合也不会串列。
     fn copy_row(st: &State, data: &VariablesData) {
-        let sel = st.borrow().selected.clone();
+        let sel = st.borrow().selected.first().cloned();
         let Some(sel) = sel else { return };
         let list = Self::collections(st, data);
         let Some((c, r)) = list.iter().find_map(|c| c.rows.iter().find(|r| r.id == sel).map(|r| (c, r))) else {
@@ -2311,7 +2424,8 @@ impl VariablesEditor {
                     move |e: &MouseDownEvent, window, cx| {
                         let mut s = st.borrow_mut();
                         s.menu = None;
-                        s.selected = None;
+                        s.selected.clear();
+                        s.anchor = None;
                         s.selected_mode = Some(mid.clone());
                         if !editable {
                             return;
@@ -2667,7 +2781,7 @@ impl VariablesEditor {
         let (selected, renaming, mode_ws, has_clip, selected_mode) = {
             let s = st.borrow();
             (
-                s.selected.as_deref() == Some(r.id.as_str()),
+                c.editable && s.selected.iter().any(|id| id == &r.id),
                 s.rename.as_deref() == Some(r.id.as_str()),
                 s.mode_ws.clone(),
                 s.clipboard.is_some(),
@@ -2677,6 +2791,33 @@ impl VariablesEditor {
         // 库变量 / 扩展集合里继承来的变量：不可拖拽、改名、删除。
         let movable = c.editable && !r.inherited;
         let has_override = r.overrides.iter().any(|&o| o);
+        // Bulk-menu snapshot: the rows this collection can act on (inherited ones are changed in
+        // their own collection, as in egui `bulk_ids`).
+        let bulk_rows: Vec<(String, String, VarKind)> = c
+            .rows
+            .iter()
+            .filter(|x| !x.inherited)
+            .map(|x| (x.id.clone(), x.full_name.clone(), x.kind))
+            .collect();
+        let bulk_groups = c.groups.clone();
+        let single_items = if movable {
+            let mut v = vec![
+                MenuItem::new(tr("Edit variable"), "ui.details", json!({ "variable": r.id })),
+                MenuItem::new(tr("Rename"), "ui.rename", json!({ "variable": r.id, "name": r.full_name })),
+                MenuItem::new(tr("Copy"), "ui.copy", json!({})),
+            ];
+            if has_clip {
+                v.push(MenuItem::new("Paste", "ui.paste", json!({})));
+            }
+            v.push(MenuItem::new(tr("Duplicate"), "variable.duplicate", json!({ "variable": r.id })));
+            if has_override {
+                v.push(MenuItem::new(tr("Reset overrides"), "variable.resetOverride", json!({ "variable": r.id })));
+            }
+            v.push(MenuItem::new(tr("Delete"), "variable.delete", json!({ "variable": r.id })));
+            v
+        } else {
+            vec![MenuItem::new(tr("Copy"), "ui.copy", json!({}))]
+        };
         let mut row = div().relative().flex_none().w_full().h(pt(ROW_H)).flex().flex_row().items_center();
         row = if selected { row.bg(rgba(t.selected_row)) } else { row.hover(move |s| s.bg(rgba(t.hover))) };
 
@@ -2698,7 +2839,7 @@ impl VariablesEditor {
                     let mut s = st.borrow_mut();
                     s.menu = None;
                     s.selected_mode = None;
-                    s.selected = Some(rid.clone());
+                    select_var(&mut s, &rid, &ids, &e.modifiers);
                     // 与左栏 Layers 行一致：原生 `click_count` 判双击，并在这一下拦住冒泡，
                     // 否则根视图「点别处就提交」会立刻把刚打开的改名框收掉。
                     if e.click_count >= 2 && movable {
@@ -2718,25 +2859,24 @@ impl VariablesEditor {
             .on_mouse_down(MouseButton::Right, {
                 let st = st.clone();
                 let rid = rid.clone();
-                let rname = rname.clone();
+                let single = single_items.clone();
+                let bulk_rows = bulk_rows.clone();
+                let bulk_groups = bulk_groups.clone();
+                let editable = c.editable;
                 move |e: &MouseDownEvent, _, _| {
-                    let items = if movable {
-                        let mut v = vec![
-                            MenuItem::new(tr("Edit variable"), "ui.details", json!({ "variable": rid.clone() })),
-                            MenuItem::new(tr("Rename"), "ui.rename", json!({ "variable": rid.clone(), "name": rname.clone() })),
-                            MenuItem::new(tr("Copy"), "ui.copy", json!({})),
-                        ];
-                        if has_clip {
-                            v.push(MenuItem::new("Paste", "ui.paste", json!({})));
+                    let selected = {
+                        let s = st.borrow();
+                        editable.then(|| s.selected.clone()).filter(|sel| sel.len() > 1 && sel.iter().any(|x| x == &rid))
+                    };
+                    let items = if let Some(sel) = selected {
+                        let rows: Vec<(String, String, VarKind)> = bulk_rows.iter().filter(|(id, ..)| sel.contains(id)).cloned().collect();
+                        if rows.len() > 1 {
+                            bulk_menu_items(&rows, &bulk_groups)
+                        } else {
+                            single.clone()
                         }
-                        v.push(MenuItem::new(tr("Duplicate"), "variable.duplicate", json!({ "variable": rid.clone() })));
-                        if has_override {
-                            v.push(MenuItem::new(tr("Reset overrides"), "variable.resetOverride", json!({ "variable": rid.clone() })));
-                        }
-                        v.push(MenuItem::new(tr("Delete"), "variable.delete", json!({ "variable": rid.clone() })));
-                        v
                     } else {
-                        vec![MenuItem::new(tr("Copy"), "ui.copy", json!({}))]
+                        single.clone()
                     };
                     st.borrow_mut().menu = Some(Menu::at(f32::from(e.position.x), f32::from(e.position.y), items));
                 }
@@ -3828,5 +3968,56 @@ fn kind_glyph(r: &VarRow) -> AnyElement {
         VarKind::Number => paint_icon(Icon::Number, rgba(t.text_secondary), 14.0).into_any_element(),
         VarKind::String => paint_icon(Icon::Text, rgba(t.text_secondary), 14.0).into_any_element(),
         VarKind::Boolean => paint_icon(Icon::Boolean, rgba(t.text_secondary), 14.0).into_any_element(),
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn order() -> Vec<String> {
+        ["a", "b", "c", "d"].iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn ctrl_click_toggles_a_variable() {
+        let mut st = EditorState::new();
+        st.selected = vec!["a".into()];
+        select_var(&mut st, "c", &order(), &Modifiers { control: true, ..Default::default() });
+        assert_eq!(st.selected, ["a", "c"]);
+        select_var(&mut st, "a", &order(), &Modifiers { control: true, ..Default::default() });
+        assert_eq!(st.selected, ["c"]);
+    }
+
+    #[test]
+    fn shift_click_selects_the_visible_range() {
+        let mut st = EditorState::new();
+        st.selected = vec!["a".into()];
+        st.anchor = Some("a".into());
+        select_var(&mut st, "c", &order(), &Modifiers { shift: true, ..Default::default() });
+        assert_eq!(st.selected, ["a", "b", "c"]);
+    }
+
+    #[test]
+    fn shift_ctrl_click_merges_the_range() {
+        let mut st = EditorState::new();
+        st.selected = vec!["a".into(), "d".into()];
+        st.anchor = Some("a".into());
+        select_var(&mut st, "c", &order(), &Modifiers { shift: true, control: true, ..Default::default() });
+        assert_eq!(st.selected, ["a", "d", "b", "c"]);
+    }
+
+    #[test]
+    fn bulk_menu_acts_on_every_selected_variable() {
+        let rows = vec![
+            ("1".to_string(), "Brand/Primary".to_string(), VarKind::Color),
+            ("2".to_string(), "Brand/Secondary".to_string(), VarKind::Color),
+        ];
+        let items = bulk_menu_items(&rows, &["Space".into()]);
+        assert_eq!(items[1].cmd, "command.batch", "delete is one undo step");
+        assert_eq!(items[1].params["commands"].as_array().map(Vec::len), Some(2));
+        assert!(items.iter().any(|i| i.label.contains("Move to group Space")));
+        assert!(items.iter().any(|i| i.label == "Scope: hidden from pickers"));
     }
 }

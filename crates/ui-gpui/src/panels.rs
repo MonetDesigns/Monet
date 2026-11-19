@@ -660,6 +660,9 @@ pub(crate) struct RightFields {
     /// `Id::new(("selection_colors_open", ds.uid))`）：**每个文档各自记住**开合状态，
     /// 缺省即折叠；折叠时头部右侧显示最多三个色块 + `+N`。
     selection_colors_open: std::rc::Rc<std::cell::RefCell<std::collections::HashMap<u64, bool>>>,
+    /// Export 节「Preview」折叠行是否展开（egui `app.ui.export_thumb`）。纯 UI 状态，按窗口隔离；
+    /// 只有展开时才让 `panel_data` 去光栅化预览图，避免每份文档白白渲染一张缩略图。
+    export_preview_open: std::rc::Rc<std::cell::Cell<bool>>,
     /// 该节头部是否悬停（lizard 只在悬停时画 chevron、把标题提亮）。
     selection_colors_hover: std::rc::Rc<std::cell::RefCell<bool>>,
     /// 右栏当前标签：0 = Design，1 = Prototype，2 = Inspect（egui `app.ui.right_tab`）。纯 UI 状态，不进文档。
@@ -1239,6 +1242,7 @@ impl RightFields {
             preset_open: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
             selection_colors_open: std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new())),
             selection_colors_hover: std::rc::Rc::new(std::cell::RefCell::new(false)),
+            export_preview_open: std::rc::Rc::new(std::cell::Cell::new(false)),
             right_tab: std::rc::Rc::new(std::cell::RefCell::new(0u8)),
             local_style_renaming: local_style_renaming.clone(),
             local_style_rename_style: local_style_rename_style.clone(),
@@ -1409,6 +1413,7 @@ impl RightFields {
         f.preset_open = Default::default();
         f.selection_colors_open = Default::default();
         f.selection_colors_hover = Default::default();
+        f.export_preview_open = Default::default();
         f.right_tab = Default::default();
         f.local_style_renaming = Default::default();
         f.local_style_rename_style = Default::default();
@@ -1457,6 +1462,11 @@ impl RightFields {
     /// A3: the Comments panel's local state.
     pub(crate) fn comment_ui(&self) -> crate::comments::CommentState {
         self.comment_ui.clone()
+    }
+
+    /// Export 节「Preview」是否展开（`panel_data` 据此决定要不要光栅化预览图）。
+    pub(crate) fn export_preview_open(&self) -> bool {
+        self.export_preview_open.get()
     }
 
     pub(crate) fn queue(&self) -> Cmds {

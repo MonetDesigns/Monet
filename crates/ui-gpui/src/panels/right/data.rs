@@ -91,6 +91,8 @@ pub struct ExportRow {
     pub crop_marks: bool,
     pub bleed_marks: bool,
     pub cmyk: bool,
+    /// PNG / JPG / WebP 的色彩配置（`ExportColorProfile::key()`）：Dots 小窗最下面的单选项。
+    pub color_profile: &'static str,
 }
 
 /// 一个 selection color 组（egui `selection_colors.rs::section`）。
@@ -547,6 +549,12 @@ fn cached_asset_thumb(doc: &Document, id: NodeId, side_px: f32, revision: u64) -
         m.insert(key, v.clone());
         v
     })
+}
+
+/// Export 节 Preview 的缩略图：与 Inspect 资产缩略图共用同一条渲染管线（`cached_asset_thumb`），
+/// 目标边长 `side_px`，按 `revision` 缓存。只在 Preview 展开时才由 `lib.rs::panel_data` 调用。
+pub fn export_preview(doc: &Document, id: NodeId, side_px: f32, revision: u64) -> Option<(u32, u32, Vec<u8>)> {
+    cached_asset_thumb(doc, id, side_px, revision)
 }
 
 /// 一个资产的 40pt 缩略图：与 egui `assets_panel::thumbnail_pixmap` 逐行一致，
@@ -1122,6 +1130,8 @@ pub struct PageData {
     pub profiles: Vec<String>,
     pub local_variables: usize,
     pub local_styles: usize,
+    /// 页面子层（egui `page_section`：`doc.node(page).children`），整页导出的 `ids`。
+    pub export_ids: Vec<NodeId>,
 }
 
 /// Selection header（`lizard right.rs::header` 的全部判断输入）。
@@ -1250,10 +1260,21 @@ pub struct PanelData {
     /// 选中的都是开放路径（Line / 未闭合 Vector），端帽才有意义。
     pub is_open_path: bool,
     pub effects: Option<Vec<EffectRow>>,
+    /// 引擎剪贴板里有没有可粘贴的 fill / stroke / effect。面板右键菜单照 egui 的
+    /// `paints.rs` / `effects.rs` 只在能粘贴时列出 Paste 行；快照在这里算，渲染期不读根视图。
+    pub can_paste_fill: bool,
+    pub can_paste_stroke: bool,
+    pub can_paste_effect: bool,
     /// WGSL 材质绑定（单选时来自该节点的 plugin_data；多选不一致时按「无绑定」处理）。
     pub wgsl: WgslPanelData,
     pub grids: Option<Vec<GridRow>>,
     pub exports: Option<Vec<ExportRow>>,
+    /// 当前选区（导出按钮的 `ids` 与「Export {name}」文案）。
+    pub ids: Vec<NodeId>,
+    /// 文档自身的色彩配置 label（`Same as file (Display P3)` 里的括号内容）。
+    pub doc_profile: String,
+    /// Export 节 Preview 的缩略图（BGRA）：只在 Preview 展开时由 `lib.rs::panel_data` 填。
+    pub export_preview: Option<(u32, u32, Vec<u8>)>,
     pub selection_colors: Vec<SelectionColorRow>,
     /// 选中的顶层图层里**有没有带子级的**（frame / group / component / instance）。
     /// 上游 `selection_colors.rs::section`：两组不同颜色才显示；只有一组时，若选中的层有子级
@@ -1453,6 +1474,9 @@ fn paint_rows(doc: &Document, ids: &[NodeId], fills: bool) -> Option<Vec<PaintRo
 /// 读取当前选区的完整快照。
 pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: usize) -> PanelData {
     let mut d = PanelData::default();
+    // 导出节与页面导出按钮都要用：选区、文档色彩配置在 `ids.is_empty()` 提前 return 之前填。
+    d.ids = ids.to_vec();
+    d.doc_profile = doc.color_profile.label().to_string();
     // 变量编辑器的列表跟选区无关，两种分支都要有（`ids.is_empty()` 会提前 return）。
     d.variables = crate::panels::right::variables::read(doc);
     // Prototype 标签的数据跟选区无关地先算好：`ids.is_empty()` 会提前 return。
@@ -1551,8 +1575,8 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
         .collect();
     if ids.is_empty() {
         // ── Page（`page_section`）：背景色 / 色彩配置 / 本地变量与样式数量 ──
-        let bg = page
-            .and_then(|p| doc.node(p))
+        let page_node = page.and_then(|p| doc.node(p));
+        let bg = page_node
             .and_then(|n| match &n.kind {
                 figcraft_doc::NodeKind::Page { background, .. } => Some(*background),
                 _ => None,
@@ -1564,6 +1588,7 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
             profiles: figcraft_color::ColorProfile::ALL.iter().map(|p| p.label().to_string()).collect(),
             local_variables: doc.variables.variables.len(),
             local_styles: doc.styles.len(),
+            export_ids: page_node.map(|n| n.children.clone()).unwrap_or_default(),
         });
         return d;
     }
@@ -1577,7 +1602,7 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
     // More actions：右键菜单的顶层行（子菜单 / 不可运行的命令跳过，分隔线顺延到下一行）。
     let mut more_actions: Vec<(String, &'static str, bool)> = Vec::new();
     let mut carry_sep = false;
-    for it in crate::context_menu::items(Some(doc), ids, &[]) {
+    for it in crate::context_menu::items(Some(doc), ids, &[], ids) {
         let sep = it.separator_before || carry_sep;
         if it.sub.is_empty() && !it.disabled && !it.id.is_empty() {
             more_actions.push((it.label.to_string(), it.id, sep));
@@ -1691,6 +1716,7 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
                 crop_marks: e.print.crop_marks,
                 bleed_marks: e.print.bleed_marks,
                 cmyk: e.print.cmyk,
+                color_profile: e.color_profile.key(),
             })
             .collect()
     });

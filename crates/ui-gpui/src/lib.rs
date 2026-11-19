@@ -1619,6 +1619,13 @@ impl CanvasView {
         // lizard `Id::new(("selection_colors_open", ds.uid))`：展开态按文档 uid 分档。
         d.doc_uid = ds.uid;
 
+        // 右键 Paste 行的可见性：从会话剪贴板取快照，渲染期只读 PanelData，避免在非 renderer
+        // 的测试帧里 `root.read()` 与 `CanvasView::update()` 重入。
+        let clip = &self.app.session.clipboard;
+        d.can_paste_fill = clip.paint.as_ref().is_some_and(|(fills, _)| *fills);
+        d.can_paste_stroke = clip.paint.as_ref().is_some_and(|(fills, _)| !*fills);
+        d.can_paste_effect = clip.effect.is_some();
+
         // A3: the Comments panel's list, from the panel's own filter/sort/search.
         let comment_me = figcraft_engine::cmd::comment::user_name(&self.app.session);
         {
@@ -1633,6 +1640,15 @@ impl CanvasView {
         // 变量编辑器还要列已启用库的只读集合（egui `View::of(lib)`）。
 
         d.variables.libraries = panels::right::variables::read_libraries(&self.app.session.libraries, &ds.doc);
+
+        // Export 节 Preview：只有展开时才光栅化（egui `export_panel::preview` 同样只在展开时刷新），
+        // 管线与 Inspect 资产缩略图共用（`cached_asset_thumb`，按 revision 缓存）。
+        if self.fields.export_preview_open()
+            && d.exports.as_ref().is_some_and(|e| !e.is_empty())
+            && let Some(id) = ds.selection.first().copied()
+        {
+            d.export_preview = panels::right::data::export_preview(&ds.doc, id, 320.0, ds.revision);
+        }
 
         // Zoom / Show 菜单的勾选状态来自引擎的 ViewState，不从 UI 另存一份。
 
@@ -4227,33 +4243,93 @@ impl CanvasView {
 
         let doc = self.app.session.doc().ok();
 
-        let items = context_menu::items(doc, &ids, &layers);
+        let mut items = context_menu::items(doc, &ids, &layers, &ids);
+
+        // A ruler guide selected on the rulers supplies the extra first row of the empty-canvas
+        // menu (egui `menus.rs`: "Remove guide" + divider, no layer selection involved).
+        if ids.is_empty() && self.app.session.ds().is_ok_and(|d| d.selected_guide().is_some()) {
+            items.insert(0, menu_card::Item::new("guide.remove", tr("Remove guide")));
+            if let Some(first) = items.get_mut(1) {
+                first.separator_before = true;
+            }
+        }
 
         self.tool_flyout = None;
 
+        self.open_context_items(pos, items, cx);
+    }
+
+    /// Show a ready-made context card at a **canvas-local** point. Shared by the canvas and the
+    /// Layers panel row: both use the same `menu_card` control, submenu aim and pick handler.
+    fn open_context_items(&mut self, pos: Pos2, items: Vec<menu_card::Item>, cx: &mut Context<Self>) {
         // Store the click point in **canvas-local** coordinates; `render` converts back to window
-
         // coordinates from the *current* canvas offset, so the menu follows the canvas when the
-
         // window is resized or the left panel width changes (`用户 2026-11-06`).
-
         self.popup = Some(Popup::Context {
             pos,
-
             items,
-
             open_sub: None,
-
             aim: crate::widgets::MenuAim::new(),
-
             pointer: Point { x: px(0.0), y: px(0.0) },
-
             born: std::time::Instant::now(),
-
             aim_busy: std::rc::Rc::new(std::cell::Cell::new(false)),
         });
-
         cx.notify();
+    }
+
+    /// The Layers-panel row's right-click menu: the row becomes the single menu target unless it is
+    /// already in the selection, but the commands still act on the whole selection — egui's
+    /// `layers.rs` sets `context_menu = Some((pos, vec![row.id]))` and `menus.rs` separately asks
+    /// `session.selection()` for Combine / Crop.
+    fn open_layer_context_menu(&mut self, id: NodeId, pointer: Point<Pixels>, cx: &mut Context<Self>) {
+        if !self.app.session.selection().contains(&id) {
+            self.app.session.set_selection(vec![id]);
+        }
+        let ids = vec![id];
+        let selection = self.app.session.selection();
+        let doc = self.app.session.doc().ok();
+        let items = context_menu::items(doc, &ids, &[], &selection);
+        // `Popup::Context` stores an x relative to the canvas (render adds `canvas_left` back),
+        // but its y is already a window coordinate. Compensate only x so the card opens exactly
+        // at the clicked layer row instead of one title-bar height above it.
+        let x = f32::from(pointer.x) - self.dock().center_x();
+        let pos = pos2(x, f32::from(pointer.y));
+        // "Paste here" from this card pastes at the row pointer, like egui's `app.to_page(pos)`.
+        self.pointer = Some(self.local(pointer));
+        self.tool_flyout = None;
+        self.open_context_items(pos, items, cx);
+    }
+
+    /// The Pages-panel row's right-click menu. Flat four rows, so it uses the same `MenuRow` +
+    /// `open_menu` control as every other panel dropdown (egui's `context_popup`).
+    fn open_page_context_menu(&mut self, id: NodeId, divider: bool, pointer: Point<Pixels>, cx: &mut Context<Self>) {
+        let rename = tr("Rename page");
+        let duplicate = tr("Duplicate page");
+        let opening = tr("Set as opening page");
+        let delete = tr("Delete page");
+        let mut rows = vec![MenuRow::new(rename), MenuRow::new(duplicate)];
+        if !divider {
+            rows.push(MenuRow::new(opening));
+        }
+        rows.push(MenuRow::new(delete));
+
+        let me = cx.entity();
+        let on_pick = std::rc::Rc::new(move |label: &str, _w: &mut Window, cx: &mut App| {
+            if label == rename {
+                me.update(cx, |cv, cx| cv.begin_inline_rename(vec![id], crate::InlineRenameTarget::Page, cx));
+            } else if label == duplicate {
+                me.update(cx, |cv, cx| cv.run_command("page.duplicate", serde_json::json!({ "id": id.0 }), cx));
+            } else if label == opening {
+                me.update(cx, |cv, cx| cv.run_command("page.setOpening", serde_json::json!({ "id": id.0 }), cx));
+            } else if label == delete {
+                me.update(cx, |cv, cx| {
+                    cv.run_command("page.delete", serde_json::json!({ "id": id.0 }), cx);
+                    cv.toast(tr("Page deleted"), cx);
+                });
+            }
+        });
+        let anchor = Bounds { origin: pointer, size: size(px(1.0), px(0.0)) };
+        self.open_menu(anchor, Some(180.0), rows, on_pick, cx);
     }
 
     /// A flyout row chosen: `tool.set`, and the tool is remembered for its group so the caret's
@@ -7962,7 +8038,7 @@ impl Render for CanvasView {
 
                 let cmds = self.fields.queue();
 
-                vec![panels::extra::render(kind, &self.app, &cmds, &self.extra_state, self.new_active.is_some(), cx, close).into_any_element()]
+                vec![panels::extra::render(kind, &self.app, &cmds, &self.extra_state, Some(cx.entity()), self.new_active.is_some(), cx, close).into_any_element()]
             }
 
             None => Vec::new(),
