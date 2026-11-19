@@ -29,8 +29,8 @@ use figcraft_i18n::tr;
 use gpui::{App, Bounds, BoxShadow, Div, ImageSource, MouseButton, MouseDownEvent, Pixels, SharedString, Stateful, Window, div, img, point, prelude::*, px};
 use std::rc::Rc;
 
-/// Every mark in the row is painted in a box this size, so they share one optical size.
-const GLYPH: f32 = 18.0;
+/// 24 网格的 SVG 等比放大到 32pt 的格子里；线宽由 ICON_STROKE 反算补偿，保持不变。
+const GLYPH: f32 = 32.0;
 /// The flyout carets are smaller than the marks (the original's `CARET`).
 const CARET: f32 = 14.0;
 /// A tool cell's side.
@@ -1043,11 +1043,12 @@ fn tool_cell(id: &'static str, icon: Icon, active: bool, tip: SharedString, on_c
         .on_mouse_down(MouseButton::Left, move |_: &MouseDownEvent, w, cx| on_click(w, cx));
     // 当前工具格：accent 实心；其余格子悬停为灰底。不加描边（圆角外圈的淡边是「虚边」）。
     cell = if active { cell.bg(rgba(t.accent)) } else { cell.hover(|s| s.bg(rgba(t.hover))) };
-    let color = rgba(if active { t.accent_on } else { t.icon });
+    // 选中格是实心强调色底：图标固定用白色，不受主题 token 影响。
+    let color: gpui::Rgba = if active { gpui::white().into() } else { rgba(t.icon) };
     // Shape-tool marks are 24 pt vectors: let them occupy their own size instead of forcing them
     // into GLYPH, which would scale their (shared 1 pt) stroke up or down.
     let mark = if crate::widgets::icon::is_shape_tool(icon) {
-        crate::widgets::icon::paint_tool(icon, color).into_any_element()
+        crate::widgets::icon::paint_tool_at(icon, color, GLYPH).into_any_element()
     } else {
         paint_icon(icon, color, GLYPH).into_any_element()
     };

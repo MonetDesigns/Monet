@@ -3825,19 +3825,8 @@ fn kind_glyph(r: &VarRow) -> AnyElement {
             let paint = figcraft_color::Paint::solid(figcraft_color::Color::from_rgba8(c.0[0], c.0[1], c.0[2], c.0[3]));
             crate::widgets::swatch::swatch(paint, 14.0).circle().into_any_element()
         }
-        VarKind::Number => div()
-            .flex_none()
-            .size(pt(14.0))
-            .flex()
-            .items_center()
-            .justify_center()
-            .text_size(pt(12.0))
-            .text_color(rgba(t.text_secondary))
-            .child("#")
-            .into_any_element(),
+        VarKind::Number => paint_icon(Icon::Number, rgba(t.text_secondary), 14.0).into_any_element(),
         VarKind::String => paint_icon(Icon::Text, rgba(t.text_secondary), 14.0).into_any_element(),
-        VarKind::Boolean => {
-            div().flex_none().w(pt(14.0)).h(pt(8.0)).rounded(pt(4.0)).border_1().border_color(rgba(t.text_secondary)).into_any_element()
-        }
+        VarKind::Boolean => paint_icon(Icon::Boolean, rgba(t.text_secondary), 14.0).into_any_element(),
     }
 }

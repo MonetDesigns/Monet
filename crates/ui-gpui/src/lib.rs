@@ -3145,8 +3145,8 @@ impl CanvasView {
                                 1.0, // 右移变宽
                                 this.left_w,
                                 x,
-                                panels::MIN_PANEL,
-                                panels::MAX_PANEL,
+                                panels::MIN_LEFT_PANEL,
+                                panels::MAX_LEFT_PANEL,
                                 x,
                                 f32::from(e.position.y),
                             );
@@ -8554,7 +8554,10 @@ impl drag_manager::WindowDragTarget for CanvasView {
                 ResizeSide::Right => self.drag_start_w - dx,
             };
 
-            let w = w.clamp(panels::MIN_PANEL, panels::MAX_PANEL);
+            let w = match side {
+                ResizeSide::Left => w.clamp(panels::MIN_LEFT_PANEL, panels::MAX_LEFT_PANEL),
+                ResizeSide::Right => w.clamp(panels::MIN_RIGHT_PANEL, panels::MAX_RIGHT_PANEL),
+            };
 
             match side {
                 ResizeSide::Left => self.left_w = w,
