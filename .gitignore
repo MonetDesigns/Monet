@@ -40,3 +40,8 @@ plans/
 /shot_*.png
 /crop_*.png
 /crates/ui-gpui/src/panels/right/reference/
+
+# Agent scratch / debug captures
+/.tmp_shots/
+/.workbuddy/
+/.tmp_*.txt
