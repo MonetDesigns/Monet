@@ -1,0 +1,137 @@
+﻿分类	界面元素	绑定命令	行为备注
+菜单·Object	Frame selection	object.frameSelection	置灰；Dev Mode 拒；Alt+Cmd+G
+菜单·Object	Group selection	object.group	置灰；Dev Mode 拒；Cmd+G
+菜单·Object	Ungroup selection	object.ungroup	置灰；Dev Mode 拒；Shift+Cmd+G
+菜单·Object	Remove frame	object.removeFrame	置灰；Dev Mode 拒
+菜单·Object	Resize to fit	object.resizeToFit	置灰；Dev Mode 拒；Alt+Shift+Cmd+R
+菜单·Object	Add auto layout	layout.add	置灰；Dev Mode 拒；Shift+A
+菜单·Object	Remove auto layout	layout.remove	置灰；Dev Mode 拒；Alt+Shift+A
+菜单·Object	Suggest auto layout	layout.suggest	置灰；Dev Mode 拒；Ctrl+Shift+A
+菜单·Object	Create component	component.create	置灰；Dev Mode 拒；Alt+Cmd+K
+菜单·Object	Create multiple components	component.createMultiple	置灰；Dev Mode 拒
+菜单·Object	Combine as variants	component.combineVariants	需 2+ 主组件；置灰；Dev Mode 拒
+菜单·Object	Reset all changes	component.resetInstance	置灰；Dev Mode 拒
+菜单·Object	Detach instance	component.detach	置灰；Dev Mode 拒；Alt+Cmd+B
+菜单·Object	Go to main component	component.goToMain	置灰；Dev Mode 拒
+菜单·Object	Push changes to main component	component.pushChanges	置灰；Dev Mode 拒
+菜单·Object	Restore main component	component.restoreMain	置灰；Dev Mode 拒
+菜单·Object	Use as mask	object.mask	置灰；Dev Mode 拒；Ctrl+Cmd+M
+菜单·Object	Release mask	object.releaseMask	置灰；Dev Mode 拒
+菜单·Object	Set as thumbnail	object.setThumbnail	置灰；Dev Mode 拒
+菜单·Object	Crop image	image.crop	Monet 自有；单选且含 image fill 可用；Dev Mode 拒
+菜单·Object	Bring to front	arrange.front	置灰；Dev Mode 拒；Alt+Cmd+]
+菜单·Object	Bring forward	arrange.forward	置灰；Dev Mode 拒；Cmd+]
+菜单·Object	Send backward	arrange.backward	置灰；Dev Mode 拒；Cmd+[
+菜单·Object	Send to back	arrange.back	置灰；Dev Mode 拒；Alt+Cmd+[
+菜单·Object	Flip horizontal	object.flipH	置灰；Dev Mode 拒；Shift+H
+菜单·Object	Flip vertical	object.flipV	置灰；Dev Mode 拒；Shift+V
+菜单·Object	Rotate 180°	object.rotate180	置灰；Dev Mode 拒
+菜单·Object	Rotate 90° left	object.rotateLeft	置灰；Dev Mode 拒
+菜单·Object	Rotate 90° right	object.rotateRight	置灰；Dev Mode 拒
+菜单·Object	Flatten	vector.flatten	置灰；Dev Mode 拒；Alt+Shift+F
+菜单·Object	Outline stroke	vector.outlineStroke	置灰；Dev Mode 拒；Alt+Cmd+O
+菜单·Object > Boolean groups	Union	bool.union	置灰；Dev Mode 拒；Alt+Shift+U
+菜单·Object > Boolean groups	Subtract	bool.subtract	置灰；Dev Mode 拒；Alt+Shift+S
+菜单·Object > Boolean groups	Intersect	bool.intersect	置灰；Dev Mode 拒；Alt+Shift+I
+菜单·Object > Boolean groups	Exclude	bool.exclude	置灰；Dev Mode 拒；Alt+Shift+E
+菜单·Object > Boolean groups	Flatten	bool.flatten	置灰；Dev Mode 拒
+菜单·Object	Rasterize selection	object.rasterize	置灰；Dev Mode 拒
+菜单·Object	Show/Hide selection	object.toggleVisible	置灰；Dev Mode 拒；Shift+Cmd+H
+菜单·Object	Lock/Unlock selection	object.toggleLock	置灰；Dev Mode 拒；Shift+Cmd+L
+菜单·Object	Hide other layers	object.hideOthers	置灰；Dev Mode 拒
+菜单·Object	Collapse layers	layers.collapseAll	置灰；Dev Mode 拒；Alt+L
+菜单·Object	Remove fill	object.removeFill	置灰；Dev Mode 拒；Alt+/
+菜单·Object	Remove stroke	object.removeStroke	置灰；Dev Mode 拒；Shift+/
+菜单·Object	Swap fill and stroke	object.swapFillStroke	置灰；Dev Mode 拒；Shift+X
+菜单·Object	Rename	object.rename	置灰；Dev Mode 拒；Cmd+R / F2
+菜单·Object	Batch rename…	object.batchRename	仅选择非空时打开批量改名；置灰；Dev Mode 拒
+菜单·Object	Move to page	object.moveToPage	打开页面输入框；置灰；Dev Mode 拒
+菜单·Object > Select layer	Select children	select.children	置灰；Dev Mode 拒；Enter
+菜单·Object > Select layer	Select parent	select.parent	置灰；Dev Mode 拒；Shift+Enter
+菜单·Object > Select layer	Select next sibling	select.next	置灰；Dev Mode 拒；Tab
+菜单·Object > Select layer	Select previous sibling	select.previous	置灰；Dev Mode 拒；Shift+Tab
+菜单·Arrange	Align left	align.left	需多选；置灰；Dev Mode 拒；Alt+A
+菜单·Arrange	Align horizontal centers	align.hcenter	置灰；Dev Mode 拒；Alt+H
+菜单·Arrange	Align right	align.right	置灰；Dev Mode 拒；Alt+D
+菜单·Arrange	Align top	align.top	置灰；Dev Mode 拒；Alt+W
+菜单·Arrange	Align vertical centers	align.vcenter	置灰；Dev Mode 拒；Alt+V
+菜单·Arrange	Align bottom	align.bottom	置灰；Dev Mode 拒；Alt+S
+菜单·Arrange	Distribute horizontal spacing	distribute.horizontal	置灰；Dev Mode 拒；Ctrl+Alt+H
+菜单·Arrange	Distribute vertical spacing	distribute.vertical	置灰；Dev Mode 拒；Ctrl+Alt+V
+菜单·Arrange	Tidy up	arrange.tidy	仅当选区是 3~2000 个带框图层、不在 auto layout 流里、且布局成行/列/网格（重叠/对角/不规则时不可用）才可点，否则置灰；显式 spacing 可放宽到 2 个；网格按列多还是行多决定打包方向；Ctrl+Alt+T（Win: Ctrl+Alt+Shift+T）；Dev Mode 拒绝
+菜单·Arrange	Pack horizontal	arrange.packH	置灰；Dev Mode 拒
+菜单·Arrange	Pack vertical	arrange.packV	置灰；Dev Mode 拒
+菜单·Arrange	Round to pixels	arrange.roundToPixels	置灰；Dev Mode 拒
+菜单·Text	Bold	text.bold	仅文本选择；置灰；Dev Mode 拒；Cmd+B
+菜单·Text	Italic	text.italic	置灰；Dev Mode 拒；Cmd+I
+菜单·Text	Underline	text.underline	置灰；Dev Mode 拒；Cmd+U
+菜单·Text	Strikethrough	text.strikethrough	置灰；Dev Mode 拒；Shift+Cmd+X
+菜单·Text	Create link	text.link	打开 URL 输入框；置灰；Dev Mode 拒；Shift+Cmd+U
+菜单·Text	Bulleted list	text.bulletList	置灰；Dev Mode 拒；Shift+Cmd+8
+菜单·Text	Numbered list	text.numberList	置灰；Dev Mode 拒；Shift+Cmd+7
+菜单·Text > Alignment	Text align left	text.alignLeft	置灰；Dev Mode 拒；Alt+Cmd+L
+菜单·Text > Alignment	Text align center	text.alignCenter	置灰；Dev Mode 拒；Alt+Cmd+T
+菜单·Text > Alignment	Text align right	text.alignRight	置灰；Dev Mode 拒；Alt+Cmd+R
+菜单·Text > Alignment	Text align justified	text.alignJustify	置灰；Dev Mode 拒；Alt+Cmd+J
+菜单·Text > Adjust	Increase font size	text.sizeUp	置灰；Dev Mode 拒；Shift+Cmd+.
+菜单·Text > Adjust	Decrease font size	text.sizeDown	置灰；Dev Mode 拒；Shift+Cmd+,
+菜单·Text > Adjust	Increase font weight	text.weightUp	置灰；Dev Mode 拒；Alt+Cmd+.
+菜单·Text > Adjust	Decrease font weight	text.weightDown	置灰；Dev Mode 拒；Alt+Cmd+,
+菜单·Text > Adjust	Increase line height	text.lineHeightUp	置灰；Dev Mode 拒；Alt+Shift+.
+菜单·Text > Adjust	Decrease line height	text.lineHeightDown	置灰；Dev Mode 拒；Alt+Shift+,
+菜单·Text > Adjust	Increase letter spacing	text.trackingUp	置灰；Dev Mode 拒；Alt+.
+菜单·Text > Adjust	Decrease letter spacing	text.trackingDown	置灰；Dev Mode 拒；Alt+,
+菜单·Text > Case	Original case	text.caseOriginal	置灰；Dev Mode 拒
+菜单·Text > Case	Uppercase	text.caseUpper	置灰；Dev Mode 拒
+菜单·Text > Case	Lowercase	text.caseLower	置灰；Dev Mode 拒
+菜单·Text > Case	Title case	text.caseTitle	置灰；Dev Mode 拒
+菜单·Text > Text direction	Auto	text.directionAuto	Monet 自有；置灰；Dev Mode 拒
+菜单·Text > Text direction	Left to right	text.directionLtr	置灰；Dev Mode 拒
+菜单·Text > Text direction	Right to left	text.directionRtl	置灰；Dev Mode 拒
+菜单·Text	Missing fonts…	text.missingFonts	打开缺失字体对话框；置灰；Dev Mode 拒
+菜单·Vector	Join selection	vector.join	置灰；Dev Mode 拒；Cmd+J
+菜单·Vector	Smooth join selection	vector.smoothJoin	置灰；Dev Mode 拒；Shift+Cmd+J
+菜单·Vector	Delete and heal selection	vector.deleteHeal	置灰；Dev Mode 拒；Shift+Delete
+菜单·Vector	Simplify vector	vector.simplify	置灰；Dev Mode 拒
+菜单·Vector	Reverse path direction	vector.reverse	置灰；Dev Mode 拒
+菜单·Vector	Offset path	vector.offset	打开距离输入框；置灰；Dev Mode 拒
+菜单·Plugins	Run last plugin	plugins.runLast	置灰；Dev Mode 拒；Alt+Cmd+P
+菜单·Plugins	Manage plugins…	plugins.manage	置灰；Dev Mode 拒
+菜单·Plugins > Development	Import plugin from manifest…	plugin.import	UI 命令；打开清单文件选择器；置灰；Dev Mode 拒
+菜单·Preferences	Snap to geometry	view.snapGeometry	打勾；Shift+Cmd+'
+菜单·Preferences	Snap to objects	view.snapObjects	打勾
+菜单·Preferences	Snap to pixel grid	view.snapPixel	打勾；Shift+Cmd+'
+菜单·Preferences	Keep tool selected after use	pref.keepTool	不勾选；切工具后保留
+菜单·Preferences	Highlight layers on hover	pref.highlightHover	不勾选
+菜单·Preferences	Rename duplicated layers	pref.renameDuplicates	不勾选
+菜单·Preferences	Show dimensions on objects	pref.showDimensions	不勾选
+菜单·Preferences	Use number keys for opacity	pref.numberKeysOpacity	不勾选
+菜单·Preferences	Nudge amount…	pref.nudge	无参数会重置，故走偏好面板
+菜单·Preferences	Preferences…	app.preferences	打开偏好设置；Cmd+,
+菜单·Libraries	Open libraries	libraries.open	置灰；Dev Mode 拒；Alt+3
+菜单·Libraries	Publish library…	libraries.publish	置灰；Dev Mode 拒
+菜单·Libraries	Hide when publishing	component.hideWhenPublishing	不勾选；置灰；Dev Mode 拒
+菜单·Help	Getting started	help.gettingStarted	置灰
+菜单·Help	Keyboard shortcuts	help.shortcuts	打开快捷键速查；Ctrl+Shift+?
+菜单·Help	Help page	help.page	置灰
+菜单·Help	About Monet	help.about	打开关于窗口；置灰
+菜单·Tools	Move	tool.move	由工具栏 tool flyout 呈现（TOP_MENUS 不含 Tools）；Dev Mode 允许；V
+菜单·Tools	Scale	tool.scale	Dev Mode 拒；K
+菜单·Tools	Hand	tool.hand	Dev Mode 允许；H
+菜单·Tools	Frame	tool.frame	Dev Mode 拒；F / A
+菜单·Tools	Section	tool.section	Dev Mode 拒；Shift+S
+菜单·Tools	Slice	tool.slice	Dev Mode 拒；S
+菜单·Tools	Rectangle	tool.rectangle	Dev Mode 拒；R
+菜单·Tools	Line	tool.line	Dev Mode 拒；L
+菜单·Tools	Arrow	tool.arrow	Dev Mode 拒；Shift+L
+菜单·Tools	Ellipse	tool.ellipse	Dev Mode 拒；O
+菜单·Tools	Polygon	tool.polygon	Dev Mode 拒
+菜单·Tools	Star	tool.star	Dev Mode 拒
+菜单·Tools	Pen	tool.pen	Dev Mode 拒；P
+菜单·Tools	Brush	tool.brush	自由手绘带笔刷；Dev Mode 拒；B
+菜单·Tools	Pen (freehand)	tool.pencil	原铅笔/马克笔/荧光笔合并；Dev Mode 拒；Shift+P
+菜单·Tools	Text	tool.text	Dev Mode 拒；T
+菜单·Tools	Comment	tool.comment	Dev Mode 允许；C
+菜单·Tools	Annotation	tool.annotation	Dev Mode 允许；Shift+T；选中层时直接请求标注
+菜单·Tools	Shape builder	tool.shapeBuilder	Dev Mode 拒；Shift+M
+菜单·Tools	Actions	app.actions	主菜单顶部搜索行 + Tools 末项；打开命令面板；Cmd+K

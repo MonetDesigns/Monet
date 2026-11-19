@@ -1,0 +1,158 @@
+﻿分类	界面元素	绑定命令	行为备注
+右面板·Design 排版	Typography section header	—	选中文本层时显示
+右面板·Design 排版	Apply variable to text	—
+右面板·Design 排版	Text styles button	—	打开文本样式选择器
+右面板·Design 排版	Text bound row	—	characters 绑定时
+右面板·Design 排版	Font family dropdown + picker	node.set / text.style	可搜索、预览、最近优先、本机字体
+右面板·Design 排版	Font style dropdown	node.set / text.style	未安装时提示
+右面板·Design 排版	Font size field + sizes menu	node.set / text.style	15 档预设
+右面板·Design 排版	Line height field	node.set / text.style	Auto/px/%
+右面板·Design 排版	Letter spacing field	node.set / text.style	%/px
+右面板·Design 排版	Paragraph spacing field	node.set (paragraphSpacing)	始终整层
+右面板·Design 排版	Resizing segmented	node.set (textAutoResize)	Auto width/Auto height/Fixed/Truncate
+右面板·Design 排版	Alignment horizontal segmented	node.set (textAlign)	Left/Center/Right/Justify
+右面板·Design 排版	Alignment vertical segmented	node.set (textAlignVertical)	Top/Middle/Bottom
+右面板·Design 排版	Type settings button	—	打开 Type settings popover
+右面板·Design 排版	Type settings tabs	—	Basics/Details/Variable
+右面板·Design 排版	Decoration segmented	textDecoration	None/Underline/Strikethrough
+右面板·Design 排版	Decoration style	textDecorationStyle	Solid/Dotted/Wavy
+右面板·Design 排版	Thickness/Offset/Skip ink/Color	textDecorationThickness / Offset / SkipInk / Color	Underline/Strike 时
+右面板·Design 排版	Letter case segmented	textCase	5 项
+右面板·Design 排版	List style segmented	text.listStyle	None/Bulleted/Numbered
+右面板·Design 排版	List spacing field	node.set (listSpacing)
+右面板·Design 排版	Paragraph indent field	node.set (paragraphIndent)	仅起始对齐
+右面板·Design 排版	Hanging punctuation / Hanging list	node.set (hangingPunctuation / hangingList)
+右面板·Design 排版	Vertical trim segmented	node.set (leadingTrim)	Standard/Cap height
+右面板·Design 排版	Wrap style segmented	text.wrapStyle	Auto/Balance/Pretty
+右面板·Design 排版	Text direction segmented	text.direction	含 RTL 时出现
+右面板·Design 排版	Truncate segmented	node.set (textAutoResize / maxLines)
+右面板·Design 排版	Max lines field	text.maxLines	仅截断
+右面板·Design 排版	OpenType feature rows	text.setFeatures	Details tab，12 项，不支持置灰
+右面板·Design 排版	Named instances dropdown	text.style	Variable tab
+右面板·Design 排版	Axis sliders + fields	text.setVariations	Variable tab，可绑变量
+右面板·Design 排版	Reset to style	text.setVariations	有 variations 时
+右面板·Design 排版	Put text on path	text.onPath	文本+路径两选中
+右面板·Design 排版	Start on path / Flip / Remove from path	text.pathOptions / text.removeFromPath	已在路径上
+右面板·Design 填充	Fill section header (+/Styles)	fill.add	右键 Paste fill → fill.paste
+右面板·Design 填充	Fill style chip	—
+右面板·Design 填充	Fill row paint field	fill.set	图片 crop→image.crop
+右面板·Design 填充	Fill row opacity	fill.set
+右面板·Design 填充	Fill row toggle / remove	fill.set / fill.remove
+右面板·Design 填充	Text range Fill section	text.style	选中文本范围
+右面板·Design 描边	Stroke section header (+/Styles)	stroke.add	右键 Paste stroke → stroke.paste
+右面板·Design 描边	Stroke style chip	—
+右面板·Design 描边	Stroke row paint / opacity / toggle / remove	stroke.set / stroke.remove
+右面板·Design 描边	Stroke align dropdown	node.set (strokeAlign)	Inside/Center/Outside
+右面板·Design 描边	Stroke weight field	node.set (strokeWeight)
+右面板·Design 描边	Individual strokes menu	node.set (strokeSides)	frame-like/Rectangle；All/T/R/B/L/Custom
+右面板·Design 描边	Per-side weight fields	node.set (strokeSides)	设 sides 后
+右面板·Design 描边	Advanced stroke button	—	展开 stroke_settings
+右面板·Design 描边	Stroke style (Solid/Dash/Custom dashes)	node.set (dashes)	下拉
+右面板·Design 描边	Dash cap dropdown	node.set (dashCap)	仅虚线
+右面板·Design 描边	Width profile dropdown + flip	stroke.widthProfile	下拉，6 个 preset + Uniform/Custom/Mixed
+右面板·Design 描边	Brush dropdown	stroke.brush	None + 预设
+右面板·Design 描边	Spacing/Scatter/Size jitter/Rotation jitter	node.set (brush)	仅 Scatter brush
+右面板·Design 描边	Join dropdown + Miter angle	node.set (strokeJoin / miterAngle)
+右面板·Design 描边	Start/End point caps	node.set (startCap / endCap)	两行独立；仅开放路径；8 种形状
+右面板·Design 效果	Effects section header (Styles/+)	effect.add	右键 Paste effect → effect.paste
+右面板·Design 效果	Effect style chip	—
+右面板·Design 效果	Effect row type dropdown	effect.set
+右面板·Design 效果	Effect row toggle / remove	effect.set / effect.remove
+右面板·Design 效果	Effect row context menu	effect.paste	Copy/Paste effect
+右面板·Design 效果	Shadow settings	effect.set	X/Y/Blur/Spread/Color/Show behind
+右面板·Design 效果	Blur settings	effect.set	渐进模糊显示 Start/End
+右面板·Design 效果	Noise settings	effect.set	依 Mono/Duo/Multi
+右面板·Design 效果	Texture settings	effect.set	Size/Radius/Clip to shape
+右面板·Design 效果	Glass settings	effect.set	Light angle/Intensity/Refraction/Depth…
+右面板·Design 布局网格	Layout grid section header	grid.add	全为 frame-like
+右面板·Design 布局网格	Grid row type / toggle / remove	node.set (grids) / grid.remove
+右面板·Design 布局网格	Grid settings	—	node.set (grids)；依 kind/align
+右面板·Design 选区色	Selection colors section	—	≥2 色，或 1 色且有子层
+右面板·Design 选区色	Color group hex / opacity	selection.setPaint
+右面板·Design 选区色	Color group swatch	—	打开取色器
+右面板·Design 选区色	Styles menu: apply style	selection.applyColorStyle
+右面板·Design 选区色	Styles menu: Color variables	selection.bindColorVariable
+右面板·Design 选区色	Styles menu: Create style	selection.createColorStyle
+右面板·Design 选区色	Detach style/variable	selection.detachColor
+右面板·Design 选区色	Select layers with this color	selection.selectColor
+右面板·Design 导出	Export section header (+)	export.add	mixed 时改走 node.set (exports)
+右面板·Design 导出	Export setting size / suffix / format	export.update
+右面板·Design 导出	Export advanced options	export.update	contentsOnly/boundingBox/SVG/XML…
+右面板·Design 导出	PDF print settings	export.update	bleed/cropMarks/bleedMarks/cmyk
+右面板·Design 导出	Remove export setting	export.remove
+右面板·Design 导出	Preview disclosure	—
+右面板·Design 导出	Export N layers button	file.exportLayers / file.export	单个走 file.export，多个 file.exportLayers
+右面板·Design Frame 工具	Frame section header	—	仅 Frame 工具激活时
+右面板·Design Frame 工具	New from selection	object.frameSelection + tool.set(move)	失败保留 Frame 工具并报错
+右面板·Design Frame 工具	Preset category	—	首个分类 Phone 默认展开
+右面板·Design Frame 工具	Preset row	frame.create + tool.set(move) + view.zoomSelection
+右面板·Prototype	Prototype tab	—
+右面板·Prototype 概览	Flow starting points section (+)	proto.flow.add	空选择；每个顶层 frame 仅一个起点
+右面板·Prototype 概览	Flow row play	proto.present
+右面板·Prototype 概览	Flow row name field	proto.flow.rename
+右面板·Prototype 概览	Flow row preview	proto.preview
+右面板·Prototype 概览	Flow row remove	proto.flow.remove
+右面板·Prototype 设置	Prototype settings section	proto.preview	header 图标
+右面板·Prototype 设置	Device dropdown + rotate	proto.settings
+右面板·Prototype 设置	Device color dropdown	proto.settings	设备支持多色时
+右面板·Prototype 设置	Custom size W/H + swap	proto.settings	Custom device
+右面板·Prototype 设置	Responsive checkbox	proto.settings
+右面板·Prototype 设置	Background color field	proto.settings
+右面板·Prototype 交互	Flow starting point section (frame)	proto.flow.add / rename / preview	顶层 frame 选中
+右面板·Prototype 交互	Interactions section (+)	proto.interaction.add	默认 Click→Navigate/Back
+右面板·Prototype 交互	Interaction row	—	单击打开编辑器 popover
+右面板·Prototype 交互	Interaction remove	proto.interaction.remove
+右面板·Prototype 交互	Mixed interactions section (+)	proto.interaction.clear + add	多选交互不同时
+右面板·Prototype 交互	Remove all	proto.interaction.clear	mixed 情形
+右面板·Prototype 编辑器	Interaction editor popover	—	浮于面板旁，标题 Interaction
+右面板·Prototype 编辑器	Trigger dropdown	proto.interaction.set	10 种触发
+右面板·Prototype 编辑器	Delay field	proto.interaction.set	Mouse enter/leave/down/up
+右面板·Prototype 编辑器	After delay field	proto.interaction.set
+右面板·Prototype 编辑器	Key capture / Controller dropdown	proto.interaction.set	KeyPress 触发
+右面板·Prototype 编辑器	Action list (drag reorder)	proto.action.move
+右面板·Prototype 编辑器	Add action menu	proto.action.add	11 种 action
+右面板·Prototype 编辑器	Navigate — Destination / Preserve scroll	proto.action.set
+右面板·Prototype 编辑器	Swap overlay — Overlay	proto.action.set
+右面板·Prototype 编辑器	Change to — Variant	proto.action.set
+右面板·Prototype 编辑器	Scroll to — layer + Offset	proto.action.set
+右面板·Prototype 编辑器	Open link — Link / new tab	proto.action.set
+右面板·Prototype 编辑器	Open overlay — 位置/偏移/关闭/背景	proto.action.set
+右面板·Prototype 编辑器	Set variable mode — Collection / Mode	proto.action.set
+右面板·Prototype 编辑器	Set variable action	proto.action.set
+右面板·Prototype 编辑器	Conditional blocks (If/Else if/Else)	proto.conditional.addBlock / removeBlock
+右面板·Prototype 编辑器	Condition builder / expression	proto.conditional.set
+右面板·Prototype 编辑器	Animation section	—	含可动画 action 时
+右面板·Prototype 编辑器	Transition dropdown	proto.interaction.set
+右面板·Prototype 编辑器	Direction segmented	proto.interaction.set
+右面板·Prototype 编辑器	Easing dropdown + duration	proto.interaction.set	弹簧类型无 duration
+右面板·Prototype 编辑器	Custom bezier/spring fields	proto.interaction.set
+右面板·Prototype 编辑器	Curve preview	—
+右面板·Prototype 滚动	Scroll behavior Position / Overflow	node.set (scrollPosition / overflow)	frame 或 frame 子层
+右面板·Inspect	Inspect tab (Dev Mode)	panel.devMode	进入时结束文本/矢量编辑
+右面板·Inspect	No selection notes	—	Select a layer… / Hover other layers…
+右面板·Inspect	Ready for dev list + filter	dev.focus / select.set / view.zoomSelection	无选择时
+右面板·Inspect	Annotations categories section	annotation.addCategory / editCategory / removeCategory	无选择时
+右面板·Inspect	Measurements section (no selection)	devMode.addMeasurement
+右面板·Inspect	Plugins section	—	Dev Mode 只读插件
+右面板·Inspect	Selected layer name header	—
+右面板·Inspect 状态	Status + Focus view / Compare changes	node.set (devStatus) / dev.focus / dev.compare	仅 frame/section
+右面板·Inspect 标注	Annotations section	annotation.add / edit / remove
+右面板·Inspect 资源	Dev resources section	devResource.add / edit / remove
+右面板·Inspect 测量	Measurements section + Add measurement	devMode.addMeasurement
+右面板·Inspect 属性	Color format dropdown	—
+右面板·Inspect 属性	Inspect property sections/rows	—	点击复制值；来自 devinspect
+右面板·Inspect 资产	Assets section + Export all	file.exportLayers / file.export	无资源时提示在 Design 添加
+右面板·Inspect 资产	Asset row format dropdown + export	file.export
+右面板·Inspect 代码	Code section — language / px-rem / Copy	—
+右面板·Inspect Playground	Playground section	—	仅改预览和代码，不写文档
+右面板·Inspect 连接	Connect to code section	codeConnect.set / remove
+右面板·Inspect 连接	Import path / Name / Template fields	codeConnect.set
+右面板·Dev compare	Compare changes window	—
+右面板·Dev compare	Mode switch (Side by side / Overlay)	—
+右面板·Dev compare	Change list rows + property lines	select.set
+右面板·Dev compare	Compare with dropdown	—
+右面板·Dev compare	Resolve change button	dev.resolveChange
+右面板·Dev compare	Close button	—
+右面板·Design Section	Section colours (8 presets)	node.set (fills)	选中 Section 时；White/Gray/Red/Orange/Yellow/Green/Blue/Violet 8 种浅色
+右面板·Design Section	Hide section contents	section.toggleContents	选中 Section 时；切换后内容不显示
+右面板·Design Section	Section status dropdown	node.set (devStatus)	选中 Section 时；Ready/Changed/Completed

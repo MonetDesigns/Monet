@@ -1,0 +1,1017 @@
+﻿分类,界面元素,绑定命令,EGUI,GPUI,行为 / 显示规则备注,EGUI 源文件,GPUI 源文件,本地状态（Monet）
+菜单·File,New design file,file.new,✓,✓,主菜单常规项；命令未注册或不可用时置灰；Dev Mode 下拒绝执行；Cmd+N,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·File,New board,file.newBoard,✓,✓,置灰；Dev Mode 拒；无快捷键,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·File,New from template…,file.newFromTemplate,✓,✓,Monet 自有项；置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·File,New window,window.new,✓,✓,浏览器单窗口(embed_viewports)时置灰；无快捷键,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·File,Open…,file.open,✓,✓,UI 命令；打开文件对话框；置灰；Dev Mode 拒；Cmd+O,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·File,Import from file…,file.import,✓,✓,UI 命令；导入对话框；置灰；Dev Mode 拒；Shift+Cmd+I,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·File,Place image…,file.placeImage,✓,✓,UI 命令；图片导入；置灰；Dev Mode 拒；Shift+Cmd+K,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·File,Save,file.save,✓,✓,UI 命令；置灰；Dev Mode 拒；Cmd+S,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·File,Save as…,file.saveAs,✓,✓,UI 命令；另存对话框；置灰；Dev Mode 拒；Shift+Cmd+S,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·File,Save to version history…,file.saveVersion,✓,✓,打开保存版本表单；置灰；Dev Mode 拒；Alt+Cmd+S,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·File,Show version history,file.versionHistory,✓,✓,置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·File,Create branch…,branch.create,✓,✓,打开建分支表单；置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·File,Join live session…,collab.join,✓,✓,打开发布/加入对话框；置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·File,Publish to server…,collab.publish,✓,✓,预填服务器地址；置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·File,Export…,file.export,✓,✓,UI 命令；打开导出预览；置灰；Dev Mode 拒；Shift+Cmd+E,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·File,Export frames to PDF…,file.exportFramesPdf,✓,✓,保存对话框/下载；置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·File,Export selection as SVG…,file.exportSvg,✓,✓,UI 命令；打开导出预览；置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·File,Duplicate,file.duplicate,✓,✓,置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·File,Rename,file.rename,✓,✓,切到左面板 File 页并进入重命名；置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·File,Color profile…,file.colorProfile,✓,✓,置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·File,Revert to saved,file.revert,✓,✓,Dev Mode 恒拒；置灰,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·File,Close tab,file.close,✓,✓,脏且非分支时先问是否保存；置灰；Dev Mode 拒；Cmd+W,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·File,Open recent,file.openRecent,✓,✓,不渲染普通项，改为动态子菜单列最近文件；文件已不存在者置灰；含 Clear recent（空时置灰）,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Edit,Undo,edit.undo,✓,✓,置灰；Dev Mode 拒；Cmd+Z,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Edit,Redo,edit.redo,✓,✓,置灰；Dev Mode 拒；Shift+Cmd+Z,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Edit > Copy as,Copy as text,edit.copyAsText,✓,✓,UI 命令；复制文本层字符；置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Edit > Copy as,Copy as CSS,edit.copyAsCss,✓,✓,UI 命令；代码生成 CSS；置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Edit > Copy as,Copy as SVG,edit.copyAsSvg,✓,✓,UI 命令；导出 SVG；置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Edit > Copy as,Copy as PNG,edit.copyAsPng,✓,✓,UI 命令；复制 PNG 并转 sRGB；置灰；Dev Mode 拒；Shift+Cmd+C,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Edit > Copy as,Copy link to selection,edit.copyLink,✓,✓,UI 命令；仅首个选中层复制 figcraft://node/<id>；置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Edit,Cut,edit.cut,✓,✓,镜像系统剪贴板（含矢量局部点/段）；置灰；Dev Mode 拒；Cmd+X,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Edit,Copy,edit.copy,✓,✓,属性行高亮时复制高亮 paint/effect，否则镜像剪贴板；置灰；Dev Mode 拒；Cmd+C,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Edit,Paste,edit.paste,✓,✓,粘贴到当前页；置灰；Dev Mode 拒；Cmd+V,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Edit,Paste over selection,edit.pasteOver,✓,✓,置灰；Dev Mode 拒；Shift+Cmd+V,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Edit,Paste to replace,edit.pasteReplace,✓,✓,置灰；Dev Mode 拒；Shift+Cmd+R,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Edit,Duplicate,edit.duplicate,✓,✓,置灰；Dev Mode 拒；Cmd+D,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Edit,Delete,edit.delete,✓,✓,Prototype 交互优先删交互；Pages 列表聚焦且无选择时删当前页；否则删层；置灰；Dev Mode 拒；Delete,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Edit,Find and replace…,edit.findReplace,✓,✓,打开查找替换条；置灰；Dev Mode 拒；Cmd+F,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Edit,Copy properties,edit.copyProperties,✓,✓,成功 toast「Properties copied」；置灰；Dev Mode 拒；Alt+Cmd+C,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Edit,Paste properties,edit.pasteProperties,✓,✓,置灰；Dev Mode 拒；Alt+Cmd+V,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Edit,Pick color,edit.pickColor,✓,✓,取色器；置灰；Dev Mode 拒；I,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Edit,Set default properties,edit.setDefaultProperties,✓,✓,置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Edit,Select all,select.all,✓,✓,置灰；Dev Mode 拒；Cmd+A,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Edit,Select matching layers,select.matching,✓,✓,置灰；Dev Mode 拒；Alt+Cmd+A,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Edit,Select none,select.none,✓,✓,置灰；Dev Mode 拒；Escape,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Edit,Select inverse,select.inverse,✓,✓,置灰；Dev Mode 拒；Shift+Cmd+A,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Edit > Select all with same,Fill,select.sameFill,✓,✓,置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Edit > Select all with same,Stroke,select.sameStroke,✓,✓,置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Edit > Select all with same,Effect,select.sameEffect,✓,✓,置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Edit > Select all with same,Text properties,select.sameText,✓,✓,置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Edit > Select all with same,Font,select.sameFont,✓,✓,置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Edit > Select all with same,Instance,select.sameInstance,✓,✓,置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Edit > Select all with same,Properties,select.sameProperties,✓,✓,置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·View,Pixel grid,view.pixelGrid,✓,✓,切换态打勾；缩放≥400% 才可见；Shift+' / Cmd+',crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·View,Layout grids,view.layoutGrids,✓,✓,打勾；层有可见 grid 时画；Shift+G / Ctrl+G,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·View,Rulers,view.rulers,✓,✓,打勾；显示上/左标尺；Shift+R,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·View,Slices,view.slices,✓,✓,打勾；画 slice 轮廓,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·View,Comments,view.comments,✓,✓,打勾；显示评论钉；Shift+C,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·View,Multiplayer cursors,view.multiplayerCursors,✓,✓,打勾；Alt+Cmd+\,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·View > Outlines,Show outlines,view.outlines,✓,✓,打勾；Shift+Cmd+O,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·View > Outlines,Show outlines for selection,view.outlinesSelection,✓,✓,打勾,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·View > Outlines,Include hidden layers,view.outlinesHiddenLayers,✓,✓,打勾,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·View > Outlines,Include object bounds,view.outlinesObjectBounds,✓,✓,打勾,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·View,Pixel preview,view.pixelPreview,✓,✓,打勾（独立字段 pixel_preview）；Ctrl+P,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·View,Mask outlines,view.maskOutlines,✓,✓,打勾,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·View,Frame outlines,view.frameOutlines,✓,✓,打勾,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·View,Soft-proof sRGB,view.proofSrgb,✓,✓,打勾；Monet 自有（不计 parity）,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·View > Panels,Show/Hide UI,view.toggleUi,✓,✓,不勾选；隐藏全部界面；Cmd+\,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·View,Full screen,view.fullscreen,✓,✓,不勾选；Ctrl+Cmd+F（Win: F11）,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·View > Panels,Reset panel widths,view.panelWidths,✓,✓,不勾选,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·View > Panels,Layers,view.layers,✓,✓,不勾选；Alt+1,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·View > Panels,Assets,view.assets,✓,✓,不勾选；Alt+2,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·View > Panels,Design,view.design,✓,✓,不勾选；Alt+8,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·View > Panels,Prototype,view.prototype,✓,✓,不勾选；Alt+9,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·View,Zoom in,view.zoomIn,✓,✓,Cmd+= / =,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·View,Zoom out,view.zoomOut,✓,✓,Cmd+-,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·View,Zoom to 100%,view.zoom100,✓,✓,Shift+0 / Cmd+0,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·View,Zoom to 50%,view.zoom50,✓,✓,,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·View,Zoom to 200%,view.zoom200,✓,✓,,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·View,Zoom to fit,view.zoomFit,✓,✓,Shift+1,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·View,Zoom to selection,view.zoomSelection,✓,✓,Shift+2；避开底部浮动工具栏,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·View,Zoom to previous frame,view.prevFrame,✓,✓,Shift+N / Home,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·View,Zoom to next frame,view.nextFrame,✓,✓,N / End,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·View,Previous page,view.prevPage,✓,✓,PageUp；回到该页上次视图,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·View,Next page,view.nextPage,✓,✓,PageDown；回到该页上次视图,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·View > Theme,Light,view.themeLight,✓,✓,单选组；命令态切换，无勾选标记,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·View > Theme,Dark,view.themeDark,✓,✓,单选组,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·View > Theme,Follow system,view.themeSystem,✓,✓,单选组,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Frame selection,object.frameSelection,✓,✓,置灰；Dev Mode 拒；Alt+Cmd+G,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Group selection,object.group,✓,✓,置灰；Dev Mode 拒；Cmd+G,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Ungroup selection,object.ungroup,✓,✓,置灰；Dev Mode 拒；Shift+Cmd+G,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Remove frame,object.removeFrame,✓,✓,置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Resize to fit,object.resizeToFit,✓,✓,置灰；Dev Mode 拒；Alt+Shift+Cmd+R,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Add auto layout,layout.add,✓,✓,置灰；Dev Mode 拒；Shift+A,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Remove auto layout,layout.remove,✓,✓,置灰；Dev Mode 拒；Alt+Shift+A,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Suggest auto layout,layout.suggest,✓,✓,置灰；Dev Mode 拒；Ctrl+Shift+A,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Create component,component.create,✓,✓,置灰；Dev Mode 拒；Alt+Cmd+K,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Create multiple components,component.createMultiple,✓,✓,置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Combine as variants,component.combineVariants,✓,✓,需 2+ 主组件；置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Reset all changes,component.resetInstance,✓,✓,置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Detach instance,component.detach,✓,✓,置灰；Dev Mode 拒；Alt+Cmd+B,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Go to main component,component.goToMain,✓,✓,置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Push changes to main component,component.pushChanges,✓,✓,置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Restore main component,component.restoreMain,✓,✓,置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Use as mask,object.mask,✓,✓,置灰；Dev Mode 拒；Ctrl+Cmd+M,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Release mask,object.releaseMask,✓,✓,置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Set as thumbnail,object.setThumbnail,✓,✓,置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Crop image,image.crop,✓,✓,Monet 自有；单选且含 image fill 可用；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Bring to front,arrange.front,✓,✓,置灰；Dev Mode 拒；Alt+Cmd+],crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Bring forward,arrange.forward,✓,✓,置灰；Dev Mode 拒；Cmd+],crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Send backward,arrange.backward,✓,✓,置灰；Dev Mode 拒；Cmd+[,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Send to back,arrange.back,✓,✓,置灰；Dev Mode 拒；Alt+Cmd+[,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Flip horizontal,object.flipH,✓,✓,置灰；Dev Mode 拒；Shift+H,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Flip vertical,object.flipV,✓,✓,置灰；Dev Mode 拒；Shift+V,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Rotate 180°,object.rotate180,✓,✓,置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Rotate 90° left,object.rotateLeft,✓,✓,置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Rotate 90° right,object.rotateRight,✓,✓,置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Flatten,vector.flatten,✓,✓,置灰；Dev Mode 拒；Alt+Shift+F,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Outline stroke,vector.outlineStroke,✓,✓,置灰；Dev Mode 拒；Alt+Cmd+O,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object > Boolean groups,Union,bool.union,✓,✓,置灰；Dev Mode 拒；Alt+Shift+U,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object > Boolean groups,Subtract,bool.subtract,✓,✓,置灰；Dev Mode 拒；Alt+Shift+S,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object > Boolean groups,Intersect,bool.intersect,✓,✓,置灰；Dev Mode 拒；Alt+Shift+I,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object > Boolean groups,Exclude,bool.exclude,✓,✓,置灰；Dev Mode 拒；Alt+Shift+E,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object > Boolean groups,Flatten,bool.flatten,✓,✓,置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Rasterize selection,object.rasterize,✓,✓,置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Show/Hide selection,object.toggleVisible,✓,✓,置灰；Dev Mode 拒；Shift+Cmd+H,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Lock/Unlock selection,object.toggleLock,✓,✓,置灰；Dev Mode 拒；Shift+Cmd+L,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Hide other layers,object.hideOthers,✓,✓,置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Collapse layers,layers.collapseAll,✓,✓,置灰；Dev Mode 拒；Alt+L,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Remove fill,object.removeFill,✓,✓,置灰；Dev Mode 拒；Alt+/,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Remove stroke,object.removeStroke,✓,✓,置灰；Dev Mode 拒；Shift+/,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Swap fill and stroke,object.swapFillStroke,✓,✓,置灰；Dev Mode 拒；Shift+X,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Rename,object.rename,✓,✓,置灰；Dev Mode 拒；Cmd+R / F2,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Batch rename…,object.batchRename,✓,✓,仅选择非空时打开批量改名；置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object,Move to page,object.moveToPage,✓,✓,打开页面输入框；置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object > Select layer,Select children,select.children,✓,✓,置灰；Dev Mode 拒；Enter,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object > Select layer,Select parent,select.parent,✓,✓,置灰；Dev Mode 拒；Shift+Enter,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object > Select layer,Select next sibling,select.next,✓,✓,置灰；Dev Mode 拒；Tab,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Object > Select layer,Select previous sibling,select.previous,✓,✓,置灰；Dev Mode 拒；Shift+Tab,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Arrange,Align left,align.left,✓,✓,需多选；置灰；Dev Mode 拒；Alt+A,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Arrange,Align horizontal centers,align.hcenter,✓,✓,置灰；Dev Mode 拒；Alt+H,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Arrange,Align right,align.right,✓,✓,置灰；Dev Mode 拒；Alt+D,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Arrange,Align top,align.top,✓,✓,置灰；Dev Mode 拒；Alt+W,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Arrange,Align vertical centers,align.vcenter,✓,✓,置灰；Dev Mode 拒；Alt+V,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Arrange,Align bottom,align.bottom,✓,✓,置灰；Dev Mode 拒；Alt+S,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Arrange,Distribute horizontal spacing,distribute.horizontal,✓,✓,置灰；Dev Mode 拒；Ctrl+Alt+H,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Arrange,Distribute vertical spacing,distribute.vertical,✓,✓,置灰；Dev Mode 拒；Ctrl+Alt+V,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Arrange,Tidy up,arrange.tidy,✓,✓,仅当选区是 3~2000 个带框图层、不在 auto layout 流里、且布局成行/列/网格（重叠/对角/不规则时不可用）才可点，否则置灰；显式 spacing 可放宽到 2 个；网格按列多还是行多决定打包方向；Ctrl+Alt+T（Win: Ctrl+Alt+Shift+T）；Dev Mode 拒绝,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Arrange,Pack horizontal,arrange.packH,✓,✓,置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Arrange,Pack vertical,arrange.packV,✓,✓,置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Arrange,Round to pixels,arrange.roundToPixels,✓,✓,置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Text,Bold,text.bold,✓,✓,仅文本选择；置灰；Dev Mode 拒；Cmd+B,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Text,Italic,text.italic,✓,✓,置灰；Dev Mode 拒；Cmd+I,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Text,Underline,text.underline,✓,✓,置灰；Dev Mode 拒；Cmd+U,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Text,Strikethrough,text.strikethrough,✓,✓,置灰；Dev Mode 拒；Shift+Cmd+X,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Text,Create link,text.link,✓,✓,打开 URL 输入框；置灰；Dev Mode 拒；Shift+Cmd+U,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Text,Bulleted list,text.bulletList,✓,✓,置灰；Dev Mode 拒；Shift+Cmd+8,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Text,Numbered list,text.numberList,✓,✓,置灰；Dev Mode 拒；Shift+Cmd+7,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Text > Alignment,Text align left,text.alignLeft,✓,✓,置灰；Dev Mode 拒；Alt+Cmd+L,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Text > Alignment,Text align center,text.alignCenter,✓,✓,置灰；Dev Mode 拒；Alt+Cmd+T,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Text > Alignment,Text align right,text.alignRight,✓,✓,置灰；Dev Mode 拒；Alt+Cmd+R,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Text > Alignment,Text align justified,text.alignJustify,✓,✓,置灰；Dev Mode 拒；Alt+Cmd+J,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Text > Adjust,Increase font size,text.sizeUp,✓,✓,置灰；Dev Mode 拒；Shift+Cmd+.,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Text > Adjust,Decrease font size,text.sizeDown,✓,✓,"置灰；Dev Mode 拒；Shift+Cmd+,",crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Text > Adjust,Increase font weight,text.weightUp,✓,✓,置灰；Dev Mode 拒；Alt+Cmd+.,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Text > Adjust,Decrease font weight,text.weightDown,✓,✓,"置灰；Dev Mode 拒；Alt+Cmd+,",crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Text > Adjust,Increase line height,text.lineHeightUp,✓,✓,置灰；Dev Mode 拒；Alt+Shift+.,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Text > Adjust,Decrease line height,text.lineHeightDown,✓,✓,"置灰；Dev Mode 拒；Alt+Shift+,",crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Text > Adjust,Increase letter spacing,text.trackingUp,✓,✓,置灰；Dev Mode 拒；Alt+.,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Text > Adjust,Decrease letter spacing,text.trackingDown,✓,✓,"置灰；Dev Mode 拒；Alt+,",crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Text > Case,Original case,text.caseOriginal,✓,✓,置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Text > Case,Uppercase,text.caseUpper,✓,✓,置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Text > Case,Lowercase,text.caseLower,✓,✓,置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Text > Case,Title case,text.caseTitle,✓,✓,置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Text > Text direction,Auto,text.directionAuto,✓,✓,Monet 自有；置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Text > Text direction,Left to right,text.directionLtr,✓,✓,置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Text > Text direction,Right to left,text.directionRtl,✓,✓,置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Text,Missing fonts…,text.missingFonts,✓,✓,打开缺失字体对话框；置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Vector,Join selection,vector.join,✓,✓,置灰；Dev Mode 拒；Cmd+J,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Vector,Smooth join selection,vector.smoothJoin,✓,✓,置灰；Dev Mode 拒；Shift+Cmd+J,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Vector,Delete and heal selection,vector.deleteHeal,✓,✓,置灰；Dev Mode 拒；Shift+Delete,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Vector,Simplify vector,vector.simplify,✓,✓,置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Vector,Reverse path direction,vector.reverse,✓,✓,置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Vector,Offset path,vector.offset,✓,✓,打开距离输入框；置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Plugins,Run last plugin,plugins.runLast,✓,✓,置灰；Dev Mode 拒；Alt+Cmd+P,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Plugins,Manage plugins…,plugins.manage,✓,✓,置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Plugins > Development,Import plugin from manifest…,plugin.import,✓,✓,UI 命令；打开清单文件选择器；置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Preferences,Snap to geometry,view.snapGeometry,✓,✓,打勾；Shift+Cmd+',crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Preferences,Snap to objects,view.snapObjects,✓,✓,打勾,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Preferences,Snap to pixel grid,view.snapPixel,✓,✓,打勾；Shift+Cmd+',crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Preferences,Keep tool selected after use,pref.keepTool,✓,✓,不勾选；切工具后保留,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Preferences,Highlight layers on hover,pref.highlightHover,✓,✓,不勾选,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Preferences,Rename duplicated layers,pref.renameDuplicates,✓,✓,不勾选,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Preferences,Show dimensions on objects,pref.showDimensions,✓,✓,不勾选,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Preferences,Use number keys for opacity,pref.numberKeysOpacity,✓,✓,不勾选,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Preferences,Nudge amount…,pref.nudge,✓,✓,无参数会重置，故走偏好面板,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Preferences,Preferences…,app.preferences,✓,✓,"打开偏好设置；Cmd+,",crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Libraries,Open libraries,libraries.open,✓,✓,置灰；Dev Mode 拒；Alt+3,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Libraries,Publish library…,libraries.publish,✓,✓,置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Libraries,Hide when publishing,component.hideWhenPublishing,✓,✓,不勾选；置灰；Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Help,Getting started,help.gettingStarted,✓,✓,置灰,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Help,Keyboard shortcuts,help.shortcuts,✓,✓,打开快捷键速查；Ctrl+Shift+?,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Help,Help page,help.page,✓,✓,置灰,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Help,About Monet,help.about,✓,✓,打开关于窗口；置灰,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Tools,Move,tool.move,✓,✓,由工具栏 tool flyout 呈现（TOP_MENUS 不含 Tools）；Dev Mode 允许；V,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Tools,Scale,tool.scale,✓,✓,Dev Mode 拒；K,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Tools,Hand,tool.hand,✓,✓,Dev Mode 允许；H,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Tools,Frame,tool.frame,✓,✓,Dev Mode 拒；F / A,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Tools,Section,tool.section,✓,✓,Dev Mode 拒；Shift+S,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Tools,Slice,tool.slice,✓,✓,Dev Mode 拒；S,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Tools,Rectangle,tool.rectangle,✓,✓,Dev Mode 拒；R,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Tools,Line,tool.line,✓,✓,Dev Mode 拒；L,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Tools,Arrow,tool.arrow,✓,✓,Dev Mode 拒；Shift+L,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Tools,Ellipse,tool.ellipse,✓,✓,Dev Mode 拒；O,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Tools,Polygon,tool.polygon,✓,✓,Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Tools,Star,tool.star,✓,✓,Dev Mode 拒,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Tools,Pen,tool.pen,✓,✓,Dev Mode 拒；P,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Tools,Brush,tool.brush,✓,✓,自由手绘带笔刷；Dev Mode 拒；B,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Tools,Pen (freehand),tool.pencil,✓,✓,原铅笔/马克笔/荧光笔合并；Dev Mode 拒；Shift+P,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Tools,Text,tool.text,✓,✓,Dev Mode 拒；T,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Tools,Comment,tool.comment,✓,✓,Dev Mode 允许；C,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Tools,Annotation,tool.annotation,✓,✓,Dev Mode 允许；Shift+T；选中层时直接请求标注,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Tools,Shape builder,tool.shapeBuilder,✓,✓,Dev Mode 拒；Shift+M,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+菜单·Tools,Actions,app.actions,✓,✓,主菜单顶部搜索行 + Tools 末项；打开命令面板；Cmd+K,crates/engine/src/catalog.rs; crates/ui-egui/src/menus.rs,crates/ui-gpui/src/main_menu.rs; widgets/menu.rs,已实现
+标题栏,Home 标签,—,✓,✓,无文件且无演示时高亮；点击回 Home 并暂停演示,crates/ui-egui/src/app/tabs.rs; crates/ui-egui/src/app/frame.rs,crates/ui-gpui/src/title_bar.rs; tabs.rs,已实现
+标题栏,文件标签（每个打开文档）,doc.switch,✓,✓,点击切换；active 高亮、脏圆点、live 标记、断连标签；可拖动重排、拖出脱窗、中键关闭；右键 Open in new window,crates/ui-egui/src/app/tabs.rs; crates/ui-egui/src/app/frame.rs,crates/ui-gpui/src/title_bar.rs; tabs.rs,已实现
+标题栏,标签关闭 ×,file.close,✓,✓,脏且非分支时先问；Alt+点击强制关闭；中键同；Cmd+W,crates/ui-egui/src/app/tabs.rs; crates/ui-egui/src/app/frame.rs,crates/ui-gpui/src/title_bar.rs; tabs.rs,已实现
+标题栏,新建标签 +,file.new,✓,✓,点击新建并关闭 Home；Cmd+N,crates/ui-egui/src/app/tabs.rs; crates/ui-egui/src/app/frame.rs,crates/ui-gpui/src/title_bar.rs; tabs.rs,已实现
+标题栏,演示标签（每个 presentation）,—,✓,✓,点击切到演示；切回保留播放状态,crates/ui-egui/src/app/tabs.rs; crates/ui-egui/src/app/frame.rs,crates/ui-gpui/src/title_bar.rs; tabs.rs,已实现
+标题栏,标签溢出菜单 Open files,—,✓,✓,仅标签放不下时出现 chevron，列出未显示文件,crates/ui-egui/src/app/tabs.rs; crates/ui-egui/src/app/frame.rs,crates/ui-gpui/src/title_bar.rs; tabs.rs,已实现
+标题栏,演示溢出菜单 Open presentations,—,✓,✓,仅演示标签溢出时出现,crates/ui-egui/src/app/tabs.rs; crates/ui-egui/src/app/frame.rs,crates/ui-gpui/src/title_bar.rs; tabs.rs,已实现
+标题栏,主题切换按钮,—,✓,✓,点击切 light/dark；固定宽度,crates/ui-egui/src/app/tabs.rs; crates/ui-egui/src/app/frame.rs,crates/ui-gpui/src/title_bar.rs; tabs.rs,已实现
+标题栏,最小化按钮,—,✓,✓,仅自绘标题栏显示,crates/ui-egui/src/app/tabs.rs; crates/ui-egui/src/app/frame.rs,crates/ui-gpui/src/title_bar.rs; tabs.rs,已实现
+标题栏,最大化/还原按钮,—,✓,✓,已最大化时图标/提示切为 Restore,crates/ui-egui/src/app/tabs.rs; crates/ui-egui/src/app/frame.rs,crates/ui-gpui/src/title_bar.rs; tabs.rs,已实现
+标题栏,关闭窗口按钮,—,✓,✓,悬停变红；有未保存改动时弹 Unsaved changes,crates/ui-egui/src/app/tabs.rs; crates/ui-egui/src/app/frame.rs,crates/ui-gpui/src/title_bar.rs; tabs.rs,已实现
+标题栏,标题栏空白拖拽区,—,✓,✓,仅非原生标题栏；双击最大化/还原,crates/ui-egui/src/app/tabs.rs; crates/ui-egui/src/app/frame.rs,crates/ui-gpui/src/title_bar.rs; tabs.rs,已实现
+标题栏,窗口边缘/角落缩放条,—,✓,✓,上/下/左/右+四角共 8 区；仅未最大化/全屏,crates/ui-egui/src/app/tabs.rs; crates/ui-egui/src/app/frame.rs,crates/ui-gpui/src/title_bar.rs; tabs.rs,已实现
+右键菜单·画布有选择,Copy,edit.copy,✓,✓,镜像剪贴板；命令可用时,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·画布有选择,Paste here,edit.paste,✓,✓,粘贴到点击的页面坐标,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·画布有选择,Paste to replace,edit.pasteReplace,✓,✓,,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·画布有选择,Copy as > Copy as CSS,edit.copyAsCss,✓,✓,子菜单,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·画布有选择,Copy as > Copy as SVG,edit.copyAsSvg,✓,✓,子菜单,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·画布有选择,Copy as > Copy as PNG,edit.copyAsPng,✓,✓,子菜单,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·画布有选择,Copy as > Copy link to selection,edit.copyLink,✓,✓,子菜单,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·画布有选择,Bring to front,arrange.front,✓,✓,,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·画布有选择,Bring forward,arrange.forward,✓,✓,,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·画布有选择,Send backward,arrange.backward,✓,✓,,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·画布有选择,Send to back,arrange.back,✓,✓,,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·画布有选择,Group selection,object.group,✓,✓,,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·画布有选择,Frame selection,object.frameSelection,✓,✓,,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·画布有选择,Wrap in new section,object.wrapInSection,✓,✓,UI 命令,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·画布有选择,Ungroup,object.ungroup,✓,✓,,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·画布有选择,Flatten,vector.flatten,✓,✓,,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·画布有选择,Outline stroke,vector.outlineStroke,✓,✓,,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·画布有选择,Use as mask,object.mask,✓,✓,,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·画布有选择,Crop image,image.crop,✓,✓,动态插入：仅单选且该层有 image fill,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·画布有选择,Add auto layout,layout.add,✓,✓,,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·画布有选择,Remove all auto layout,layout.removeAll,✓,✓,UI 命令,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·画布有选择,Combine as variants,component.combineVariants,✓,✓,动态插入：2+ 主组件才显示,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·画布有选择,Create component,component.create,✓,✓,选中全为 Instance 时被替换为 Go to main component,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·画布有选择,Go to main component,component.goToMain,✓,✓,动态替换项,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·画布有选择,Detach instance,component.detach,✓,✓,,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·画布有选择,Show/Hide,object.toggleVisible,✓,✓,,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·画布有选择,Lock/Unlock,object.toggleLock,✓,✓,,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·画布有选择,Show/Hide section contents,section.toggleContents,✓,✓,动态插入：选中含 Section,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·画布有选择,Convert to frame,object.convertToFrame,✓,✓,动态插入：选中全为 Section,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·画布有选择,Convert to section,object.convertToSection,✓,✓,动态插入：选中全为 Frame,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·画布有选择,Flip horizontal,object.flipH,✓,✓,,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·画布有选择,Flip vertical,object.flipV,✓,✓,,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·画布有选择,Delete,edit.delete,✓,✓,,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·画布无选择,Remove guide,guide.remove,✓,✓,动态：无选择且选中了参考线时插到最前,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·画布无选择,Paste here,edit.paste,✓,✓,粘贴到点击坐标,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·画布无选择,Select all,select.all,✓,✓,,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·画布无选择,Show/Hide UI,view.toggleUi,✓,✓,,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·画布无选择,Zoom to fit,view.zoomFit,✓,✓,,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·画布无选择,Rulers,view.rulers,✓,✓,,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·画布无选择,Pixel grid,view.pixelGrid,✓,✓,,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·画布,Select layer >（动态层列表）,select.set,✓,✓,仅指针下≥2 图层时显示；列出命中层最多 40，锁定带锁、选中打勾、嵌套缩进,crates/ui-egui/src/menus.rs; crates/ui-egui/src/canvas/input.rs,crates/ui-gpui/src/context_menu.rs,已实现
+右键菜单·图层面板行,（复用画布有选择菜单）,—,✓,✓,行右键→context_menu；多选只带自身,crates/ui-egui/src/menus.rs; crates/ui-egui/src/panels/layers.rs,crates/ui-gpui/src/context_menu.rs; layer_tree.rs,已实现
+右键菜单·页面行,Rename page,page.rename,✓,✓,Dev Mode 拒,crates/ui-egui/src/panels/layers.rs,crates/ui-gpui/src/layer_tree.rs,已实现
+右键菜单·页面行,Duplicate page,page.duplicate,✓,✓,Dev Mode 拒,crates/ui-egui/src/panels/layers.rs,crates/ui-gpui/src/layer_tree.rs,已实现
+右键菜单·页面行,Set as opening page,page.setOpening,✓,✓,非分隔页才显示；Dev Mode 拒,crates/ui-egui/src/panels/layers.rs,crates/ui-gpui/src/layer_tree.rs,已实现
+右键菜单·页面行,Delete page,page.delete,✓,✓,无确认，Undo 可恢复；Dev Mode 拒,crates/ui-egui/src/panels/layers.rs,crates/ui-gpui/src/layer_tree.rs,已实现
+工具栏·主工具栏 Move 组,Move tools (group button),tool.set,✓,✓,显示组内当前工具；点击触发选择,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·主工具栏 Move 组 flyout,Move,tool.set,✓,✓,组内>1 显示 flyout,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·主工具栏 Move 组 flyout,Hand,tool.set,✓,✓,,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·主工具栏 Move 组 flyout,Scale,tool.set,✓,✓,,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·主工具栏 Frame 组,Frame tools (group button),tool.set,✓,✓,,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·主工具栏 Frame 组 flyout,Frame,tool.set,✓,✓,draws_shape；已选中时 Enter 放置,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·主工具栏 Frame 组 flyout,Section,tool.set,✓,✓,,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·主工具栏 Frame 组 flyout,Slice,tool.set,✓,✓,,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·主工具栏 Shape 组,Shape tools (group button),tool.set,✓,✓,,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·主工具栏 Shape 组 flyout,Rectangle,tool.set,✓,✓,,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·主工具栏 Shape 组 flyout,Line,tool.set,✓,✓,,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·主工具栏 Shape 组 flyout,Arrow,tool.set,✓,✓,,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·主工具栏 Shape 组 flyout,Ellipse,tool.set,✓,✓,,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·主工具栏 Shape 组 flyout,Polygon,tool.set,✓,✓,,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·主工具栏 Shape 组 flyout,Star,tool.set,✓,✓,,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·主工具栏 Drawing 组,Drawing tools (group button),tool.set,✓,✓,,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·主工具栏 Drawing 组 flyout,Pen tool,tool.set,✓,✓,贝塞尔钢笔,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·主工具栏 Drawing 组 flyout,Brush,tool.set,✓,✓,自由手绘带笔刷；N,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·主工具栏 Drawing 组 flyout,Pen,tool.set,✓,✓,自由手绘等宽；Shift+P,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·主工具栏 Drawing 组 flyout,Shape builder,tool.set,✓,✓,选中后切成 builder 工具栏,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·主工具栏 Text 组,Text (group button),tool.set,✓,✓,,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·主工具栏 Text 组 flyout,Text,tool.set,✓,✓,,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·主工具栏 Text 组 flyout,Text on a path,tool.set,✓,✓,,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·主工具栏 Comment 组,Comment tool button,tool.set,✓,✓,单工具无 flyout,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·主工具栏,Flyout caret (chevron),—,✓,✓,组>1 或有 options 时显示；点击开合，Esc 关闭,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·主工具栏,Actions,—,✓,✓,打开 Actions 面板,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·主工具栏,Divider,—,✓,✓,Actions 与模式切换之间,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·主工具栏 模式切换,Draw mode,tool.set,✓,✓,pencil；切 Design tab,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·主工具栏 模式切换,Design mode,tool.set,✓,✓,当前为 pencil 则切 move,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·主工具栏 模式切换,Prototype mode,—,✓,✓,仅切右栏到 Prototype,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·主工具栏 模式切换,Inspect mode,—,✓,✓,仅切右栏到 Inspect；Dev 模式工具选择退回 Design,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·主工具栏,Help and resources button,—,✓,✓,画布右下角；与 pill 重叠时上移,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·主工具栏 帮助菜单,Getting started,help.gettingStarted,✓,✓,,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·主工具栏 帮助菜单,Keyboard shortcuts,help.shortcuts,✓,✓,,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·主工具栏 帮助菜单,Help page,help.page,✓,✓,,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·主工具栏 帮助菜单,Check for updates…,help.checkForUpdates,✓,✓,,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·主工具栏 帮助菜单,About FigCraft,help.about,✓,✓,,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·画板工具栏,Move tools (group button),tool.set,✓,✓,画板组,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 Move 组 flyout,Move,tool.set,✓,✓,,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 Move 组 flyout,Hand,tool.set,✓,✓,,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏,Drawing tools (group button),tool.set,✓,✓,ink 组,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 ink 组 flyout,Pen,tool.set,✓,✓,原马克笔=ink 样式,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 ink 组 flyout,Highlighter,tool.set,✓,✓,pen 的 highlighter 样式,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 ink 组 flyout,Eraser,tool.set,✓,✓,,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏,Sticky note colors (group button),tool.sticky,✓,✓,单工具+Colors flyout,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 Sticky 颜色,Yellow,tool.sticky,✓,✓,"{""color"":""yellow""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 Sticky 颜色,Orange,tool.sticky,✓,✓,"{""color"":""orange""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 Sticky 颜色,Red,tool.sticky,✓,✓,"{""color"":""red""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 Sticky 颜色,Pink,tool.sticky,✓,✓,"{""color"":""pink""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 Sticky 颜色,Violet,tool.sticky,✓,✓,"{""color"":""violet""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 Sticky 颜色,Blue,tool.sticky,✓,✓,"{""color"":""blue""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 Sticky 颜色,Green,tool.sticky,✓,✓,"{""color"":""green""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 Sticky 颜色,Gray,tool.sticky,✓,✓,"{""color"":""gray""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏,Shapes (group button),tool.shape,✓,✓,单工具+Shapes flyout,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 Shapes flyout,Rectangle,tool.shape,✓,✓,"{""shape"":""rectangle""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 Shapes flyout,Rounded rectangle,tool.shape,✓,✓,"{""shape"":""roundedRectangle""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 Shapes flyout,Ellipse,tool.shape,✓,✓,"{""shape"":""ellipse""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 Shapes flyout,Diamond,tool.shape,✓,✓,"{""shape"":""diamond""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 Shapes flyout,Triangle,tool.shape,✓,✓,"{""shape"":""triangle""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 Shapes flyout,Triangle down,tool.shape,✓,✓,"{""shape"":""triangleDown""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 Shapes flyout,Parallelogram right,tool.shape,✓,✓,"{""shape"":""parallelogramRight""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 Shapes flyout,Parallelogram left,tool.shape,✓,✓,"{""shape"":""parallelogramLeft""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 Shapes flyout,Trapezoid,tool.shape,✓,✓,"{""shape"":""trapezoid""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 Shapes flyout,Pentagon,tool.shape,✓,✓,"{""shape"":""pentagon""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 Shapes flyout,Hexagon,tool.shape,✓,✓,"{""shape"":""hexagon""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 Shapes flyout,Octagon,tool.shape,✓,✓,"{""shape"":""octagon""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 Shapes flyout,Star,tool.shape,✓,✓,"{""shape"":""star""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 Shapes flyout,Plus,tool.shape,✓,✓,"{""shape"":""plus""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 Shapes flyout,Arrow left,tool.shape,✓,✓,"{""shape"":""arrowLeft""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 Shapes flyout,Arrow right,tool.shape,✓,✓,"{""shape"":""arrowRight""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 Shapes flyout,Chevron,tool.shape,✓,✓,"{""shape"":""chevron""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 Shapes flyout,Speech bubble,tool.shape,✓,✓,"{""shape"":""speechBubble""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 Shapes flyout,Database,tool.shape,✓,✓,"{""shape"":""database""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 Shapes flyout,Document,tool.shape,✓,✓,"{""shape"":""document""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 Shapes flyout,Predefined process,tool.shape,✓,✓,"{""shape"":""predefinedProcess""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 Shapes flyout,Manual input,tool.shape,✓,✓,"{""shape"":""manualInput""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 Shapes flyout,Internal storage,tool.shape,✓,✓,"{""shape"":""internalStorage""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏,Connector tool button,tool.set,✓,✓,单工具,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏,Text tool button,tool.set,✓,✓,单工具,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏,Section tool button,tool.set,✓,✓,单工具,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏,Stamps (group button),tool.stamp,✓,✓,单工具+Stamps flyout,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 Stamps flyout,Thumbs up,tool.stamp,✓,✓,"{""stamp"":""thumbsUp""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 Stamps flyout,Heart,tool.stamp,✓,✓,"{""stamp"":""heart""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 Stamps flyout,Plus one,tool.stamp,✓,✓,"{""stamp"":""plusOne""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 Stamps flyout,Star,tool.stamp,✓,✓,"{""stamp"":""star""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 Stamps flyout,Question,tool.stamp,✓,✓,"{""stamp"":""question""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏 Stamps flyout,Check,tool.stamp,✓,✓,"{""stamp"":""check""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏,Comment tool button,tool.set,✓,✓,单工具,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏,Board picker (templates) button,—,✓,✓,打开模板选择器,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·画板工具栏,Design panel button,view.design,✓,✓,面板被请求前隐藏,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+工具栏·只读工具栏,Move,tool.set,✓,✓,只读时；编辑工具被过滤,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·只读工具栏,Hand,tool.set,✓,✓,只读时,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·只读工具栏,Comment,tool.set,✓,✓,仅 comment-only 时显示,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·只读工具栏,View only / Can comment / Publishing… badge,—,✓,✓,只读状态；hover 显示原因,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·矢量编辑工具栏,Move,vector.edit.tool,✓,✓,"{""tool"":""move""}；按 Cmd 时 Bend 高亮",crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·矢量编辑工具栏,Pen,vector.edit.tool,✓,✓,"{""tool"":""pen""}",crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·矢量编辑工具栏,Bend,vector.edit.tool,✓,✓,"{""tool"":""bend""}",crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·矢量编辑工具栏,Paint bucket,vector.edit.tool,✓,✓,"{""tool"":""paint""}",crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·矢量编辑工具栏,Lasso,vector.edit.tool,✓,✓,"{""tool"":""lasso""}",crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·矢量编辑工具栏,Cut,vector.edit.tool,✓,✓,"{""tool"":""cut""}",crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·矢量编辑工具栏,Eraser,vector.edit.tool,✓,✓,"{""tool"":""eraser""}",crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·矢量编辑工具栏,Variable width,vector.edit.tool,✓,✓,"{""tool"":""width""}",crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·矢量编辑工具栏,Done editing,vector.edit.end,✓,✓,Esc,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·ShapeBuilder 工具栏,Merge regions,shapeBuilder.mode,✓,✓,"{""mode"":""merge""}",crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·ShapeBuilder 工具栏,Remove regions,shapeBuilder.mode,✓,✓,"{""mode"":""remove""}",crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·ShapeBuilder 工具栏,Builder hint text,—,✓,✓,无区域时「Select overlapping shapes」,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·ShapeBuilder 工具栏,Done,tool.set,✓,✓,"{""tool"":""move""}；Enter",crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·Drawing 设置条,Stroke colour swatch,—,✓,✓,每支笔各自 drawStyle.color,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·Drawing 设置条,Weight −/值/+,—,✓,✓,tool.drawStyle weight,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·Drawing 设置条,Flow −/值/+,tool.drawStyle,✓,✓,仅 Brush；一笔内墨量,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·Drawing 设置条,Opacity −/值/+,tool.drawStyle,✓,✓,仅 Brush；整笔上限,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·Drawing 设置条,Smoothing −/值/+,tool.drawStyle,✓,✓,三支笔都有；稳定器,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·Drawing 设置条,Brush preset dropdown,tool.drawStyle,✓,✓,仅 Brush；外部 .abr,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+工具栏·Drawing 设置条,Done,—,✓,✓,仅贝塞尔钢笔,crates/ui-egui/src/toolbar.rs,crates/ui-gpui/src/toolbar.rs,已实现
+画板选区栏,Color swatch (8 色),board.setColor,✓,✓,仅画板对象被选中时,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏,Edit colour wheel,—,✓,✓,仅全选连接器时；打开颜色选择器,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏,Shape menu button,—,✓,✓,选中 Shape 时,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏 形状菜单,Rectangle,tool.shape,✓,✓,"board.setStyle {""shape"":""rectangle""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏 形状菜单,Rounded rectangle,tool.shape,✓,✓,board.setStyle,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏 形状菜单,Ellipse,tool.shape,✓,✓,board.setStyle,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏 形状菜单,Diamond,tool.shape,✓,✓,board.setStyle,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏 形状菜单,Triangle,tool.shape,✓,✓,board.setStyle,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏 形状菜单,Triangle down,tool.shape,✓,✓,board.setStyle,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏 形状菜单,Parallelogram right,tool.shape,✓,✓,board.setStyle,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏 形状菜单,Parallelogram left,tool.shape,✓,✓,board.setStyle,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏 形状菜单,Trapezoid,tool.shape,✓,✓,board.setStyle,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏 形状菜单,Pentagon,tool.shape,✓,✓,board.setStyle,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏 形状菜单,Hexagon,tool.shape,✓,✓,board.setStyle,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏 形状菜单,Octagon,tool.shape,✓,✓,board.setStyle,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏 形状菜单,Star,tool.shape,✓,✓,board.setStyle,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏 形状菜单,Plus,tool.shape,✓,✓,board.setStyle,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏 形状菜单,Arrow left,tool.shape,✓,✓,board.setStyle,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏 形状菜单,Arrow right,tool.shape,✓,✓,board.setStyle,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏 形状菜单,Chevron,tool.shape,✓,✓,board.setStyle,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏 形状菜单,Speech bubble,tool.shape,✓,✓,board.setStyle,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏 形状菜单,Database,tool.shape,✓,✓,board.setStyle,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏 形状菜单,Document,tool.shape,✓,✓,board.setStyle,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏 形状菜单,Predefined process,tool.shape,✓,✓,board.setStyle,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏 形状菜单,Manual input,tool.shape,✓,✓,board.setStyle,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏 形状菜单,Internal storage,tool.shape,✓,✓,board.setStyle,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏,Text size S,tool.shape,✓,✓,"board.setStyle {""fontSize"":12}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏,Text size M,tool.shape,✓,✓,"{""fontSize"":16}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏,Text size L,tool.shape,✓,✓,"{""fontSize"":24}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏,Text size XL,tool.shape,✓,✓,"{""fontSize"":36}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏,Sticky text size menu button,—,✓,✓,仅选中 sticky 且唯一含文本对象,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏 Sticky 尺寸,Small,tool.shape,✓,✓,"{""fontSize"":16}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏 Sticky 尺寸,Medium,tool.shape,✓,✓,"{""fontSize"":24}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏 Sticky 尺寸,Large,tool.shape,✓,✓,"{""fontSize"":40}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏 Sticky 尺寸,Extra large,tool.shape,✓,✓,"{""fontSize"":64}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏 Sticky 尺寸,Huge,tool.shape,✓,✓,"{""fontSize"":96}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏,Table part,—,✓,✓,选中 Table 时,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏 连接器,Straight routing,tool.shape,✓,✓,"board.setStyle {""style"":""straight""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏 连接器,Elbow routing,tool.shape,✓,✓,"{""style"":""elbow""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏 连接器,Curved routing,tool.shape,✓,✓,"{""style"":""curved""}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏 连接器,Start point menu,tool.shape,✓,✓,"{""startCap"":c}；选项为 StrokeCap::ALL",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏 连接器,End point menu,tool.shape,✓,✓,"{""endCap"":c}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏 连接器,Stroke style menu (Solid/Dash),—,✓,✓,写 dashes,crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+画板选区栏 连接器,Stroke weight 1/2/4/6,—,✓,✓,"{""strokeWeight"":n}",crates/ui-egui/src/canvas/board_bar.rs,crates/ui-gpui/src/board_bar.rs,已实现
+部件条,Widget color swatch,widget.menu,✓,✓,单选有菜单的 widget 时,crates/ui-egui/src/canvas/widget_bar.rs,crates/ui-gpui/src/widget_bar.rs,已实现
+部件条,Widget toggle button,widget.menu,✓,✓,"{""value"":!checked}",crates/ui-egui/src/canvas/widget_bar.rs,crates/ui-gpui/src/widget_bar.rs,已实现
+部件条,Widget action button,widget.menu,✓,✓,"{""value"":null}",crates/ui-egui/src/canvas/widget_bar.rs,crates/ui-gpui/src/widget_bar.rs,已实现
+画板便利栏,Timer button,—,✓,✓,无 timer 时打开 timer 浮层；仅可编辑,crates/ui-egui/src/canvas/board_facilitate.rs,crates/ui-gpui/src/board_facilitate.rs,已实现
+画板便利栏 Timer,Preset 1/3/5/10/15 min,board.timer,✓,✓,"{""action"":""start"",""minutes"":m}",crates/ui-egui/src/canvas/board_facilitate.rs,crates/ui-gpui/src/board_facilitate.rs,已实现
+画板便利栏 Timer,Minutes + Start,board.timer,✓,✓,"{""action"":""start"",""minutes"":minutes}",crates/ui-egui/src/canvas/board_facilitate.rs,crates/ui-gpui/src/board_facilitate.rs,已实现
+画板便利栏,Timer Pause / Resume,board.timer,✓,✓,done 状态不显示,crates/ui-egui/src/canvas/board_facilitate.rs,crates/ui-gpui/src/board_facilitate.rs,已实现
+画板便利栏,Add a minute,board.timer,✓,✓,"{""action"":""add"",""minutes"":1}",crates/ui-egui/src/canvas/board_facilitate.rs,crates/ui-gpui/src/board_facilitate.rs,已实现
+画板便利栏,Stop timer,board.timer,✓,✓,"{""action"":""stop""}",crates/ui-egui/src/canvas/board_facilitate.rs,crates/ui-gpui/src/board_facilitate.rs,已实现
+画板便利栏,Timer clock readout,—,✓,✓,运行时显示；按秒重绘,crates/ui-egui/src/canvas/board_facilitate.rs,crates/ui-gpui/src/board_facilitate.rs,已实现
+画板便利栏,Vote button,—,✓,✓,无进行中投票时打开 vote 浮层,crates/ui-egui/src/canvas/board_facilitate.rs,crates/ui-gpui/src/board_facilitate.rs,已实现
+画板便利栏 Vote,Votes per person + scope + Start vote,board.vote,✓,✓,"{""action"":""start"",""votes"":votes,""on"":scope}",crates/ui-egui/src/canvas/board_facilitate.rs,crates/ui-gpui/src/board_facilitate.rs,已实现
+画板便利栏,End vote,board.vote,✓,✓,"{""action"":""end""}；进行中显示",crates/ui-egui/src/canvas/board_facilitate.rs,crates/ui-gpui/src/board_facilitate.rs,已实现
+画板便利栏,Votes left readout,—,✓,✓,进行中显示,crates/ui-egui/src/canvas/board_facilitate.rs,crates/ui-gpui/src/board_facilitate.rs,已实现
+画板便利栏,Results button,—,✓,✓,有历史/已结束投票时,crates/ui-egui/src/canvas/board_facilitate.rs,crates/ui-gpui/src/board_facilitate.rs,已实现
+画板便利栏 Results,Result row,select.set,✓,✓,"{""ids"":[id]}；按票数排序",crates/ui-egui/src/canvas/board_facilitate.rs,crates/ui-gpui/src/board_facilitate.rs,已实现
+画板便利栏 Results,Clear results,board.vote,✓,✓,"{""action"":""clear""}",crates/ui-egui/src/canvas/board_facilitate.rs,crates/ui-gpui/src/board_facilitate.rs,已实现
+画板便利栏 Results,Delete results,board.vote,✓,✓,"{""action"":""delete"",""index"":index}",crates/ui-egui/src/canvas/board_facilitate.rs,crates/ui-gpui/src/board_facilitate.rs,已实现
+画板便利栏 Results,Vote session stepper,—,✓,✓,多个投票时,crates/ui-egui/src/canvas/board_facilitate.rs,crates/ui-gpui/src/board_facilitate.rs,已实现
+画布覆盖,Vote badges on objects,—,✓,✓,进行中显示自己票；结束显示所有人票,crates/ui-egui/src/canvas/overlays.rs; canvas/board_facilitate.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画板连接,+ handle (上/右/下/左),board.addConnected,✓,✓,"{""id"",""side"",""edit"":true}；选中单个 sticky/shape 且 Move 工具时四边显示",crates/ui-egui/src/canvas/board_connect.rs,crates/ui-gpui/src/canvas/board_connect.rs,已实现
+画板连接,+ handle 拖到对象,board.connector,✓,✓,"{""from"",""to"",""fromSide""}",crates/ui-egui/src/canvas/board_connect.rs,crates/ui-gpui/src/canvas/board_connect.rs,已实现
+画板连接,+ handle 拖到空白,board.addConnected,✓,✓,"{""id"",""side"",""at"",""edit"":true}",crates/ui-egui/src/canvas/board_connect.rs,crates/ui-gpui/src/canvas/board_connect.rs,已实现
+画板连接,Placement preview (ghost box + line),—,✓,✓,hover + 时,crates/ui-egui/src/canvas/board_connect.rs,crates/ui-gpui/src/canvas/board_connect.rs,已实现
+画板连接,Drag preview (ghost/target outline + line),—,✓,✓,拖动 + 时,crates/ui-egui/src/canvas/board_connect.rs,crates/ui-gpui/src/canvas/board_connect.rs,已实现
+画布覆盖·overlays,Pixel grid,—,✓,✓,view.pixel_grid_shown() 高缩放时,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Layout grids,—,✓,✓,layout_grids 且层有可见 grid,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Frame name label,—,✓,✓,顶层 frame 在屏内且非 board atom,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Section title pill (EyeOff),—,✓,✓,隐藏内容的 section 显示眼睛图标,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Contents hidden text,—,✓,✓,隐藏内容的 frame/section 中央，够大时,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Dev status badge (Ready/Changed/Completed),—,✓,✓,n.dev_status != None 时,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Frame label rename field,object.rename,✓,✓,双击标签进入,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Prototype connection noodle,—,✓,✓,Prototype tab；点击打开交互编辑器,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Hover outline,—,✓,✓,Move/Scale 且 hover 未选中且 highlight_on_hover,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Boolean operand outlines,—,✓,✓,布尔组内选中 operand 或矢量编辑,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Mask outlines,—,✓,✓,view.mask_outlines,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Frame outlines,—,✓,✓,view.frame_outlines,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Slice outlines,—,✓,✓,view.show_slices,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Drop target outline,—,✓,✓,ov.drop_target；组件内为紫色,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Stamp target outline,—,✓,✓,ov.stamp_target,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Slot badges,—,✓,✓,选中组件/实例/被拖入的 slot,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Swap highlight,—,✓,✓,ov.swap_target（Alt-drop 组件）,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Insert line indicator,—,✓,✓,ov.insert_line,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Drop cell highlight,—,✓,✓,ov.drop_cell,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Vector edit overlay (segments/handles/vertices),—,✓,✓,矢量编辑模式；hover/选中放大,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Variable width handles overlay,—,✓,✓,Width 工具时替代路径点,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Vector multi-point transform box,—,✓,✓,选中多个点,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Selection outlines + transform box + corner handles,—,✓,✓,有选中且非文本/矢量编辑；手柄数随选中类型,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Selection size label,—,✓,✓,show_dimensions 时；测量时隐藏,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Constraint guides,—,✓,✓,选中层受父 frame 约束时,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Arc handles + readout pill,—,✓,✓,选中椭圆时,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Shape handles + readout (Radius/Ratio/Count),—,✓,✓,选中形状时,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Scale pivot marker,—,✓,✓,Scale 工具,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Rotation origin ring,—,✓,✓,ds.origin_handle() 时,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Connector attach points,—,✓,✓,Connector 工具 hover 对象时,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Connector path handles / end points,—,✓,✓,选中连接器时,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Placement crosshair,—,✓,✓,draws_shape 且有 crosshair；Enter 放置,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Pen path anchors / bezier handles,—,✓,✓,Pen/Pencil 绘制中,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Pencil stroke preview,—,✓,✓,Pencil 工具；用笔色与粗细,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Rubber-band segment,—,✓,✓,Pen 绘制中或拖连接器端点,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Eraser brush circle,—,✓,✓,ov.brush（矢量编辑）,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Lasso dashed path,—,✓,✓,ov.lasso.len()>1,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Marquee / key box,—,✓,✓,ov.marquee 或 key_box,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Text caret,—,✓,✓,文本编辑；每 500ms 闪烁,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Text selection highlight,—,✓,✓,文本有选区且非 IME,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,IME composition underline,—,✓,✓,preedit 时,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Pick outline (pink 2px),—,✓,✓,picked() 存在时,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·overlays,Shape builder region hatch,—,✓,✓,ShapeBuilder 且 current() 有区域,crates/ui-egui/src/canvas/overlays.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·handles,Gradient line / end handles,fill.set / stroke.set,✓,✓,颜色选择器打开渐变 paint 时,crates/ui-egui/src/canvas/handles.rs,crates/ui-gpui/src/canvas/overlays.rs; canvas/mod.rs,已实现
+画布覆盖·handles,Gradient stops,fill.set / stroke.set,✓,✓,点击线新增 stop；Delete 删除（至少留 2）,crates/ui-egui/src/canvas/handles.rs,crates/ui-gpui/src/canvas/overlays.rs; canvas/mod.rs,已实现
+画布覆盖·handles,Progressive blur start/end handles,effect.set,✓,✓,Design tab 且渐进模糊展开,crates/ui-egui/src/canvas/handles.rs,crates/ui-gpui/src/canvas/overlays.rs; canvas/mod.rs,已实现
+画布覆盖·handles,Image crop outline + corner handles,fill.set / stroke.set,✓,✓,Crop 模式,crates/ui-egui/src/canvas/handles.rs,crates/ui-gpui/src/canvas/overlays.rs; canvas/mod.rs,已实现
+画布覆盖·handles,Crop ghost,—,✓,✓,轴对齐 crop,crates/ui-egui/src/canvas/handles.rs,crates/ui-gpui/src/canvas/overlays.rs; canvas/mod.rs,已实现
+画布覆盖·handles,Crop marks,—,✓,✓,ui.crop.is_some(),crates/ui-egui/src/canvas/handles.rs,crates/ui-gpui/src/canvas/overlays.rs; canvas/mod.rs,已实现
+画布覆盖·handles,Auto-layout padding grips + labels,node.set,✓,✓,Move、单个无旋转 AL frame；hover 显示,crates/ui-egui/src/canvas/handles.rs,crates/ui-gpui/src/canvas/overlays.rs; canvas/mod.rs,已实现
+画布覆盖·handles,Auto-layout gap bands + labels,node.set,✓,✓,同上；拖动固定 auto gap,crates/ui-egui/src/canvas/handles.rs,crates/ui-gpui/src/canvas/overlays.rs; canvas/mod.rs,已实现
+画布覆盖·handles,Grid track outlines (pink dashed),—,✓,✓,Grid 布局 frame 的轨道边界,crates/ui-egui/src/canvas/handles.rs,crates/ui-gpui/src/canvas/overlays.rs; canvas/mod.rs,已实现
+画布覆盖·rulers,Rulers (top + left),—,✓,✓,view.rulers；20px 厚,crates/ui-egui/src/canvas/rulers.rs,crates/ui-gpui/src/canvas/rulers.rs,已实现
+画布覆盖·rulers,Selection span highlight,—,✓,✓,有选中时高亮跨度,crates/ui-egui/src/canvas/rulers.rs,crates/ui-gpui/src/canvas/rulers.rs,已实现
+画布覆盖·guides,Guide lines (page / frame),—,✓,✓,随 rulers 显示；frame 参考线只在 frame 内,crates/ui-egui/src/canvas/guides.rs,crates/ui-gpui/src/canvas/guides.rs,已实现
+画布覆盖·guides,Guide offset tag,—,✓,✓,hover/选中/拖动时显示偏移,crates/ui-egui/src/canvas/guides.rs,crates/ui-gpui/src/canvas/guides.rs,已实现
+画布覆盖·guides,Drag new guide out of ruler,guide.add,✓,✓,从标尺拖出,crates/ui-egui/src/canvas/guides.rs,crates/ui-gpui/src/canvas/guides.rs,已实现
+画布覆盖·guides,Move guide,guide.move,✓,✓,拖动已有参考线,crates/ui-egui/src/canvas/guides.rs,crates/ui-gpui/src/canvas/guides.rs,已实现
+画布覆盖·guides,Remove guide (drop on ruler),guide.remove,✓,✓,拖回标尺,crates/ui-egui/src/canvas/guides.rs,crates/ui-gpui/src/canvas/guides.rs,已实现
+画布覆盖·guides,Select guide (click),guide.select,✓,✓,Move 工具点击；右键开菜单,crates/ui-egui/src/canvas/guides.rs,crates/ui-gpui/src/canvas/guides.rs,已实现
+画布覆盖·guides,Duplicate guide (Alt drag),guide.add,✓,✓,Alt 拖动,crates/ui-egui/src/canvas/guides.rs,crates/ui-gpui/src/canvas/guides.rs,已实现
+画布覆盖·guides,Alt measure distances from guide,—,✓,✓,Alt 拖动参考线时,crates/ui-egui/src/canvas/guides.rs,crates/ui-gpui/src/canvas/guides.rs,已实现
+画布覆盖·measure,Smart guide lines,—,✓,✓,ov.guides + 已保存 dev 线,crates/ui-egui/src/canvas/measure_overlay.rs,crates/ui-gpui/src/canvas/measure_overlay.rs,已实现
+画布覆盖·measure,Snap point marker (X),—,✓,✓,吸附到点时,crates/ui-egui/src/canvas/measure_overlay.rs,crates/ui-gpui/src/canvas/measure_overlay.rs,已实现
+画布覆盖·measure,Measured box outline,—,✓,✓,ov.measure_box（Alt 测量到另一层）,crates/ui-egui/src/canvas/measure_overlay.rs,crates/ui-gpui/src/canvas/measure_overlay.rs,已实现
+画布覆盖·measure,Measurement labels,—,✓,✓,避让 size label 与彼此；缩放不变大小,crates/ui-egui/src/canvas/measure_overlay.rs,crates/ui-gpui/src/canvas/measure_overlay.rs,已实现
+画布覆盖·frame_labels,Status badge pill,—,✓,✓,Ready/Changed/Completed,crates/ui-egui/src/canvas/frame_labels.rs,crates/ui-gpui/src/canvas/frame_labels.rs,已实现
+画布覆盖·frame_stats,Frame statistics,ui.set,✓,✓,数据由 ui.inspect 读；{resetFrameStats:true} 重置,crates/ui-egui/src/canvas/frame_stats.rs,crates/ui-gpui/src/canvas/frame_stats.rs,已实现
+画布覆盖·comments,Comment pin,—,✓,✓,Comment 工具或 View›Comments 或线程/draft 打开,crates/ui-egui/src/canvas/comments.rs,crates/ui-gpui/src/comments.rs,已实现
+画布覆盖·comments,Unread dot / resolved check,—,✓,✓,未读/已解决,crates/ui-egui/src/canvas/comments.rs,crates/ui-gpui/src/comments.rs,已实现
+画布覆盖·comments,Comment cluster pin,—,✓,✓,pin 中心距<24px 聚合；点击 comment.zoom,crates/ui-egui/src/canvas/comments.rs,crates/ui-gpui/src/comments.rs,已实现
+画布覆盖·comments,Draft pin,—,✓,✓,Comment 工具点击画布后,crates/ui-egui/src/canvas/comments.rs,crates/ui-gpui/src/comments.rs,已实现
+画布覆盖·comments,Pin drag → move comment,comment.move,✓,✓,拖动自己的 pin,crates/ui-egui/src/canvas/comments.rs,crates/ui-gpui/src/comments.rs,已实现
+画布覆盖·comments,Cluster click → zoom,comment.zoom,✓,✓,"{""ids"":ids}",crates/ui-egui/src/canvas/comments.rs,crates/ui-gpui/src/comments.rs,已实现
+画布覆盖·comments,Draft composer popover,comment.add,✓,✓,"{""x"",""y"",""text"",""anchor"":true}",crates/ui-egui/src/canvas/comments.rs,crates/ui-gpui/src/comments.rs,已实现
+画布覆盖·comments,Thread popover,comment.markRead,✓,✓,打开时标记已读,crates/ui-egui/src/canvas/comments.rs,crates/ui-gpui/src/comments.rs,已实现
+画布覆盖·comments,Reply composer,comment.reply,✓,✓,"{""id"",""text""}",crates/ui-egui/src/canvas/comments.rs,crates/ui-gpui/src/comments.rs,已实现
+画布覆盖·comments,Edit message,comment.edit,✓,✓,"{""id"",""reply"",""text""}",crates/ui-egui/src/canvas/comments.rs,crates/ui-gpui/src/comments.rs,已实现
+画布覆盖·comments,Delete message / thread,comment.delete,✓,✓,"{""id"",""reply?""}",crates/ui-egui/src/canvas/comments.rs,crates/ui-gpui/src/comments.rs,已实现
+画布覆盖·comments,Reaction menu (8 emoji),comment.react,✓,✓,"{""id"",""emoji""}",crates/ui-egui/src/canvas/comments.rs,crates/ui-gpui/src/comments.rs,已实现
+画布覆盖·comments,Click existing reaction,comment.react,✓,✓,切换自己的反应,crates/ui-egui/src/canvas/comments.rs,crates/ui-gpui/src/comments.rs,已实现
+画布覆盖·comments,More: Mark as unread,comment.markRead,✓,✓,"{""id"",""read"":false}",crates/ui-egui/src/canvas/comments.rs,crates/ui-gpui/src/comments.rs,已实现
+画布覆盖·comments,More: Copy link,comment.link,✓,✓,复制到剪贴板,crates/ui-egui/src/canvas/comments.rs,crates/ui-gpui/src/comments.rs,已实现
+画布覆盖·comments,More: Copy for AI,comment.prompt,✓,✓,生成 AI brief,crates/ui-egui/src/canvas/comments.rs,crates/ui-gpui/src/comments.rs,已实现
+画布覆盖·comments,More: Mark resolved / unresolved,comment.resolve,✓,✓,"{""id"",""resolved"":!c.resolved}",crates/ui-egui/src/canvas/comments.rs,crates/ui-gpui/src/comments.rs,已实现
+画布覆盖·comments,Resolve button,comment.resolve,✓,✓,线程头按钮,crates/ui-egui/src/canvas/comments.rs,crates/ui-gpui/src/comments.rs,已实现
+画布覆盖·comments,Agent label on AI message,—,✓,✓,m.agent 时,crates/ui-egui/src/canvas/comments.rs,crates/ui-gpui/src/comments.rs,已实现
+画布覆盖·comments,@mention picker,—,✓,✓,输入 @ 时；最多 6 条,crates/ui-egui/src/canvas/comments.rs,crates/ui-gpui/src/comments.rs,已实现
+画布覆盖·comments,Presenter comment pin,—,✓,✓,演示 frame 且显示评论,crates/ui-egui/src/canvas/comments.rs,crates/ui-gpui/src/comments.rs,已实现
+画布覆盖·comments,Presenter draft pin / composer,comment.add,✓,✓,附于 frame,crates/ui-egui/src/canvas/comments.rs,crates/ui-gpui/src/comments.rs,已实现
+画布覆盖·live_text,Remote text caret + selection + name tag,—,✓,✓,他人正在编辑同页文本时；不闪烁,crates/ui-egui/src/canvas/live_text.rs,crates/ui-gpui/src/canvas/live_text.rs,已实现
+画布覆盖·outline,Slot badges / swap highlight / outline colours,—,✓,✓,组件紫色轮廓；槽位虚线+名称,crates/ui-egui/src/canvas/outline.rs,crates/ui-gpui/src/canvas/outline.rs,已实现
+画布覆盖·selection_spacing,Spacing handles (H/V),arrange.spacing,✓,✓,"{""ids"",""key"",""fromGesture"":true}",crates/ui-egui/src/canvas/selection_spacing.rs,crates/ui-gpui/src/canvas/selection_spacing.rs,已实现
+画布覆盖·selection_spacing,Spacing number fields (panel),arrange.spacing,✓,✓,Design tab、Move 工具,crates/ui-egui/src/canvas/selection_spacing.rs,crates/ui-gpui/src/canvas/selection_spacing.rs,已实现
+画布覆盖·selection_spacing,Reorder rings,arrange.reorder,✓,✓,"{""ids"",""source"",""target"",""swap"",""fromGesture""}",crates/ui-egui/src/canvas/selection_spacing.rs,crates/ui-gpui/src/canvas/selection_spacing.rs,已实现
+画布覆盖·selection_spacing,Reorder target highlight,—,✓,✓,拖动中目标槽位描边,crates/ui-egui/src/canvas/selection_spacing.rs,crates/ui-gpui/src/canvas/selection_spacing.rs,已实现
+画布覆盖·proto_canvas,Prototype connection noodle,—,✓,✓,Prototype tab,crates/ui-egui/src/canvas/proto_canvas.rs,crates/ui-gpui/src/canvas/proto_canvas.rs,已实现
+画布覆盖·proto_canvas,+ connection handle,proto.interaction.add,✓,✓,从右边缘拖到 frame/variant,crates/ui-egui/src/canvas/proto_canvas.rs,crates/ui-gpui/src/canvas/proto_canvas.rs,已实现
+画布覆盖·proto_canvas,Drag target frame highlight,—,✓,✓,拖动中指向目标,crates/ui-egui/src/canvas/proto_canvas.rs,crates/ui-gpui/src/canvas/proto_canvas.rs,已实现
+画布覆盖·proto_canvas,Overlay ghost (prototype),—,✓,✓,拖动时半透明预览,crates/ui-egui/src/canvas/proto_canvas.rs,crates/ui-gpui/src/canvas/proto_canvas.rs,已实现
+画布覆盖·background,Transparency checkerboard grid,—,✓,✓,页面背景 alpha<255,crates/ui-egui/src/canvas/background.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·background,Coarse surround image,—,✓,✓,渲染图未覆盖区域,crates/ui-egui/src/canvas/background.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·background,Page colour fallback strips,—,✓,✓,渲染图与 surround 之外,crates/ui-egui/src/canvas/background.rs,crates/ui-gpui/src/canvas/overlays.rs,已实现
+画布覆盖·cursors,System cursors,—,✓,✓,依工具与手势（Move/Grab/Text/Copy/Resize/Zoom…）,crates/ui-egui/src/canvas/cursors.rs,crates/ui-gpui/src/canvas/cursors.rs,已实现
+画布覆盖·cursors,Drawn rotate cursor,—,✓,✓,Rotate 状态,crates/ui-egui/src/canvas/cursors.rs,crates/ui-gpui/src/canvas/cursors.rs,已实现
+画布覆盖·cursors,Drawn pen cursors,—,✓,✓,PenCursor 各状态,crates/ui-egui/src/canvas/cursors.rs,crates/ui-gpui/src/canvas/cursors.rs,已实现
+画布覆盖·cursors,Drawn eyedropper cursor,—,✓,✓,Pick color,crates/ui-egui/src/canvas/cursors.rs,crates/ui-gpui/src/canvas/cursors.rs,已实现
+画布覆盖·cursors,Drawn comment cursor,—,✓,✓,Comment 工具,crates/ui-egui/src/canvas/cursors.rs,crates/ui-gpui/src/canvas/cursors.rs,已实现
+画布覆盖·cursors,Drawn crosshair cursor,—,✓,✓,形状/文本工具,crates/ui-egui/src/canvas/cursors.rs,crates/ui-gpui/src/canvas/cursors.rs,已实现
+浮层·Popover 框架,Popover card (frame + shadow),—,✓,✓,通用外壳：标题左内缩 16、X 右内缩 8、header 40,crates/ui-egui/src/popover.rs,crates/ui-gpui/src/popovers.rs,已实现
+浮层·Popover 框架,Header title,—,✓,✓,,crates/ui-egui/src/popover.rs,crates/ui-gpui/src/popovers.rs,已实现
+浮层·Popover 框架,X close button,—,✓,✓,点击/Esc/外部按下关闭,crates/ui-egui/src/popover.rs,crates/ui-gpui/src/popovers.rs,已实现
+浮层·Popover 框架,Header drag handle,—,✓,✓,拖动移动浮层,crates/ui-egui/src/popover.rs,crates/ui-gpui/src/popovers.rs,已实现
+浮层·Popover 框架,Content slot,—,✓,✓,body 内容区,crates/ui-egui/src/popover.rs,crates/ui-gpui/src/popovers.rs,已实现
+浮层·Popover 框架,Surface::Panel,—,✓,✓,普通面板表面,crates/ui-egui/src/popover.rs,crates/ui-gpui/src/popovers.rs,已实现
+浮层·Popover 框架,Surface::Menu,—,✓,✓,深色菜单表面,crates/ui-egui/src/popover.rs,crates/ui-gpui/src/popovers.rs,已实现
+浮层·Popover 框架,Open::Anchor / AnchorMirrored / At,—,✓,✓,三种定位,crates/ui-egui/src/popover.rs,crates/ui-gpui/src/popovers.rs,已实现
+浮层·实例,"Colour picker popover (""Custom"")",—,✓,✓,picker 打开时,crates/ui-egui/src/popover.rs,crates/ui-gpui/src/popovers.rs,已实现
+浮层·实例,Style picker popover,—,✓,✓,样式面板打开时,crates/ui-egui/src/popover.rs,crates/ui-gpui/src/popovers.rs,已实现
+浮层·实例,Comment thread / draft popover,—,✓,✓,评论覆盖（egui Area）,crates/ui-egui/src/popover.rs,crates/ui-gpui/src/popovers.rs,已实现
+浮层·实例,Tool group flyout,tool.set,✓,✓,工具栏 flyout,crates/ui-egui/src/popover.rs,crates/ui-gpui/src/popovers.rs,已实现
+左面板·图标栏,Main menu button,—,✓,✓,最左侧细栏顶部 logo；点击切换主菜单弹层,crates/ui-egui/src/panels.rs,crates/ui-gpui/src/panels.rs,已实现
+左面板·图标栏,File tab,—,✓,✓,切文件/图层；点击已激活项收起侧栏,crates/ui-egui/src/panels.rs,crates/ui-gpui/src/panels.rs,已实现
+左面板·图标栏,Assets tab,—,✓,✓,切资产面板,crates/ui-egui/src/panels.rs,crates/ui-gpui/src/panels.rs,已实现
+左面板·图标栏,Variables tab,—,✓,✓,打开变量编辑器,crates/ui-egui/src/panels.rs,crates/ui-gpui/src/panels.rs,已实现
+左面板·文件头,File name rename field,file.rename,✓,✓,仅 File tab；就地重命名,crates/ui-egui/src/panels/layers.rs,crates/ui-gpui/src/layer_tree.rs,已实现
+左面板·文件头,Drafts label,—,✓,✓,仅 File tab 静态标签,crates/ui-egui/src/panels/layers.rs,crates/ui-gpui/src/layer_tree.rs,已实现
+左面板·文件头,Minimize button,view.minimize,✓,✓,收起导航/左右侧栏,crates/ui-egui/src/panels/layers.rs,crates/ui-gpui/src/layer_tree.rs,已实现
+左面板·Pages,Pages header toggle,—,✓,✓,展开/折叠页面列表,crates/ui-egui/src/panels/layers.rs,crates/ui-gpui/src/layer_tree.rs,已实现
+左面板·Pages,Search pages button,—,✓,✓,打开页面搜索并强制展开,crates/ui-egui/src/panels/layers.rs,crates/ui-gpui/src/layer_tree.rs,已实现
+左面板·Pages,Add new page button,page.add,✓,✓,Dev Mode 拒绝,crates/ui-egui/src/panels/layers.rs,crates/ui-gpui/src/layer_tree.rs,已实现
+左面板·Pages,Page search field,—,✓,✓,过滤页面；Esc 清空并关闭,crates/ui-egui/src/panels/layers.rs,crates/ui-gpui/src/layer_tree.rs,已实现
+左面板·Pages,Page row,page.select,✓,✓,单击打开；Dev Mode 只允许打开,crates/ui-egui/src/panels/layers.rs,crates/ui-gpui/src/layer_tree.rs,已实现
+左面板·Pages,Page divider row,—,✓,✓,不可打开、不接受拖放、不能设为起始页,crates/ui-egui/src/panels/layers.rs,crates/ui-gpui/src/layer_tree.rs,已实现
+左面板·Pages,Context: Rename page,page.rename,✓,✓,双击或右键；Dev Mode 拒绝,crates/ui-egui/src/panels/layers.rs,crates/ui-gpui/src/layer_tree.rs,已实现
+左面板·Pages,Context: Duplicate page,page.duplicate,✓,✓,Dev Mode 拒绝,crates/ui-egui/src/panels/layers.rs,crates/ui-gpui/src/layer_tree.rs,已实现
+左面板·Pages,Context: Set as opening page,page.setOpening,✓,✓,非分隔行；Dev Mode 拒绝,crates/ui-egui/src/panels/layers.rs,crates/ui-gpui/src/layer_tree.rs,已实现
+左面板·Pages,Context: Delete page,page.delete,✓,✓,无确认，Undo 可恢复；Dev Mode 拒绝,crates/ui-egui/src/panels/layers.rs,crates/ui-gpui/src/layer_tree.rs,已实现
+左面板·Pages,Page row drag reorder,page.move,✓,✓,Dev Mode 拒绝,crates/ui-egui/src/panels/layers.rs,crates/ui-gpui/src/layer_tree.rs,已实现
+左面板·Pages,Layers dropped onto a page,object.moveToPage,✓,✓,拖到页面行,crates/ui-egui/src/panels/layers.rs,crates/ui-gpui/src/layer_tree.rs,已实现
+左面板·Layers,Layers header label,—,✓,✓,标题 Layers,crates/ui-egui/src/panels/layers.rs,crates/ui-gpui/src/layer_tree.rs,已实现
+左面板·Layers,Search layers button,—,✓,✓,打开图层搜索,crates/ui-egui/src/panels/layers.rs,crates/ui-gpui/src/layer_tree.rs,已实现
+左面板·Layers,Layers search field,—,✓,✓,按名过滤，扁平列出，最多 5000 行,crates/ui-egui/src/panels/layers.rs,crates/ui-gpui/src/layer_tree.rs,已实现
+左面板·Layers,Layer row,select.set,✓,✓,单击选中；Shift 连续；Cmd 切换；Dev Mode 仅选中/展开,crates/ui-egui/src/panels/layers.rs,crates/ui-gpui/src/layer_tree.rs,已实现
+左面板·Layers,Expand/collapse triangle,—,✓,✓,有子层时；Alt 点击展开/折叠全部子孙,crates/ui-egui/src/panels/layers.rs,crates/ui-gpui/src/layer_tree.rs,已实现
+左面板·Layers,Row eye (visibility),object.toggleVisible,✓,✓,悬停或已隐藏时显示；可拖动批量 sweep,crates/ui-egui/src/panels/layers.rs,crates/ui-gpui/src/layer_tree.rs,已实现
+左面板·Layers,Row padlock (lock),object.toggleLock,✓,✓,悬停或已锁定时显示；父层锁定则失效,crates/ui-egui/src/panels/layers.rs,crates/ui-gpui/src/layer_tree.rs,已实现
+左面板·Layers,Eye/padlock drag sweep,object.toggleVisible / object.toggleLock,✓,✓,拖过多行一次性提交（单个撤销步）,crates/ui-egui/src/panels/layers.rs,crates/ui-gpui/src/layer_tree.rs,已实现
+左面板·Layers,Layer row double-click (name),object.rename,✓,✓,进入重命名；Dev Mode 拒绝,crates/ui-egui/src/panels/layers.rs,crates/ui-gpui/src/layer_tree.rs,已实现
+左面板·Layers,Layer row double-click (icon),view.zoomSelection,✓,✓,缩放并选中该层,crates/ui-egui/src/panels/layers.rs,crates/ui-gpui/src/layer_tree.rs,已实现
+左面板·Layers,Layer drag reparent/reorder,node.reparent,✓,✓,zone=0 入容器，±1 排序；Dev Mode 拒绝,crates/ui-egui/src/panels/layers.rs,crates/ui-gpui/src/layer_tree.rs,已实现
+左面板·Layers,Layers empty space click,select.none,✓,✓,清除选择,crates/ui-egui/src/panels/layers.rs,crates/ui-gpui/src/layer_tree.rs,已实现
+左面板·Layers,Layers arrow-key navigation,select.set,✓,✓,↑↓ 选行、Shift 扩展、←/→ 折叠展开,crates/ui-egui/src/panels/layers.rs,crates/ui-gpui/src/layer_tree.rs,已实现
+左面板·Layers,Empty list hint,—,✓,✓,无过滤：Add a frame (F)…；有过滤：No matching layers,crates/ui-egui/src/panels/layers.rs,crates/ui-gpui/src/layer_tree.rs,已实现
+左面板·Layers,Row context menu trigger,—,✓,✓,右键选中行并打开全局 context menu,crates/ui-egui/src/panels/layers.rs,crates/ui-gpui/src/layer_tree.rs,已实现
+左面板·Assets,Assets header,—,✓,✓,标题 Assets,crates/ui-egui/src/panels/assets_panel.rs,crates/ui-gpui/src/panels/extra.rs,已实现
+左面板·Assets,Search row,—,✓,✓,过滤本地及库组件/样式,crates/ui-egui/src/panels/assets_panel.rs,crates/ui-gpui/src/panels/extra.rs,已实现
+左面板·Assets,Updates banner,library.acceptUpdates,✓,✓,updates>0 时出现,crates/ui-egui/src/panels/assets_panel.rs,crates/ui-gpui/src/panels/extra.rs,已实现
+左面板·Assets,Local components title + folders,—,✓,✓,无组件时提示创建快捷键,crates/ui-egui/src/panels/assets_panel.rs,crates/ui-gpui/src/panels/extra.rs,已实现
+左面板·Assets,Component tile click,instance.place,✓,✓,放置到页面视图中心,crates/ui-egui/src/panels/assets_panel.rs,crates/ui-gpui/src/panels/extra.rs,已实现
+左面板·Assets,Component tile drag-out,instance.place / library.place,✓,✓,本地/库组件,crates/ui-egui/src/panels/assets_panel.rs,crates/ui-gpui/src/panels/extra.rs,已实现
+左面板·Assets,Component tile swap-at,instance.swapAt / library.swapAt,✓,✓,拖到已有实例上替换,crates/ui-egui/src/panels/assets_panel.rs,crates/ui-gpui/src/panels/extra.rs,已实现
+左面板·Assets,Component hide-when-publishing,component.hideWhenPublishing,✓,✓,悬停切换；Dev Mode 拒绝,crates/ui-egui/src/panels/assets_panel.rs,crates/ui-gpui/src/panels/extra.rs,已实现
+左面板·Assets,Local styles title + style rows,style.apply / library.applyStyle,✓,✓,单击应用,crates/ui-egui/src/panels/assets_panel.rs,crates/ui-gpui/src/panels/extra.rs,已实现
+左面板·Assets,Style swap-at,library.swapAt,✓,✓,库样式拖到已有样式上替换,crates/ui-egui/src/panels/assets_panel.rs,crates/ui-gpui/src/panels/extra.rs,已实现
+左面板·Assets,Library section fold title,—,✓,✓,折叠/展开每个启用库,crates/ui-egui/src/panels/assets_panel.rs,crates/ui-gpui/src/panels/extra.rs,已实现
+左面板·Assets,Libraries button,—,✓,✓,进入 libraries_view,crates/ui-egui/src/panels/assets_panel.rs,crates/ui-gpui/src/panels/extra.rs,已实现
+左面板·Assets,Libraries view back button,—,✓,,返回 Assets,crates/ui-egui/src/panels/assets_panel.rs,crates/ui-gpui/src/panels/extra.rs,GPUI 未实现（上游 EGUI 有）
+左面板·Assets,This file publish form,library.publish / library.publishToServer,✓,✓,本地/服务器发布,crates/ui-egui/src/panels/assets_panel.rs,crates/ui-gpui/src/panels/extra.rs,已实现
+左面板·Assets,Publish form groups (Components/Styles/Variable collections),—,✓,,三个分组复选,crates/ui-egui/src/panels/assets_panel.rs,crates/ui-gpui/src/panels/extra.rs,GPUI 未实现（上游 EGUI 有）
+左面板·Assets,Libraries in this file,library.add / remove / swap / check / usage,✓,,库管理行及菜单,crates/ui-egui/src/panels/assets_panel.rs,crates/ui-gpui/src/panels/extra.rs,GPUI 未实现（上游 EGUI 有）
+左面板·Assets,Add library file button,library.add,✓,,选 .figcraft 文件,crates/ui-egui/src/panels/assets_panel.rs,crates/ui-gpui/src/panels/extra.rs,GPUI 未实现（上游 EGUI 有）
+左面板·版本历史,Version history header,—,✓,✓,标题 Version history,crates/ui-egui/src/panels/versions.rs,crates/ui-gpui/src/panels/extra.rs,已实现
+左面板·版本历史,Close button,version.exitPreview,✓,✓,关闭并退出预览,crates/ui-egui/src/panels/versions.rs,crates/ui-gpui/src/panels/extra.rs,已实现
+左面板·版本历史,Save version (+) button,—,✓,✓,打开保存表单；Alt+Cmd+S,crates/ui-egui/src/panels/versions.rs,crates/ui-gpui/src/panels/extra.rs,已实现
+左面板·版本历史,Save/Create submit,file.saveVersion / version.rename / branch.create,✓,✓,依表单类型,crates/ui-egui/src/panels/versions.rs,crates/ui-gpui/src/panels/extra.rs,已实现
+左面板·版本历史,Branches section Create branch,—,✓,✓,section header + 打开分支表单,crates/ui-egui/src/panels/versions.rs,crates/ui-gpui/src/panels/extra.rs,已实现
+左面板·版本历史,Branch row click,branch.open,✓,✓,,crates/ui-egui/src/panels/versions.rs,crates/ui-gpui/src/panels/extra.rs,已实现
+左面板·版本历史,Branch menu: Open,branch.open,✓,,,crates/ui-egui/src/panels/versions.rs,crates/ui-gpui/src/panels/extra.rs,GPUI 未实现（上游 EGUI 有）
+左面板·版本历史,Branch menu: Review and merge,—,✓,,打开 branch_ui,crates/ui-egui/src/panels/versions.rs,crates/ui-gpui/src/panels/extra.rs,GPUI 未实现（上游 EGUI 有）
+左面板·版本历史,Branch menu: Archive,branch.archive,✓,,仅 Active 分支,crates/ui-egui/src/panels/versions.rs,crates/ui-gpui/src/panels/extra.rs,GPUI 未实现（上游 EGUI 有）
+左面板·版本历史,Current row exit preview,version.exitPreview,✓,✓,预览某版本时显示,crates/ui-egui/src/panels/versions.rs,crates/ui-gpui/src/panels/extra.rs,已实现
+左面板·版本历史,Autosave group row,—,✓,✓,连续≥2 个自动保存折叠，可展开,crates/ui-egui/src/panels/versions.rs,crates/ui-gpui/src/panels/extra.rs,已实现
+左面板·版本历史,Version row click,version.preview,✓,✓,单击预览，双击进入编辑,crates/ui-egui/src/panels/versions.rs,crates/ui-gpui/src/panels/extra.rs,已实现
+左面板·版本历史,Version menu: Restore this version,version.restore,✓,✓,,crates/ui-egui/src/panels/versions.rs,crates/ui-gpui/src/panels/extra.rs,已实现
+左面板·版本历史,Version menu: Rename,version.rename,✓,✓,,crates/ui-egui/src/panels/versions.rs,crates/ui-gpui/src/panels/extra.rs,已实现
+左面板·版本历史,Version menu: Duplicate,version.duplicate,✓,✓,新标签页打开,crates/ui-egui/src/panels/versions.rs,crates/ui-gpui/src/panels/extra.rs,已实现
+左面板·版本历史,Version menu: Delete,version.delete,✓,✓,二次确认,crates/ui-egui/src/panels/versions.rs,crates/ui-gpui/src/panels/extra.rs,已实现
+左面板·版本历史,Empty state hint,—,✓,✓,No saved versions yet...,crates/ui-egui/src/panels/versions.rs,crates/ui-gpui/src/panels/extra.rs,已实现
+左面板·版本历史,Preview banner,version.restore / version.exitPreview,✓,✓,画布横幅 Restore 与 Back,crates/ui-egui/src/panels/versions.rs,crates/ui-gpui/src/panels/extra.rs,已实现
+左面板·快捷键,Keyboard shortcuts window,help.shortcuts,✓,✓,app.ui.shortcuts_panel,crates/ui-egui/src/panels/shortcuts_panel.rs,crates/ui-gpui/src/panels/extra.rs,已实现
+左面板·快捷键,Group tab strip,—,✓,✓,按 keymap Group 分组,crates/ui-egui/src/panels/shortcuts_panel.rs,crates/ui-gpui/src/panels/extra.rs,已实现
+左面板·快捷键,Search shortcuts field,—,✓,✓,跨组按语言/英文搜索,crates/ui-egui/src/panels/shortcuts_panel.rs,crates/ui-gpui/src/panels/extra.rs,已实现
+左面板·快捷键,Shortcut rows (keycaps),—,✓,✓,只读展示，不触发命令,crates/ui-egui/src/panels/shortcuts_panel.rs,crates/ui-gpui/src/panels/extra.rs,已实现
+右面板·顶栏,Share button,—,✓,✓,打开 live share popover,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·顶栏,Play (present) button,proto.present,✓,✓,三角区点击演示,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·顶栏,Play menu: Present,proto.present,✓,✓,,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·顶栏,Play menu: Preview / Close preview,proto.preview / proto.closePreview,✓,✓,依 ui.preview 切换,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·顶栏,People bar,—,✓,✓,实时会话协作者头像,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·顶栏,Design tab,—,✓,✓,切 Design；Frame 工具时显示预设面板,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·顶栏,Prototype tab,—,✓,✓,切 Prototype；切换时 open_editor(None),crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·顶栏,Zoom combo,—,✓,✓,显示当前缩放百分比,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·顶栏,Zoom menu: Zoom in/out/fit/50/100/200/selection,view.zoomIn / view.zoomOut / view.zoomFit / view.zoom50 / view.zoom100 / view.zoom200 / view.zoomSelection,✓,✓,,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·顶栏,Zoom menu: Pixel preview 1x/2x,view.pixelPreview,✓,✓,复选项,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·顶栏,Zoom menu: Pixel grid / Snap to pixel / Layout grids / Rulers / Outlines,view.pixelGrid / view.snapPixel / view.layoutGrids / view.rulers / view.outlines,✓,✓,复选项,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·顶栏,Comments panel,—,✓,✓,Comment 工具时替代主内容,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Design 页面区,Page section,—,✓,✓,空选择时显示,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 页面区,Page background field,page.setBackground,✓,✓,色板+hex+不透明度；scrub 合并为一步,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 页面区,Color profile dropdown,—,✓,✓,写 ui.color_profile,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 页面区,Open variables button,—,✓,✓,变量数为 0 时置灰,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 页面区,Local styles list,—,✓,✓,style_picker::local_styles,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 页面区,Page variable modes,variable.setMode / library.setVariableMode,✓,✓,仅多模式集合,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 页面区,Export page as PNG,file.export,✓,✓,页面 Export 段,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 选择头,Selection header type label,—,✓,✓,类型名/复数/Mixed,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 选择头,Type menu: Convert to Frame/Group,object.convertToFrame / object.convertToGroup,✓,✓,仅全为 Frame 或 Group,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 选择头,Swap orientation,frame.swapOrientation,✓,✓,单个 Frame,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 选择头,Fit to contents,object.resizeToFit,✓,✓,单个 Frame,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 选择头,Dev status icon,node.set,✓,✓,has_status 时显示,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 选择头,Frame presets menu in header,node.set,✓,✓,单个 Frame,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 选择头,Create component quick action,component.create / createMultiple / createSet,✓,✓,多选取下拉,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 选择头,Use as mask,object.mask,✓,✓,,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 选择头,Boolean groups menu,bool.union / subtract / intersect / exclude,✓,✓,图标显示当前布尔操作,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 选择头,Flatten,vector.flatten,✓,✓,布尔菜单内,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 实例,Instance section header,—,✓,✓,Instance / Nested instance,crates/ui-egui/src/panels/component_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 实例,More: Go to main component,component.goToMain,✓,✓,main 存在时,crates/ui-egui/src/panels/component_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 实例,More: Push changes to main,component.pushChanges,✓,✓,main 存在时,crates/ui-egui/src/panels/component_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 实例,More: Restore main component,component.restoreMain,✓,✓,main 缺失且非嵌套,crates/ui-egui/src/panels/component_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 实例,More: Reset all changes,component.resetInstance,✓,✓,,crates/ui-egui/src/panels/component_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 实例,More: Detach instance,component.detach,✓,✓,非嵌套,crates/ui-egui/src/panels/component_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 实例,Detach instance button,component.detach,✓,✓,非嵌套,crates/ui-egui/src/panels/component_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 实例,Reset all changes button,component.resetInstance,✓,✓,,crates/ui-egui/src/panels/component_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 实例,Main component swap dropdown,instance.swap,✓,✓,,crates/ui-egui/src/panels/component_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 实例,Expose properties to instances,component.exposeInstance,✓,✓,仅嵌套在主组件内的实例,crates/ui-egui/src/panels/component_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 实例,Variant/property controls,instance.setProperties,✓,✓,变体/布尔/文本/实例交换,crates/ui-egui/src/panels/component_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 实例,Slot fill,instance.setProperties,✓,✓,,crates/ui-egui/src/panels/component_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 实例,Description field,node.set,✓,✓,组件/组件集,crates/ui-egui/src/panels/component_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 实例,Combine as variants,component.combineVariants,✓,✓,多选主组件且可合并,crates/ui-egui/src/panels/component_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 实例,Properties header (+),component.addProperty,✓,✓,Variant/Boolean/Text/Instance swap,crates/ui-egui/src/panels/component_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 实例,Variant property name/default/delete/reorder,component.editProperty / deleteProperty,✓,✓,,crates/ui-egui/src/panels/component_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 实例,Variant value fields + add,component.editProperty / addVariant,✓,✓,,crates/ui-egui/src/panels/component_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 实例,Shared property name/default/delete,component.editProperty / deleteProperty,✓,✓,,crates/ui-egui/src/panels/component_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 实例,Preferred components dropdown,component.editProperty,✓,✓,Slot/Instance swap 属性,crates/ui-egui/src/panels/component_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 实例,Add variant button,component.addVariant,✓,✓,单个主组件,crates/ui-egui/src/panels/component_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 实例,Component property bind rows,node.set,✓,✓,,crates/ui-egui/src/panels/component_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 实例,Overrides section,component.resetOverride,✓,✓,有 override 组时,crates/ui-egui/src/panels/component_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Position,Position section,—,✓,✓,,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Position,Alignment 6 buttons,align.left / hcenter / right / top / vcenter / bottom,✓,✓,can_align 控制启用,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Position,Distribute and tidy menu,distribute.horizontal / vertical / arrange.tidy,✓,✓,选中>2 层时出现该图标按钮；菜单含 Distribute H / Distribute V / Tidy up；Tidy 项与 Arrange 菜单同一套 can_tidy 约束（3~2000 层、成行/列/网格、不在 auto layout 流里），不满足时点了不生效,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Position,Position X field,node.set (x),✓,✓,多选混合值相对编辑,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Position,Position Y field,node.set (y),✓,✓,,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Position,Absolute position toggle,node.set (absolute),✓,✓,仅父级为 auto layout,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Position,Rotation field,node.set (absoluteRotation),✓,✓,页面角度=自身+父级,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Position,Rotate 90 / Flip H / Flip V,object.rotateRight / flipH / flipV,✓,✓,,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Position,Constraints horizontal dropdown,node.set (constraints.horizontal),✓,✓,仅无 AL 的 Frame 子层,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Position,Constraints vertical dropdown,node.set (constraints.vertical),✓,✓,,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Scale,Scale section,—,✓,✓,仅 Scale 工具且有选中时替代 Position,crates/ui-egui/src/panels/scale_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Scale,Dimensions W/H fields,transform.scale,✓,✓,,crates/ui-egui/src/panels/scale_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Scale,Scale factor field,transform.scale,✓,✓,重出现时自动聚焦；Enter/Esc 回 Move,crates/ui-egui/src/panels/scale_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Scale,Anchor picker 3x3,tool.scaleAnchor,✓,✓,,crates/ui-egui/src/panels/scale_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 矢量,Points/Point section,—,✓,✓,矢量编辑且选中点,crates/ui-egui/src/panels/vector_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 矢量,Point X/Y fields,vector.edit.position,✓,✓,,crates/ui-egui/src/panels/vector_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 矢量,Point W/H fields,vector.edit.resize,✓,✓,仅多点变换盒,crates/ui-egui/src/panels/vector_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 矢量,Corner radius field,vector.edit.cornerRadius,✓,✓,,crates/ui-egui/src/panels/vector_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 矢量,Mirroring dropdown,vector.edit.mirroring,✓,✓,None/Angle/AngleAndLength,crates/ui-egui/src/panels/vector_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 矢量,End point / Join dropdown,vector.edit.strokeCap / strokeJoin,✓,✓,含 Same as layer,crates/ui-egui/src/panels/vector_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 矢量,Width point section,vector.edit.widthPoint,✓,✓,Variable width 工具,crates/ui-egui/src/panels/vector_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 矢量,No points hint,—,✓,✓,Select points to edit…,crates/ui-egui/src/panels/vector_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Layout,Layout section header (+/-),layout.add / layout.remove,✓,✓,标题随 has_al 在 Layout/Auto layout 切换,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Layout,Direction segmented (V/H/Grid),node.set (layout),✓,✓,,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Layout,Wrap toggle,node.set (wrap),✓,✓,仅非 Grid,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Layout,Dimensions W/H fields,node.set (width/height),✓,✓,,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Layout,Constrain proportions,node.set (constrainProportions),✓,✓,实例内禁用,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Layout,Sizing H/V dropdown,node.set (sizingH / sizingV),✓,✓,Fixed/Hug/Fill,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Layout,Min/max width/height fields,node.set (min/max…),✓,✓,,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Layout,Alignment grid 3x3,node.set (mainAlign / crossAlign),✓,✓,,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Layout,Gap field,node.set (gap),✓,✓,可绑变量；Auto 显示,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Layout,Auto gap dropdown,node.set (mainAlign),✓,✓,Fixed/Space between/evenly/around,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Layout,Column gap / Row gap fields,node.set (columnGap / rowGap),✓,✓,Grid,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Layout,Align text baselines,node.set (crossAlign),✓,✓,仅 Horizontal,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Layout,Padding H/V fields,node.set (paddingHorizontal / paddingVertical),✓,✓,,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Layout,Individual padding fields,node.set (paddingLeft/Top/Right/Bottom),✓,✓,切换按钮展开,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Layout,Cross gap (wrapped),node.set (crossGap / contentAlign),✓,✓,仅 wrap 且非 Grid,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Layout,Columns/Rows fields,node.set (gridColumns / gridRows),✓,✓,Grid,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Layout,Strokes dropdown,node.set (strokesIncluded),✓,✓,,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Layout,Canvas stacking dropdown,node.set (reverseZ),✓,✓,,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Layout,Track sizes (column/row),layout.setTrack,✓,✓,Grid 且单选；最多 24 行,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Layout,Grid cell column/row,node.set (gridColumn / gridRow),✓,✓,Grid 子层非 absolute,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Layout,Column span / Row span,node.set (gridColumnSpan / gridRowSpan),✓,✓,,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Layout,Horizontal/Vertical align in cell,node.set (gridAlignH / gridAlignV),✓,✓,,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Layout,Clip content checkbox,node.set (clip),✓,✓,仅 frame-like,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 形状,Arc section,node.set (arcStart / arcSweep / arcInner),✓,✓,全为 Ellipse,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 形状,Polygon/Star Count field,node.set (pointCount),✓,✓,全为 Polygon/Star,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 形状,Star Ratio field,node.set (innerRadius),✓,✓,全为 Star,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 外观,Appearance section,—,✓,✓,,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 外观,Show/Hide,object.toggleVisible,✓,✓,section header 图标,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 外观,Apply variable to visibility,—,✓,✓,变量选择器（Boolean）,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 外观,Blend mode header toggle,—,✓,✓,展开/收起 Blend mode 行,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 外观,Visible bound row,—,✓,✓,characters/visible 绑定时,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 外观,Mask type dropdown,node.set (maskType),✓,✓,全为 mask 时,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 外观,Opacity field,node.set (opacity),✓,✓,,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 外观,Corner radius field,node.set (cornerRadius),✓,✓,依节点类型,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 外观,Individual corners toggle,—,✓,✓,smooth_ok 时展开,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 外观,Top/Right/Bottom/Left corner radius fields,node.set (topLeftRadius…),✓,✓,仅独立圆角,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 外观,Corner smoothing + iOS button,node.set (cornerSmoothing),✓,✓,iOS=60%,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 外观,Blend mode dropdown,node.set (blend),✓,✓,非 Normal/PassThrough 或手动展开,crates/ui-egui/src/panels/right.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 变量模式,Variable modes section,variable.setMode / library.setVariableMode,✓,✓,全为 frame-like 且多模式集合,crates/ui-egui/src/panels/variable_ui.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 排版,Typography section header,—,✓,✓,选中文本层时显示,"crates/ui-egui/src/panels/typography.rs; typography/{axes,fields,glyphs,picker,spacing}.rs",crates/ui-gpui/src/panels.rs,已实现
+右面板·Design 排版,Apply variable to text,—,✓,✓,,"crates/ui-egui/src/panels/typography.rs; typography/{axes,fields,glyphs,picker,spacing}.rs",crates/ui-gpui/src/panels.rs,已实现
+右面板·Design 排版,Text styles button,—,✓,✓,打开文本样式选择器,"crates/ui-egui/src/panels/typography.rs; typography/{axes,fields,glyphs,picker,spacing}.rs",crates/ui-gpui/src/panels.rs,已实现
+右面板·Design 排版,Text bound row,—,✓,✓,characters 绑定时,"crates/ui-egui/src/panels/typography.rs; typography/{axes,fields,glyphs,picker,spacing}.rs",crates/ui-gpui/src/panels.rs,已实现
+右面板·Design 排版,Font family dropdown + picker,node.set / text.style,✓,✓,可搜索、预览、最近优先、本机字体,"crates/ui-egui/src/panels/typography.rs; typography/{axes,fields,glyphs,picker,spacing}.rs",crates/ui-gpui/src/panels.rs,已实现
+右面板·Design 排版,Font style dropdown,node.set / text.style,✓,✓,未安装时提示,"crates/ui-egui/src/panels/typography.rs; typography/{axes,fields,glyphs,picker,spacing}.rs",crates/ui-gpui/src/panels.rs,已实现
+右面板·Design 排版,Font size field + sizes menu,node.set / text.style,✓,✓,15 档预设,"crates/ui-egui/src/panels/typography.rs; typography/{axes,fields,glyphs,picker,spacing}.rs",crates/ui-gpui/src/panels.rs,已实现
+右面板·Design 排版,Line height field,node.set / text.style,✓,✓,Auto/px/%,"crates/ui-egui/src/panels/typography.rs; typography/{axes,fields,glyphs,picker,spacing}.rs",crates/ui-gpui/src/panels.rs,已实现
+右面板·Design 排版,Letter spacing field,node.set / text.style,✓,✓,%/px,"crates/ui-egui/src/panels/typography.rs; typography/{axes,fields,glyphs,picker,spacing}.rs",crates/ui-gpui/src/panels.rs,已实现
+右面板·Design 排版,Paragraph spacing field,node.set (paragraphSpacing),✓,✓,始终整层,"crates/ui-egui/src/panels/typography.rs; typography/{axes,fields,glyphs,picker,spacing}.rs",crates/ui-gpui/src/panels.rs,已实现
+右面板·Design 排版,Resizing segmented,node.set (textAutoResize),✓,✓,Auto width/Auto height/Fixed/Truncate,"crates/ui-egui/src/panels/typography.rs; typography/{axes,fields,glyphs,picker,spacing}.rs",crates/ui-gpui/src/panels.rs,已实现
+右面板·Design 排版,Alignment horizontal segmented,node.set (textAlign),✓,✓,Left/Center/Right/Justify,"crates/ui-egui/src/panels/typography.rs; typography/{axes,fields,glyphs,picker,spacing}.rs",crates/ui-gpui/src/panels.rs,已实现
+右面板·Design 排版,Alignment vertical segmented,node.set (textAlignVertical),✓,✓,Top/Middle/Bottom,"crates/ui-egui/src/panels/typography.rs; typography/{axes,fields,glyphs,picker,spacing}.rs",crates/ui-gpui/src/panels.rs,已实现
+右面板·Design 排版,Type settings button,—,✓,✓,打开 Type settings popover,"crates/ui-egui/src/panels/typography.rs; typography/{axes,fields,glyphs,picker,spacing}.rs",crates/ui-gpui/src/panels.rs,已实现
+右面板·Design 排版,Type settings tabs,—,✓,✓,Basics/Details/Variable,"crates/ui-egui/src/panels/typography.rs; typography/{axes,fields,glyphs,picker,spacing}.rs",crates/ui-gpui/src/panels.rs,已实现
+右面板·Design 排版,Decoration segmented,textDecoration,✓,✓,None/Underline/Strikethrough,"crates/ui-egui/src/panels/typography.rs; typography/{axes,fields,glyphs,picker,spacing}.rs",crates/ui-gpui/src/panels.rs,已实现
+右面板·Design 排版,Decoration style,textDecorationStyle,✓,✓,Solid/Dotted/Wavy,"crates/ui-egui/src/panels/typography.rs; typography/{axes,fields,glyphs,picker,spacing}.rs",crates/ui-gpui/src/panels.rs,已实现
+右面板·Design 排版,Thickness/Offset/Skip ink/Color,textDecorationThickness / Offset / SkipInk / Color,✓,✓,Underline/Strike 时,"crates/ui-egui/src/panels/typography.rs; typography/{axes,fields,glyphs,picker,spacing}.rs",crates/ui-gpui/src/panels.rs,已实现
+右面板·Design 排版,Letter case segmented,textCase,✓,✓,5 项,"crates/ui-egui/src/panels/typography.rs; typography/{axes,fields,glyphs,picker,spacing}.rs",crates/ui-gpui/src/panels.rs,已实现
+右面板·Design 排版,List style segmented,text.listStyle,✓,✓,None/Bulleted/Numbered,"crates/ui-egui/src/panels/typography.rs; typography/{axes,fields,glyphs,picker,spacing}.rs",crates/ui-gpui/src/panels.rs,已实现
+右面板·Design 排版,List spacing field,node.set (listSpacing),✓,✓,,"crates/ui-egui/src/panels/typography.rs; typography/{axes,fields,glyphs,picker,spacing}.rs",crates/ui-gpui/src/panels.rs,已实现
+右面板·Design 排版,Paragraph indent field,node.set (paragraphIndent),✓,✓,仅起始对齐,"crates/ui-egui/src/panels/typography.rs; typography/{axes,fields,glyphs,picker,spacing}.rs",crates/ui-gpui/src/panels.rs,已实现
+右面板·Design 排版,Hanging punctuation / Hanging list,node.set (hangingPunctuation / hangingList),✓,✓,,"crates/ui-egui/src/panels/typography.rs; typography/{axes,fields,glyphs,picker,spacing}.rs",crates/ui-gpui/src/panels.rs,已实现
+右面板·Design 排版,Vertical trim segmented,node.set (leadingTrim),✓,✓,Standard/Cap height,"crates/ui-egui/src/panels/typography.rs; typography/{axes,fields,glyphs,picker,spacing}.rs",crates/ui-gpui/src/panels.rs,已实现
+右面板·Design 排版,Wrap style segmented,text.wrapStyle,✓,✓,Auto/Balance/Pretty,"crates/ui-egui/src/panels/typography.rs; typography/{axes,fields,glyphs,picker,spacing}.rs",crates/ui-gpui/src/panels.rs,已实现
+右面板·Design 排版,Text direction segmented,text.direction,✓,✓,含 RTL 时出现,"crates/ui-egui/src/panels/typography.rs; typography/{axes,fields,glyphs,picker,spacing}.rs",crates/ui-gpui/src/panels.rs,已实现
+右面板·Design 排版,Truncate segmented,node.set (textAutoResize / maxLines),✓,✓,,"crates/ui-egui/src/panels/typography.rs; typography/{axes,fields,glyphs,picker,spacing}.rs",crates/ui-gpui/src/panels.rs,已实现
+右面板·Design 排版,Max lines field,text.maxLines,✓,✓,仅截断,"crates/ui-egui/src/panels/typography.rs; typography/{axes,fields,glyphs,picker,spacing}.rs",crates/ui-gpui/src/panels.rs,已实现
+右面板·Design 排版,OpenType feature rows,text.setFeatures,✓,✓,Details tab，12 项，不支持置灰,"crates/ui-egui/src/panels/typography.rs; typography/{axes,fields,glyphs,picker,spacing}.rs",crates/ui-gpui/src/panels.rs,已实现
+右面板·Design 排版,Named instances dropdown,text.style,✓,✓,Variable tab,"crates/ui-egui/src/panels/typography.rs; typography/{axes,fields,glyphs,picker,spacing}.rs",crates/ui-gpui/src/panels.rs,已实现
+右面板·Design 排版,Axis sliders + fields,text.setVariations,✓,✓,Variable tab，可绑变量,"crates/ui-egui/src/panels/typography.rs; typography/{axes,fields,glyphs,picker,spacing}.rs",crates/ui-gpui/src/panels.rs,已实现
+右面板·Design 排版,Reset to style,text.setVariations,✓,✓,有 variations 时,"crates/ui-egui/src/panels/typography.rs; typography/{axes,fields,glyphs,picker,spacing}.rs",crates/ui-gpui/src/panels.rs,已实现
+右面板·Design 排版,Put text on path,text.onPath,✓,✓,文本+路径两选中,"crates/ui-egui/src/panels/typography.rs; typography/{axes,fields,glyphs,picker,spacing}.rs",crates/ui-gpui/src/panels.rs,已实现
+右面板·Design 排版,Start on path / Flip / Remove from path,text.pathOptions / text.removeFromPath,✓,✓,已在路径上,"crates/ui-egui/src/panels/typography.rs; typography/{axes,fields,glyphs,picker,spacing}.rs",crates/ui-gpui/src/panels.rs,已实现
+右面板·Design 填充,Fill section header (+/Styles),fill.add,✓,✓,右键 Paste fill → fill.paste,crates/ui-egui/src/panels/right/paints.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 填充,Fill style chip,—,✓,✓,,crates/ui-egui/src/panels/right/paints.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 填充,Fill row paint field,fill.set,✓,✓,图片 crop→image.crop,crates/ui-egui/src/panels/right/paints.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 填充,Fill row opacity,fill.set,✓,✓,,crates/ui-egui/src/panels/right/paints.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 填充,Fill row toggle / remove,fill.set / fill.remove,✓,✓,,crates/ui-egui/src/panels/right/paints.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 填充,Text range Fill section,text.style,✓,✓,选中文本范围,crates/ui-egui/src/panels/right/paints.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 描边,Stroke section header (+/Styles),stroke.add,✓,✓,右键 Paste stroke → stroke.paste,crates/ui-egui/src/panels/right/stroke.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 描边,Stroke style chip,—,✓,✓,,crates/ui-egui/src/panels/right/stroke.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 描边,Stroke row paint / opacity / toggle / remove,stroke.set / stroke.remove,✓,✓,,crates/ui-egui/src/panels/right/stroke.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 描边,Stroke align dropdown,node.set (strokeAlign),✓,✓,Inside/Center/Outside,crates/ui-egui/src/panels/right/stroke.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 描边,Stroke weight field,node.set (strokeWeight),✓,✓,,crates/ui-egui/src/panels/right/stroke.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 描边,Individual strokes menu,node.set (strokeSides),✓,✓,frame-like/Rectangle；All/T/R/B/L/Custom,crates/ui-egui/src/panels/right/stroke.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 描边,Per-side weight fields,node.set (strokeSides),✓,✓,设 sides 后,crates/ui-egui/src/panels/right/stroke.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 描边,Advanced stroke button,—,✓,✓,展开 stroke_settings,crates/ui-egui/src/panels/right/stroke.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 描边,Stroke style (Solid/Dash/Custom dashes),node.set (dashes),✓,✓,下拉,crates/ui-egui/src/panels/right/stroke.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 描边,Dash cap dropdown,node.set (dashCap),✓,✓,仅虚线,crates/ui-egui/src/panels/right/stroke.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 描边,Width profile dropdown + flip,stroke.widthProfile,✓,✓,下拉，6 个 preset + Uniform/Custom/Mixed,crates/ui-egui/src/panels/right/stroke.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 描边,Brush dropdown,stroke.brush,✓,✓,None + 预设,crates/ui-egui/src/panels/right/stroke.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 描边,Spacing/Scatter/Size jitter/Rotation jitter,node.set (brush),✓,✓,仅 Scatter brush,crates/ui-egui/src/panels/right/stroke.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 描边,Join dropdown + Miter angle,node.set (strokeJoin / miterAngle),✓,✓,,crates/ui-egui/src/panels/right/stroke.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 描边,Start/End point caps,node.set (startCap / endCap),✓,✓,两行独立；仅开放路径；8 种形状,crates/ui-egui/src/panels/right/stroke.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 效果,Effects section header (Styles/+),effect.add,✓,✓,右键 Paste effect → effect.paste,crates/ui-egui/src/panels/right/effects.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 效果,Effect style chip,—,✓,✓,,crates/ui-egui/src/panels/right/effects.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 效果,Effect row type dropdown,effect.set,✓,✓,,crates/ui-egui/src/panels/right/effects.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 效果,Effect row toggle / remove,effect.set / effect.remove,✓,✓,,crates/ui-egui/src/panels/right/effects.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 效果,Effect row context menu,effect.paste,✓,✓,Copy/Paste effect,crates/ui-egui/src/panels/right/effects.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 效果,Shadow settings,effect.set,✓,✓,X/Y/Blur/Spread/Color/Show behind,crates/ui-egui/src/panels/right/effects.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 效果,Blur settings,effect.set,✓,✓,渐进模糊显示 Start/End,crates/ui-egui/src/panels/right/effects.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 效果,Noise settings,effect.set,✓,✓,依 Mono/Duo/Multi,crates/ui-egui/src/panels/right/effects.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 效果,Texture settings,effect.set,✓,✓,Size/Radius/Clip to shape,crates/ui-egui/src/panels/right/effects.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 效果,Glass settings,effect.set,✓,✓,Light angle/Intensity/Refraction/Depth…,crates/ui-egui/src/panels/right/effects.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 布局网格,Layout grid section header,grid.add,✓,✓,全为 frame-like,crates/ui-egui/src/panels/layout_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 布局网格,Grid row type / toggle / remove,node.set (grids) / grid.remove,✓,✓,,crates/ui-egui/src/panels/layout_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 布局网格,Grid settings,—,✓,✓,node.set (grids)；依 kind/align,crates/ui-egui/src/panels/layout_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 选区色,Selection colors section,—,✓,✓,≥2 色，或 1 色且有子层,crates/ui-egui/src/panels/selection_colors.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 选区色,Color group hex / opacity,selection.setPaint,✓,✓,,crates/ui-egui/src/panels/selection_colors.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 选区色,Color group swatch,—,✓,✓,打开取色器,crates/ui-egui/src/panels/selection_colors.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 选区色,Styles menu: apply style,selection.applyColorStyle,✓,✓,,crates/ui-egui/src/panels/selection_colors.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 选区色,Styles menu: Color variables,selection.bindColorVariable,✓,✓,,crates/ui-egui/src/panels/selection_colors.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 选区色,Styles menu: Create style,selection.createColorStyle,✓,✓,,crates/ui-egui/src/panels/selection_colors.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 选区色,Detach style/variable,selection.detachColor,✓,✓,,crates/ui-egui/src/panels/selection_colors.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 选区色,Select layers with this color,selection.selectColor,✓,✓,,crates/ui-egui/src/panels/selection_colors.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 导出,Export section header (+),export.add,✓,✓,mixed 时改走 node.set (exports),crates/ui-egui/src/panels/export_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 导出,Export setting size / suffix / format,export.update,✓,✓,,crates/ui-egui/src/panels/export_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 导出,Export advanced options,export.update,✓,✓,contentsOnly/boundingBox/SVG/XML…,crates/ui-egui/src/panels/export_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 导出,PDF print settings,export.update,✓,✓,bleed/cropMarks/bleedMarks/cmyk,crates/ui-egui/src/panels/export_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 导出,Remove export setting,export.remove,✓,✓,,crates/ui-egui/src/panels/export_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 导出,Preview disclosure,—,✓,✓,,crates/ui-egui/src/panels/export_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design 导出,Export N layers button,file.exportLayers / file.export,✓,✓,单个走 file.export，多个 file.exportLayers,crates/ui-egui/src/panels/export_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Frame 工具,Frame section header,—,✓,✓,仅 Frame 工具激活时,crates/ui-egui/src/panels/frame_presets.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Frame 工具,New from selection,object.frameSelection + tool.set(move),✓,✓,失败保留 Frame 工具并报错,crates/ui-egui/src/panels/frame_presets.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Frame 工具,Preset category,—,✓,✓,首个分类 Phone 默认展开,crates/ui-egui/src/panels/frame_presets.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Frame 工具,Preset row,frame.create + tool.set(move) + view.zoomSelection,✓,✓,,crates/ui-egui/src/panels/frame_presets.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Prototype,Prototype tab,—,✓,✓,,crates/ui-egui/src/panels/proto_panel.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 概览,Flow starting points section (+),proto.flow.add,✓,✓,空选择；每个顶层 frame 仅一个起点,crates/ui-egui/src/panels/proto_panel.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 概览,Flow row play,proto.present,✓,✓,,crates/ui-egui/src/panels/proto_panel.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 概览,Flow row name field,proto.flow.rename,✓,✓,,crates/ui-egui/src/panels/proto_panel.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 概览,Flow row preview,proto.preview,✓,✓,,crates/ui-egui/src/panels/proto_panel.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 概览,Flow row remove,proto.flow.remove,✓,✓,,crates/ui-egui/src/panels/proto_panel.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 设置,Prototype settings section,proto.preview,✓,✓,header 图标,crates/ui-egui/src/panels/proto_panel.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 设置,Device dropdown + rotate,proto.settings,✓,✓,,crates/ui-egui/src/panels/proto_panel.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 设置,Device color dropdown,proto.settings,✓,✓,设备支持多色时,crates/ui-egui/src/panels/proto_panel.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 设置,Custom size W/H + swap,proto.settings,✓,✓,Custom device,crates/ui-egui/src/panels/proto_panel.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 设置,Responsive checkbox,proto.settings,✓,✓,,crates/ui-egui/src/panels/proto_panel.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 设置,Background color field,proto.settings,✓,✓,,crates/ui-egui/src/panels/proto_panel.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 交互,Flow starting point section (frame),proto.flow.add / rename / preview,✓,✓,顶层 frame 选中,crates/ui-egui/src/panels/proto_panel.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 交互,Interactions section (+),proto.interaction.add,✓,✓,默认 Click→Navigate/Back,crates/ui-egui/src/panels/proto_panel.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 交互,Interaction row,—,✓,✓,单击打开编辑器 popover,crates/ui-egui/src/panels/proto_panel.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 交互,Interaction remove,proto.interaction.remove,✓,✓,,crates/ui-egui/src/panels/proto_panel.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 交互,Mixed interactions section (+),proto.interaction.clear + add,✓,✓,多选交互不同时,crates/ui-egui/src/panels/proto_panel.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 交互,Remove all,proto.interaction.clear,✓,✓,mixed 情形,crates/ui-egui/src/panels/proto_panel.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 编辑器,Interaction editor popover,—,✓,✓,浮于面板旁，标题 Interaction,crates/ui-egui/src/panels/proto_editor.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 编辑器,Trigger dropdown,proto.interaction.set,✓,✓,10 种触发,crates/ui-egui/src/panels/proto_editor.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 编辑器,Delay field,proto.interaction.set,✓,✓,Mouse enter/leave/down/up,crates/ui-egui/src/panels/proto_editor.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 编辑器,After delay field,proto.interaction.set,✓,✓,,crates/ui-egui/src/panels/proto_editor.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 编辑器,Key capture / Controller dropdown,proto.interaction.set,✓,✓,KeyPress 触发,crates/ui-egui/src/panels/proto_editor.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 编辑器,Action list (drag reorder),proto.action.move,✓,✓,,crates/ui-egui/src/panels/proto_editor.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 编辑器,Add action menu,proto.action.add,✓,✓,11 种 action,crates/ui-egui/src/panels/proto_editor.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 编辑器,Navigate — Destination / Preserve scroll,proto.action.set,✓,✓,,crates/ui-egui/src/panels/proto_editor.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 编辑器,Swap overlay — Overlay,proto.action.set,✓,✓,,crates/ui-egui/src/panels/proto_editor.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 编辑器,Change to — Variant,proto.action.set,✓,✓,,crates/ui-egui/src/panels/proto_editor.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 编辑器,Scroll to — layer + Offset,proto.action.set,✓,✓,,crates/ui-egui/src/panels/proto_editor.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 编辑器,Open link — Link / new tab,proto.action.set,✓,✓,,crates/ui-egui/src/panels/proto_editor.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 编辑器,Open overlay — 位置/偏移/关闭/背景,proto.action.set,✓,✓,,crates/ui-egui/src/panels/proto_editor.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 编辑器,Set variable mode — Collection / Mode,proto.action.set,✓,✓,,crates/ui-egui/src/panels/proto_editor.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 编辑器,Set variable action,proto.action.set,✓,✓,,crates/ui-egui/src/panels/proto_editor.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 编辑器,Conditional blocks (If/Else if/Else),proto.conditional.addBlock / removeBlock,✓,✓,,crates/ui-egui/src/panels/proto_editor.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 编辑器,Condition builder / expression,proto.conditional.set,✓,✓,,crates/ui-egui/src/panels/proto_editor.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 编辑器,Animation section,—,✓,✓,含可动画 action 时,crates/ui-egui/src/panels/proto_editor.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 编辑器,Transition dropdown,proto.interaction.set,✓,✓,,crates/ui-egui/src/panels/proto_editor.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 编辑器,Direction segmented,proto.interaction.set,✓,✓,,crates/ui-egui/src/panels/proto_editor.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 编辑器,Easing dropdown + duration,proto.interaction.set,✓,✓,弹簧类型无 duration,crates/ui-egui/src/panels/proto_editor.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 编辑器,Custom bezier/spring fields,proto.interaction.set,✓,✓,,crates/ui-egui/src/panels/proto_editor.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 编辑器,Curve preview,—,✓,✓,,crates/ui-egui/src/panels/proto_editor.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Prototype 滚动,Scroll behavior Position / Overflow,node.set (scrollPosition / overflow),✓,✓,frame 或 frame 子层,crates/ui-egui/src/panels/proto_panel.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Inspect,Inspect tab (Dev Mode),panel.devMode,✓,✓,进入时结束文本/矢量编辑,crates/ui-egui/src/panels/right/inspect.rs,crates/ui-gpui/src/panels.rs; canvas/dev.rs,已实现
+右面板·Inspect,No selection notes,—,✓,✓,Select a layer… / Hover other layers…,crates/ui-egui/src/panels/right/inspect.rs,crates/ui-gpui/src/panels.rs; canvas/dev.rs,已实现
+右面板·Inspect,Ready for dev list + filter,dev.focus / select.set / view.zoomSelection,✓,✓,无选择时,crates/ui-egui/src/panels/right/inspect.rs,crates/ui-gpui/src/panels.rs; canvas/dev.rs,已实现
+右面板·Inspect,Annotations categories section,annotation.addCategory / editCategory / removeCategory,✓,✓,无选择时,crates/ui-egui/src/panels/right/inspect.rs,crates/ui-gpui/src/panels.rs; canvas/dev.rs,已实现
+右面板·Inspect,Measurements section (no selection),devMode.addMeasurement,✓,✓,,crates/ui-egui/src/panels/right/inspect.rs,crates/ui-gpui/src/panels.rs; canvas/dev.rs,已实现
+右面板·Inspect,Plugins section,—,✓,,Dev Mode 只读插件,crates/ui-egui/src/panels/right/inspect.rs,crates/ui-gpui/src/panels.rs; canvas/dev.rs,GPUI 未实现（上游 EGUI 有）
+右面板·Inspect,Selected layer name header,—,✓,✓,,crates/ui-egui/src/panels/right/inspect.rs,crates/ui-gpui/src/panels.rs; canvas/dev.rs,已实现
+右面板·Inspect 状态,Status + Focus view / Compare changes,node.set (devStatus) / dev.focus / dev.compare,✓,✓,仅 frame/section,crates/ui-egui/src/panels/right/inspect.rs,crates/ui-gpui/src/panels.rs; canvas/dev.rs,已实现
+右面板·Inspect 标注,Annotations section,annotation.add / edit / remove,✓,✓,,crates/ui-egui/src/panels/right/inspect.rs,crates/ui-gpui/src/panels.rs; canvas/dev.rs,已实现
+右面板·Inspect 资源,Dev resources section,devResource.add / edit / remove,✓,✓,,crates/ui-egui/src/panels/right/inspect.rs,crates/ui-gpui/src/panels.rs; canvas/dev.rs,已实现
+右面板·Inspect 测量,Measurements section + Add measurement,devMode.addMeasurement,✓,✓,,crates/ui-egui/src/panels/right/inspect.rs,crates/ui-gpui/src/panels.rs; canvas/dev.rs,已实现
+右面板·Inspect 属性,Color format dropdown,—,✓,✓,,crates/ui-egui/src/panels/right/inspect.rs,crates/ui-gpui/src/panels.rs; canvas/dev.rs,已实现
+右面板·Inspect 属性,Inspect property sections/rows,—,✓,✓,点击复制值；来自 devinspect,crates/ui-egui/src/panels/right/inspect.rs,crates/ui-gpui/src/panels.rs; canvas/dev.rs,已实现
+右面板·Inspect 资产,Assets section + Export all,file.exportLayers / file.export,✓,✓,无资源时提示在 Design 添加,crates/ui-egui/src/panels/right/inspect.rs,crates/ui-gpui/src/panels.rs; canvas/dev.rs,已实现
+右面板·Inspect 资产,Asset row format dropdown + export,file.export,✓,✓,,crates/ui-egui/src/panels/right/inspect.rs,crates/ui-gpui/src/panels.rs; canvas/dev.rs,已实现
+右面板·Inspect 代码,Code section — language / px-rem / Copy,—,✓,✓,,crates/ui-egui/src/panels/right/inspect.rs,crates/ui-gpui/src/panels.rs; canvas/dev.rs,已实现
+右面板·Inspect Playground,Playground section,—,✓,✓,仅改预览和代码，不写文档,crates/ui-egui/src/panels/right/inspect.rs,crates/ui-gpui/src/panels.rs; canvas/dev.rs,已实现
+右面板·Inspect 连接,Connect to code section,codeConnect.set / remove,✓,✓,,crates/ui-egui/src/panels/right/inspect.rs,crates/ui-gpui/src/panels.rs; canvas/dev.rs,已实现
+右面板·Inspect 连接,Import path / Name / Template fields,codeConnect.set,✓,✓,,crates/ui-egui/src/panels/right/inspect.rs,crates/ui-gpui/src/panels.rs; canvas/dev.rs,已实现
+右面板·Dev compare,Compare changes window,—,✓,✓,,crates/ui-egui/src/panels/dev_compare.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Dev compare,Mode switch (Side by side / Overlay),—,✓,✓,,crates/ui-egui/src/panels/dev_compare.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Dev compare,Change list rows + property lines,select.set,✓,✓,,crates/ui-egui/src/panels/dev_compare.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Dev compare,Compare with dropdown,—,✓,✓,,crates/ui-egui/src/panels/dev_compare.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Dev compare,Resolve change button,dev.resolveChange,✓,✓,,crates/ui-egui/src/panels/dev_compare.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Dev compare,Close button,—,✓,✓,,crates/ui-egui/src/panels/dev_compare.rs,crates/ui-gpui/src/panels.rs,已实现
+右面板·Design Section,Section colours (8 presets),node.set (fills),✓,✓,选中 Section 时；White/Gray/Red/Orange/Yellow/Green/Blue/Violet 8 种浅色,crates/ui-egui/src/panels/section_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Section,Hide section contents,section.toggleContents,✓,✓,选中 Section 时；切换后内容不显示,crates/ui-egui/src/panels/section_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+右面板·Design Section,Section status dropdown,node.set (devStatus),✓,✓,选中 Section 时；Ready/Changed/Completed,crates/ui-egui/src/panels/section_panel.rs,crates/ui-gpui/src/panels.rs (+ panels/extra.rs),已实现
+对话框,About FigCraft (About tab),help.about,✓,✓,居中；三 tab；Escape 关闭；非模态,crates/ui-egui/src/dialogs/credits.rs,crates/ui-gpui/src/dialogs.rs,已实现
+对话框,About > Contributors,help.about,✓,✓,子页；姓名模式/排序/Grab bag,crates/ui-egui/src/dialogs/credits.rs,crates/ui-gpui/src/dialogs.rs,已实现
+对话框,About > Models,help.about,✓,✓,AI 模型贡献表,crates/ui-egui/src/dialogs/credits.rs,crates/ui-gpui/src/dialogs.rs,已实现
+对话框,Preferences,app.preferences,✓,✓,居中宽 360；偏好开关/界面尺寸/网格/主题/语言/用户名/共享服务器/nudge；Escape 关闭,crates/ui-egui/src/app/preferences.rs,crates/ui-gpui/src/dialogs.rs,已实现
+对话框,Keyboard shortcuts,help.shortcuts,✓,✓,底部居中；按 Group 分 tab；三列键帽+搜索；Escape 关闭,crates/ui-egui/src/panels/shortcuts_panel.rs,crates/ui-gpui/src/dialogs.rs,已实现
+对话框,Find and replace,edit.findReplace,✓,✓,"左上角固定 (260,120) 宽 280；结果 toast；Escape 关闭",crates/ui-egui/src/menus.rs,crates/ui-gpui/src/dialogs.rs,已实现
+对话框,Rename layers (批量),object.batchRename,✓,✓,居中宽 320；Match/正则/Rename to/编号/5 行预览；Escape 关闭,crates/ui-egui/src/dialogs/batch_rename.rs,crates/ui-gpui/src/dialogs.rs,已实现
+对话框,Menu input — Create link,text.link,✓,✓,居中宽 320；填 URL 后提交,crates/ui-egui/src/dialogs/menu_input.rs,crates/ui-gpui/src/dialogs.rs,已实现
+对话框,Menu input — Offset path,vector.offset,✓,✓,数值字段 clamp ±100000,crates/ui-egui/src/dialogs/menu_input.rs,crates/ui-gpui/src/dialogs.rs,已实现
+对话框,Menu input — Move to page,object.moveToPage,✓,✓,列出其他非分隔页；无其他页显示 No other pages,crates/ui-egui/src/dialogs/menu_input.rs,crates/ui-gpui/src/dialogs.rs,已实现
+对话框,Export,file.export / file.exportSvg,✓,✓,居中宽 320；图层各自/多图层预设/整文件 .fig；含 PDF 选项,crates/ui-egui/src/dialogs/export.rs,crates/ui-gpui/src/dialogs.rs,已实现
+对话框,Color profile,file.colorProfile,✓,✓,居中宽 340；sRGB/P3 + Keep appearance/values,crates/ui-egui/src/dialogs/color_profile.rs,crates/ui-gpui/src/dialogs.rs,已实现
+对话框,Import report,file.open / import / edit.pasteDesignLayers 后自动,✓,✓,居中宽 420；页/图层/图像+兼容性 notes；随文档关闭消失,crates/ui-egui/src/dialogs/import_report.rs,crates/ui-gpui/src/dialogs.rs,已实现
+对话框,Missing fonts,text.missingFonts,✓,✓,居中宽 380；列出未装字体+Download/Try again；无缺失不显示,crates/ui-egui/src/dialogs/missing_fonts.rs,crates/ui-gpui/src/dialogs.rs,已实现
+对话框,Create from color,取色器 Cmd+Shift,✓,,居中宽 280；Style/Variable + 名称 + collection,crates/ui-egui/src/dialogs/sampled_color.rs,crates/ui-gpui/src/dialogs.rs,GPUI 未实现（上游 EGUI 有）
+对话框,Plugins (Installed tab),plugins.manage,✓,✓,居中宽 400；两 tab；关闭时取消后台请求,crates/ui-egui/src/dialogs/plugins_ui.rs,crates/ui-gpui/src/dialogs.rs,已实现
+对话框,Plugins > Browse tab,plugin.directory.list / install,✓,✓,服务器地址+搜索+Install/Remove；Browse 前不请求,crates/ui-egui/src/dialogs/plugins_ui.rs,crates/ui-gpui/src/dialogs.rs,已实现
+对话框,Plugin install/update confirm,plugin.directory.install,✓,,居中宽 340；显示权限/来源/SHA-256,crates/ui-egui/src/dialogs/plugins_ui.rs,crates/ui-gpui/src/dialogs.rs,GPUI 未实现（上游 EGUI 有）
+对话框,Plugin parameters form,plugin.run,✓,,居中宽 320；两列参数 + Run/Cancel,crates/ui-egui/src/dialogs/plugins_ui.rs,crates/ui-gpui/src/dialogs.rs,GPUI 未实现（上游 EGUI 有）
+对话框,Plugin panels,plugin.event / plugin.close / widget.insert,✓,,浮动宽 320；贴属性面板左侧,crates/ui-egui/src/dialogs/plugins_ui.rs,crates/ui-gpui/src/dialogs.rs,GPUI 未实现（上游 EGUI 有）
+对话框,Updates (检查更新),help.checkForUpdates,✓,✓,居中窗口；显示当前版本/新版本/下载入口；工具栏帮助菜单或菜单项打开,crates/ui-egui/src/dialogs/updates_ui.rs,crates/ui-gpui/src/dialogs.rs,已实现
+对话框,Save file (插件请求保存),dialog.pluginSave,✓,,浏览器下载/桌面 pick_save,crates/ui-egui/src/dialogs/plugins_ui.rs,crates/ui-gpui/src/dialogs.rs,GPUI 未实现（上游 EGUI 有）
+对话框,Remove from server (在线文件),collab.manageFile,✓,,居中宽 380；Home▸Online 行打开,crates/ui-egui/src/dialogs.rs (+ dialogs/*),crates/ui-gpui/src/dialogs.rs,GPUI 未实现（上游 EGUI 有）
+对话框,Rename on the server,collab.manageFile,✓,,居中宽 380,crates/ui-egui/src/dialogs.rs (+ dialogs/*),crates/ui-gpui/src/dialogs.rs,GPUI 未实现（上游 EGUI 有）
+对话框,Join live session,collab.join,✓,,居中宽 380；邀请码/链接+用户名,crates/ui-egui/src/dialogs.rs (+ dialogs/*),crates/ui-gpui/src/dialogs.rs,GPUI 未实现（上游 EGUI 有）
+对话框,Publish to server,collab.publish,✓,,预填上次服务器地址,crates/ui-egui/src/dialogs.rs (+ dialogs/*),crates/ui-gpui/src/dialogs.rs,GPUI 未实现（上游 EGUI 有）
+对话框,File published,—,✓,,发布成功后确认,crates/ui-egui/src/dialogs.rs (+ dialogs/*),crates/ui-gpui/src/dialogs.rs,GPUI 未实现（上游 EGUI 有）
+对话框,Unsaved changes (关闭窗口),—,✓,✓,前景居中宽 340；Don't Save/Cancel/Save；Save 默认（Enter）,crates/ui-egui/src/windows.rs,crates/ui-gpui/src/dialogs.rs,已实现
+对话框,Unsaved changes (关闭 tab),file.save / file.saveAs,✓,✓,同 unsaved_question；分支 tab 的改动视为已在主文件,crates/ui-egui/src/windows.rs,crates/ui-gpui/src/dialogs.rs,已实现
+对话框,Pending open card,—,✓,,打开文件前显示卡片,crates/ui-egui/src/pending_open.rs,crates/ui-gpui/src/dialogs.rs,GPUI 未实现（上游 EGUI 有）
+独立窗口,Main window (id 0),window.focus,✓,✓,显示无其他窗口持有的打开文件,crates/ui-egui/src/windows.rs; dialogs/variables_panel.rs,crates/ui-gpui/src/windows.rs,已实现
+独立窗口,New window,window.new,✓,✓,有读屏或嵌入视口时退化为 tab,crates/ui-egui/src/windows.rs; dialogs/variables_panel.rs,crates/ui-gpui/src/windows.rs,已实现
+独立窗口,Focus window,window.focus,✓,✓,置前并把后续控制请求发往它,crates/ui-egui/src/windows.rs; dialogs/variables_panel.rs,crates/ui-gpui/src/windows.rs,已实现
+独立窗口,Fullscreen,window.fullscreen,✓,✓,切换当前视口全屏,crates/ui-egui/src/windows.rs; dialogs/variables_panel.rs,crates/ui-gpui/src/windows.rs,已实现
+独立窗口,Variables editor,ui.set {variables},✓,✓,可调大小 min 600×240；默认 880×480 居中；左集合列表+右变量表,crates/ui-egui/src/windows.rs; dialogs/variables_panel.rs,crates/ui-gpui/src/windows.rs,已实现
+独立窗口,Edit variable,—,✓,✓,variable.update；宽 260,crates/ui-egui/src/windows.rs; dialogs/variables_panel.rs,crates/ui-gpui/src/windows.rs,已实现
+独立窗口,Edit variables (批量),—,✓,✓,variable.update；宽 260；Details/Scope 两 tab,crates/ui-egui/src/windows.rs; dialogs/variables_panel.rs,crates/ui-gpui/src/windows.rs,已实现
+首页,Home screen,home / home.templates,✓,✓,无打开文件时显示；整窗为拖放目标,crates/ui-egui/src/home.rs (+ home/*),crates/ui-gpui/src/home/mod.rs,已实现
+首页,Home Sidebar,app.preferences,✓,✓,左侧 240 宽；搜索/Recents/Online/Templates/底部 Preferences,crates/ui-egui/src/home.rs (+ home/*),crates/ui-gpui/src/home/mod.rs,已实现
+首页,Recents New design file,file.new,✓,✓,新建后 home=false,crates/ui-egui/src/home.rs (+ home/*),crates/ui-gpui/src/home/mod.rs,已实现
+首页,Recents New board,file.newBoard,✓,✓,,crates/ui-egui/src/home.rs (+ home/*),crates/ui-gpui/src/home/mod.rs,已实现
+首页,Recents Open file,—,✓,✓,系统文件对话框,crates/ui-egui/src/home.rs (+ home/*),crates/ui-gpui/src/home/mod.rs,已实现
+首页,Recents Join with a code,collab.join,✓,✓,live::join_row,crates/ui-egui/src/home.rs (+ home/*),crates/ui-gpui/src/home/mod.rs,已实现
+首页,Recents Getting started tips,help.gettingStarted,✓,✓,6 条提示；关闭后 Help 菜单可恢复,crates/ui-egui/src/home.rs (+ home/*),crates/ui-gpui/src/home/mod.rs,已实现
+首页,Recents Open files list,doc.switch,✓,✓,点击切换 tab 并 home=false,crates/ui-egui/src/home.rs (+ home/*),crates/ui-gpui/src/home/mod.rs,已实现
+首页,Recents Recent files (grid/list),file.open / file.openRecent,✓,✓,最多 12；Grid/List 切换、Sort by；右键 Reveal/Remove,crates/ui-egui/src/home.rs (+ home/*),crates/ui-gpui/src/home/mod.rs,已实现
+首页,Recents Start from a template,file.newFromTemplate,✓,✓,无最近文件时前 4 个模板卡,crates/ui-egui/src/home.rs (+ home/*),crates/ui-gpui/src/home/mod.rs,已实现
+首页,Templates section,file.newFromTemplate,✓,✓,搜索+Kind 过滤+模板卡网格,crates/ui-egui/src/home.rs (+ home/*),crates/ui-gpui/src/home/mod.rs,已实现
+首页,Search results,file.open / collab.openFile / file.newFromTemplate,✓,✓,侧栏搜索非空时；无结果引导,crates/ui-egui/src/home.rs (+ home/*),crates/ui-gpui/src/home/mod.rs,已实现
+首页,Online 在线文件列表,collab.files / collab.openFile,✓,✓,无搜索且 section=Online 时自绘,crates/ui-egui/src/home.rs (+ home/*),crates/ui-gpui/src/home/mod.rs,已实现
+首页,Online 文件行菜单,collab.manageFile / collab.forgetFile,✓,✓,Open/Start-Stop sharing/Copy code/Rename/Remove/Forget,crates/ui-egui/src/home.rs (+ home/*),crates/ui-gpui/src/home/mod.rs,已实现
+首页,Online Team list,collab.join,✓,✓,服务器团队当前共享文件,crates/ui-egui/src/home.rs (+ home/*),crates/ui-gpui/src/home/mod.rs,已实现
+首页,Online 服务器状态,collab.files,✓,✓,Checking/离线错误+Try again/旧服务器提示,crates/ui-egui/src/home.rs (+ home/*),crates/ui-gpui/src/home/mod.rs,已实现
+首页,拖放打开文件,—,✓,✓,整窗拖放目标；支持 .figcraft/.fig/.jam/.sketch/.json/.svg/图片,crates/ui-egui/src/home.rs (+ home/*),crates/ui-gpui/src/home/mod.rs,已实现
+Dev Mode,Dev Mode (Inspect tab 主界面),view.devMode,✓,✓,进入时结束文本/矢量编辑,crates/ui-egui/src/panels/dev_mode.rs,crates/ui-gpui/src/canvas/dev.rs,已实现
+Dev Mode,Measurements,dev.measure,✓,✓,画布 hover 测量，类别过滤,crates/ui-egui/src/panels/dev_mode.rs,crates/ui-gpui/src/canvas/dev.rs,已实现
+Dev Mode,Code / Playground,codeConnect.set,✓,✓,选 React/Leptos/Vue/SwiftUI/Compose/ArkUI/Flutter,crates/ui-egui/src/panels/dev_mode.rs,crates/ui-gpui/src/canvas/dev.rs,已实现
+Dev Mode,Connect to code,codeConnect.set / remove,✓,✓,,crates/ui-egui/src/panels/dev_mode.rs,crates/ui-gpui/src/canvas/dev.rs,已实现
+Dev Mode,Annotations,annotation.add / edit / remove,✓,✓,,crates/ui-egui/src/panels/dev_mode.rs,crates/ui-gpui/src/canvas/dev.rs,已实现
+Dev Mode,Dev resources,devResource.add / edit / remove,✓,✓,,crates/ui-egui/src/panels/dev_mode.rs,crates/ui-gpui/src/canvas/dev.rs,已实现
+Dev Mode,Status (Ready for dev / Compare),dev.focus / dev.compare,✓,✓,,crates/ui-egui/src/panels/dev_mode.rs,crates/ui-gpui/src/canvas/dev.rs,已实现
+Dev Mode,Categories,annotation.update,✓,✓,管理标注分类,crates/ui-egui/src/panels/dev_mode.rs,crates/ui-gpui/src/canvas/dev.rs,已实现
+Dev Mode,Ready list,dev.focus / select.set / view.zoomSelection,✓,✓,列出 ready for dev 图层,crates/ui-egui/src/panels/dev_mode.rs,crates/ui-gpui/src/canvas/dev.rs,已实现
+Dev Mode,Focus bar,dev.focus / dev.unfocus / dev.compare,✓,✓,画布聚焦导航条,crates/ui-egui/src/panels/dev_mode.rs,crates/ui-gpui/src/canvas/dev.rs,已实现
+动画,Animation controls (原型转场),proto.settings,✓,✓,仅原型交互的转场设置；EGUI 无独立时间线,crates/ui-egui/src/panels/proto_panel.rs,crates/ui-gpui/src/panels.rs,已实现
+演示,Prototype preview (画布内预览窗),proto.preview,✓,✓,浮动默认 320×600；贴画布右上角,crates/ui-egui/src/present.rs,crates/ui-gpui/src/present.rs (+ present/*),已实现
+演示,Present (全屏演示),proto.present,✓,✓,全屏 Presenter；Escape/Close 结束,crates/ui-egui/src/present.rs,crates/ui-gpui/src/present.rs (+ present/*),已实现
+演示,Present 导航栏,present.options / proto.settings,✓,✓,底部居中；上/下一帧/设备/缩放；Cmd+\ 隐藏,crates/ui-egui/src/present.rs,crates/ui-gpui/src/present.rs (+ present/*),已实现
+演示,Present Inspect panel,present.options,✓,✓,右侧 Panel；可开关,crates/ui-egui/src/present.rs,crates/ui-gpui/src/present.rs (+ present/*),已实现
+演示,Present Link notice / Comment mode,proto.linkNotice / Shift+C,✓,✓,外链提示 + 演示中评论,crates/ui-egui/src/present.rs,crates/ui-gpui/src/present.rs (+ present/*),已实现
+通知,Toast,—,✓,✓,底部居中；约 4 秒自动消失,crates/ui-egui/src/app.rs,crates/ui-gpui/src/lib.rs (toast),已实现
+颜色选择器,Color picker popover,edit.pickColor,✓,✓,S/B 方块+Hue/Alpha 滑条+数值+渐变+图片；外部点击/Escape 关闭,crates/ui-egui/src/widgets/colorpicker.rs,crates/ui-gpui/src/popovers.rs,已实现
+颜色选择器,Eyedropper,edit.pickColor,✓,✓,取样写当前 paint；Cmd+Shift 取样弹 Create from color,crates/ui-egui/src/widgets/colorpicker.rs,crates/ui-gpui/src/popovers.rs,已实现
+颜色选择器,Recent colors / Page colors,edit.pickColor,✓,✓,最近使用色与页面色快捷色板,crates/ui-egui/src/widgets/colorpicker.rs,crates/ui-gpui/src/popovers.rs,已实现
+动画·GPUI 特有,MotionInspector (动画右栏整页),motion.preset / motion.keyframe,,✓,打开 Motion 时替换 Design 面板；复用 Design 的 Fill/Stroke/Effects 行,crates/ui-gpui/src/motion/*.rs; canvas/motion_overlay.rs,"crates/ui-gpui/src/motion/{inspector,timeline,keyframe_field,clip_popover,easing,host}.rs; canvas/motion_overlay.rs",GPUI 独有
+动画·GPUI 特有,"AnimationSection (presets + ""+""菜单)",motion.preset,,✓,,crates/ui-gpui/src/motion/*.rs; canvas/motion_overlay.rs,"crates/ui-gpui/src/motion/{inspector,timeline,keyframe_field,clip_popover,easing,host}.rs; canvas/motion_overlay.rs",GPUI 独有
+动画·GPUI 特有,KeyframeFields (Transform/Layout/Appearance 行),motion.keyframe,,✓,每个可动画值一个字段，行尾菱形切换关键帧,crates/ui-gpui/src/motion/*.rs; canvas/motion_overlay.rs,"crates/ui-gpui/src/motion/{inspector,timeline,keyframe_field,clip_popover,easing,host}.rs; canvas/motion_overlay.rs",GPUI 独有
+动画·GPUI 特有,MotionTimelineBar (底部时间线条),motion.keyframe / motion.timeline / motion.track,,✓,替换 animation_bar；可拖高度；顶边 4px resize,crates/ui-gpui/src/motion/*.rs; canvas/motion_overlay.rs,"crates/ui-gpui/src/motion/{inspector,timeline,keyframe_field,clip_popover,easing,host}.rs; canvas/motion_overlay.rs",GPUI 独有
+动画·GPUI 特有,TimelineRuler + Playhead,motion.timeline,,✓,标尺右半与 header 同带；播放头最后画,crates/ui-gpui/src/motion/*.rs; canvas/motion_overlay.rs,"crates/ui-gpui/src/motion/{inspector,timeline,keyframe_field,clip_popover,easing,host}.rs; canvas/motion_overlay.rs",GPUI 独有
+动画·GPUI 特有,TimelineLayerRows + Tracks,motion.track,,✓,图层摘要行+属性轨道；滚动行不渗入 header,crates/ui-gpui/src/motion/*.rs; canvas/motion_overlay.rs,"crates/ui-gpui/src/motion/{inspector,timeline,keyframe_field,clip_popover,easing,host}.rs; canvas/motion_overlay.rs",GPUI 独有
+动画·GPUI 特有,KeyframeDiamonds,motion.keyframe / keyframeMove / keyframeDelete / keyframeCopy,,✓,空心/选中实心；拖动吸附帧网格，开一次 undo,crates/ui-gpui/src/motion/*.rs; canvas/motion_overlay.rs,"crates/ui-gpui/src/motion/{inspector,timeline,keyframe_field,clip_popover,easing,host}.rs; canvas/motion_overlay.rs",GPUI 独有
+动画·GPUI 特有,ClipBars (片段条),motion.clip / clipUpdate / clipDelete,,✓,先于关键帧轨道画,crates/ui-gpui/src/motion/*.rs; canvas/motion_overlay.rs,"crates/ui-gpui/src/motion/{inspector,timeline,keyframe_field,clip_popover,easing,host}.rs; canvas/motion_overlay.rs",GPUI 独有
+动画·GPUI 特有,DurationHandle (时长右端手柄),motion.timeline,,✓,指针不动也续帧伸长,crates/ui-gpui/src/motion/*.rs; canvas/motion_overlay.rs,"crates/ui-gpui/src/motion/{inspector,timeline,keyframe_field,clip_popover,easing,host}.rs; canvas/motion_overlay.rs",GPUI 独有
+动画·GPUI 特有,EditableTimeBoxes (当前/时长时间框),motion.timeline,,✓,header 中两个可编辑时间字段,crates/ui-gpui/src/motion/*.rs; canvas/motion_overlay.rs,"crates/ui-gpui/src/motion/{inspector,timeline,keyframe_field,clip_popover,easing,host}.rs; canvas/motion_overlay.rs",GPUI 独有
+动画·GPUI 特有,ClipSettingsPopover,motion.clip / clipUpdate / clipDelete / keyframeEase,,✓,枚举行点开 options 菜单,crates/ui-gpui/src/motion/*.rs; canvas/motion_overlay.rs,"crates/ui-gpui/src/motion/{inspector,timeline,keyframe_field,clip_popover,easing,host}.rs; canvas/motion_overlay.rs",GPUI 独有
+动画·GPUI 特有,EasingEditor (Curve/Spring),motion.keyframeEase,,✓,Curve|Spring 页签+图形手柄+数值/弹簧参数,crates/ui-gpui/src/motion/*.rs; canvas/motion_overlay.rs,"crates/ui-gpui/src/motion/{inspector,timeline,keyframe_field,clip_popover,easing,host}.rs; canvas/motion_overlay.rs",GPUI 独有
+动画·GPUI 特有,MotionOverlay (运动路径+变换手柄),motion.keyframe / keyframeHandle / autoKey,,✓,有动画时显示、播放中隐藏；空间贝塞尔手柄可拖改曲线,crates/ui-gpui/src/motion/*.rs; canvas/motion_overlay.rs,"crates/ui-gpui/src/motion/{inspector,timeline,keyframe_field,clip_popover,easing,host}.rs; canvas/motion_overlay.rs",GPUI 独有
