@@ -1393,7 +1393,7 @@ impl CanvasView {
                 "color" => {
                     let on_pick = Rc::new(|_c: Color32, _w: &mut Window, _cx: &mut App| {});
 
-                    Some(popovers::WindowState::color(cx, anchor, Color32::from_rgb(0x2D, 0x9C, 0xDB), None, on_pick, view.fields.queue()))
+                    Some(popovers::WindowState::color(cx, anchor, Color32::from_rgb(0x2D, 0x9C, 0xDB), None, Default::default(), on_pick, view.fields.queue()))
                 }
 
                 _ => None,
@@ -4668,7 +4668,7 @@ impl CanvasView {
 
         cx: &mut Context<Self>,
     ) {
-        let w = popovers::WindowState::color(cx, origin, current, None, on_pick, self.fields.queue());
+        let w = popovers::WindowState::color(cx, origin, current, None, self.fields.contrast(), on_pick, self.fields.queue());
 
         self.open_window(w, cx);
     }
@@ -5468,6 +5468,7 @@ impl Render for CanvasView {
                     gpui::point(px(160.0), px(60.0)),
                     Color32::from_rgb(0x2D, 0x9C, 0xDB),
                     Some(picker),
+                    Default::default(),
                     std::rc::Rc::new(|_, _, _| {}),
                     self.fields.queue(),
                 );

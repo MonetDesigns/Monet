@@ -3052,7 +3052,7 @@ impl VariablesEditor {
                                 });
                             }
                         });
-                        let w = crate::popovers::WindowState::color(cx, pos, current, None, on_pick, cmds_pick.clone());
+                        let w = crate::popovers::WindowState::color(cx, pos, current, None, Default::default(), on_pick, cmds_pick.clone());
                         popups.request(w);
                     });
                 }

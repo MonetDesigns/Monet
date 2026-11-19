@@ -967,6 +967,8 @@ fn color_pick(
 ) -> (ColorField, Rc<Cell<Option<Bounds<Pixels>>>>) {
     let popups = f.popups();
     let cmds = f.cmds.clone();
+    // 打开取色器时带上当前选区的 AA 对比上下文（背景色 + 文字判定）。
+    let contrast = f.contrast();
     // 跨帧稳定探针：色块每帧重建，cell 必须按 trigger 存活，否则点下去那一帧量不到顶部。
     let hit = crate::popovers::window_trigger_top(&trigger);
     let anchor_key = trigger.clone();
@@ -1012,7 +1014,7 @@ fn color_pick(
         // Synchronous request, no detached async `spawn` and no root-Entity guard: the old
         // `cx.spawn(...).detach()` delayed the picker by a frame and could be dropped entirely.
         open_detached_with(popups.clone(), trigger.clone(), Some(top), cx, |anchor, cx| {
-            crate::popovers::WindowState::color(cx, anchor, current, picker, on_pick, cmds.clone())
+            crate::popovers::WindowState::color(cx, anchor, current, picker, contrast.clone(), on_pick, cmds.clone())
         });
     });
     (cf, hit)

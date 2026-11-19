@@ -633,6 +633,13 @@ struct ColorState {
     /// Alpha percentage (all models except CSS).
     alpha: Entity<TextField>,
     on_pick: Rc<dyn Fn(Color32, &mut Window, &mut App)>,
+    /// AA 对比度的选区上下文（背景色 + 文字判定），来自 `PanelData::contrast`。
+    contrast: crate::panels::right::data::ContrastContext,
+    /// 用户选的分类（`None` = 跟随 auto 判定）与等级；Rc<RefCell> 让菜单回调用 &App 也能改。
+    aa_category: std::rc::Rc<std::cell::RefCell<Option<figcraft_color::ContrastCategory>>>,
+    aa_level: std::rc::Rc<std::cell::RefCell<figcraft_color::ContrastLevel>>,
+    /// AA 对比度设置下拉的锚点矩形（`Some` = 本帧显示菜单）。
+    aa_anchor: std::rc::Rc<std::cell::RefCell<Option<Bounds<Pixels>>>>,
 }
 
 /// 渐变断点行里的通用输入控件：位置百分比 + 通用颜色行（Hex + 透明度）。
@@ -2350,6 +2357,7 @@ impl WindowState {
         origin: Point<Pixels>,
         current: Color32,
         paint: Option<PaintPicker>,
+        contrast: crate::panels::right::data::ContrastContext,
         on_pick: Rc<dyn Fn(Color32, &mut Window, &mut App)>,
         cmds: Cmds,
     ) -> Self {
@@ -2515,6 +2523,10 @@ impl WindowState {
             fields,
             alpha,
             on_pick: pick,
+            contrast,
+            aa_category: std::rc::Rc::new(std::cell::RefCell::new(None)),
+            aa_level: std::rc::Rc::new(std::cell::RefCell::new(figcraft_color::ContrastLevel::AA)),
+            aa_anchor: std::rc::Rc::new(std::cell::RefCell::new(None)),
         });
         // 卡片高度按面板实际内容算（见 `color_card_height`），`render` 每帧会再同步一次，
         // 所以纯色 ↔ 渐变、色板行数变化时卡片会自己长/缩。
@@ -2529,10 +2541,11 @@ impl WindowState {
         origin: Point<Pixels>,
         current: Color32,
         paint: Option<PaintPicker>,
+        contrast: crate::panels::right::data::ContrastContext,
         on_pick: Rc<dyn Fn(Color32, &mut Window, &mut App)>,
         cmds: Cmds,
     ) -> Self {
-        let mut w = Self::color(cx, origin, current, paint, on_pick, cmds);
+        let mut w = Self::color(cx, origin, current, paint, contrast, on_pick, cmds);
         if let Some(c) = w.color.as_mut() {
             c.nested = true;
         }
@@ -2936,6 +2949,17 @@ impl WindowState {
                 pick(hsb_color(h, s, v).with_alpha(a), window, cx);
             }
         };
+        // ── AA 对比度：类别/等级来自 ColorState，背景来自选区快照，白线是达标边界 ──────
+        let aa_category_val = c.aa_category.borrow().unwrap_or(c.contrast.auto_category);
+        let aa_level_val = *c.aa_level.borrow();
+        let aa_min = figcraft_color::minimum(aa_category_val, aa_level_val);
+        let aa_fg = picker_color(current);
+        let aa_bg = c.contrast.bg;
+        let aa_ratio = figcraft_color::contrast_ratio(aa_fg, aa_bg);
+        let aa_pass = aa_min.is_some_and(|m| aa_ratio >= m);
+        // graphics 无 AAA → 无线；否则反解亮/暗两侧边界，供 SV canvas 画连续白线。
+        let aa_boundary = aa_min.map(|m| figcraft_color::boundary_line(aa_bg, m, hue));
+        let aa_boundary_paint = aa_boundary.clone();
         let hue_c = hsb_color(hue, 1.0, 1.0);
         let sv_drag = c.sv_drag.clone();
         let sv_drag_down = sv_drag.clone();
@@ -2973,6 +2997,23 @@ impl WindowState {
                                     bounds,
                                     gpui::linear_gradient(180.0, gpui::linear_color_stop(clear, 0.0), gpui::linear_color_stop(black, 1.0)),
                                 ));
+                                // AA 达标边界白线：一条连续 stroke 折线（lyon 自动补 join + 抗锯齿）。
+                                if let Some((lighter, darker)) = &aa_boundary_paint {
+                                    let bx = f32::from(bounds.origin.x);
+                                    let by = f32::from(bounds.origin.y);
+                                    let bw = f32::from(bounds.size.width);
+                                    let bh = f32::from(bounds.size.height);
+                                    let sc = rgba(Color32::from_rgba_unmultiplied(255, 255, 255, 217));
+                                    for l in [lighter, darker] {
+                                        if l.len() < 2 { continue; }
+                                        let mut b = gpui::PathBuilder::stroke(px(1.25));
+                                        for (i, pt) in l.iter().enumerate() {
+                                            let p = point(px(bx + pt.s * bw), px(by + (1.0 - pt.v) * bh));
+                                            if i == 0 { b.move_to(p); } else { b.line_to(p); }
+                                        }
+                                        if let Ok(path) = b.build() { window.paint_path(path, sc); }
+                                    }
+                                }
                                 // 拖动监听必须挂在窗口级：指针一旦移出色域方块就收不到元素的
                                 // move，手柄会卡住（用户实测「手柄拖不动 / 放不下」）。
                                 {
@@ -3165,41 +3206,128 @@ impl WindowState {
             .child(grid)
             .child(div().h(pt(12.0)));
 
-        // ⑥ 对比度行：Figma `color_contrast_info` 的圆片 + 比值（比的是当前色对本页画布底色）。
-        let ratio = contrast_ratio(current.with_alpha(255), t.canvas);
+        // ⑥ 对比度行：Figma `color_contrast_info` 的圆片 + 比值 + AA 圆标 + 设置下拉。
+        //    对比基准是选区快照里的真实背景（父级纯色 fill / 页面背景），不是画布默认色。
+        let ratio_label = format!("{aa_ratio:.2} : 1");
+        let bg_dot = aa_bg;
+        let ratio_canvas = gpui::canvas(
+            |_, _, _| {},
+            move |bounds, _, window, _| {
+                let r = f32::from(bounds.size.width).min(f32::from(bounds.size.height)) * 0.5;
+                let cx = f32::from(bounds.origin.x) + r;
+                let cy = f32::from(bounds.origin.y) + r;
+                let bg_rgba = rgba(crate::widgets::swatch::color32(bg_dot.with_alpha(1.0)));
+                window.paint_quad(gpui::fill(
+                    Bounds { origin: point(px(cx - r), px(cy - r)), size: size(px(r), px(2.0 * r)) }, bg_rgba,
+                ));
+                window.paint_quad(gpui::fill(
+                    Bounds { origin: point(px(cx), px(cy - r)), size: size(px(r), px(2.0 * r)) }, rgba(Color32::WHITE),
+                ));
+            },
+        )
+        .size(pt(14.0));
+
+        // AA 圆标：未达标带斜杠，点击取白线上最近达标色并应用（复用取色器现有 pick）。
+        let aa_pick = pick.clone();
+        let aa_candidate = if !aa_pass { aa_min.and_then(|m| figcraft_color::autocorrect_candidate(aa_fg, aa_bg, m, hue)) } else { None };
+        let mut aa_trigger = div()
+            .h(pt(20.0))
+            .px(pt(6.0))
+            .rounded(pt(4.0))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(pt(4.0))
+            .bg(rgba(if aa_pass { t.field } else { t.hover }))
+            .hover(|s| s.bg(rgba(t.selected_row)))
+            .cursor_pointer()
+            .child(
+                div()
+                    .size(pt(12.0))
+                    .rounded_full()
+                    .border_1()
+                    .border_color(rgba(if aa_pass { t.text } else { t.text_secondary }))
+                    .flex().items_center().justify_center()
+                    .child(if aa_pass { "✓" } else { "/" }),
+            )
+            .child(div().text_size(pt(11.0)).text_color(rgba(t.text)).child("AA"));
+        if let Some(cand) = aa_candidate {
+            aa_trigger = aa_trigger.on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                let [r, g, b, a] = cand.to_rgba8();
+                aa_pick(Color32::from_rgba_unmultiplied(r, g, b, a), window, cx);
+            });
+        }
+
+        // 设置图标：点开 AA 分类/等级下拉（走本浮层自己的 overlays 通道）。
+        let aa_anchor = c.aa_anchor.clone();
+        let aa_wake = self.cmds.clone();
+        let settings_trigger = div()
+            .size(pt(20.0)).rounded(pt(4.0)).flex().items_center().justify_center()
+            .cursor_pointer().hover(|s| s.bg(rgba(t.hover)))
+            .child(crate::widgets::icon::paint(Icon::Settings, rgba(t.text), 12.0))
+            .on_mouse_down(MouseButton::Left, {
+                let store = aa_anchor.clone();
+                let wake = aa_wake.clone();
+                move |e, _, _| {
+                    *store.borrow_mut() = Some(Bounds { origin: e.position, size: size(px(20.0), px(20.0)) });
+                    wake.wake();
+                }
+            });
+
         let contrast_row = div()
             .w(pt(PANEL_W))
             .h(pt(48.0))
             .px(pt(8.0))
             .flex()
             .items_center()
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(pt(5.0))
-                    .child(
-                        div()
-                            .relative()
-                            .w(pt(14.0))
-                            .h(pt(14.0))
-                            .rounded_full()
-                            .overflow_hidden()
-                            .bg(rgba(t.canvas))
-                            .border_1()
-                            .border_color(rgba(Color32::from_black_alpha(38)))
-                            .child(div().absolute().right_0().top_0().w(pt(7.0)).h(pt(14.0)).bg(rgba(current.with_alpha(255)))),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .text_size(pt(11.0))
-                            .text_color(rgba(t.text))
-                            .child(format!("{ratio:.2}"))
-                            .child(div().text_color(rgba(t.text_secondary)).child(": 1")),
-                    ),
-            );
+            .gap(pt(6.0))
+            .child(div().size(pt(14.0)).child(ratio_canvas))
+            .child(div().flex_1().text_size(pt(11.0)).text_color(rgba(t.text)).child(ratio_label))
+            .child(aa_trigger)
+            .child(settings_trigger);
+
+        // AA 设置下拉：若本帧锚点为 Some，构造分类 4 项 + 等级 2 项菜单推到浮层 overlays。
+        if let Some(rect) = *aa_anchor.borrow() {
+            let cat = c.aa_category.clone();
+            let lvl = c.aa_level.clone();
+            let anchor_close = aa_anchor.clone();
+            let wake2 = self.cmds.clone();
+            let auto_label: SharedString = format!("自动（{}）", aa_category_label(c.contrast.auto_category)).into();
+            let large_label: SharedString = tr("大文本").into();
+            let normal_label: SharedString = tr("普通文本").into();
+            let graphics_label: SharedString = tr("图形").into();
+            let aa_label: SharedString = format!("AA · Essential ({:.1} : 1)", aa_min.unwrap_or(3.0)).into();
+            let aaa_label: SharedString = tr("AAA · 仅限文本").into();
+            let row_auto = auto_label.clone(); let row_large = large_label.clone(); let row_normal = normal_label.clone();
+            let row_graphics = graphics_label.clone(); let row_aa = aa_label.clone(); let row_aaa = aaa_label.clone();
+            let has_aaa = figcraft_color::minimum(aa_category_val, figcraft_color::ContrastLevel::AAA).is_some();
+            let on_pick_menu = Rc::new(move |picked: &str, _w: &mut Window, _cx: &mut App| {
+                if picked == aaa_label.as_ref() && !has_aaa { *anchor_close.borrow_mut() = None; wake2.wake(); return; }
+                if picked == auto_label.as_ref() { *cat.borrow_mut() = None; }
+                else if picked == large_label.as_ref() { *cat.borrow_mut() = Some(figcraft_color::ContrastCategory::LargeText); }
+                else if picked == normal_label.as_ref() { *cat.borrow_mut() = Some(figcraft_color::ContrastCategory::NormalText); }
+                else if picked == graphics_label.as_ref() { *cat.borrow_mut() = Some(figcraft_color::ContrastCategory::Graphics); }
+                else if picked == aa_label.as_ref() { *lvl.borrow_mut() = figcraft_color::ContrastLevel::AA; }
+                else if picked == aaa_label.as_ref() { *lvl.borrow_mut() = figcraft_color::ContrastLevel::AAA; }
+                *anchor_close.borrow_mut() = None;
+                wake2.wake();
+            });
+            let anchor_dismiss = aa_anchor.clone();
+            let wake3 = self.cmds.clone();
+            let dismiss = Rc::new(move |_: &mut Window, _: &mut App| { *anchor_dismiss.borrow_mut() = None; wake3.wake(); });
+            let sel_cat = *c.aa_category.borrow();
+            let sel_lvl = *c.aa_level.borrow();
+            let rows = vec![
+                MenuRow { label: row_auto, trail: None, key: None, checked: Some(sel_cat.is_none()), separator_before: false },
+                MenuRow { label: row_large, trail: None, key: None, checked: Some(sel_cat == Some(figcraft_color::ContrastCategory::LargeText)), separator_before: false },
+                MenuRow { label: row_normal, trail: None, key: None, checked: Some(sel_cat == Some(figcraft_color::ContrastCategory::NormalText)), separator_before: false },
+                MenuRow { label: row_graphics, trail: None, key: None, checked: Some(sel_cat == Some(figcraft_color::ContrastCategory::Graphics)), separator_before: false },
+                MenuRow { label: row_aa, trail: None, key: None, checked: Some(sel_lvl == figcraft_color::ContrastLevel::AA), separator_before: true },
+                MenuRow { label: row_aaa, trail: None, key: None, checked: Some(sel_lvl == figcraft_color::ContrastLevel::AAA), separator_before: false },
+            ];
+            let menu = menu_popup_in(rect, Some(180.0), rows, on_pick_menu, dismiss, 0.0, 0.0);
+            self.overlays.borrow_mut().push(menu);
+        }
 
         // ── 组装（顺序与 Figma 一致：类型条 → 渐变编辑 / 或纯色编辑）
         // 渐变页只保留「类型行 + 预览条 + 断点列表」，不再带色域/色相/透明度/色板，
@@ -4282,7 +4410,7 @@ impl WindowState {
                             format!("style-paint-{sid}-{idx}"),
                             None,
                             cx,
-                            |anchor, cx| Self::color(cx, anchor, current, Some(picker), on_pick, cmds.clone()),
+                            |anchor, cx| Self::color(cx, anchor, current, Some(picker), Default::default(), on_pick, cmds.clone()),
                         );
                     });
                 }
@@ -4362,7 +4490,7 @@ impl WindowState {
                         // 锚点左侧），两个卡片并排而不是一开一关。
                         let top = anchored_top(&anchored_key, window);
                         let anchor = Point { x: pos.x - px(8.0), y: pos.y };
-                        let mut child = Self::color(cx, anchor, current, Some(pick.clone()), on_pick.clone(), open_cmds.clone());
+                        let mut child = Self::color(cx, anchor, current, Some(pick.clone()), Default::default(), on_pick.clone(), open_cmds.clone());
                         child.anchor_to_button_top(top);
                         *slot.borrow_mut() = Some(Box::new(child));
                         open_cmds.wake();
@@ -5879,7 +6007,7 @@ fn open_stop_color(
     };
     let picker = PaintPicker { paint: figcraft_color::Paint::solid(color), on_write: write_back, styles: Vec::new() };
     let on_pick: Rc<dyn Fn(Color32, &mut Window, &mut App)> = Rc::new(|_, _, _| {});
-    let mut child = WindowState::color_nested(cx, at, picker_c32(color), Some(picker), on_pick, cmds.clone());
+    let mut child = WindowState::color_nested(cx, at, picker_c32(color), Some(picker), Default::default(), on_pick, cmds.clone());
     child.anchor_to_button_top(at.y);
     *sub.borrow_mut() = Some(Box::new(child));
     cmds.wake();
@@ -5989,6 +6117,16 @@ fn relative_luminance(c: Color32) -> f32 {
 }
 
 /// 两个不透明色的对比度（1.0 … 21.0）。
+/// Figma 下拉里「自动（图形）」括号内的判定结果文案。
+fn aa_category_label(c: figcraft_color::ContrastCategory) -> &'static str {
+    match c {
+        figcraft_color::ContrastCategory::LargeText => "大文本",
+        figcraft_color::ContrastCategory::NormalText => "普通文本",
+        figcraft_color::ContrastCategory::Graphics => "图形",
+        figcraft_color::ContrastCategory::Mixed => "混合",
+    }
+}
+
 fn contrast_ratio(a: Color32, b: Color32) -> f32 {
     let (la, lb) = (relative_luminance(a), relative_luminance(b));
     let (hi, lo) = if la > lb { (la, lb) } else { (lb, la) };
