@@ -1,5 +1,6 @@
 # yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
-# AI review for pull requests. Install the CodeRabbit app on the repository to activate it.
+# AI review for pull requests. Requires the CodeRabbit GitHub App on this repository
+# (https://github.com/apps/coderabbitai) — the config alone does nothing until it is installed.
 language: en
 early_access: false
 reviews:
@@ -8,12 +9,38 @@ reviews:
   high_level_summary: true
   poem: false
   review_status: true
+  collapse_walkthrough: false
   auto_review:
     enabled: true
     drafts: false
+    # Only auto-review PRs targeting the default branch.
+    base_branches:
+      - main
     # Dependabot bumps are checked by CI; skip CodeRabbit reviews on them.
     ignore_usernames:
       - "dependabot[bot]"
   path_filters:
     - "!**/target/**"
     - "!**/*.svg"
+    - "!**/Cargo.lock"
+  path_instructions:
+    - path: "crates/ui-gpui/**"
+      instructions: |
+        GPUI port of the egui UI layer. `crates/ui-egui` is the 1:1 reference:
+        flag any control that is simplified, dropped, or replaced by a hand-rolled
+        widget instead of being ported faithfully. Files under
+        `crates/ui-gpui/src/widgets/` are frozen shared components — extra scrutiny,
+        they affect every panel.
+    - path: "crates/color/**"
+      instructions: |
+        Colour math (WCAG contrast, CIEDE2000, gradients). Flag magic numbers without a
+        cited reference and any change that would break the existing unit tests.
+  tools:
+    # Rust: run clippy on the changed crates.
+    clippy:
+      enabled: true
+    # Secret scanning on every diff.
+    gitleaks:
+      enabled: true
+chat:
+  auto_reply: true
