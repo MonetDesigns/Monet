@@ -1,0 +1,60 @@
+﻿分类	界面元素	绑定命令	行为备注
+标题栏	Home 标签	—	无文件且无演示时高亮；点击回 Home 并暂停演示
+标题栏	文件标签（每个打开文档）	doc.switch	点击切换；active 高亮、脏圆点、live 标记、断连标签；可拖动重排、拖出脱窗、中键关闭；右键 Open in new window
+标题栏	标签关闭 ×	file.close	脏且非分支时先问；Alt+点击强制关闭；中键同；Cmd+W
+标题栏	新建标签 +	file.new	点击新建并关闭 Home；Cmd+N
+标题栏	演示标签（每个 presentation）	—	点击切到演示；切回保留播放状态
+标题栏	标签溢出菜单 Open files	—	仅标签放不下时出现 chevron，列出未显示文件
+标题栏	演示溢出菜单 Open presentations	—	仅演示标签溢出时出现
+标题栏	主题切换按钮	—	点击切 light/dark；固定宽度
+标题栏	最小化按钮	—	仅自绘标题栏显示
+标题栏	最大化/还原按钮	—	已最大化时图标/提示切为 Restore
+标题栏	关闭窗口按钮	—	悬停变红；有未保存改动时弹 Unsaved changes
+标题栏	标题栏空白拖拽区	—	仅非原生标题栏；双击最大化/还原
+标题栏	窗口边缘/角落缩放条	—	上/下/左/右+四角共 8 区；仅未最大化/全屏
+右键菜单·画布有选择	Copy	edit.copy	镜像剪贴板；命令可用时
+右键菜单·画布有选择	Paste here	edit.paste	粘贴到点击的页面坐标
+右键菜单·画布有选择	Paste to replace	edit.pasteReplace
+右键菜单·画布有选择	Copy as > Copy as CSS	edit.copyAsCss	子菜单
+右键菜单·画布有选择	Copy as > Copy as SVG	edit.copyAsSvg	子菜单
+右键菜单·画布有选择	Copy as > Copy as PNG	edit.copyAsPng	子菜单
+右键菜单·画布有选择	Copy as > Copy link to selection	edit.copyLink	子菜单
+右键菜单·画布有选择	Bring to front	arrange.front
+右键菜单·画布有选择	Bring forward	arrange.forward
+右键菜单·画布有选择	Send backward	arrange.backward
+右键菜单·画布有选择	Send to back	arrange.back
+右键菜单·画布有选择	Group selection	object.group
+右键菜单·画布有选择	Frame selection	object.frameSelection
+右键菜单·画布有选择	Wrap in new section	object.wrapInSection	UI 命令
+右键菜单·画布有选择	Ungroup	object.ungroup
+右键菜单·画布有选择	Flatten	vector.flatten
+右键菜单·画布有选择	Outline stroke	vector.outlineStroke
+右键菜单·画布有选择	Use as mask	object.mask
+右键菜单·画布有选择	Crop image	image.crop	动态插入：仅单选且该层有 image fill
+右键菜单·画布有选择	Add auto layout	layout.add
+右键菜单·画布有选择	Remove all auto layout	layout.removeAll	UI 命令
+右键菜单·画布有选择	Combine as variants	component.combineVariants	动态插入：2+ 主组件才显示
+右键菜单·画布有选择	Create component	component.create	选中全为 Instance 时被替换为 Go to main component
+右键菜单·画布有选择	Go to main component	component.goToMain	动态替换项
+右键菜单·画布有选择	Detach instance	component.detach
+右键菜单·画布有选择	Show/Hide	object.toggleVisible
+右键菜单·画布有选择	Lock/Unlock	object.toggleLock
+右键菜单·画布有选择	Show/Hide section contents	section.toggleContents	动态插入：选中含 Section
+右键菜单·画布有选择	Convert to frame	object.convertToFrame	动态插入：选中全为 Section
+右键菜单·画布有选择	Convert to section	object.convertToSection	动态插入：选中全为 Frame
+右键菜单·画布有选择	Flip horizontal	object.flipH
+右键菜单·画布有选择	Flip vertical	object.flipV
+右键菜单·画布有选择	Delete	edit.delete
+右键菜单·画布无选择	Remove guide	guide.remove	动态：无选择且选中了参考线时插到最前
+右键菜单·画布无选择	Paste here	edit.paste	粘贴到点击坐标
+右键菜单·画布无选择	Select all	select.all
+右键菜单·画布无选择	Show/Hide UI	view.toggleUi
+右键菜单·画布无选择	Zoom to fit	view.zoomFit
+右键菜单·画布无选择	Rulers	view.rulers
+右键菜单·画布无选择	Pixel grid	view.pixelGrid
+右键菜单·画布	Select layer >（动态层列表）	select.set	仅指针下≥2 图层时显示；列出命中层最多 40，锁定带锁、选中打勾、嵌套缩进
+右键菜单·图层面板行	（复用画布有选择菜单）	—	行右键→context_menu；多选只带自身
+右键菜单·页面行	Rename page	page.rename	Dev Mode 拒
+右键菜单·页面行	Duplicate page	page.duplicate	Dev Mode 拒
+右键菜单·页面行	Set as opening page	page.setOpening	非分隔页才显示；Dev Mode 拒
+右键菜单·页面行	Delete page	page.delete	无确认，Undo 可恢复；Dev Mode 拒

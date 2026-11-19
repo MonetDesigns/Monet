@@ -205,6 +205,7 @@ fn tool_keys_come_from_the_keymap() {
     assert_eq!(ToolId::Section.shortcut(), "Shift+S");
     assert_eq!(ToolId::Eyedropper.shortcut(), "I");
     assert_eq!(ToolId::Polygon.shortcut(), "");
+    assert_eq!(ToolId::Annotation.shortcut(), "Shift+T");
     assert_eq!(crate::catalog::shortcut("tool.text"), Some("T"));
 }
 

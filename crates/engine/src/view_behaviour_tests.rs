@@ -131,7 +131,7 @@ fn zoom_to_fit_selection_and_frames() {
     // (command, selection before, zoom, centre, selection after, derivation)
     let rows: Vec<(&str, Vec<NodeId>, f64, (f64, f64), Vec<NodeId>, &str)> = vec![
         ("view.zoomFit", vec![], fit(content), (470.0, 300.0), vec![], "Shift+1 fits everything on the page into the view"),
-        ("view.zoomSelection", vec![r], fit(Rect::new(0.0, 0.0, 40.0, 40.0)), (920.0, 20.0), vec![r], "Shift+2 zooms to the selection"),
+        ("view.zoomSelection", vec![r], 18.0, (920.0, 20.0), vec![r], "Shift+2 zooms to the selection (40 pt margin, #2152)"),
         (
             "view.nextFrame",
             vec![],

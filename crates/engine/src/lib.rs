@@ -78,6 +78,7 @@ pub use selection::rename;
 pub use selection::selection_colors;
 pub use selection::selection_reorder;
 pub use selection::selection_spacing;
+pub use selection::tidy;
 pub use sharing::agent;
 pub use sharing::background;
 pub use sharing::branches;
@@ -671,3 +672,7 @@ mod widgets_tests;
 mod selection_reorder_tests;
 #[cfg(test)]
 mod selection_spacing_tests;
+#[cfg(test)]
+mod tidy_tests;
+#[cfg(test)]
+mod page_view_tests;

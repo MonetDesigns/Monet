@@ -1,0 +1,89 @@
+﻿分类	界面元素	绑定命令	行为备注
+菜单·File	New design file	file.new	主菜单常规项；命令未注册或不可用时置灰；Dev Mode 下拒绝执行；Cmd+N
+菜单·File	New board	file.newBoard	置灰；Dev Mode 拒；无快捷键
+菜单·File	New from template…	file.newFromTemplate	Monet 自有项；置灰；Dev Mode 拒
+菜单·File	New window	window.new	浏览器单窗口(embed_viewports)时置灰；无快捷键
+菜单·File	Open…	file.open	UI 命令；打开文件对话框；置灰；Dev Mode 拒；Cmd+O
+菜单·File	Import from file…	file.import	UI 命令；导入对话框；置灰；Dev Mode 拒；Shift+Cmd+I
+菜单·File	Place image…	file.placeImage	UI 命令；图片导入；置灰；Dev Mode 拒；Shift+Cmd+K
+菜单·File	Save	file.save	UI 命令；置灰；Dev Mode 拒；Cmd+S
+菜单·File	Save as…	file.saveAs	UI 命令；另存对话框；置灰；Dev Mode 拒；Shift+Cmd+S
+菜单·File	Save to version history…	file.saveVersion	打开保存版本表单；置灰；Dev Mode 拒；Alt+Cmd+S
+菜单·File	Show version history	file.versionHistory	置灰；Dev Mode 拒
+菜单·File	Create branch…	branch.create	打开建分支表单；置灰；Dev Mode 拒
+菜单·File	Join live session…	collab.join	打开发布/加入对话框；置灰；Dev Mode 拒
+菜单·File	Publish to server…	collab.publish	预填服务器地址；置灰；Dev Mode 拒
+菜单·File	Export…	file.export	UI 命令；打开导出预览；置灰；Dev Mode 拒；Shift+Cmd+E
+菜单·File	Export frames to PDF…	file.exportFramesPdf	保存对话框/下载；置灰；Dev Mode 拒
+菜单·File	Export selection as SVG…	file.exportSvg	UI 命令；打开导出预览；置灰；Dev Mode 拒
+菜单·File	Duplicate	file.duplicate	置灰；Dev Mode 拒
+菜单·File	Rename	file.rename	切到左面板 File 页并进入重命名；置灰；Dev Mode 拒
+菜单·File	Color profile…	file.colorProfile	置灰；Dev Mode 拒
+菜单·File	Revert to saved	file.revert	Dev Mode 恒拒；置灰
+菜单·File	Close tab	file.close	脏且非分支时先问是否保存；置灰；Dev Mode 拒；Cmd+W
+菜单·File	Open recent	file.openRecent	不渲染普通项，改为动态子菜单列最近文件；文件已不存在者置灰；含 Clear recent（空时置灰）
+菜单·Edit	Undo	edit.undo	置灰；Dev Mode 拒；Cmd+Z
+菜单·Edit	Redo	edit.redo	置灰；Dev Mode 拒；Shift+Cmd+Z
+菜单·Edit > Copy as	Copy as text	edit.copyAsText	UI 命令；复制文本层字符；置灰；Dev Mode 拒
+菜单·Edit > Copy as	Copy as CSS	edit.copyAsCss	UI 命令；代码生成 CSS；置灰；Dev Mode 拒
+菜单·Edit > Copy as	Copy as SVG	edit.copyAsSvg	UI 命令；导出 SVG；置灰；Dev Mode 拒
+菜单·Edit > Copy as	Copy as PNG	edit.copyAsPng	UI 命令；复制 PNG 并转 sRGB；置灰；Dev Mode 拒；Shift+Cmd+C
+菜单·Edit > Copy as	Copy link to selection	edit.copyLink	UI 命令；仅首个选中层复制 figcraft://node/<id>；置灰；Dev Mode 拒
+菜单·Edit	Cut	edit.cut	镜像系统剪贴板（含矢量局部点/段）；置灰；Dev Mode 拒；Cmd+X
+菜单·Edit	Copy	edit.copy	属性行高亮时复制高亮 paint/effect，否则镜像剪贴板；置灰；Dev Mode 拒；Cmd+C
+菜单·Edit	Paste	edit.paste	粘贴到当前页；置灰；Dev Mode 拒；Cmd+V
+菜单·Edit	Paste over selection	edit.pasteOver	置灰；Dev Mode 拒；Shift+Cmd+V
+菜单·Edit	Paste to replace	edit.pasteReplace	置灰；Dev Mode 拒；Shift+Cmd+R
+菜单·Edit	Duplicate	edit.duplicate	置灰；Dev Mode 拒；Cmd+D
+菜单·Edit	Delete	edit.delete	Prototype 交互优先删交互；Pages 列表聚焦且无选择时删当前页；否则删层；置灰；Dev Mode 拒；Delete
+菜单·Edit	Find and replace…	edit.findReplace	打开查找替换条；置灰；Dev Mode 拒；Cmd+F
+菜单·Edit	Copy properties	edit.copyProperties	成功 toast「Properties copied」；置灰；Dev Mode 拒；Alt+Cmd+C
+菜单·Edit	Paste properties	edit.pasteProperties	置灰；Dev Mode 拒；Alt+Cmd+V
+菜单·Edit	Pick color	edit.pickColor	取色器；置灰；Dev Mode 拒；I
+菜单·Edit	Set default properties	edit.setDefaultProperties	置灰；Dev Mode 拒
+菜单·Edit	Select all	select.all	置灰；Dev Mode 拒；Cmd+A
+菜单·Edit	Select matching layers	select.matching	置灰；Dev Mode 拒；Alt+Cmd+A
+菜单·Edit	Select none	select.none	置灰；Dev Mode 拒；Escape
+菜单·Edit	Select inverse	select.inverse	置灰；Dev Mode 拒；Shift+Cmd+A
+菜单·Edit > Select all with same	Fill	select.sameFill	置灰；Dev Mode 拒
+菜单·Edit > Select all with same	Stroke	select.sameStroke	置灰；Dev Mode 拒
+菜单·Edit > Select all with same	Effect	select.sameEffect	置灰；Dev Mode 拒
+菜单·Edit > Select all with same	Text properties	select.sameText	置灰；Dev Mode 拒
+菜单·Edit > Select all with same	Font	select.sameFont	置灰；Dev Mode 拒
+菜单·Edit > Select all with same	Instance	select.sameInstance	置灰；Dev Mode 拒
+菜单·Edit > Select all with same	Properties	select.sameProperties	置灰；Dev Mode 拒
+菜单·View	Pixel grid	view.pixelGrid	切换态打勾；缩放≥400% 才可见；Shift+' / Cmd+'
+菜单·View	Layout grids	view.layoutGrids	打勾；层有可见 grid 时画；Shift+G / Ctrl+G
+菜单·View	Rulers	view.rulers	打勾；显示上/左标尺；Shift+R
+菜单·View	Slices	view.slices	打勾；画 slice 轮廓
+菜单·View	Comments	view.comments	打勾；显示评论钉；Shift+C
+菜单·View	Multiplayer cursors	view.multiplayerCursors	打勾；Alt+Cmd+\
+菜单·View > Outlines	Show outlines	view.outlines	打勾；Shift+Cmd+O
+菜单·View > Outlines	Show outlines for selection	view.outlinesSelection	打勾
+菜单·View > Outlines	Include hidden layers	view.outlinesHiddenLayers	打勾
+菜单·View > Outlines	Include object bounds	view.outlinesObjectBounds	打勾
+菜单·View	Pixel preview	view.pixelPreview	打勾（独立字段 pixel_preview）；Ctrl+P
+菜单·View	Mask outlines	view.maskOutlines	打勾
+菜单·View	Frame outlines	view.frameOutlines	打勾
+菜单·View	Soft-proof sRGB	view.proofSrgb	打勾；Monet 自有（不计 parity）
+菜单·View > Panels	Show/Hide UI	view.toggleUi	不勾选；隐藏全部界面；Cmd+\
+菜单·View	Full screen	view.fullscreen	不勾选；Ctrl+Cmd+F（Win: F11）
+菜单·View > Panels	Reset panel widths	view.panelWidths	不勾选
+菜单·View > Panels	Layers	view.layers	不勾选；Alt+1
+菜单·View > Panels	Assets	view.assets	不勾选；Alt+2
+菜单·View > Panels	Design	view.design	不勾选；Alt+8
+菜单·View > Panels	Prototype	view.prototype	不勾选；Alt+9
+菜单·View	Zoom in	view.zoomIn	Cmd+= / =
+菜单·View	Zoom out	view.zoomOut	Cmd+-
+菜单·View	Zoom to 100%	view.zoom100	Shift+0 / Cmd+0
+菜单·View	Zoom to 50%	view.zoom50
+菜单·View	Zoom to 200%	view.zoom200
+菜单·View	Zoom to fit	view.zoomFit	Shift+1
+菜单·View	Zoom to selection	view.zoomSelection	Shift+2；避开底部浮动工具栏
+菜单·View	Zoom to previous frame	view.prevFrame	Shift+N / Home
+菜单·View	Zoom to next frame	view.nextFrame	N / End
+菜单·View	Previous page	view.prevPage	PageUp；回到该页上次视图
+菜单·View	Next page	view.nextPage	PageDown；回到该页上次视图
+菜单·View > Theme	Light	view.themeLight	单选组；命令态切换，无勾选标记
+菜单·View > Theme	Dark	view.themeDark	单选组
+菜单·View > Theme	Follow system	view.themeSystem	单选组

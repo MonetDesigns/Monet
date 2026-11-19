@@ -63,7 +63,11 @@ fn polygon_and_star_handles() {
     let doc = s.doc().unwrap().clone();
     let hs = handles(&doc, &[star], 1.0);
     let kinds: Vec<ShapeHandle> = hs.iter().map(|h| h.0).collect();
-    assert_eq!(kinds, vec![ShapeHandle::Radius { corner: 0 }, ShapeHandle::Ratio], "a star has a radius and a ratio handle");
+    assert_eq!(
+        kinds,
+        vec![ShapeHandle::Radius { corner: 0 }, ShapeHandle::Ratio, ShapeHandle::Count],
+        "a star has a radius, a ratio and a point-count handle (#2152)"
+    );
     // The ratio handle sits on the first inner point; dragging it to the centre's side shrinks it.
     let ratio_at = hs[1].1;
     let inner = figcraft_geom::star_points(200.0, 200.0, 5, 0.38)[1];
@@ -78,7 +82,14 @@ fn polygon_and_star_handles() {
     assert!(radii(&s, star)[0] > 1.0, "the star's points round");
     let mut s = Session::new();
     let poly = create(&mut s, "shape.polygon", json!({"x": 0, "y": 0, "width": 200, "height": 200}));
-    assert_eq!(handles(s.doc().unwrap(), &[poly], 1.0).len(), 1, "a polygon has one radius handle");
+    let ph = handles(s.doc().unwrap(), &[poly], 1.0);
+    assert_eq!(ph.len(), 2, "a polygon has a radius and a point-count handle");
+    assert_eq!(ph[1].0, ShapeHandle::Count);
+    // The Count handle reads the pointer's angle about the centre: 60° clockwise from the top is 6.
+    let at = ph[1].1;
+    drag(&mut s, (at[0], at[1]), (100.0 + 86.60254, 100.0 - 50.0), false);
+    let NodeKind::Polygon { count } = s.doc().unwrap().node(poly).unwrap().kind else { panic!("polygon") };
+    assert_eq!(count, 6, "the count follows the drag: {count}");
 }
 
 #[test]

@@ -1,0 +1,186 @@
+﻿分类	界面元素	绑定命令	行为备注
+左面板·图标栏	Main menu button	—	最左侧细栏顶部 logo；点击切换主菜单弹层
+左面板·图标栏	File tab	—	切文件/图层；点击已激活项收起侧栏
+左面板·图标栏	Assets tab	—	切资产面板
+左面板·图标栏	Variables tab	—	打开变量编辑器
+左面板·文件头	File name rename field	file.rename	仅 File tab；就地重命名
+左面板·文件头	Drafts label	—	仅 File tab 静态标签
+左面板·文件头	Minimize button	view.minimize	收起导航/左右侧栏
+左面板·Pages	Pages header toggle	—	展开/折叠页面列表
+左面板·Pages	Search pages button	—	打开页面搜索并强制展开
+左面板·Pages	Add new page button	page.add	Dev Mode 拒绝
+左面板·Pages	Page search field	—	过滤页面；Esc 清空并关闭
+左面板·Pages	Page row	page.select	单击打开；Dev Mode 只允许打开
+左面板·Pages	Page divider row	—	不可打开、不接受拖放、不能设为起始页
+左面板·Pages	Context: Rename page	page.rename	双击或右键；Dev Mode 拒绝
+左面板·Pages	Context: Duplicate page	page.duplicate	Dev Mode 拒绝
+左面板·Pages	Context: Set as opening page	page.setOpening	非分隔行；Dev Mode 拒绝
+左面板·Pages	Context: Delete page	page.delete	无确认，Undo 可恢复；Dev Mode 拒绝
+左面板·Pages	Page row drag reorder	page.move	Dev Mode 拒绝
+左面板·Pages	Layers dropped onto a page	object.moveToPage	拖到页面行
+左面板·Layers	Layers header label	—	标题 Layers
+左面板·Layers	Search layers button	—	打开图层搜索
+左面板·Layers	Layers search field	—	按名过滤，扁平列出，最多 5000 行
+左面板·Layers	Layer row	select.set	单击选中；Shift 连续；Cmd 切换；Dev Mode 仅选中/展开
+左面板·Layers	Expand/collapse triangle	—	有子层时；Alt 点击展开/折叠全部子孙
+左面板·Layers	Row eye (visibility)	object.toggleVisible	悬停或已隐藏时显示；可拖动批量 sweep
+左面板·Layers	Row padlock (lock)	object.toggleLock	悬停或已锁定时显示；父层锁定则失效
+左面板·Layers	Eye/padlock drag sweep	object.toggleVisible / object.toggleLock	拖过多行一次性提交（单个撤销步）
+左面板·Layers	Layer row double-click (name)	object.rename	进入重命名；Dev Mode 拒绝
+左面板·Layers	Layer row double-click (icon)	view.zoomSelection	缩放并选中该层
+左面板·Layers	Layer drag reparent/reorder	node.reparent	zone=0 入容器，±1 排序；Dev Mode 拒绝
+左面板·Layers	Layers empty space click	select.none	清除选择
+左面板·Layers	Layers arrow-key navigation	select.set	↑↓ 选行、Shift 扩展、←/→ 折叠展开
+左面板·Layers	Empty list hint	—	无过滤：Add a frame (F)…；有过滤：No matching layers
+左面板·Layers	Row context menu trigger	—	右键选中行并打开全局 context menu
+左面板·Assets	Assets header	—	标题 Assets
+左面板·Assets	Search row	—	过滤本地及库组件/样式
+左面板·Assets	Updates banner	library.acceptUpdates	updates>0 时出现
+左面板·Assets	Local components title + folders	—	无组件时提示创建快捷键
+左面板·Assets	Component tile click	instance.place	放置到页面视图中心
+左面板·Assets	Component tile drag-out	instance.place / library.place	本地/库组件
+左面板·Assets	Component tile swap-at	instance.swapAt / library.swapAt	拖到已有实例上替换
+左面板·Assets	Component hide-when-publishing	component.hideWhenPublishing	悬停切换；Dev Mode 拒绝
+左面板·Assets	Local styles title + style rows	style.apply / library.applyStyle	单击应用
+左面板·Assets	Style swap-at	library.swapAt	库样式拖到已有样式上替换
+左面板·Assets	Library section fold title	—	折叠/展开每个启用库
+左面板·Assets	Libraries button	—	进入 libraries_view
+左面板·Assets	Libraries view back button	—	返回 Assets
+左面板·Assets	This file publish form	library.publish / library.publishToServer	本地/服务器发布
+左面板·Assets	Publish form groups (Components/Styles/Variable collections)	—	三个分组复选
+左面板·Assets	Libraries in this file	library.add / remove / swap / check / usage	库管理行及菜单
+左面板·Assets	Add library file button	library.add	选 .figcraft 文件
+左面板·版本历史	Version history header	—	标题 Version history
+左面板·版本历史	Close button	version.exitPreview	关闭并退出预览
+左面板·版本历史	Save version (+) button	—	打开保存表单；Alt+Cmd+S
+左面板·版本历史	Save/Create submit	file.saveVersion / version.rename / branch.create	依表单类型
+左面板·版本历史	Branches section Create branch	—	section header + 打开分支表单
+左面板·版本历史	Branch row click	branch.open
+左面板·版本历史	Branch menu: Open	branch.open
+左面板·版本历史	Branch menu: Review and merge	—	打开 branch_ui
+左面板·版本历史	Branch menu: Archive	branch.archive	仅 Active 分支
+左面板·版本历史	Current row exit preview	version.exitPreview	预览某版本时显示
+左面板·版本历史	Autosave group row	—	连续≥2 个自动保存折叠，可展开
+左面板·版本历史	Version row click	version.preview	单击预览，双击进入编辑
+左面板·版本历史	Version menu: Restore this version	version.restore	
+左面板·版本历史	Version menu: Rename	version.rename
+左面板·版本历史	Version menu: Duplicate	version.duplicate	新标签页打开
+左面板·版本历史	Version menu: Delete	version.delete	二次确认
+左面板·版本历史	Empty state hint	—	No saved versions yet...
+左面板·版本历史	Preview banner	version.restore / version.exitPreview	画布横幅 Restore 与 Back
+左面板·快捷键	Keyboard shortcuts window	help.shortcuts	app.ui.shortcuts_panel
+左面板·快捷键	Group tab strip	—	按 keymap Group 分组
+左面板·快捷键	Search shortcuts field	—	跨组按语言/英文搜索
+左面板·快捷键	Shortcut rows (keycaps)	—	只读展示，不触发命令
+右面板·顶栏	Share button	—	打开 live share popover
+右面板·顶栏	Play (present) button	proto.present	三角区点击演示
+右面板·顶栏	Play menu: Present	proto.present
+右面板·顶栏	Play menu: Preview / Close preview	proto.preview / proto.closePreview	依 ui.preview 切换
+右面板·顶栏	People bar	—	实时会话协作者头像
+右面板·顶栏	Design tab	—	切 Design；Frame 工具时显示预设面板
+右面板·顶栏	Prototype tab	—	切 Prototype；切换时 open_editor(None)
+右面板·顶栏	Zoom combo	—	显示当前缩放百分比
+右面板·顶栏	Zoom menu: Zoom in/out/fit/50/100/200/selection	view.zoomIn / view.zoomOut / view.zoomFit / view.zoom50 / view.zoom100 / view.zoom200 / view.zoomSelection
+右面板·顶栏	Zoom menu: Pixel preview 1x/2x	view.pixelPreview	复选项
+右面板·顶栏	Zoom menu: Pixel grid / Snap to pixel / Layout grids / Rulers / Outlines	view.pixelGrid / view.snapPixel / view.layoutGrids / view.rulers / view.outlines	复选项
+右面板·顶栏	Comments panel	—	Comment 工具时替代主内容
+右面板·Design 页面区	Page section	—	空选择时显示
+右面板·Design 页面区	Page background field	page.setBackground	色板+hex+不透明度；scrub 合并为一步
+右面板·Design 页面区	Color profile dropdown	—	写 ui.color_profile
+右面板·Design 页面区	Open variables button	—	变量数为 0 时置灰
+右面板·Design 页面区	Local styles list	—	style_picker::local_styles
+右面板·Design 页面区	Page variable modes	variable.setMode / library.setVariableMode	仅多模式集合
+右面板·Design 页面区	Export page as PNG	file.export	页面 Export 段
+右面板·Design 选择头	Selection header type label	—	类型名/复数/Mixed
+右面板·Design 选择头	Type menu: Convert to Frame/Group	object.convertToFrame / object.convertToGroup	仅全为 Frame 或 Group
+右面板·Design 选择头	Swap orientation	frame.swapOrientation	单个 Frame
+右面板·Design 选择头	Fit to contents	object.resizeToFit	单个 Frame
+右面板·Design 选择头	Dev status icon	node.set	has_status 时显示
+右面板·Design 选择头	Frame presets menu in header	node.set	单个 Frame
+右面板·Design 选择头	Create component quick action	component.create / createMultiple / createSet	多选取下拉
+右面板·Design 选择头	Use as mask	object.mask
+右面板·Design 选择头	Boolean groups menu	bool.union / subtract / intersect / exclude	图标显示当前布尔操作
+右面板·Design 选择头	Flatten	vector.flatten	布尔菜单内
+右面板·Design 实例	Instance section header	—	Instance / Nested instance
+右面板·Design 实例	More: Go to main component	component.goToMain	main 存在时
+右面板·Design 实例	More: Push changes to main	component.pushChanges	main 存在时
+右面板·Design 实例	More: Restore main component	component.restoreMain	main 缺失且非嵌套
+右面板·Design 实例	More: Reset all changes	component.resetInstance
+右面板·Design 实例	More: Detach instance	component.detach	非嵌套
+右面板·Design 实例	Detach instance button	component.detach	非嵌套
+右面板·Design 实例	Reset all changes button	component.resetInstance
+右面板·Design 实例	Main component swap dropdown	instance.swap
+右面板·Design 实例	Expose properties to instances	component.exposeInstance	仅嵌套在主组件内的实例
+右面板·Design 实例	Variant/property controls	instance.setProperties	变体/布尔/文本/实例交换
+右面板·Design 实例	Slot fill	instance.setProperties
+右面板·Design 实例	Description field	node.set	组件/组件集
+右面板·Design 实例	Combine as variants	component.combineVariants	多选主组件且可合并
+右面板·Design 实例	Properties header (+)	component.addProperty	Variant/Boolean/Text/Instance swap
+右面板·Design 实例	Variant property name/default/delete/reorder	component.editProperty / deleteProperty
+右面板·Design 实例	Variant value fields + add	component.editProperty / addVariant
+右面板·Design 实例	Shared property name/default/delete	component.editProperty / deleteProperty
+右面板·Design 实例	Preferred components dropdown	component.editProperty	Slot/Instance swap 属性
+右面板·Design 实例	Add variant button	component.addVariant	单个主组件
+右面板·Design 实例	Component property bind rows	node.set
+右面板·Design 实例	Overrides section	component.resetOverride	有 override 组时
+右面板·Design Position	Position section	—
+右面板·Design Position	Alignment 6 buttons	align.left / hcenter / right / top / vcenter / bottom	can_align 控制启用
+右面板·Design Position	Distribute and tidy menu	distribute.horizontal / vertical / arrange.tidy	选中>2 层时出现该图标按钮；菜单含 Distribute H / Distribute V / Tidy up；Tidy 项与 Arrange 菜单同一套 can_tidy 约束（3~2000 层、成行/列/网格、不在 auto layout 流里），不满足时点了不生效
+右面板·Design Position	Position X field	node.set (x)	多选混合值相对编辑
+右面板·Design Position	Position Y field	node.set (y)
+右面板·Design Position	Absolute position toggle	node.set (absolute)	仅父级为 auto layout
+右面板·Design Position	Rotation field	node.set (absoluteRotation)	页面角度=自身+父级
+右面板·Design Position	Rotate 90 / Flip H / Flip V	object.rotateRight / flipH / flipV
+右面板·Design Position	Constraints horizontal dropdown	node.set (constraints.horizontal)	仅无 AL 的 Frame 子层
+右面板·Design Position	Constraints vertical dropdown	node.set (constraints.vertical)
+右面板·Design Scale	Scale section	—	仅 Scale 工具且有选中时替代 Position
+右面板·Design Scale	Dimensions W/H fields	transform.scale
+右面板·Design Scale	Scale factor field	transform.scale	重出现时自动聚焦；Enter/Esc 回 Move
+右面板·Design Scale	Anchor picker 3x3	tool.scaleAnchor
+右面板·Design 矢量	Points/Point section	—	矢量编辑且选中点
+右面板·Design 矢量	Point X/Y fields	vector.edit.position
+右面板·Design 矢量	Point W/H fields	vector.edit.resize	仅多点变换盒
+右面板·Design 矢量	Corner radius field	vector.edit.cornerRadius
+右面板·Design 矢量	Mirroring dropdown	vector.edit.mirroring	None/Angle/AngleAndLength
+右面板·Design 矢量	End point / Join dropdown	vector.edit.strokeCap / strokeJoin	含 Same as layer
+右面板·Design 矢量	Width point section	vector.edit.widthPoint	Variable width 工具
+右面板·Design 矢量	No points hint	—	Select points to edit…
+右面板·Design Layout	Layout section header (+/-)	layout.add / layout.remove	标题随 has_al 在 Layout/Auto layout 切换
+右面板·Design Layout	Direction segmented (V/H/Grid)	node.set (layout)
+右面板·Design Layout	Wrap toggle	node.set (wrap)	仅非 Grid
+右面板·Design Layout	Dimensions W/H fields	node.set (width/height)
+右面板·Design Layout	Constrain proportions	node.set (constrainProportions)	实例内禁用
+右面板·Design Layout	Sizing H/V dropdown	node.set (sizingH / sizingV)	Fixed/Hug/Fill
+右面板·Design Layout	Min/max width/height fields	node.set (min/max…)
+右面板·Design Layout	Alignment grid 3x3	node.set (mainAlign / crossAlign)
+右面板·Design Layout	Gap field	node.set (gap)	可绑变量；Auto 显示
+右面板·Design Layout	Auto gap dropdown	node.set (mainAlign)	Fixed/Space between/evenly/around
+右面板·Design Layout	Column gap / Row gap fields	node.set (columnGap / rowGap)	Grid
+右面板·Design Layout	Align text baselines	node.set (crossAlign)	仅 Horizontal
+右面板·Design Layout	Padding H/V fields	node.set (paddingHorizontal / paddingVertical)
+右面板·Design Layout	Individual padding fields	node.set (paddingLeft/Top/Right/Bottom)	切换按钮展开
+右面板·Design Layout	Cross gap (wrapped)	node.set (crossGap / contentAlign)	仅 wrap 且非 Grid
+右面板·Design Layout	Columns/Rows fields	node.set (gridColumns / gridRows)	Grid
+右面板·Design Layout	Strokes dropdown	node.set (strokesIncluded)
+右面板·Design Layout	Canvas stacking dropdown	node.set (reverseZ)
+右面板·Design Layout	Track sizes (column/row)	layout.setTrack	Grid 且单选；最多 24 行
+右面板·Design Layout	Grid cell column/row	node.set (gridColumn / gridRow)	Grid 子层非 absolute
+右面板·Design Layout	Column span / Row span	node.set (gridColumnSpan / gridRowSpan)
+右面板·Design Layout	Horizontal/Vertical align in cell	node.set (gridAlignH / gridAlignV)
+右面板·Design Layout	Clip content checkbox	node.set (clip)	仅 frame-like
+右面板·Design 形状	Arc section	node.set (arcStart / arcSweep / arcInner)	全为 Ellipse
+右面板·Design 形状	Polygon/Star Count field	node.set (pointCount)	全为 Polygon/Star
+右面板·Design 形状	Star Ratio field	node.set (innerRadius)	全为 Star
+右面板·Design 外观	Appearance section	—
+右面板·Design 外观	Show/Hide	object.toggleVisible	section header 图标
+右面板·Design 外观	Apply variable to visibility	—	变量选择器（Boolean）
+右面板·Design 外观	Blend mode header toggle	—	展开/收起 Blend mode 行
+右面板·Design 外观	Visible bound row	—	characters/visible 绑定时
+右面板·Design 外观	Mask type dropdown	node.set (maskType)	全为 mask 时
+右面板·Design 外观	Opacity field	node.set (opacity)
+右面板·Design 外观	Corner radius field	node.set (cornerRadius)	依节点类型
+右面板·Design 外观	Individual corners toggle	—	smooth_ok 时展开
+右面板·Design 外观	Top/Right/Bottom/Left corner radius fields	node.set (topLeftRadius…)	仅独立圆角
+右面板·Design 外观	Corner smoothing + iOS button	node.set (cornerSmoothing)	iOS=60%
+右面板·Design 外观	Blend mode dropdown	node.set (blend)	非 Normal/PassThrough 或手动展开
+右面板·Design 变量模式	Variable modes section	variable.setMode / library.setVariableMode	全为 frame-like 且多模式集合

@@ -1,0 +1,191 @@
+﻿分类	界面元素	绑定命令	行为备注
+画板选区栏	Color swatch (8 色)	board.setColor	仅画板对象被选中时
+画板选区栏	Edit colour wheel	—	仅全选连接器时；打开颜色选择器
+画板选区栏	Shape menu button	—	选中 Shape 时
+画板选区栏 形状菜单	Rectangle	tool.shape	board.setStyle {"shape":"rectangle"}
+画板选区栏 形状菜单	Rounded rectangle	tool.shape	board.setStyle
+画板选区栏 形状菜单	Ellipse	tool.shape	board.setStyle
+画板选区栏 形状菜单	Diamond	tool.shape	board.setStyle
+画板选区栏 形状菜单	Triangle	tool.shape	board.setStyle
+画板选区栏 形状菜单	Triangle down	tool.shape	board.setStyle
+画板选区栏 形状菜单	Parallelogram right	tool.shape	board.setStyle
+画板选区栏 形状菜单	Parallelogram left	tool.shape	board.setStyle
+画板选区栏 形状菜单	Trapezoid	tool.shape	board.setStyle
+画板选区栏 形状菜单	Pentagon	tool.shape	board.setStyle
+画板选区栏 形状菜单	Hexagon	tool.shape	board.setStyle
+画板选区栏 形状菜单	Octagon	tool.shape	board.setStyle
+画板选区栏 形状菜单	Star	tool.shape	board.setStyle
+画板选区栏 形状菜单	Plus	tool.shape	board.setStyle
+画板选区栏 形状菜单	Arrow left	tool.shape	board.setStyle
+画板选区栏 形状菜单	Arrow right	tool.shape	board.setStyle
+画板选区栏 形状菜单	Chevron	tool.shape	board.setStyle
+画板选区栏 形状菜单	Speech bubble	tool.shape	board.setStyle
+画板选区栏 形状菜单	Database	tool.shape	board.setStyle
+画板选区栏 形状菜单	Document	tool.shape	board.setStyle
+画板选区栏 形状菜单	Predefined process	tool.shape	board.setStyle
+画板选区栏 形状菜单	Manual input	tool.shape	board.setStyle
+画板选区栏 形状菜单	Internal storage	tool.shape	board.setStyle
+画板选区栏	Text size S	tool.shape	board.setStyle {"fontSize":12}
+画板选区栏	Text size M	tool.shape	{"fontSize":16}
+画板选区栏	Text size L	tool.shape	{"fontSize":24}
+画板选区栏	Text size XL	tool.shape	{"fontSize":36}
+画板选区栏	Sticky text size menu button	—	仅选中 sticky 且唯一含文本对象
+画板选区栏 Sticky 尺寸	Small	tool.shape	{"fontSize":16}
+画板选区栏 Sticky 尺寸	Medium	tool.shape	{"fontSize":24}
+画板选区栏 Sticky 尺寸	Large	tool.shape	{"fontSize":40}
+画板选区栏 Sticky 尺寸	Extra large	tool.shape	{"fontSize":64}
+画板选区栏 Sticky 尺寸	Huge	tool.shape	{"fontSize":96}
+画板选区栏	Table part	—	选中 Table 时
+画板选区栏 连接器	Straight routing	tool.shape	board.setStyle {"style":"straight"}
+画板选区栏 连接器	Elbow routing	tool.shape	{"style":"elbow"}
+画板选区栏 连接器	Curved routing	tool.shape	{"style":"curved"}
+画板选区栏 连接器	Start point menu	tool.shape	{"startCap":c}；选项为 StrokeCap::ALL
+画板选区栏 连接器	End point menu	tool.shape	{"endCap":c}
+画板选区栏 连接器	Stroke style menu (Solid/Dash)	—	写 dashes
+画板选区栏 连接器	Stroke weight 1/2/4/6	—	{"strokeWeight":n}
+部件条	Widget color swatch	widget.menu	单选有菜单的 widget 时
+部件条	Widget toggle button	widget.menu	{"value":!checked}
+部件条	Widget action button	widget.menu	{"value":null}
+画板便利栏	Timer button	—	无 timer 时打开 timer 浮层；仅可编辑
+画板便利栏 Timer	Preset 1/3/5/10/15 min	board.timer	{"action":"start","minutes":m}
+画板便利栏 Timer	Minutes + Start	board.timer	{"action":"start","minutes":minutes}
+画板便利栏	Timer Pause / Resume	board.timer	done 状态不显示
+画板便利栏	Add a minute	board.timer	{"action":"add","minutes":1}
+画板便利栏	Stop timer	board.timer	{"action":"stop"}
+画板便利栏	Timer clock readout	—	运行时显示；按秒重绘
+画板便利栏	Vote button	—	无进行中投票时打开 vote 浮层
+画板便利栏 Vote	Votes per person + scope + Start vote	board.vote	{"action":"start","votes":votes,"on":scope}
+画板便利栏	End vote	board.vote	{"action":"end"}；进行中显示
+画板便利栏	Votes left readout	—	进行中显示
+画板便利栏	Results button	—	有历史/已结束投票时
+画板便利栏 Results	Result row	select.set	{"ids":[id]}；按票数排序
+画板便利栏 Results	Clear results	board.vote	{"action":"clear"}
+画板便利栏 Results	Delete results	board.vote	{"action":"delete","index":index}
+画板便利栏 Results	Vote session stepper	—	多个投票时
+画布覆盖	Vote badges on objects	—	进行中显示自己票；结束显示所有人票
+画板连接	+ handle (上/右/下/左)	board.addConnected	{"id","side","edit":true}；选中单个 sticky/shape 且 Move 工具时四边显示
+画板连接	+ handle 拖到对象	board.connector	{"from","to","fromSide"}
+画板连接	+ handle 拖到空白	board.addConnected	{"id","side","at","edit":true}
+画板连接	Placement preview (ghost box + line)	—	hover + 时
+画板连接	Drag preview (ghost/target outline + line)	—	拖动 + 时
+画布覆盖·overlays	Pixel grid	—	view.pixel_grid_shown() 高缩放时
+画布覆盖·overlays	Layout grids	—	layout_grids 且层有可见 grid
+画布覆盖·overlays	Frame name label	—	顶层 frame 在屏内且非 board atom
+画布覆盖·overlays	Section title pill (EyeOff)	—	隐藏内容的 section 显示眼睛图标
+画布覆盖·overlays	Contents hidden text	—	隐藏内容的 frame/section 中央，够大时
+画布覆盖·overlays	Dev status badge (Ready/Changed/Completed)	—	n.dev_status != None 时
+画布覆盖·overlays	Frame label rename field	object.rename	双击标签进入
+画布覆盖·overlays	Prototype connection noodle	—	Prototype tab；点击打开交互编辑器
+画布覆盖·overlays	Hover outline	—	Move/Scale 且 hover 未选中且 highlight_on_hover
+画布覆盖·overlays	Boolean operand outlines	—	布尔组内选中 operand 或矢量编辑
+画布覆盖·overlays	Mask outlines	—	view.mask_outlines
+画布覆盖·overlays	Frame outlines	—	view.frame_outlines
+画布覆盖·overlays	Slice outlines	—	view.show_slices
+画布覆盖·overlays	Drop target outline	—	ov.drop_target；组件内为紫色
+画布覆盖·overlays	Stamp target outline	—	ov.stamp_target
+画布覆盖·overlays	Slot badges	—	选中组件/实例/被拖入的 slot
+画布覆盖·overlays	Swap highlight	—	ov.swap_target（Alt-drop 组件）
+画布覆盖·overlays	Insert line indicator	—	ov.insert_line
+画布覆盖·overlays	Drop cell highlight	—	ov.drop_cell
+画布覆盖·overlays	Vector edit overlay (segments/handles/vertices)	—	矢量编辑模式；hover/选中放大
+画布覆盖·overlays	Variable width handles overlay	—	Width 工具时替代路径点
+画布覆盖·overlays	Vector multi-point transform box	—	选中多个点
+画布覆盖·overlays	Selection outlines + transform box + corner handles	—	有选中且非文本/矢量编辑；手柄数随选中类型
+画布覆盖·overlays	Selection size label	—	show_dimensions 时；测量时隐藏
+画布覆盖·overlays	Constraint guides	—	选中层受父 frame 约束时
+画布覆盖·overlays	Arc handles + readout pill	—	选中椭圆时
+画布覆盖·overlays	Shape handles + readout (Radius/Ratio/Count)	—	选中形状时
+画布覆盖·overlays	Scale pivot marker	—	Scale 工具
+画布覆盖·overlays	Rotation origin ring	—	ds.origin_handle() 时
+画布覆盖·overlays	Connector attach points	—	Connector 工具 hover 对象时
+画布覆盖·overlays	Connector path handles / end points	—	选中连接器时
+画布覆盖·overlays	Placement crosshair	—	draws_shape 且有 crosshair；Enter 放置
+画布覆盖·overlays	Pen path anchors / bezier handles	—	Pen/Pencil 绘制中
+画布覆盖·overlays	Pencil stroke preview	—	Pencil 工具；用笔色与粗细
+画布覆盖·overlays	Rubber-band segment	—	Pen 绘制中或拖连接器端点
+画布覆盖·overlays	Eraser brush circle	—	ov.brush（矢量编辑）
+画布覆盖·overlays	Lasso dashed path	—	ov.lasso.len()>1
+画布覆盖·overlays	Marquee / key box	—	ov.marquee 或 key_box
+画布覆盖·overlays	Text caret	—	文本编辑；每 500ms 闪烁
+画布覆盖·overlays	Text selection highlight	—	文本有选区且非 IME
+画布覆盖·overlays	IME composition underline	—	preedit 时
+画布覆盖·overlays	Pick outline (pink 2px)	—	picked() 存在时
+画布覆盖·overlays	Shape builder region hatch	—	ShapeBuilder 且 current() 有区域
+画布覆盖·handles	Gradient line / end handles	fill.set / stroke.set	颜色选择器打开渐变 paint 时
+画布覆盖·handles	Gradient stops	fill.set / stroke.set	点击线新增 stop；Delete 删除（至少留 2）
+画布覆盖·handles	Progressive blur start/end handles	effect.set	Design tab 且渐进模糊展开
+画布覆盖·handles	Image crop outline + corner handles	fill.set / stroke.set	Crop 模式
+画布覆盖·handles	Crop ghost	—	轴对齐 crop
+画布覆盖·handles	Crop marks	—	ui.crop.is_some()
+画布覆盖·handles	Auto-layout padding grips + labels	node.set	Move、单个无旋转 AL frame；hover 显示
+画布覆盖·handles	Auto-layout gap bands + labels	node.set	同上；拖动固定 auto gap
+画布覆盖·handles	Grid track outlines (pink dashed)	—	Grid 布局 frame 的轨道边界
+画布覆盖·rulers	Rulers (top + left)	—	view.rulers；20px 厚
+画布覆盖·rulers	Selection span highlight	—	有选中时高亮跨度
+画布覆盖·guides	Guide lines (page / frame)	—	随 rulers 显示；frame 参考线只在 frame 内
+画布覆盖·guides	Guide offset tag	—	hover/选中/拖动时显示偏移
+画布覆盖·guides	Drag new guide out of ruler	guide.add	从标尺拖出
+画布覆盖·guides	Move guide	guide.move	拖动已有参考线
+画布覆盖·guides	Remove guide (drop on ruler)	guide.remove	拖回标尺
+画布覆盖·guides	Select guide (click)	guide.select	Move 工具点击；右键开菜单
+画布覆盖·guides	Duplicate guide (Alt drag)	guide.add	Alt 拖动
+画布覆盖·guides	Alt measure distances from guide	—	Alt 拖动参考线时
+画布覆盖·measure	Smart guide lines	—	ov.guides + 已保存 dev 线
+画布覆盖·measure	Snap point marker (X)	—	吸附到点时
+画布覆盖·measure	Measured box outline	—	ov.measure_box（Alt 测量到另一层）
+画布覆盖·measure	Measurement labels	—	避让 size label 与彼此；缩放不变大小
+画布覆盖·frame_labels	Status badge pill	—	Ready/Changed/Completed
+画布覆盖·frame_stats	Frame statistics	ui.set	数据由 ui.inspect 读；{resetFrameStats:true} 重置
+画布覆盖·comments	Comment pin	—	Comment 工具或 View›Comments 或线程/draft 打开
+画布覆盖·comments	Unread dot / resolved check	—	未读/已解决
+画布覆盖·comments	Comment cluster pin	—	pin 中心距<24px 聚合；点击 comment.zoom
+画布覆盖·comments	Draft pin	—	Comment 工具点击画布后
+画布覆盖·comments	Pin drag → move comment	comment.move	拖动自己的 pin
+画布覆盖·comments	Cluster click → zoom	comment.zoom	{"ids":ids}
+画布覆盖·comments	Draft composer popover	comment.add	{"x","y","text","anchor":true}
+画布覆盖·comments	Thread popover	comment.markRead	打开时标记已读
+画布覆盖·comments	Reply composer	comment.reply	{"id","text"}
+画布覆盖·comments	Edit message	comment.edit	{"id","reply","text"}
+画布覆盖·comments	Delete message / thread	comment.delete	{"id","reply?"}
+画布覆盖·comments	Reaction menu (8 emoji)	comment.react	{"id","emoji"}
+画布覆盖·comments	Click existing reaction	comment.react	切换自己的反应
+画布覆盖·comments	More: Mark as unread	comment.markRead	{"id","read":false}
+画布覆盖·comments	More: Copy link	comment.link	复制到剪贴板
+画布覆盖·comments	More: Copy for AI	comment.prompt	生成 AI brief
+画布覆盖·comments	More: Mark resolved / unresolved	comment.resolve	{"id","resolved":!c.resolved}
+画布覆盖·comments	Resolve button	comment.resolve	线程头按钮
+画布覆盖·comments	Agent label on AI message	—	m.agent 时
+画布覆盖·comments	@mention picker	—	输入 @ 时；最多 6 条
+画布覆盖·comments	Presenter comment pin	—	演示 frame 且显示评论
+画布覆盖·comments	Presenter draft pin / composer	comment.add	附于 frame
+画布覆盖·live_text	Remote text caret + selection + name tag	—	他人正在编辑同页文本时；不闪烁
+画布覆盖·outline	Slot badges / swap highlight / outline colours	—	组件紫色轮廓；槽位虚线+名称
+画布覆盖·selection_spacing	Spacing handles (H/V)	arrange.spacing	{"ids","key","fromGesture":true}
+画布覆盖·selection_spacing	Spacing number fields (panel)	arrange.spacing	Design tab、Move 工具
+画布覆盖·selection_spacing	Reorder rings	arrange.reorder	{"ids","source","target","swap","fromGesture"}
+画布覆盖·selection_spacing	Reorder target highlight	—	拖动中目标槽位描边
+画布覆盖·proto_canvas	Prototype connection noodle	—	Prototype tab
+画布覆盖·proto_canvas	+ connection handle	proto.interaction.add	从右边缘拖到 frame/variant
+画布覆盖·proto_canvas	Drag target frame highlight	—	拖动中指向目标
+画布覆盖·proto_canvas	Overlay ghost (prototype)	—	拖动时半透明预览
+画布覆盖·background	Transparency checkerboard grid	—	页面背景 alpha<255
+画布覆盖·background	Coarse surround image	—	渲染图未覆盖区域
+画布覆盖·background	Page colour fallback strips	—	渲染图与 surround 之外
+画布覆盖·cursors	System cursors	—	依工具与手势（Move/Grab/Text/Copy/Resize/Zoom…）
+画布覆盖·cursors	Drawn rotate cursor	—	Rotate 状态
+画布覆盖·cursors	Drawn pen cursors	—	PenCursor 各状态
+画布覆盖·cursors	Drawn eyedropper cursor	—	Pick color
+画布覆盖·cursors	Drawn comment cursor	—	Comment 工具
+画布覆盖·cursors	Drawn crosshair cursor	—	形状/文本工具
+浮层·Popover 框架	Popover card (frame + shadow)	—	通用外壳：标题左内缩 16、X 右内缩 8、header 40
+浮层·Popover 框架	Header title	—
+浮层·Popover 框架	X close button	—	点击/Esc/外部按下关闭
+浮层·Popover 框架	Header drag handle	—	拖动移动浮层
+浮层·Popover 框架	Content slot	—	body 内容区
+浮层·Popover 框架	Surface::Panel	—	普通面板表面
+浮层·Popover 框架	Surface::Menu	—	深色菜单表面
+浮层·Popover 框架	Open::Anchor / AnchorMirrored / At	—	三种定位
+浮层·实例	Colour picker popover ("Custom")	—	picker 打开时
+浮层·实例	Style picker popover	—	样式面板打开时
+浮层·实例	Comment thread / draft popover	—	评论覆盖（egui Area）
+浮层·实例	Tool group flyout	tool.set	工具栏 flyout
