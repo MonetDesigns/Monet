@@ -76,6 +76,8 @@ mod colorpicker_selection_tests;
 #[cfg(test)]
 mod comments_tests;
 #[cfg(test)]
+mod component_header_tests;
+#[cfg(test)]
 mod component_props_reorder_tests;
 #[cfg(test)]
 mod component_set_narrow_tests;
@@ -299,6 +301,8 @@ mod variables_select_tests;
 mod variables_window_resize_tests;
 #[cfg(test)]
 mod variants_discovery_tests;
+#[cfg(test)]
+mod vector_align_tests;
 #[cfg(test)]
 mod vector_keys_tests;
 #[cfg(test)]
