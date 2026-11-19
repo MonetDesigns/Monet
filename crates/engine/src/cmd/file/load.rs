@@ -89,6 +89,7 @@ pub(super) fn load_with(
     images: figcraft_format::rest::ImageResolver,
 ) -> Result<(figcraft_format::Loaded, bool)> {
     let (mut loaded, rest) = load_any(bytes, name_hint, variables, images)?;
+    crate::library::resolve_links(&mut loaded.doc, name_hint);
     let notes = crate::components::break_component_cycles(&mut loaded.doc);
     loaded.issues.extend(notes);
     Ok((loaded, rest))

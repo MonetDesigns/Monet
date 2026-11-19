@@ -20,4 +20,5 @@ toml = "1"
 # 目录里有几条测试要拿引擎的命令表/工具名核对「每个键都有翻译」，以及用 `pref.language` 走一遍
 # 语言切换——它们在原文就在 i18n 的测试里，跟着目录一起搬过来，不删。
 figcraft-engine = { workspace = true }
+figcraft-doc = { workspace = true }
 serde_json = { workspace = true }

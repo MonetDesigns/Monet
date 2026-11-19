@@ -183,9 +183,8 @@ fn page_step(s: &mut Session, dir: i64) -> Result<Value> {
         }
     };
     let ds = s.ds_mut()?;
-    ds.page = pg;
     ds.selection.clear();
-    ds.zoom_to_fit();
+    ds.open_page(pg);
     Ok(json!({"page": pg}))
 }
 
@@ -235,6 +234,28 @@ pub(crate) fn tool(s: &mut Session, t: ToolId) -> Result<Value> {
     Ok(json!({"tool": t.id()}))
 }
 
+/// Shift+T and choosing the Annotation tool: with a layer selected (or named by `id`/`ids`) the UI
+/// is asked for its note at once; in the tool, a press on a layer selects it and asks (the engine
+/// never writes the note). A named target is checked first: one that isn't a layer in the document
+/// is an error and the tool stays as it was.
+fn annotation(s: &mut Session, p: &Value) -> Result<Value> {
+    let named = p.get("id").is_some_and(|v| !v.is_null()) || p.get("ids").is_some_and(|v| !v.is_null());
+    let first = crate::params::targets(s, p).into_iter().find(|i| s.doc().is_ok_and(|d| d.node(*i).is_some_and(|n| !n.is_page())));
+    if named && first.is_none() {
+        return Err(bad("tool.annotation", "`id` must name a layer in this document (not a page)".to_string()));
+    }
+    // 先把目标选中/切页（被拒就在这里失败），再切工具：否则目标被拒后工具已经改了、矢量
+    // 编辑也结束了，与「被拒时什么都不变」的约定不符（CodeRabbit PR#34）。
+    if named && let Some(id) = first {
+        crate::cmd::edit::select_and_page(s, vec![id])?;
+    }
+    let r = tool(s, ToolId::Annotation)?;
+    if let Some(id) = first {
+        s.request_ui("annotation.new", json!({"id": id}));
+    }
+    Ok(r)
+}
+
 /// The View menu's commands and their parameters.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -259,11 +280,16 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("view.zoomSelection", "Zoom to selection", "{}", false, |s, _| {
             let ds = s.ds_mut()?;
             if let Some(b) = ds.doc.bounds_of(&ds.selection) {
-                ds.view.fit(b, 256.0);
+                ds.view.fit_selection(b, 256.0);
             }
             Ok(json!({"zoom": ds.view.zoom}))
         }),
-        spec!("view.set", "Set view", "{zoom?, cx?, cy? (page coordinate at the centre), vw?, vh? (viewport size)}", false, |s, p| {
+        spec!(
+            "view.set",
+            "Set view",
+            "{zoom?, cx?, cy? (page coordinate at the centre), vw?, vh? (viewport size), bottomInset? (height of the strip the bottom toolbar covers)}",
+            false,
+            |s, p| {
             let v = view(s)?;
             if let Some(z) = num(p, "zoom") {
                 v.zoom = z.clamp(ViewState::MIN_ZOOM, ViewState::MAX_ZOOM);
@@ -275,6 +301,9 @@ pub fn specs() -> Vec<CommandSpec> {
             }
             if let Some(h) = num(p, "vh") {
                 v.vh = h.clamp(10.0, 20000.0);
+            }
+            if let Some(i) = num(p, "bottomInset") {
+                v.bottom_inset = i.clamp(0.0, 20000.0);
             }
             Ok(serde_json::to_value(&*v).unwrap_or(Value::Null))
         }),
@@ -420,6 +449,13 @@ pub fn specs() -> Vec<CommandSpec> {
             "{on?}  a mouse wheel zooms the canvas about the pointer and Cmd/Ctrl+wheel scrolls it (Shift+wheel still scrolls sideways; trackpads are unchanged) → {on}",
             false,
             |s, p| pref(s, p, |x| &mut x.scroll_wheel_zoom)
+        ),
+        spec!(
+            "pref.invertZoom",
+            "Invert zoom direction",
+            "{on?}  reverses wheel zoom: Cmd/Ctrl+wheel, and a plain mouse wheel with Scroll wheel zoom on, zoom out where they would zoom in (a trackpad pinch and panning are unchanged) → {on}",
+            false,
+            |s, p| pref(s, p, |x| &mut x.invert_zoom)
         ),
         spec!("pref.reduceMotion", "Reduce motion", "{on?}", false, |s, p| pref(s, p, |x| &mut x.reduce_motion)),
         spec!(
@@ -569,6 +605,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
                 if t.on_boards() {
                     crate::board::require(s, &format!("tool.{}", t.id()))?;
+                }
+                if t == ToolId::Annotation {
+                    return annotation(s, &json!({}));
                 }
                 tool(s, t)
             }
@@ -769,6 +808,9 @@ pub fn specs() -> Vec<CommandSpec> {
             tool(s, ToolId::TextOnPath)
         }),
         spec!("tool.comment", "Comment", "{}", false, |s, _| tool(s, ToolId::Comment)),
+        // Shift+T: with a layer selected (or an `id`) the UI is asked for its note at once; in the
+        // tool, a press on a layer selects it and asks (the engine never writes the note).
+        spec!("tool.annotation", "Annotation", "{id?|ids?}", false, annotation),
         spec!("tool.shapeBuilder", "Shape builder", "{}", false, |s, _| tool(s, ToolId::ShapeBuilder)),
         // `apply: false` is for the UI colour picker: the eyedropper only samples (into
         // `ToolState::picked`) and the picker writes the colour to the paint it edits.

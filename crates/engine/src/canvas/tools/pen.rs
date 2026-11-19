@@ -173,6 +173,7 @@ pub(crate) fn brush_profile(points: &[Point], pressure: &[Option<f32>], zoom: f6
 /// Pen pressure along drawn samples as width profile points `[t, scale]`: `t` by length, at most
 /// [`PROFILE_KNOTS`] points, medium pressure (0.5) at the stroke weight, from a tenth to twice it.
 /// `None` when no sample has pressure.
+#[allow(dead_code)] // the pressure-only view is kept for the unit tests; strokes use `brush_profile`
 pub(crate) fn pressure_profile(points: &[Point], pressure: &[Option<f32>]) -> Option<Vec<[f64; 2]>> {
     let scales = pressure_scales(points, pressure)?;
     profile_knots(points, &scales)

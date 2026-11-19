@@ -55,6 +55,7 @@ fn a_plugin_gets_library_names_but_not_their_links() {
         id: "lib".into(),
         name: "Kit".into(),
         path: LINK.into(),
+        relative: String::new(),
         version: 3,
     });
     let tail = "(call $set_output (i32.const 40000) (call $reply_read (i32.const 40000) (i32.const 20000))) (return (i32.const 0))";
@@ -72,6 +73,7 @@ fn a_plugin_gets_a_fixed_message_for_library_update_failures() {
         id: "lib".into(),
         name: "Kit".into(),
         path: LINK.into(),
+        relative: String::new(),
         version: 3,
     });
     let tail = "(call $set_output (i32.const 40000) (call $reply_read (i32.const 40000) (i32.const 20000))) (return (i32.const 0))";

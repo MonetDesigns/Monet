@@ -605,3 +605,20 @@ fn ui_flow_opacity_smoothing_steppers_take_effect() {
     assert!(!p_none.is_empty(), "a brush stroke writes a width profile");
     assert_ne!(p_none, p_max, "smoothing 0 vs 1 must change the written width profile");
 }
+
+/// 描边高级设置里每个下拉值都必须是引擎认的值（#823）：下拉项变多了，点了要真能生效。
+#[test]
+fn every_stroke_dropdown_value_is_accepted() {
+    let mut s = Session::new();
+    let rect = id(s.execute("shape.rectangle", &json!({"x": 0, "y": 0, "width": 40, "height": 40})).unwrap());
+    s.execute("stroke.add", &json!({"ids": [rect]})).unwrap();
+    for cap in ["none", "round", "square", "lineArrow", "triangleArrow", "reversedTriangle", "circleFilled", "diamondFilled"] {
+        assert!(s.execute("node.set", &json!({"id": rect, "props": {"startCap": cap, "endCap": cap}})).is_ok(), "cap {cap} must be accepted");
+    }
+    for join in ["miter", "bevel", "round"] {
+        assert!(s.execute("node.set", &json!({"id": rect, "props": {"strokeJoin": join}})).is_ok(), "join {join} must be accepted");
+    }
+    for preset in ["uniform", "wedge", "taper", "eye", "rounded", "pinch"] {
+        assert!(s.execute("stroke.widthProfile", &json!({"ids": [rect], "preset": preset})).is_ok(), "profile {preset} must be accepted");
+    }
+}

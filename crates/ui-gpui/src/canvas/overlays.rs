@@ -498,6 +498,7 @@ fn shape_overlay(app: &CanvasApp, painter: &mut Painter, col: Color32) {
         let text = match hint.handle {
             ShapeHandle::Radius { .. } => format!("{} {}", figcraft_i18n::tr("Radius"), hint.value),
             ShapeHandle::Ratio => format!("{} {}%", figcraft_i18n::tr("Ratio"), hint.value),
+            ShapeHandle::Count => format!("{} {}", figcraft_i18n::tr("Count"), hint.value),
         };
         pill(painter, c + vec2(12.0, 12.0), Align2::LEFT_TOP, text, col);
     }

@@ -78,6 +78,7 @@ pub use selection::rename;
 pub use selection::selection_colors;
 pub use selection::selection_reorder;
 pub use selection::selection_spacing;
+pub use selection::tidy;
 pub use sharing::agent;
 pub use sharing::background;
 pub use sharing::branches;
@@ -220,6 +221,8 @@ mod board_connected_tests;
 mod board_connector_tests;
 #[cfg(test)]
 mod board_grid_tests;
+#[cfg(test)]
+mod board_mindmap_tests;
 #[cfg(test)]
 mod board_reshape_tests;
 #[cfg(test)]
@@ -406,6 +409,10 @@ mod jam_open_tests;
 mod jpg_export_tests;
 #[cfg(test)]
 mod keymap_tests;
+#[cfg(test)]
+mod page_opening_tests;
+#[cfg(test)]
+mod page_view_tests;
 #[cfg(test)]
 mod layout_suggest_tests;
 #[cfg(test)]
@@ -671,3 +678,5 @@ mod widgets_tests;
 mod selection_reorder_tests;
 #[cfg(test)]
 mod selection_spacing_tests;
+#[cfg(test)]
+mod tidy_tests;

@@ -638,17 +638,30 @@ fn index(cmd: &str, p: &Value, key: &str) -> Result<usize> {
 }
 
 /// Delete the points and segments of `parts` (`heal` keeps paths through deleted points closed).
-fn delete_selection(s: &mut Session, parts: Vec<EditPart>, heal: bool) -> Result<()> {
+pub(crate) fn delete_selection(s: &mut Session, parts: Vec<EditPart>, heal: bool) -> Result<()> {
     let doc = s.doc_mut()?;
     for EditPart { id, vertices: verts, segments: segs } in parts {
         edit(doc, id, |net| {
             // Segments first (their indices refer to the network before points go).
             let segs: Vec<usize> =
                 segs.into_iter().filter(|si| net.segments.get(*si).is_some_and(|x| !verts.contains(&x.a) && !verts.contains(&x.b))).collect();
-            let pts: Vec<Point> = verts.iter().filter_map(|v| net.vertices.get(*v)).map(|v| v.point()).collect();
+            // 同坐标的顶点可能不止一个：记下每个选中点是该坐标上的第几个，删段后按这个身份
+            // 找回。按坐标直接取第一个会删到没选中的那个（CodeRabbit PR#34）。
+            let keyed: Vec<(Point, usize)> = verts
+                .iter()
+                .filter_map(|v| net.vertices.get(*v).map(|vert| (*v, vert.point())))
+                .map(|(idx, p)| {
+                    let nth = net.vertices[..idx].iter().filter(|w| w.point() == p).count();
+                    (p, nth)
+                })
+                .collect();
             ops::remove_segments(net, &segs);
-            // Point indices may have shifted: find them again by position.
-            let now: Vec<usize> = pts.iter().filter_map(|p| net.vertices.iter().position(|v| v.point() == *p)).collect();
+            // Point indices may have shifted: find them again by identity (position + which one
+            // of the vertices sharing that position it was).
+            let now: Vec<usize> = keyed
+                .iter()
+                .filter_map(|(p, nth)| net.vertices.iter().enumerate().filter(|(_, v)| v.point() == *p).nth(*nth).map(|(i, _)| i))
+                .collect();
             ops::delete_vertices(net, &now, heal);
         })?;
     }

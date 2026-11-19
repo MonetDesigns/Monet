@@ -620,6 +620,70 @@ fn read_file(_path: &str) -> std::result::Result<PublishedLibrary, String> {
 }
 
 /// Turn `path` into an absolute path (library links outlive the working directory).
+/// `path` with `.` and `..` taken out without asking the file system.
+fn lexical(path: &std::path::Path) -> std::path::PathBuf {
+    use std::path::Component;
+    let mut out = std::path::PathBuf::new();
+    for c in path.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir if matches!(out.components().next_back(), Some(Component::Normal(_))) => { out.pop(); }
+            Component::ParentDir if out.has_root() => {}
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// The folder of the document saved at `doc_path`, absolute.
+fn doc_folder(doc_path: &str) -> Option<std::path::PathBuf> {
+    lexical(std::path::Path::new(&absolute_path(doc_path))).parent().map(std::path::Path::to_path_buf)
+}
+
+/// Library file `lib` from the folder of the document at `doc_path`, '/'-separated.
+fn relative_to(doc_path: &str, lib: &str) -> Option<String> {
+    use std::path::Component;
+    let folder = doc_folder(doc_path)?;
+    let lib = lexical(std::path::Path::new(&absolute_path(lib)));
+    let (from, to): (Vec<_>, Vec<_>) = (folder.components().collect(), lib.components().collect());
+    let same = from.iter().zip(&to).take_while(|(a, b)| a == b).count();
+    if same == 0 || !matches!(to.get(same..), Some([_, ..])) { return None; }
+    let up = from.get(same..).unwrap_or_default().iter().map(|_| Some(".."));
+    let down = to.get(same..).unwrap_or_default().iter().map(|c| match c {
+        Component::Normal(s) => s.to_str(),
+        _ => None,
+    });
+    up.chain(down).collect::<Option<Vec<_>>>().map(|parts| parts.join("/"))
+}
+
+/// Before saving: each library file link also says where the file is from the document's folder.
+pub fn relate_links(doc: &mut Document, doc_path: &str) {
+    if doc.libraries.enabled.is_empty() { return; }
+    for l in &mut doc.libraries_mut().enabled {
+        l.relative = if crate::library_server::is_server_link(&l.path) {
+            None
+        } else {
+            relative_to(doc_path, &l.path)
+        }.unwrap_or_default();
+    }
+}
+
+/// After opening: library file links go by the document's folder.
+pub fn resolve_links(doc: &mut Document, doc_path: &str) {
+    if doc.libraries.enabled.iter().all(|l| crate::library_server::is_server_link(&l.path) && l.relative.is_empty()) { return; }
+    let Some(folder) = doc_folder(doc_path) else { return };
+    for l in &mut doc.libraries_mut().enabled {
+        if crate::library_server::is_server_link(&l.path) { l.relative.clear(); continue; }
+        let moved = Some(l.relative.as_str()).filter(|r| !r.is_empty()).map(|r| lexical(&folder.join(r)));
+        if let Some(p) = moved.filter(|p| p.to_str().is_some_and(craft_docpath::is_local) && crate::file_access::metadata(p).is_ok_and(|m| m.is_file())) {
+            l.path = p.to_string_lossy().into_owned();
+        } else if !l.path.is_empty() && std::path::Path::new(&l.path).is_relative()
+            && let Some(p) = lexical(&folder.join(&l.path)).to_str().filter(|p| craft_docpath::is_local(p)) {
+            l.path = p.to_string();
+        }
+        l.relative.clear();
+    }
+}
 pub fn absolute_path(path: &str) -> String {
     #[cfg(not(target_arch = "wasm32"))]
     if let Ok(p) = std::path::absolute(path) {
@@ -1257,7 +1321,7 @@ pub fn adopt_pasted(doc: &mut Document, src: &Document, src_path: Option<&str>, 
             if doc.libraries.link(&m.id).is_none()
                 && let Some(path) = src_path
             {
-                doc.libraries_mut().enabled.push(LibraryLink { id: m.id.clone(), name: m.name.clone(), path: path.to_string(), version: m.version });
+                doc.libraries_mut().enabled.push(LibraryLink { id: m.id.clone(), name: m.name.clone(), path: path.to_string(), relative: String::new(), version: m.version });
             }
         }
     }

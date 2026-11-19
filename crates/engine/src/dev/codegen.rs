@@ -6,7 +6,7 @@
 //! their iOS and Android code syntax in SwiftUI and Compose. The output is a starting point, not a
 //! pixel-exact translation.
 
-use figcraft_color::{Color, PaintKind};
+use figcraft_color::{Color, Gradient, GradientKind, Paint, PaintKind};
 use figcraft_doc::{
     ContentAlign, CrossAlign, Document, EffectKind, LayoutMode, LetterSpacing, LineHeight, MainAlign, Node, NodeId, NodeKind, Shadow, Sizing,
     TextAlignH, TextCase, TextDecoration, Variable,
@@ -370,6 +370,33 @@ fn first_fill(n: &Node) -> Option<Color> {
     })
 }
 
+/// The visible fills of `n`, with their index (for bound-variable fields).
+fn visible_fills(n: &Node) -> impl DoubleEndedIterator<Item = (usize, &Paint)> {
+    n.fills.iter().enumerate().filter(|(_, p)| p.visible)
+}
+
+/// A gradient's sorted stops as (position, colour), the paint's opacity folded into each colour.
+/// A lone stop is written twice (at 1 as well), since Android and Flutter need two colours.
+fn gradient_stops(g: &Gradient, opacity: f32) -> Vec<(f64, Color)> {
+    let mut stops: Vec<(f64, Color)> = g.sorted_stops().iter().map(|s| (f64::from(s.position), s.color.with_alpha(s.color.a * opacity))).collect();
+    if let [(_, only)] = stops[..] {
+        stops.push((1.0, only));
+    }
+    stops
+}
+
+/// A gradient's main axis in pixels on a `w` x `h` box.
+fn gradient_axis(g: &Gradient, w: f64, h: f64) -> (f64, f64) {
+    ((g.to.0 - g.from.0) * w, (g.to.1 - g.from.1) * h)
+}
+
+/// The kind a native target writes: a diamond reads as a radial gradient.
+fn native_gradient_kind(g: &Gradient) -> GradientKind {
+    match g.kind {
+        GradientKind::Diamond => GradientKind::Radial,
+        k => k,
+    }
+}
 fn stroke_color(n: &Node) -> Option<Color> {
     if !n.has_visible_stroke() {
         return None;

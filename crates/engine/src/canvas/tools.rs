@@ -77,6 +77,7 @@ pub enum ToolId {
     Text,
     TextOnPath,
     Comment,
+    Annotation,
     Eyedropper,
     ShapeBuilder,
     // Board tools.
@@ -88,7 +89,7 @@ pub enum ToolId {
 }
 
 impl ToolId {
-    pub const ALL: [ToolId; 25] = [
+    pub const ALL: [ToolId; 26] = [
         ToolId::Move,
         ToolId::Scale,
         ToolId::Hand,
@@ -107,6 +108,7 @@ impl ToolId {
         ToolId::Text,
         ToolId::TextOnPath,
         ToolId::Comment,
+        ToolId::Annotation,
         ToolId::Eyedropper,
         ToolId::ShapeBuilder,
         ToolId::Sticky,
@@ -136,6 +138,7 @@ impl ToolId {
             ToolId::Text => "text",
             ToolId::TextOnPath => "textOnPath",
             ToolId::Comment => "comment",
+            ToolId::Annotation => "annotation",
             ToolId::Eyedropper => "eyedropper",
             ToolId::ShapeBuilder => "shapeBuilder",
             ToolId::Sticky => "sticky",
@@ -168,6 +171,7 @@ impl ToolId {
             ToolId::Text => "Text",
             ToolId::TextOnPath => "Text on a path",
             ToolId::Comment => "Comment",
+            ToolId::Annotation => "Annotation",
             ToolId::Eyedropper => "Pick color",
             ToolId::ShapeBuilder => "Shape builder",
             ToolId::Sticky => "Sticky note",
@@ -178,6 +182,11 @@ impl ToolId {
         }
     }
 
+    /// Whether Developer Mode keeps this tool: it only inspects, so the tools that edit leave it.
+    /// The one list behind the engine's pointer routing and the Inspect panel's tool check.
+    pub fn works_in_dev_mode(self) -> bool {
+        matches!(self, ToolId::Move | ToolId::Hand | ToolId::Comment | ToolId::Annotation)
+    }
     /// The tools of a board's toolbar (a design file's toolbar has the others).
     pub fn on_boards(self) -> bool {
         matches!(

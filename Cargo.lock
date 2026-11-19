@@ -2248,6 +2248,7 @@ dependencies = [
 name = "figcraft-i18n"
 version = "0.15.0"
 dependencies = [
+ "figcraft-doc",
  "figcraft-engine",
  "figcraft-text",
  "serde_json",

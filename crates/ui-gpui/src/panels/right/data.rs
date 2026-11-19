@@ -1245,6 +1245,8 @@ pub struct PanelData {
     /// 选中节点的共同起止端帽（`None`：多选不一致）。
     pub cap_start: Option<figcraft_doc::StrokeCap>,
     pub cap_end: Option<figcraft_doc::StrokeCap>,
+    /// 选中层的共同宽度剖面：外层 None = 多选不一致，内层 None = 均匀宽度。
+    pub stroke_profile: Option<Option<figcraft_doc::WidthProfile>>,
     /// 选中的都是开放路径（Line / 未闭合 Vector），端帽才有意义。
     pub is_open_path: bool,
     pub effects: Option<Vec<EffectRow>>,
@@ -1630,6 +1632,7 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
     d.join = common(doc, ids, |n| n.stroke.join);
     d.cap_start = common(doc, ids, |n| n.stroke.cap_start);
     d.cap_end = common(doc, ids, |n| n.stroke.cap_end);
+    d.stroke_profile = common(doc, ids, |n| n.stroke.profile().cloned());
     d.is_open_path = ids.iter().all(|i| doc.node(*i).is_some_and(|n| matches!(n.kind, NodeKind::Line | NodeKind::Vector { .. })));
 
     // ── Effects（`effects.rs::effects`） ──

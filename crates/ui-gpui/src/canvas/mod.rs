@@ -183,6 +183,9 @@ pub fn show(app: &mut CanvasApp, worker: &mut Worker, ppp: f32, t: &Tokens, rena
         let z = ds.view.zoom.max(1e-9);
         ds.view.vw = f64::from(rect.width());
         ds.view.vh = f64::from(rect.height());
+        // 底部浮动工具栏盖住的那一条：zoom-to-selection 要避开它。这个值以前只有 eGUI 在设
+        // （app.rs），GPUI 一直留 0，fit_selection 的留白等于没有（CodeRabbit PR#34）。
+        ds.view.bottom_inset = f64::from(crate::toolbar::PILL_H) + 12.0;
         if first {
             ds.zoom_to_fit();
         } else {

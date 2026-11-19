@@ -14,6 +14,10 @@ use crate::params::{
 use crate::{BatchStep, EngineError, Result, Session, bad, spec};
 
 mod clipboard;
+mod vector_clipboard;
+pub use vector_clipboard::clipboard_svg;
+#[cfg(test)]
+mod vector_clipboard_tests;
 mod props;
 pub(crate) use props::{edit_region_fills, fill_regions};
 mod select;
@@ -549,7 +553,9 @@ pub fn select_and_page(s: &mut Session, ids: Vec<NodeId>) -> Result<()> {
         if !doc.pages.contains(&pg) {
             return Err(EngineError::Disabled("select".into(), format!("{first} isn't on a page (it is a library component)")));
         }
-        s.ds_mut()?.page = pg;
+        // 走 open_page：切页要保存当前页视图、恢复目标页视图（直接赋 page 会污染页面视图
+        // 记忆，CodeRabbit PR#34）。
+        s.ds_mut()?.open_page(pg);
     }
     s.set_selection(ids);
     Ok(())

@@ -206,6 +206,7 @@ fn routes_are_the_same_for_the_same_document() {
         to: End::Point { x: 300.0, y: 500.0 },
         routing: Routing::Elbow,
         path: None,
+        branch: false,
     };
     let doc = s.doc().unwrap();
     let r = route(doc, &c).unwrap();

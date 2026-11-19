@@ -17,6 +17,7 @@ fn the_assets_panel_checks_an_unknown_library_server_only_when_asked() {
         id: "lib".into(),
         name: "Kit".into(),
         path: LINK.into(),
+        relative: String::new(),
         version: 1,
         ..Default::default()
     });

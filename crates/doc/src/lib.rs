@@ -10,6 +10,8 @@
 
 pub mod anim;
 pub mod board;
+mod board_mindmap;
+pub use board_mindmap::{MIND_GAP_X, MIND_GAP_Y, MIND_MAX_DEPTH, MIND_MAX_NODES, MindBox, mind_layout};
 pub mod board_route;
 pub mod colors;
 pub mod comments;
@@ -450,7 +452,7 @@ impl Document {
         let id = self.alloc_id();
         let node = Node::new(
             id,
-            NodeKind::Page { background: Color::DEFAULT_PAGE, flows: Vec::new(), prototype: Default::default(), guides: Vec::new() },
+            NodeKind::Page { background: Color::DEFAULT_PAGE, flows: Vec::new(), prototype: Default::default(), guides: Vec::new(), opening: false },
             name,
             0.0,
             0.0,
@@ -1356,6 +1358,8 @@ fn remap_action(a: &mut proto::Action, map: &BTreeMap<NodeId, NodeId>) {
 
 #[cfg(test)]
 mod blur_tests;
+#[cfg(test)]
+mod board_mindmap_tests;
 #[cfg(test)]
 mod boolean_hit_tests;
 #[cfg(test)]
