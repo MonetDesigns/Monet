@@ -3368,7 +3368,11 @@ impl WindowState {
         let kind_now = c.paint_state.as_ref().map(|s| s.borrow().kind.clone());
         let is_grad = matches!(kind_now, Some(figcraft_color::PaintKind::Gradient(_)));
         // 顶部不额外留白：类型条紧贴标题栏下方（Figma 取色器内容 257 = 类型条 41 + 渐变编辑 216）。
-        let mut col = div().w(pt(PANEL_W)).flex().flex_col();
+        // 点卡片内空白（非输入框）时让输入框失焦提交：TextEdit 点自身会 stop_propagation，
+        // 所以这里只在点空白时触发 blur（用户反复反馈的「输入完点别处提交不了」）。
+        let mut col = div().w(pt(PANEL_W)).flex().flex_col().on_mouse_down(MouseButton::Left, |_e, window, _cx| {
+            window.blur();
+        });
         if c.paint.is_some() && !c.nested {
             col = col.child(self.picker_toolbar(c));
         }
