@@ -266,9 +266,13 @@ pub fn at_point(x: f32, y: f32) -> Bounds<Pixels> {
 ///
 /// One definition, so a change here lands on every popup at once: nothing else may draw a menu's
 /// chrome (a row's own 5 pt hover fill is `widgets/menu.rs` / `menu_card`'s business).
+/// ⚠️ 菜单文字颜色的**唯一来源**：所有菜单（主菜单、下拉、工具栏飞出、画布右键、
+/// Actions palette）都通过本控件继承白 90% 的墨色。调用处禁止再写 `.text_color(...)`
+/// 或 `t.menu_text` 去改行文字；要调整菜单颜色只能改这里 / `menu_metrics::ink()`。
+/// 行内的快捷键和子菜单箭头用 `menu_metrics::trail_ink()` 故意淡一档，是例外。
 pub fn menu_surface() -> Div {
     let t = tokens();
-    div().flex().flex_col().p(pt(PAD)).bg(rgba(t.menu)).rounded(pt(13.0)).shadow(vec![BoxShadow {
+    div().flex().flex_col().p(pt(PAD)).bg(rgba(t.menu)).rounded(pt(13.0)).text_color(crate::menu_metrics::ink()).shadow(vec![BoxShadow {
         color: rgba(crate::canvas::geom::Color32::from_black_alpha(60)).into(),
         offset: point(px(0.0), px(4.0)),
         blur_radius: px(16.0),

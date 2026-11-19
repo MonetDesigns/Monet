@@ -395,7 +395,7 @@ pub(crate) fn render(
                 .flex_row()
                 .items_center()
                 .rounded(pt(ITEM_RADIUS))
-                .text_color(crate::menu_metrics::ink())
+                // 墨色由通用 menu_surface() 统一注入，禁止在这里单独设行文字颜色。
                 .text_size(pt(TEXT_PT))
                 .on_mouse_move(move |_e, window, cx| hover(li, ri, window, cx))
                 .on_mouse_down(MouseButton::Left, move |_e, window, cx| click(li, ri, window, cx));

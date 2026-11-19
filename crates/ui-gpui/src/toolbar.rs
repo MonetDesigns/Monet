@@ -923,13 +923,13 @@ fn vector_more_card(current: VTool, on: &OnIntent) -> Div {
             .px(pt(4.0))
             .rounded(pt(5.0))
             .text_size(pt(crate::widgets::TEXT_PT))
-            .text_color(rgba(t.menu_text))
+            // 行文字颜色继承通用 menu_surface()，不在这里单独设置。
             .cursor_pointer()
             .on_mouse_down(MouseButton::Left, move |_: &MouseDownEvent, w, cx| on_click(intent.clone(), w, cx))
-            .child(paint_icon(icon, rgba(t.menu_text), 16.0))
+            .child(paint_icon(icon, crate::menu_metrics::ink(), 16.0))
             .child(tr(label))
             .child(div().flex_1())
-            .child(div().text_color(rgba(t.menu_dim)).child(pretty_shortcut(shortcut)));
+            .child(div().text_color(crate::menu_metrics::trail_ink()).child(pretty_shortcut(shortcut)));
         r = if active { r.bg(rgba(t.menu_hover)) } else { r.hover(|s| s.bg(rgba(t.menu_hover))) };
         card = card.child(r);
     }

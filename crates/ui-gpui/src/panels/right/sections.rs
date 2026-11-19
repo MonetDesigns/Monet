@@ -963,6 +963,7 @@ fn color_pick(
     key: &'static str,
     base_paint: Option<Value>,
     trigger: String,
+    styles: Vec<(String, &'static str, Value)>,
 ) -> (ColorField, Rc<Cell<Option<Bounds<Pixels>>>>) {
     let popups = f.popups();
     let cmds = f.cmds.clone();
@@ -971,6 +972,10 @@ fn color_pick(
     let anchor_key = trigger.clone();
     let cf = cf.on_swatch(move |pos: Point<Pixels>, window, cx: &mut App| {
         let top = crate::popovers::anchored_top(&anchor_key, window);
+        let style_rows: Vec<crate::popovers::Row> = styles
+            .iter()
+            .map(|(label, cmd, params)| crate::popovers::Row::new(label.clone(), cmd, params.clone()).group(tr("This file")))
+            .collect();
         let on_pick = Rc::new({
             let cmds = cmds.clone();
             let params = params.clone();
@@ -1001,6 +1006,7 @@ fn color_pick(
                         p["paint"] = serde_json::to_value(&np).unwrap_or(Value::Null);
                         write_cmds.push(Cmd { id: cmd, params: Some(p) });
                     }),
+                    styles: style_rows.clone(),
                 }
             });
         // Synchronous request, no detached async `spawn` and no root-Entity guard: the old
@@ -1013,12 +1019,20 @@ fn color_pick(
 }
 
 /// paint 行的 swatch（`paints.rs::paint_row`）：选色推 `fill.set`/`stroke.set`，带 `index`。
-fn paint_swatch(f: &RightFields, row: &PaintRow, cf: ColorField) -> (ColorField, Rc<Cell<Option<Bounds<Pixels>>>>) {
+fn paint_swatch(
+    f: &RightFields,
+    row: &PaintRow,
+    cf: ColorField,
+    styles: Vec<(String, &'static str, Value)>,
+) -> (ColorField, Rc<Cell<Option<Bounds<Pixels>>>>) {
     let current = row.paint.solid_color().map(crate::widgets::swatch::color32).unwrap_or(Color32::BLACK);
     let cmd = if row.fills { "fill.set" } else { "stroke.set" };
     // Fill / Stroke 同 index 的两行不能共用取色器 trigger，否则点开一个会关掉另一个
     // （CodeRabbit PR#28）。trigger 里带上 paint 侧。
     let side = if row.fills { "fill" } else { "stroke" };
+    // 必须把整份 paint 交给取色器，否则 `PaintPicker` 为 None，类型条（纯色/渐变/图案/图片）
+    // 和渐变色阶整块都不会渲染（EGUI 版同样依赖 paint 本体判断类型）。
+    let base = serde_json::to_value(&row.paint).ok();
     color_pick(
         f,
         cf,
@@ -1026,8 +1040,9 @@ fn paint_swatch(f: &RightFields, row: &PaintRow, cf: ColorField) -> (ColorField,
         cmd,
         json!({ "index": row.index }),
         "color",
-        None,
+        base,
         format!("color-{side}-{}", row.index),
+        styles,
     )
 }
 
@@ -1090,6 +1105,13 @@ pub(crate) fn paints(
     // egui 倒序画（最上层 paint 在最前）。只有**第一道实心 paint** 的 colour 可关键帧化
     // （egui `paints.rs` 的 `first_solid`）。Motion 模式下那一行行尾多出一个菱形按钮。
     let first_solid = rows.iter().position(|r| matches!(r.paint.kind, PaintKind::Solid { .. }));
+    // 该 paint 槽可应用的样式（取色器头部「+」弹出的样式面板用）。
+    let paint_styles: Vec<(String, &'static str, Value)> = d
+        .styles
+        .iter()
+        .filter(|s| s.ty == "paint")
+        .map(|s| (s.name.clone(), "style.apply", json!({ "style": s.id, "target": if fills { "fill" } else { "stroke" } })))
+        .collect();
     for (idx, row) in rows.iter().enumerate().rev() {
         let cmd = if fills { "fill.set" } else { "stroke.set" };
         let index = row.index;
@@ -1135,7 +1157,7 @@ pub(crate) fn paints(
         // 颜色输入框跨两列（w_full），行尾只有两个 24 pt 槽，同 egui `paint_row` 的
         // `available_width - 56` + `icon_pair`。绑定/解绑一律由 ColorField 自己的尾插槽承担。
         let cf = ColorField::new(cx, row.paint.clone(), text, row_w, hex_ed, op_ed);
-        let (cf, swatch_hit) = paint_swatch(f, row, cf);
+        let (cf, swatch_hit) = paint_swatch(f, row, cf, paint_styles.clone());
         // 变量绑定态 = 设计稿 `Field-color / Disabled`：无背景、整框可点换绑、透明度数值消失，
         // 24 pt 尾插槽换成解绑按钮；未绑定态该插槽仍是 100 / "%"。
         let cf = match row.bound.as_deref() {
@@ -1647,8 +1669,17 @@ pub(crate) fn selection_colors(
         let current = paint.solid_color().map(crate::widgets::swatch::color32).unwrap_or(Color32::BLACK);
         let cf = ColorField::new(cx, paint, text, row_w, hex_ed, op_ed);
         // swatch 点击开取色器（`selection_colors.rs::toggle`）：`selection.setPaint` 用 `paint` 键。
-        let (cf, swatch_hit) =
-            color_pick(f, cf, current, "selection.setPaint", json!({ "targets": targets }), "paint", Some(row.paint.clone()), format!("color-sel-{targets}"));
+        let (cf, swatch_hit) = color_pick(
+            f,
+            cf,
+            current,
+            "selection.setPaint",
+            json!({ "targets": targets }),
+            "paint",
+            Some(row.paint.clone()),
+            format!("color-sel-{targets}"),
+            Vec::new(),
+        );
         // 选区颜色组绑定到变量时同样走 `Field-color / Disabled`：整框可点换绑，24 pt
         // 尾插槽换成解绑按钮（`selection.detachColor`）。换绑菜单只列这组作用域内的变量。
         let var_names: Vec<String> = row.variables.iter().map(|(name, _)| name.clone()).collect();
@@ -4161,7 +4192,17 @@ pub(crate) fn page(f: &RightFields, d: &PanelData, row_w: f32, n: &mut usize, wi
     let cf = ColorField::new(cx, figcraft_color::Paint::solid(color), ColorText::Hex(SharedString::from(p.background.clone())), row_w, hex_ed, op_ed);
     // swatch → picker (`toggle_picker(PickerTarget::PageBackground)`).
     let (cf, swatch_hit) =
-        color_pick(f, cf, Color32::from_hex(&p.background).unwrap_or(Color32::WHITE), "page.setBackground", json!({}), "color", None, "color-page".to_string());
+        color_pick(
+            f,
+            cf,
+            Color32::from_hex(&p.background).unwrap_or(Color32::WHITE),
+            "page.setBackground",
+            json!({}),
+            "color",
+            None,
+            "color-page".to_string(),
+            Vec::new(),
+        );
     sec = sec.child(field_row_full(crate::popovers::with_button_bounds(cf, swatch_hit)));
     // egui keeps this as local UI state and opens a dialog; GPUI has no dialog yet, so the
     // engine's `file.colorProfile` command is the equivalent. `node.set {"colorProfile": …}`

@@ -215,11 +215,8 @@ pub(crate) fn rows(
             .rounded(pt(ITEM_RADIUS))
             .pl(pt(inset))
             .pr(pt(8.0))
-            // Every menu is the dark surface (`t.menu`, #1E1E1E in both themes), so labels are
-            // always `t.menu_text`. The actions palette used to be a light card with dark text;
-            // it is a dark card too now (user 2026-11-18).
+            // 默认墨色由通用 `menu_surface()` 统一注入，调用处不许再设行文字颜色。
             .text_size(pt(PALETTE_TEXT_PT))
-            .text_color(rgba(t.menu_text))
             .when(item.disabled, |d| d.opacity(0.4));
         if !item.disabled {
             // Every menu is the dark surface with `t.menu_text` (white) labels, so the hover fill
@@ -255,7 +252,8 @@ pub(crate) fn rows(
             }));
         }
         if let Some(icon) = item.icon {
-            let color = if item.disabled { rgba(t.menu_dim) } else { crate::menu_metrics::ink() };
+            // 与标签、勾号同色；.disabled 的变淡由行盒的 opacity(0.4) 统一负责。
+            let color = crate::menu_metrics::ink();
             // A shape-tool mark is a 24 pt vector: the icon column is 24 pt wide, so let the
             // vector keep its own size instead of forcing it into ICON_SIZE (which would also
             // scale the shared 1 pt stroke).
