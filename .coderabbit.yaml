@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
 # AI review for pull requests. Install the CodeRabbit app on the repository to activate it.
 language: en
 early_access: false
@@ -10,6 +11,9 @@ reviews:
   auto_review:
     enabled: true
     drafts: false
+    # Dependabot bumps are checked by CI; skip CodeRabbit reviews on them.
+    ignore_usernames:
+      - "dependabot[bot]"
   path_filters:
     - "!**/target/**"
     - "!**/*.svg"
