@@ -14,6 +14,10 @@ use crate::params::{
 use crate::{BatchStep, EngineError, Result, Session, bad, spec};
 
 mod clipboard;
+mod vector_clipboard;
+pub use vector_clipboard::clipboard_svg;
+#[cfg(test)]
+mod vector_clipboard_tests;
 mod props;
 pub(crate) use props::{edit_region_fills, fill_regions};
 mod select;

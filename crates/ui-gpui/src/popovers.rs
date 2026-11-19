@@ -763,6 +763,60 @@ fn style_write_queue(cmds: &Cmds, style_id: String, text: Rc<RefCell<Value>>) ->
     cmds.mapped(map)
 }
 
+/// 一行“下拉式”设置（PR #823）：描边的枚举设置是列表，不是左右分格。
+fn stroke_dropdown(tab: u8, label: SharedString, current: impl Into<SharedString>, options: Vec<Opt>) -> Setting {
+    Setting::Dropdown {
+        tab,
+        label,
+        current: Rc::new(RefCell::new(current.into())),
+        anchor: Rc::new(RefCell::new(None)),
+        options,
+    }
+}
+
+/// `node.set` 的 cap id 是 lowerCamelCase（`none`、`lineArrow`…），不是 Debug 名。
+fn cap_param_id(c: figcraft_doc::StrokeCap) -> &'static str {
+    use figcraft_doc::StrokeCap as C;
+    match c {
+        C::None => "none",
+        C::Round => "round",
+        C::Square => "square",
+        C::LineArrow => "lineArrow",
+        C::TriangleArrow => "triangleArrow",
+        C::ReversedTriangle => "reversedTriangle",
+        C::CircleFilled => "circleFilled",
+        C::DiamondFilled => "diamondFilled",
+    }
+}
+
+fn cap_options(key: &'static str) -> Vec<Opt> {
+    figcraft_doc::StrokeCap::ALL
+        .iter()
+        .map(|c| {
+            let mut props = serde_json::Map::new();
+            props.insert(key.to_string(), json!(cap_param_id(*c)));
+            Opt::new(tr(c.label()), "node.set", json!({ "props": props }))
+        })
+        .collect()
+}
+
+/// 宽度剖面当前显示名：真实 preset、Custom（手改过）、Uniform（无）或 Mixed（多选不一致）。
+fn profile_label(data: &PanelData) -> String {
+    match &data.stroke_profile {
+        None => tr("Mixed").to_string(),
+        Some(None) => tr("Uniform").to_string(),
+        Some(Some(p)) => p.preset().map_or_else(|| tr("Custom").to_string(), |w| tr(w.label()).to_string()),
+    }
+}
+
+fn join_label(j: figcraft_doc::StrokeJoin) -> &'static str {
+    match j {
+        figcraft_doc::StrokeJoin::Miter => "Miter",
+        figcraft_doc::StrokeJoin::Bevel => "Bevel",
+        figcraft_doc::StrokeJoin::Round => "Round",
+    }
+}
+
 impl WindowState {
     /// Pin the card's top to the exact top of its trigger button (window coordinates).
     /// Call this at the open site when the button reported its own `Bounds`; the press
@@ -943,12 +997,11 @@ impl WindowState {
             }),
         );
         let miter_field = mk_number(cx, 28.6, "node.set", Rc::new(|v| json!({ "props": { "miterAngle": v } })));
-        let profiles = vec![
-            Opt::new(tr("Uniform"), "stroke.widthProfile", json!({ "preset": "uniform" })),
-            Opt::new(tr("Wedge"), "stroke.widthProfile", json!({ "preset": "wedge" })),
-            Opt::new(tr("Taper"), "stroke.widthProfile", json!({ "preset": "taper" })),
-            Opt::new(tr("Eye"), "stroke.widthProfile", json!({ "preset": "eye" })),
-        ];
+        // 全部 6 个 preset（旧版只列 4 个，丢了 Rounded / Pinch）。
+        let profiles: Vec<Opt> = figcraft_doc::WidthPreset::ALL
+            .iter()
+            .map(|p| Opt::new(tr(p.label()), "stroke.widthProfile", json!({ "preset": p.id() })))
+            .collect();
         // Brushes are read from external `.abr` files in the user's brushes directory; the engine
         // contains no built-in shapes. Group / folder / name keeps packs of hundreds selectable.
         let installed = figcraft_abr::infos();
@@ -1011,69 +1064,58 @@ impl WindowState {
             };
             [spacing, scatter, size_jitter, rotation_jitter]
         });
-        // Behaviour, not a static list (ui-egui `stroke_settings_body`): the dash fields only
-        // exist while the stroke is dashed, the miter angle only for a miter join, and the end
-        // caps only on open paths. Pattern / Join / End caps read the selection's own values
-        // instead of always lighting the first cell (user 2026-11-18).
+        // 行为驱动，不是静态列表：虚线字段仅在虚线时出现，miter 角仅 miter 连接，端帽仅开放路径。
+        // 这些枚举设置是**下拉**而非左右分格（PR #823）：分格行宽只有 134pt，多出选项就被挤掉。
         let dashed = data.dashes.as_ref().is_some_and(|d| !d.is_empty());
-        let pattern_active = match &data.dashes {
-            Some(d) if d.is_empty() => Some(0),
-            Some(_) => Some(1),
-            None => None,
+        let style_current = match &data.dashes {
+            None => tr("Mixed").to_string(),
+            Some(d) if d.is_empty() => tr("Solid").to_string(),
+            Some(_) => tr("Dash").to_string(),
         };
-        let join_active = data.join.map(|j| match j {
-            figcraft_doc::StrokeJoin::Miter => 0,
-            figcraft_doc::StrokeJoin::Bevel => 1,
-            figcraft_doc::StrokeJoin::Round => 2,
-        });
-        let cap_active = data.cap_start.and_then(|c| match c {
-            figcraft_doc::StrokeCap::None => Some(0),
-            figcraft_doc::StrokeCap::Round => Some(1),
-            figcraft_doc::StrokeCap::Square => Some(2),
-            _ => None,
-        });
-        let mut settings = vec![
-            Setting::Caption { tab: 0, text: tr("Stroke style").into() },
-            Setting::Options {
-                tab: 0,
-                label: tr("Pattern").into(),
-                active: pattern_active,
-                options: vec![
-                    Opt::new(tr("Solid"), "node.set", json!({ "props": { "dashes": [] } })),
-                    Opt::new(tr("Dash"), "node.set", json!({ "props": { "dashes": [weight * 4.0, weight * 4.0] } })),
-                ],
-            },
-        ];
+        let join_current = data.join.map_or_else(|| tr("Mixed").to_string(), |j| join_label(j).to_string());
+        let mut settings = vec![stroke_dropdown(
+            0,
+            tr("Stroke style").into(),
+            style_current,
+            vec![
+                Opt::new(tr("Solid"), "node.set", json!({ "props": { "dashes": [] } })),
+                Opt::new(tr("Dash"), "node.set", json!({ "props": { "dashes": [weight * 4.0, weight * 4.0] } })),
+            ],
+        )];
         if dashed {
             settings.push(Setting::Number { tab: 0, label: tr("Dash").into(), field: dash_field });
             settings.push(Setting::Number { tab: 0, label: tr("Gap").into(), field: gap_field });
         }
-        settings.push(Setting::Options {
-            tab: 0,
-            label: tr("Join").into(),
-            active: join_active,
-            options: vec![
-                Opt::new(tr("Miter"), "node.set", json!({ "props": { "strokeJoin": "miter" } })),
-                Opt::new(tr("Bevel"), "node.set", json!({ "props": { "strokeJoin": "bevel" } })),
-                Opt::new(tr("Round"), "node.set", json!({ "props": { "strokeJoin": "round" } })),
-            ],
-        });
+        settings.push(stroke_dropdown(
+            0,
+            tr("Join").into(),
+            join_current,
+            figcraft_doc::StrokeJoin::ALL
+                .iter()
+                .map(|j| Opt::new(tr(join_label(*j)), "node.set", json!({ "props": { "strokeJoin": format!("{j:?}").to_lowercase() } })))
+                .collect(),
+        ));
         if data.join == Some(figcraft_doc::StrokeJoin::Miter) {
             settings.push(Setting::Number { tab: 0, label: tr("Miter angle").into(), field: miter_field });
         }
         if data.is_open_path {
-            settings.push(Setting::Options {
-                tab: 0,
-                label: "End caps".into(),
-                active: cap_active,
-                options: vec![
-                    Opt::new(tr("None"), "node.set", json!({ "props": { "strokeCap": "butt" } })),
-                    Opt::new(tr("Round"), "node.set", json!({ "props": { "strokeCap": "round" } })),
-                    Opt::new(tr("Square"), "node.set", json!({ "props": { "strokeCap": "square" } })),
-                ],
-            });
+            // 两端分开两行，各列全 8 种形状（旧版只有 3 个，且 id 用了引擎不认的 "butt"）。
+            settings.push(stroke_dropdown(
+                0,
+                tr("Start point").into(),
+                data.cap_start.map_or_else(|| tr("Mixed").to_string(), |c| tr(c.label()).to_string()),
+                cap_options("startCap"),
+            ));
+            settings.push(stroke_dropdown(
+                0,
+                tr("End point").into(),
+                data.cap_end.map_or_else(|| tr("Mixed").to_string(), |c| tr(c.label()).to_string()),
+                cap_options("endCap"),
+            ));
         }
-        settings.push(Setting::Options { tab: 0, label: tr("Width profile").into(), active: Some(0), options: profiles.clone() });
+        // 宽度剖面两个页签都放，列全 6 个；当前值取自选择（Mixed / Uniform / Custom / preset 名）。
+        let shown_profile = profile_label(data);
+        settings.push(stroke_dropdown(0, tr("Width profile").into(), shown_profile.clone(), profiles.clone()));
         settings.push(Setting::Caption { tab: 1, text: tr("Brush").into() });
         // Every brush comes from an external `.abr` file; "None" keeps a plain vector stroke.
         settings.push(Setting::Dropdown {
@@ -1089,16 +1131,16 @@ impl WindowState {
             settings.push(Setting::Number { tab: 1, label: tr("Size jitter").into(), field: size_jitter });
             settings.push(Setting::Number { tab: 1, label: tr("Rotation jitter").into(), field: rotation_jitter });
         }
-        settings.push(Setting::Options {
-            tab: 1,
-            label: tr("Brush library").into(),
-            active: None,
-            options: vec![
+        settings.push(stroke_dropdown(
+            1,
+            tr("Brush library").into(),
+            tr("Brush library").to_string(),
+            vec![
                 Opt::new(tr("Import brushes…"), "brush.import", json!({})),
                 Opt::new(tr("Reload"), "brush.reload", json!({})),
             ],
-        });
-        settings.push(Setting::Options { tab: 1, label: tr("Width profile").into(), active: Some(0), options: profiles });
+        ));
+        settings.push(stroke_dropdown(1, tr("Width profile").into(), shown_profile, profiles));
         w.settings = Rc::new(RefCell::new(settings));
         w
     }

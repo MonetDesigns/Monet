@@ -12,6 +12,10 @@ pub struct ViewState {
     /// Viewport size in logical pixels (set by the UI; used by zoom-to-fit).
     pub vw: f64,
     pub vh: f64,
+    /// Height in screen points of the strip the floating bottom toolbar covers; set by the UI
+    /// every frame, 0 when hidden. Input state, never saved with the document (#2152).
+    #[serde(skip)]
+    pub bottom_inset: f64,
     pub pixel_grid: bool,
     pub layout_grids: bool,
     pub rulers: bool,
@@ -51,6 +55,7 @@ impl Default for ViewState {
             zoom: 1.0,
             vw: 1200.0,
             vh: 800.0,
+            bottom_inset: 0.0,
             pixel_grid: true,
             layout_grids: true,
             rulers: false,
@@ -105,6 +110,28 @@ impl ViewState {
         self.cx = r.center().x;
         self.cy = r.center().y;
     }
+    /// Fit a page rectangle for Zoom to selection: a 40-point margin around the area *above* the
+    /// floating bottom toolbar (`vw` by `vh - bottom_inset`), centred in that area (#2152).
+    pub fn fit_selection(&mut self, r: figcraft_geom::Rect, max_zoom: f64) {
+        if ![r.x0, r.y0, r.x1, r.y1].iter().all(|v| v.is_finite()) {
+            return;
+        }
+        let inset = if self.bottom_inset.is_finite() { self.bottom_inset.clamp(0.0, (self.vh - 1.0).max(0.0)) } else { 0.0 };
+        let area_h = (self.vh - inset).max(1.0);
+        if !(r.width() > 0.0 || r.height() > 0.0) {
+            self.cx = r.center().x;
+            self.cy = r.center().y + (self.vh - area_h) / 2.0 / self.zoom.max(1e-6);
+            return;
+        }
+        let mx = (self.vw / 4.0).clamp(0.0, 40.0);
+        let my = (area_h / 4.0).clamp(0.0, 40.0);
+        let zx = (self.vw - mx * 2.0).max(1.0) / r.width().max(1e-6);
+        let zy = (area_h - my * 2.0).max(1.0) / r.height().max(1e-6);
+        self.zoom = zx.min(zy).clamp(Self::MIN_ZOOM, max_zoom);
+        self.cx = r.center().x;
+        self.cy = r.center().y + (self.vh - area_h) / 2.0 / self.zoom;
+    }
+
     /// The zoom from which the pixel grid shows (400%).
     pub const PIXEL_GRID_ZOOM: f64 = 4.0;
     /// Whether the pixel grid draws: it's on and the canvas is zoomed in to 400% or more.
@@ -136,5 +163,24 @@ impl ViewState {
         let (ox, oy) = self.origin();
         let z = self.zoom.max(1e-9);
         (ox + x / z, oy + y / z)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Zoom to selection fits the area *above* a floating bottom toolbar, so the selected thing
+    /// lands centred in what the user can actually see (#2152).
+    #[test]
+    fn fit_selection_accounts_for_the_bottom_toolbar() {
+        let rect = figcraft_geom::Rect::new(0.0, 0.0, 100.0, 100.0);
+        let mut plain = ViewState { vw: 1000.0, vh: 800.0, ..Default::default() };
+        plain.fit_selection(rect, 256.0);
+        let mut inset = ViewState { vw: 1000.0, vh: 800.0, bottom_inset: 100.0, ..Default::default() };
+        inset.fit_selection(rect, 256.0);
+        assert!(inset.zoom < plain.zoom, "less usable height means a smaller zoom: {} vs {}", inset.zoom, plain.zoom);
+        assert!(inset.cy > plain.cy, "the selection sits lower on the page to clear the toolbar: {} vs {}", inset.cy, plain.cy);
+        assert!((inset.cy - (50.0 + 50.0 / inset.zoom)).abs() < 1e-9, "its centre lands at the middle of the area above the toolbar");
     }
 }

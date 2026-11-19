@@ -715,3 +715,21 @@ fn the_transform_box_and_its_handles() {
     // At a larger zoom the same layer is big enough on screen for its handles inside it.
     assert_eq!(handle_at(s.doc().unwrap(), &[tiny], Point::new(320.2, 10.2), 20.0), Some(Handle::Corner(0)));
 }
+
+/// `absoluteRotation` is the angle on the *page* (the Design panel's field), so setting it on a
+/// child of a turned frame has to cancel the parent's angle instead of adding to it (#2152).
+#[test]
+fn absolute_rotation_sets_the_angle_on_the_page() {
+    let mut s = Session::new();
+    let frame = id(&ex(&mut s, "node.create", json!({"type": "frame", "x": 0, "y": 0, "width": 200, "height": 200, "props": {"rotation": 30}})));
+    let rect = id(&ex(&mut s, "node.create", json!({"type": "rectangle", "x": 20, "y": 20, "width": 50, "height": 50, "parent": frame})));
+    let doc = s.doc().unwrap();
+    assert!((rotation_degrees(doc.world_transform(frame)) - 30.0).abs() < 1e-6);
+    ex(&mut s, "node.set", json!({"id": rect, "props": {"absoluteRotation": 0}}));
+    let doc = s.doc().unwrap();
+    assert!((rotation_degrees(doc.world_transform(rect))).abs() < 1e-6, "the child sits straight on the page");
+    ex(&mut s, "node.set", json!({"id": rect, "props": {"absoluteRotation": 90}}));
+    let doc = s.doc().unwrap();
+    assert!((rotation_degrees(doc.world_transform(rect)) - 90.0).abs() < 1e-6);
+    assert!(s.execute("node.set", &json!({"id": rect, "props": {"rotation": 1, "absoluteRotation": 2}})).is_err(), "one angle per call");
+}
