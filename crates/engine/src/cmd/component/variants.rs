@@ -1,6 +1,6 @@
 use super::{
-    BTreeMap, BTreeSet, Document, EngineError, Node, NodeId, NodeKind, Result, Session, Value, bad, inside_instance, json, owning_instance,
-    id_of, req_targets, roots, set_name_from, string, targets, variant_name, variant_options, variant_props, variant_set, z_sorted,
+    BTreeMap, BTreeSet, Document, EngineError, Node, NodeId, NodeKind, Result, Session, Value, bad, id_of, inside_instance, json, owning_instance,
+    req_targets, roots, set_name_from, string, targets, variant_name, variant_options, variant_props, variant_set, z_sorted,
 };
 
 /// Wrap components in a new component set (named after the first) placed around them.
