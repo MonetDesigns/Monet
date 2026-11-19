@@ -524,7 +524,7 @@ pub fn paint_tool(icon: Icon, color: impl Into<gpui::Rgba>) -> impl IntoElement 
 /// Figma 的四个 24×24 描边图标（用户 2026-11-15）：加号 / 减号 / 叉号 / 下拉小箭头。
 /// **网格和路径坐标保持原样**，只有显示尺寸会等比缩放；`__STROKE__` 由
 /// [`ICON_STROKE`] 按缩放比反算注入，缩放后视觉线宽恒为 1 pt。
-const FIGMA_UI_ICONS: [(Icon, &str); 25] = [
+const FIGMA_UI_ICONS: [(Icon, &str); 28] = [
     (Icon::Plus, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M12 6.5V12M12 12V17.5M12 12H6.5M12 12H17.5" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/></svg>"#),
     (Icon::Minus, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M6.5 12H17.5" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/></svg>"#),
     (Icon::Close, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M6.50003 17.5L13.6109 10.3891L17.5 6.50006M6.5 6.5L17.5 17.5" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/></svg>"#),
@@ -554,6 +554,11 @@ const FIGMA_UI_ICONS: [(Icon, &str); 25] = [
     (Icon::Text, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M6.5 9V6.5H12M17.5 9V6.5H12M12 6.5V17.5M12 17.5H9.5M12 17.5H14.5" stroke="black" stroke-width="__STROKE__" stroke-linecap="round" stroke-linejoin="round"/></svg>"#),
     (Icon::Pen, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M13.5 17.5L14.6464 18.6464C14.8417 18.8417 15.1583 18.8417 15.3536 18.6464L18.6464 15.3536C18.8417 15.1583 18.8417 14.8417 18.6464 14.6464L17.5 13.5M13.5 17.5L17.5 13.5M13.5 17.5L11.0205 17.0041C9.48501 16.697 8.26993 15.5222 7.91128 13.9979L6.62759 8.54225C6.54827 8.20514 6.64902 7.85098 6.8939 7.6061L7.25 7.25M17.5 13.5L17.0041 11.0205C16.697 9.48501 15.5222 8.26993 13.9979 7.91128L8.54225 6.62759C8.20514 6.54827 7.85098 6.64902 7.6061 6.8939L7.25 7.25M7.25 7.25L11 11" stroke="black" stroke-width="__STROKE__" stroke-linejoin="round"/><circle cx="12" cy="12" r="1.5" stroke="black" stroke-width="__STROKE__"/></svg>"#),
     (Icon::Page, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M8.5 6H12.793C12.925 6 13.052 6.053 13.146 6.146L16.854 9.854C16.947 9.947 17 10.075 17 10.208V16.5C17 17.328 16.328 18 15.5 18H8.5C7.672 18 7 17.328 7 16.5V7.5C7 6.672 7.672 6 8.5 6Z" stroke="black" stroke-width="__STROKE__" stroke-linejoin="round"/><path d="M13 7V10H16" stroke="black" stroke-width="__STROKE__" stroke-linejoin="round"/></svg>"#),
+    // 自动布局方向（用户 2026-11-19 的第二份包）：横向 = Frame-2 的胶囊，竖向由它顺时针
+    // 旋转 90° 得到，网格 = Frame-4 的四个角标。
+    (Icon::LayoutH, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M9 16H15C17.2091 16 19 14.2091 19 12C19 9.79086 17.2091 8 15 8H9C6.79086 8 5 9.79086 5 12C5 14.2091 6.79086 16 9 16Z" stroke="black" stroke-width="__STROKE__"/><circle cx="9.5" cy="12" r="2" stroke="black" stroke-width="__STROKE__"/></svg>"#),
+    (Icon::LayoutV, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><g transform="rotate(90 12 12)"><path d="M9 16H15C17.2091 16 19 14.2091 19 12C19 9.79086 17.2091 8 15 8H9C6.79086 8 5 9.79086 5 12C5 14.2091 6.79086 16 9 16Z" stroke="black" stroke-width="__STROKE__"/><circle cx="9.5" cy="12" r="2" stroke="black" stroke-width="__STROKE__"/></g></svg>"#),
+    (Icon::LayoutGrid, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M6 8H18M6 16H18M8 6V18M16 18V6" stroke-linecap="round" stroke="black" stroke-width="__STROKE__"/></svg>"#),
     // Move = 主菜单用的商标（monet-mono）纯线框版，几何不动，线宽走 ICON_STROKE。
     (Icon::Move, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M6.58595 6.58595C7.14047 6.03143 7.96787 5.8517 8.70216 6.12697L16.7022 9.12697C17.5218 9.43433 18.0467 10.2394 17.9971 11.1133C17.9473 11.9873 17.3346 12.728 16.4854 12.9404L13.6494 13.6494L12.9404 16.4854C12.728 17.3346 11.9873 17.9473 11.1133 17.9971C10.2394 18.0467 9.43433 17.5218 9.12697 16.7022L6.12697 8.70216C5.8517 7.96787 6.03143 7.14047 6.58595 6.58595Z" stroke="black" stroke-width="__STROKE__" stroke-linejoin="round"/></svg>"#),
     // 标题栏用产品自带的减号 / 方框，不另造 Win* 图标。
@@ -567,7 +572,44 @@ const FIGMA_UI_ICONS: [(Icon, &str); 25] = [
 fn figma_ui_icon(icon: Icon, size: f32) -> Option<Vec<u8>> {
     let (_, src) = FIGMA_UI_ICONS.iter().find(|(i, _)| *i == icon)?;
     let width = ICON_STROKE * 24.0 / size.max(0.001);
-    Some(src.replace("__STROKE__", &format!("{}", width)).into_bytes())
+    let mut out = src.replace("__STROKE__", &format!("{}", width));
+    // 用户 2026-11-19 的两组 24 网格线框图标图稿只占中间 6.5..17.5，按 16 pt 画出来比旧的
+    // 16 网格字形小一圈。渲染色时把图稿按中心放大，viewBox 不变（描边同比变粗到约 1.4 pt，
+    // 接近旧图标的观感）。
+    let k = art_scale(icon);
+    if k != 1.0
+        && out.starts_with("<svg ")
+        && let (Some(open), Some(close)) = (out.find('>'), out.rfind("</svg>"))
+    {
+        let inner = &out[open + 1..close];
+        out = format!("{}<g transform=\"translate(12 12) scale({k}) translate(-12 -12)\">{inner}</g></svg>", &out[..=open]);
+    }
+    Some(out.into_bytes())
+}
+
+/// 图稿放大倍数：只有用户提供的线框图标（对齐 / 镜像 / 节点类型 / 自动布局方向）需要，
+/// 加号、箭头这些原有图标保持原样。
+fn art_scale(icon: Icon) -> f32 {
+    match icon {
+        Icon::AlignLeft
+        | Icon::AlignHCenter
+        | Icon::AlignRight
+        | Icon::AlignTop
+        | Icon::AlignVCenter
+        | Icon::AlignBottom
+        | Icon::FlipH
+        | Icon::FlipV
+        | Icon::Frame
+        | Icon::Number
+        | Icon::Boolean
+        | Icon::Text
+        | Icon::Pen
+        | Icon::Page
+        | Icon::LayoutH
+        | Icon::LayoutV
+        | Icon::LayoutGrid => 1.4,
+        _ => 1.0,
+    }
 }
 
 /// 每个图标按显示尺寸各有一个资源路径（`icons/<name>@<size>.svg`）。

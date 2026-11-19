@@ -126,17 +126,15 @@ mod divider_tests {
 pub(crate) const MIN_PANEL: f32 = 240.0;
 pub(crate) const MAX_PANEL: f32 = 500.0;
 pub(crate) const DEFAULT_PANEL: f32 = 280.0;
-/// Figma 快照里两个分隔条的 ARIA 范围：左栏 240..443，右栏 241..500。
-/// 用户要求按各自的范围夹取，不再左右共用一个上下限。
+/// 两个分隔条各自的夹取范围：左栏 240..443，右栏 240..500（用户 2026-11-19：
+/// 左右最小宽度统一 240）。
 pub(crate) const MIN_LEFT_PANEL: f32 = 240.0;
 pub(crate) const MAX_LEFT_PANEL: f32 = 443.0;
-pub(crate) const MIN_RIGHT_PANEL: f32 = 241.0;
+pub(crate) const MIN_RIGHT_PANEL: f32 = 240.0;
 pub(crate) const MAX_RIGHT_PANEL: f32 = 500.0;
-/// 窗口布局的默认宽度，按 Figma 参考快照根节点的 CSS 变量：
-/// `--left-panel-width: 240px` / `--right-panel-width: 241px`（左 rail 仍是 57）。
-/// 左右栏宽度本来就不同，不再共用一个 `DEFAULT_PANEL`。
+/// 窗口布局的默认宽度（用户 2026-11-19：打开时左右都是 240；左 rail 仍是 57）。
 pub(crate) const DEFAULT_LEFT_PANEL: f32 = 240.0;
-pub(crate) const DEFAULT_RIGHT_PANEL: f32 = 241.0;
+pub(crate) const DEFAULT_RIGHT_PANEL: f32 = 240.0;
 
 /// 左右栏头部间距，直接取自 Figma 参考 `Figma (7).fig` 的 **AutoLayout 数据**
 /// （不是量坐标猜的）。`AutoLayout { gap, padding, main_align, cross_align }`：
@@ -2554,7 +2552,7 @@ pub(crate) fn auto_layout_section(
             LayoutDir::None => None,
         };
         let dir_cmds = f.cmds.clone();
-        let dir = Segmented::icons(&[(Icon::AlignVCenter, tr("Vertical")), (Icon::AlignHCenter, tr("Horizontal")), (Icon::ViewGrid, tr("Grid"))])
+        let dir = Segmented::icons(&[(Icon::LayoutV, tr("Vertical")), (Icon::LayoutH, tr("Horizontal")), (Icon::LayoutGrid, tr("Grid"))])
             .active(active)
             .on_pick(move |i: usize, _w: &mut Window, _cx: &mut App| {
                 let m = match i {
