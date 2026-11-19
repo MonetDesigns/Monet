@@ -26,7 +26,9 @@ use figcraft_engine::ToolId;
 use figcraft_engine::tools::DrawStyle;
 use figcraft_engine::vectoredit::VTool;
 use figcraft_i18n::tr;
-use gpui::{App, Bounds, BoxShadow, Div, ImageSource, MouseButton, MouseDownEvent, Pixels, SharedString, Stateful, Window, div, img, point, prelude::*, px};
+use gpui::{
+    App, Bounds, BoxShadow, Div, ImageSource, MouseButton, MouseDownEvent, Pixels, SharedString, Stateful, Window, div, img, point, prelude::*, px,
+};
 use std::rc::Rc;
 
 /// 24 网格的 SVG 等比放大到 32pt 的格子里；线宽由 ICON_STROKE 反算补偿，保持不变。
@@ -244,10 +246,7 @@ fn draw_art(inks: [[u8; 3]; 3]) -> NibArt {
                 let v = (src * ia + b.0[k] as f32 * ba * (1.0 - ia)) / oa;
                 rgb[k] = v.round().clamp(0.0, 255.0) as u8;
             }
-            out.extend_from_slice(&[
-                rgb[0], rgb[1], rgb[2],
-                (oa * 255.0).round().clamp(0.0, 255.0) as u8,
-            ]);
+            out.extend_from_slice(&[rgb[0], rgb[1], rgb[2], (oa * 255.0).round().clamp(0.0, 255.0) as u8]);
         }
         crate::canvas::render_worker::wrap_rgba(w, h, out)
     });
@@ -256,7 +255,9 @@ fn draw_art(inks: [[u8; 3]; 3]) -> NibArt {
     const NIB_CACHE_MAX: usize = 32;
     NIB_CACHE.with(|c| {
         let mut cache = c.borrow_mut();
-        if cache.len() >= NIB_CACHE_MAX { cache.clear(); }
+        if cache.len() >= NIB_CACHE_MAX {
+            cache.clear();
+        }
         cache.insert(inks, art.clone());
     });
     art
@@ -272,13 +273,19 @@ fn draw_section(tool: ToolId, inks: [[u8; 3]; 3], on: &OnIntent) -> Div {
         ("brush", tool == ToolId::Brush, Intent::Tool("brush")),
         ("pencil", tool == ToolId::Pencil, Intent::Tool("pencil")),
     ];
-    let mut row = div().flex_none().w(pt(DRAW_SECTION_W)).h(pt(PILL_H)).flex().flex_row().items_center().justify_between().px(pt(8.0)).child(divider());
+    let mut row =
+        div().flex_none().w(pt(DRAW_SECTION_W)).h(pt(PILL_H)).flex().flex_row().items_center().justify_between().px(pt(8.0)).child(divider());
     for (i, (id, active, intent)) in entries.into_iter().enumerate() {
         let tex = art[i].clone();
         let (iw, ih) = (art[i].size(0).width.0 as f32, art[i].size(0).height.0 as f32);
         let w = 60.0 * iw / ih;
         let on_click = on.clone();
-        let label: SharedString = tr(match id { "pen" => "Pen tool", "brush" => "Brush", _ => "Pen" }).into();
+        let label: SharedString = tr(match id {
+            "pen" => "Pen tool",
+            "brush" => "Brush",
+            _ => "Pen",
+        })
+        .into();
         // A per-cell group makes the whole 54 pt cell (not just the narrow art) drive the lift.
         let group: SharedString = SharedString::from(format!("draw-nib-{i}"));
         let lift_group = group.clone();
@@ -296,9 +303,7 @@ fn draw_section(tool: ToolId, inks: [[u8; 3]; 3], on: &OnIntent) -> Div {
             .justify_center()
             .cursor_pointer()
             // The selected nib sits on a raised 5 pt rounded plate.
-            .when(active, |d| {
-                d.child(div().absolute().left(pt(4.0)).top(pt(4.0)).w(pt(46.0)).h(pt(40.0)).rounded(pt(5.0)).bg(rgba(t.pressed)))
-            })
+            .when(active, |d| d.child(div().absolute().left(pt(4.0)).top(pt(4.0)).w(pt(46.0)).h(pt(40.0)).rounded(pt(5.0)).bg(rgba(t.pressed))))
             .when(!active, |d| d.hover(|s| s.bg(rgba(t.hover))))
             .tooltip(move |_window, cx| cx.new(|_| Tip { text: label.clone() }).into())
             .on_mouse_down(MouseButton::Left, move |_: &MouseDownEvent, w, cx| on_click(intent.clone(), w, cx))
@@ -330,11 +335,7 @@ pub(crate) fn width(groups: &[Group], board: bool, draw_mode: bool) -> f32 {
     // templates button is built but never mounted, so nothing ever needed the extra cell. The port
     // does mount it, so the tail is both cells and the point between them.)
     let tail = if board { 2.0 * CELL + GAP } else { MODE_CELLS as f32 * CELL };
-    let draw_extra = if draw_mode && !board {
-        DRAW_SECTION_W - groups.iter().find(|g| g.key == "pen").map(group_w).unwrap_or(0.0)
-    } else {
-        0.0
-    };
+    let draw_extra = if draw_mode && !board { DRAW_SECTION_W - groups.iter().find(|g| g.key == "pen").map(group_w).unwrap_or(0.0) } else { 0.0 };
     PAD * 2.0 + groups_w + CELL + 1.0 + tail + GAP * (items - 1.0) + draw_extra
 }
 
@@ -358,12 +359,7 @@ pub(crate) fn group_left(groups: &[Group], key: &str) -> Option<f32> {
 /// The flyout caret's left edge **inside the pill**: the tool cell plus the point between them.
 /// The flyout card is aligned to this, not to the cell (`用户 2026-11-06`：菜单左边和那 16pt 的
 /// 点击按钮左边对齐). `None` for a single-tool group, which has no caret.
-pub(crate) fn caret_left(
-    groups: &[Group],
-    key: &str,
-    board: bool,
-    draw_mode: bool,
-) -> Option<f32> {
+pub(crate) fn caret_left(groups: &[Group], key: &str, board: bool, draw_mode: bool) -> Option<f32> {
     let g = groups.iter().find(|g| g.key == key)?;
     if !g.has_flyout() {
         return None;
@@ -646,29 +642,28 @@ fn centred(pill: Div, canvas_left: f32, canvas_w: f32) -> Div {
 fn param_cell(row: Div, label: String, value: f64, key: &'static str, on: OnIntent) -> Div {
     let t = tokens();
     let name: SharedString = SharedString::from(label);
-    row.child(divider())
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(pt(2.0))
-                .child(extra_button("−", false, Intent::DrawParam(key, (value - 0.1).max(0.0)), on.clone()))
-                .child(
-                    div()
-                        .flex_none()
-                        .w(pt(72.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .gap(pt(3.0))
-                        .text_size(pt(crate::widgets::TEXT_PT - 1.0))
-                        .text_color(rgba(t.text))
-                        .child(name)
-                        .child(SharedString::from(format!("{:.0}%", value * 100.0))),
-                )
-                .child(extra_button("+", false, Intent::DrawParam(key, (value + 0.1).min(1.0)), on.clone())),
-        )
+    row.child(divider()).child(
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(pt(2.0))
+            .child(extra_button("−", false, Intent::DrawParam(key, (value - 0.1).max(0.0)), on.clone()))
+            .child(
+                div()
+                    .flex_none()
+                    .w(pt(72.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .gap(pt(3.0))
+                    .text_size(pt(crate::widgets::TEXT_PT - 1.0))
+                    .text_color(rgba(t.text))
+                    .child(name)
+                    .child(SharedString::from(format!("{:.0}%", value * 100.0))),
+            )
+            .child(extra_button("+", false, Intent::DrawParam(key, (value + 0.1).min(1.0)), on.clone())),
+    )
 }
 
 fn extra_button(label: impl Into<SharedString>, active: bool, intent: Intent, on: OnIntent) -> Div {
@@ -685,11 +680,7 @@ fn extra_button(label: impl Into<SharedString>, active: bool, intent: Intent, on
         .cursor_pointer()
         .on_mouse_down(MouseButton::Left, move |_: &MouseDownEvent, w, cx| on(intent.clone(), w, cx))
         .child(label.into());
-    d = if active {
-        d.bg(rgba(t.accent)).text_color(rgba(t.accent_on))
-    } else {
-        d.text_color(rgba(t.text)).hover(|s| s.bg(rgba(t.hover)))
-    };
+    d = if active { d.bg(rgba(t.accent)).text_color(rgba(t.accent_on)) } else { d.text_color(rgba(t.text)).hover(|s| s.bg(rgba(t.hover))) };
     d
 }
 
@@ -711,12 +702,7 @@ pub(crate) fn drawing_bar(tool: ToolId, style: &DrawStyle, brush: Option<&str>, 
         .bg(rgba(t.panel))
         .border_1()
         .border_color(rgba(t.border_strong))
-        .shadow(vec![BoxShadow {
-            color: rgba(t.shadow).into(),
-            offset: point(px(0.0), px(3.0)),
-            blur_radius: px(14.0),
-            spread_radius: px(0.0),
-        }])
+        .shadow(vec![BoxShadow { color: rgba(t.shadow).into(), offset: point(px(0.0), px(3.0)), blur_radius: px(14.0), spread_radius: px(0.0) }])
         .occlude();
 
     // Stroke colour → the shared colour picker, showing *this* tool's own colour (every freehand
@@ -789,15 +775,7 @@ pub(crate) fn drawing_bar(tool: ToolId, style: &DrawStyle, brush: Option<&str>, 
     }
 
     // 12 pt above the canvas bottom + the 48 pt main pill + an 8 pt gap.
-    div()
-        .absolute()
-        .left(px(canvas_left))
-        .w(px(canvas_w.max(0.0)))
-        .bottom(px(12.0 + PILL_H + 8.0))
-        .flex()
-        .flex_row()
-        .justify_center()
-        .child(row)
+    div().absolute().left(px(canvas_left)).w(px(canvas_w.max(0.0))).bottom(px(12.0 + PILL_H + 8.0)).flex().flex_row().justify_center().child(row)
 }
 
 /// The vector-edit row, transcribed from the saved Figma editor's `secondary_toolbelt`
@@ -872,11 +850,7 @@ fn vector_tool_button(i: usize, tool: VTool, icon: Icon, label: &'static str, cu
         .on_mouse_down(MouseButton::Left, move |_: &MouseDownEvent, w, cx| on_click(Intent::VectorTool(id), w, cx))
         .child(paint_icon(icon, rgba(glyph), 24.0))
         .child(div().pr(pt(8.0)).child(tr(label)));
-    if active {
-        btn.bg(rgba(t.menu_hover))
-    } else {
-        btn.hover(|s| s.bg(rgba(t.hover)))
-    }
+    if active { btn.bg(rgba(t.menu_hover)) } else { btn.hover(|s| s.bg(rgba(t.hover))) }
 }
 
 /// "More" — Figma's `aria-haspopup=menu` button: a text label plus a 16 pt chevron.
@@ -896,11 +870,7 @@ fn vector_more_button(open: bool, on: &OnIntent) -> Stateful<Div> {
         .on_mouse_down(MouseButton::Left, move |_: &MouseDownEvent, w, cx| on_click(Intent::VectorMore, w, cx))
         .child(div().pl(pt(4.0)).child(tr("More")))
         .child(paint_icon(Icon::ChevronDown, rgba(if open { t.menu_text } else { t.icon }), 16.0));
-    if open {
-        btn.bg(rgba(t.menu_hover)).text_color(rgba(t.menu_text))
-    } else {
-        btn.text_color(rgba(t.text)).hover(|s| s.bg(rgba(t.hover)))
-    }
+    if open { btn.bg(rgba(t.menu_hover)).text_color(rgba(t.menu_text)) } else { btn.text_color(rgba(t.text)).hover(|s| s.bg(rgba(t.hover))) }
 }
 
 /// The dropdown 8 pt above the bar, right-aligned to it, in the shared menu-card colours.
@@ -953,12 +923,7 @@ pub(crate) fn vector_edit_bar(current: VTool, more_open: bool, canvas_left: f32,
         .bg(rgba(t.panel))
         .border_1()
         .border_color(rgba(t.border_strong))
-        .shadow(vec![BoxShadow {
-            color: rgba(t.shadow).into(),
-            offset: point(px(0.0), px(3.0)),
-            blur_radius: px(14.0),
-            spread_radius: px(0.0),
-        }])
+        .shadow(vec![BoxShadow { color: rgba(t.shadow).into(), offset: point(px(0.0), px(3.0)), blur_radius: px(14.0), spread_radius: px(0.0) }])
         .occlude();
 
     // Group 1: Move / Lasso. Group 2: Paint bucket / Bend / Cut / Erase.
@@ -993,15 +958,7 @@ pub(crate) fn vector_edit_bar(current: VTool, more_open: bool, canvas_left: f32,
     }
 
     // 12 pt above the canvas bottom + the 48 pt main pill + an 8 pt gap.
-    div()
-        .absolute()
-        .left(px(canvas_left))
-        .w(px(canvas_w.max(0.0)))
-        .bottom(px(12.0 + PILL_H + 8.0))
-        .flex()
-        .flex_row()
-        .justify_center()
-        .child(row)
+    div().absolute().left(px(canvas_left)).w(px(canvas_w.max(0.0))).bottom(px(12.0 + PILL_H + 8.0)).flex().flex_row().justify_center().child(row)
 }
 
 /// A one-line tooltip: the tool's name and its shortcut, on the menu's own card colours
@@ -1027,7 +984,13 @@ impl gpui::Render for Tip {
 }
 
 /// A square tool button: accent solid when active, grey on hover (`ui-egui::tool_cell`).
-fn tool_cell(id: &'static str, icon: Icon, active: bool, tip: SharedString, on_click: impl Fn(&mut Window, &mut App) + 'static) -> impl gpui::IntoElement {
+fn tool_cell(
+    id: &'static str,
+    icon: Icon,
+    active: bool,
+    tip: SharedString,
+    on_click: impl Fn(&mut Window, &mut App) + 'static,
+) -> impl gpui::IntoElement {
     let t = tokens();
     let a11y_tip = tip.to_string();
     let mut cell = div()
@@ -1054,9 +1017,7 @@ fn tool_cell(id: &'static str, icon: Icon, active: bool, tip: SharedString, on_c
     };
     use crate::a11y::{A11yExt, Meta, Region};
     cell.child(mark).a11y(
-        Meta::toggle(format!("tool:{id}"), a11y_tip, active)
-            .region(Region::Toolbar)
-            .description(active.then_some("selected").unwrap_or_default()),
+        Meta::toggle(format!("tool:{id}"), a11y_tip, active).region(Region::Toolbar).description(active.then_some("selected").unwrap_or_default()),
     )
 }
 
@@ -1163,10 +1124,7 @@ mod tests {
         // In Draw mode the nib strip is mounted right after Move, so Move keeps its anchor but
         // every later group moves right by the strip and its gap.
         assert_eq!(caret_left(GROUPS, "move", false, true), Some(PAD + CELL + CARET_GAP));
-        assert_eq!(
-            caret_left(GROUPS, "frame", false, true),
-            Some(PAD + group_w(&GROUPS[0]) + GAP + DRAW_SECTION_W + GAP + CELL + CARET_GAP)
-        );
+        assert_eq!(caret_left(GROUPS, "frame", false, true), Some(PAD + group_w(&GROUPS[0]) + GAP + DRAW_SECTION_W + GAP + CELL + CARET_GAP));
         // The cells are centred in the 48 pt pill, so 8 pt of it is above a button's top edge; the
         // card's bottom edge sits 4 pt above that.
         assert_eq!(CELL_TOP, 8.0);

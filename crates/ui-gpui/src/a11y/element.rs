@@ -9,10 +9,7 @@ use super::registry::{self, Control, States};
 use super::tree::CLICKABLE;
 use crate::a11y::Region;
 use accesskit::{Action, Role};
-use gpui::{
-    App, Bounds, Element, ElementId, FocusHandle, GlobalElementId, IntoElement, LayoutId,
-    Pixels, Window,
-};
+use gpui::{App, Bounds, Element, ElementId, FocusHandle, GlobalElementId, IntoElement, LayoutId, Pixels, Window};
 use std::panic::Location;
 
 /// What a screen reader should see for one control.

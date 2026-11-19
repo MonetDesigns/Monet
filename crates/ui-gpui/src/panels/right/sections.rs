@@ -8,8 +8,6 @@
 //! 所有写回都通过 `Cmd` 通道（`sync_panel` 统一 `execute`），与 egui 的 `app.run/set_props` 同构。
 //! 动态列表的输入框由父模块的**编辑器池**提供（retained tree 不能每帧新建 `Entity`）。
 
-use figcraft_i18n::tr_noop;
-use figcraft_i18n::tr;
 use super::data::{EffectRow, LocalStyleRow, PaintRow, PanelData, ViewData};
 use crate::canvas::geom::Color32;
 use crate::motion::{Act, Queue};
@@ -22,7 +20,11 @@ use crate::widgets::{
 use figcraft_color::PaintKind;
 use figcraft_doc::NodeId;
 use figcraft_doc::anim::motion::AnimProperty;
-use gpui::{App, Bounds, Div, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, SharedString, Window, div, prelude::*, px, size};
+use figcraft_i18n::tr;
+use figcraft_i18n::tr_noop;
+use gpui::{
+    App, Bounds, Div, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, SharedString, Window, div, prelude::*, px, size,
+};
 use serde_json::{Value, json};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -372,13 +374,7 @@ pub(crate) fn icon_cmd(icon: Icon, cmd_id: &'static str, params: Value, f: &Righ
 /// `menu`（sizing 菜单）优先——W/H 在 auto layout / auto layout 子层 / 文本上时右端是 chevron 或
 /// `Hug`/`Fill` 字样，此时**不画变量按钮**；只有 `menu` 为空（普通形状的 W/H、opacity、gap…）
 /// 才有上面第 2 条的变量按钮。已绑定时是函数最前面的早退分支，整格换 chip，与 auto layout 无关。
-pub(crate) fn bindable(
-    f: &RightFields,
-    field: &'static str,
-    bound: Option<&str>,
-    vars: &[String],
-    el: gpui::AnyElement,
-) -> gpui::AnyElement {
+pub(crate) fn bindable(f: &RightFields, field: &'static str, bound: Option<&str>, vars: &[String], el: gpui::AnyElement) -> gpui::AnyElement {
     let t = tokens();
     let hovered = *f.bind_hover.borrow() == Some(field);
     let hover = f.bind_hover.clone();
@@ -412,10 +408,10 @@ pub(crate) fn bindable(
                 .text_color(rgba(t.text))
                 .cursor_pointer()
                 .on_mouse_down(MouseButton::Left, move |_e, window, cx: &mut App| {
-                    let rows = list
-                        .iter()
-                        .map(|v| (v.clone(), "variable.bind", json!({ "field": field, "variable": v })))
-                        .collect::<Vec<(String, &'static str, Value)>>();
+                    let rows =
+                        list.iter()
+                            .map(|v| (v.clone(), "variable.bind", json!({ "field": field, "variable": v })))
+                            .collect::<Vec<(String, &'static str, Value)>>();
                     let top = crate::popovers::anchored_top(&anchor_key, window);
                     open_list_window_at(
                         popups.clone(),
@@ -460,39 +456,40 @@ pub(crate) fn bindable(
                 let bind_key = format!("bind-{field}");
                 let hit = crate::popovers::window_trigger_top(&bind_key);
                 let anchor_key = bind_key.clone();
-                cell = cell.child(crate::popovers::with_absolute_bounds(
-                    div()
-                        .absolute()
-                        .right(px(0.0))
-                        .top(px(0.0))
-                        .w(pt(24.0))
-                        .h_full()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .cursor_pointer()
-                        .on_mouse_down(MouseButton::Left, move |_e, window, cx: &mut App| {
-                            cx.stop_propagation();
-                            let rows = list
-                                .iter()
-                                .map(|v| (v.clone(), "variable.bind", json!({ "field": field, "variable": v })))
-                                .collect::<Vec<(String, &'static str, Value)>>();
-                            let top = crate::popovers::anchored_top(&anchor_key, window);
-                            open_list_window_at(
-                                popups.clone(),
-                                queue.clone(),
-                                cx,
-                                window.mouse_position(),
-                                Some(top),
-                                bind_key.clone(),
-                                ListWindow::Variables,
-                                SharedString::from(tr("Variables")),
-                                rows,
-                            );
-                        })
-                        .child(crate::widgets::variable_button()),
-                hit,
-                ));
+                cell =
+                    cell.child(crate::popovers::with_absolute_bounds(
+                        div()
+                            .absolute()
+                            .right(px(0.0))
+                            .top(px(0.0))
+                            .w(pt(24.0))
+                            .h_full()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .on_mouse_down(MouseButton::Left, move |_e, window, cx: &mut App| {
+                                cx.stop_propagation();
+                                let rows = list
+                                    .iter()
+                                    .map(|v| (v.clone(), "variable.bind", json!({ "field": field, "variable": v })))
+                                    .collect::<Vec<(String, &'static str, Value)>>();
+                                let top = crate::popovers::anchored_top(&anchor_key, window);
+                                open_list_window_at(
+                                    popups.clone(),
+                                    queue.clone(),
+                                    cx,
+                                    window.mouse_position(),
+                                    Some(top),
+                                    bind_key.clone(),
+                                    ListWindow::Variables,
+                                    SharedString::from(tr("Variables")),
+                                    rows,
+                                );
+                            })
+                            .child(crate::widgets::variable_button()),
+                        hit,
+                    ));
             }
             cell.into_any_element()
         }
@@ -754,12 +751,7 @@ fn open_list_window_at(
 /// A header icon that opens the detached Variables window (egui `variable_ui::picker`) instead
 /// of a little dropdown. These are the visible buttons in the Appearance / Typography headers —
 /// wiring the window only to the small in-row binding button left them looking unconnected.
-fn variables_window_button(
-    f: &RightFields,
-    trigger: &'static str,
-    icon: Icon,
-    rows: Vec<(String, &'static str, Value)>,
-) -> gpui::AnyElement {
+fn variables_window_button(f: &RightFields, trigger: &'static str, icon: Icon, rows: Vec<(String, &'static str, Value)>) -> gpui::AnyElement {
     let root = f.popups();
     let queue = f.queue();
     let active = root.is_open(trigger);
@@ -901,7 +893,16 @@ fn bound_color_field(
                 }
             })
             .collect();
-        open_list_window(root.clone(), queue.clone(), cx, pos, format!("bind-{field}"), ListWindow::Variables, SharedString::from(tr("Variables")), rows);
+        open_list_window(
+            root.clone(),
+            queue.clone(),
+            cx,
+            pos,
+            format!("bind-{field}"),
+            ListWindow::Variables,
+            SharedString::from(tr("Variables")),
+            rows,
+        );
     })
     .on_detach(move |_window, _cx| {
         cmds.push(Cmd { id: detach.0, params: Some(detach.1.clone()) });
@@ -974,10 +975,8 @@ fn color_pick(
     let anchor_key = trigger.clone();
     let cf = cf.on_swatch(move |pos: Point<Pixels>, window, cx: &mut App| {
         let top = crate::popovers::anchored_top(&anchor_key, window);
-        let style_rows: Vec<crate::popovers::Row> = styles
-            .iter()
-            .map(|(label, cmd, params)| crate::popovers::Row::new(label.clone(), cmd, params.clone()).group(tr("This file")))
-            .collect();
+        let style_rows: Vec<crate::popovers::Row> =
+            styles.iter().map(|(label, cmd, params)| crate::popovers::Row::new(label.clone(), cmd, params.clone()).group(tr("This file"))).collect();
         let on_pick = Rc::new({
             let cmds = cmds.clone();
             let params = params.clone();
@@ -995,22 +994,19 @@ fn color_pick(
             }
         });
         // The paint the row edits, so the picker can switch its kind / blend in place.
-        let picker = base_paint
-            .as_ref()
-            .and_then(|v| serde_json::from_value::<figcraft_color::Paint>(v.clone()).ok())
-            .map(|paint| {
-                let write_cmds = cmds.clone();
-                let write_params = params.clone();
-                crate::popovers::PaintPicker {
-                    paint,
-                    on_write: Rc::new(move |np, _w, _cx| {
-                        let mut p = write_params.clone();
-                        p["paint"] = serde_json::to_value(&np).unwrap_or(Value::Null);
-                        write_cmds.push(Cmd { id: cmd, params: Some(p) });
-                    }),
-                    styles: style_rows.clone(),
-                }
-            });
+        let picker = base_paint.as_ref().and_then(|v| serde_json::from_value::<figcraft_color::Paint>(v.clone()).ok()).map(|paint| {
+            let write_cmds = cmds.clone();
+            let write_params = params.clone();
+            crate::popovers::PaintPicker {
+                paint,
+                on_write: Rc::new(move |np, _w, _cx| {
+                    let mut p = write_params.clone();
+                    p["paint"] = serde_json::to_value(&np).unwrap_or(Value::Null);
+                    write_cmds.push(Cmd { id: cmd, params: Some(p) });
+                }),
+                styles: style_rows.clone(),
+            }
+        });
         // Synchronous request, no detached async `spawn` and no root-Entity guard: the old
         // `cx.spawn(...).detach()` delayed the picker by a frame and could be dropped entirely.
         open_detached_with(popups.clone(), trigger.clone(), Some(top), cx, |anchor, cx| {
@@ -1035,17 +1031,7 @@ fn paint_swatch(
     // 必须把整份 paint 交给取色器，否则 `PaintPicker` 为 None，类型条（纯色/渐变/图案/图片）
     // 和渐变色阶整块都不会渲染（EGUI 版同样依赖 paint 本体判断类型）。
     let base = serde_json::to_value(&row.paint).ok();
-    color_pick(
-        f,
-        cf,
-        current,
-        cmd,
-        json!({ "index": row.index }),
-        "color",
-        base,
-        format!("color-{side}-{}", row.index),
-        styles,
-    )
+    color_pick(f, cf, current, cmd, json!({ "index": row.index }), "color", base, format!("color-{side}-{}", row.index), styles)
 }
 
 // ───────────────────────────────────────────────────────────────────────────────────────────────
@@ -1081,17 +1067,19 @@ pub(crate) fn paints(
     // 此前这里 `if fills` 无条件画，普通矩形/文本也顶着一个无效的填充规则按钮。
     let mut icons = vec![style_menu(f, d, "paint", Some(if fills { "fill" } else { "stroke" }), Icon::Dot)];
     if visibility::fill_rule(fills, has_vector) {
-        icons.push(menu_icon(
-            f,
-            Icon::ViewGrid,
-            160.0,
-            vec![
-                ("Non-zero".into(), "vector.fillRule", json!({ "rule": "nonZero" })),
-                ("Even-odd".into(), "vector.fillRule", json!({ "rule": "evenOdd" })),
-            ],
-            false,
-        )
-        .into_any_element());
+        icons.push(
+            menu_icon(
+                f,
+                Icon::ViewGrid,
+                160.0,
+                vec![
+                    ("Non-zero".into(), "vector.fillRule", json!({ "rule": "nonZero" })),
+                    ("Even-odd".into(), "vector.fillRule", json!({ "rule": "evenOdd" })),
+                ],
+                false,
+            )
+            .into_any_element(),
+        );
     }
     icons.push(icon_cmd(Icon::Plus, add_cmd, json!({}), f, false).into_any_element());
     // 空 / Mixed（多选混合，`list == None`）：**只有置灰头部**——不写提示文字、不给 body、
@@ -1230,15 +1218,12 @@ pub(crate) fn paints(
             let stroke_queue = f.queue();
             let stroke_data = d.clone();
             let dots = crate::popovers::with_window_trigger(
-                IconButton::new(Icon::Menu)
-                    .size(24.0)
-                    .active(popups.is_open("stroke"))
-                    .on_click(move |_e, window, cx: &mut App| {
-                        let top = crate::popovers::anchored_top("stroke", window);
-                        open_detached_with(popups.clone(), "stroke", Some(top), cx, |anchor, cx| {
-                            crate::popovers::WindowState::stroke(stroke_queue.clone(), &stroke_data, cx, anchor)
-                        });
-                    }),
+                IconButton::new(Icon::Menu).size(24.0).active(popups.is_open("stroke")).on_click(move |_e, window, cx: &mut App| {
+                    let top = crate::popovers::anchored_top("stroke", window);
+                    open_detached_with(popups.clone(), "stroke", Some(top), cx, |anchor, cx| {
+                        crate::popovers::WindowState::stroke(stroke_queue.clone(), &stroke_data, cx, anchor)
+                    });
+                }),
                 "stroke",
             );
             // 第二行 = 描边对齐下拉 + **线宽字段** + 独立边宽 + 高级描边（egui `paints.rs`:
@@ -1247,7 +1232,13 @@ pub(crate) fn paints(
                 vec![
                     pick_dropdown(f, align, col, rows).into_any_element(),
                     // 线宽可绑变量（`paints.rs::stroke`：`variable_ui::number_field_mixed(..., "strokeWeight", ...)`）。
-                    bindable(f, "strokeWeight", d.bound.get("strokeWeight").map(String::as_str), &d.number_variables, f.stroke_weight.clone().into_any_element()),
+                    bindable(
+                        f,
+                        "strokeWeight",
+                        d.bound.get("strokeWeight").map(String::as_str),
+                        &d.number_variables,
+                        f.stroke_weight.clone().into_any_element(),
+                    ),
                 ],
                 vec![sides.into_any_element(), dots],
             ));
@@ -1933,12 +1924,9 @@ pub(crate) fn export(f: &RightFields, d: &PanelData, col: f32, n: &mut usize, cx
 /// 切换推 `node.set {"props":{"clipsContent":!current}}`，引擎按当前选区执行。
 pub(crate) fn clip_content(f: &RightFields, d: &PanelData) -> crate::widgets::panel_section::FieldRow {
     let cmds = f.cmds.clone();
-    let cb = Checkbox::new("clip-content")
-        .label(tr("Clip content"))
-        .checked(d.clip.unwrap_or(false))
-        .on_change(move |next: &bool, _w, _cx| {
-            cmds.push(Cmd { id: "node.set", params: Some(json!({ "props": { "clipsContent": *next } })) });
-        });
+    let cb = Checkbox::new("clip-content").label(tr("Clip content")).checked(d.clip.unwrap_or(false)).on_change(move |next: &bool, _w, _cx| {
+        cmds.push(Cmd { id: "node.set", params: Some(json!({ "props": { "clipsContent": *next } })) });
+    });
     // egui `layout_panel.rs::layout_section` 的末尾就是这一行（`if frames { row(24, checkbox) }`）：
     // Clip content 属于 **Layout 节**，由 `auto_layout_section` 追加在网格轨道之后。
     field_row_full(cb)
@@ -1963,15 +1951,12 @@ fn corner_smoothing_button(f: &RightFields, d: &PanelData) -> gpui::AnyElement {
     let value = d.corner_smoothing.unwrap_or(0.0) as f32;
     let open = popups.is_open("corner-smoothing");
     crate::popovers::with_window_trigger(
-        IconButton::new(Icon::Menu)
-            .size(24.0)
-            .active(open)
-            .on_click(move |_e, window, cx: &mut App| {
-                let top = crate::popovers::anchored_top("corner-smoothing", window);
-                open_detached_with(popups.clone(), "corner-smoothing", Some(top), cx, |anchor, _cx| {
-                    crate::popovers::WindowState::corner_smoothing(queue.clone(), value, anchor)
-                });
-            }),
+        IconButton::new(Icon::Menu).size(24.0).active(open).on_click(move |_e, window, cx: &mut App| {
+            let top = crate::popovers::anchored_top("corner-smoothing", window);
+            open_detached_with(popups.clone(), "corner-smoothing", Some(top), cx, |anchor, _cx| {
+                crate::popovers::WindowState::corner_smoothing(queue.clone(), value, anchor)
+            });
+        }),
         "corner-smoothing",
     )
 }
@@ -2023,20 +2008,17 @@ pub(crate) fn appearance(
     } else {
         None
     };
-    let mut sec = PanelSection::new(tr("Appearance"))
-        .header_trail(icon_row(vec![eye.into_any_element(), blend.into_any_element()]));
+    let mut sec = PanelSection::new(tr("Appearance")).header_trail(icon_row(vec![eye.into_any_element(), blend.into_any_element()]));
     let corner_row_trail: Vec<gpui::AnyElement> = indep_toggle.map(|b| b.into_any_element()).into_iter().collect();
-    sec = sec
-        .child(sublabel_row2(tr("Opacity"), tr("Corner radius")))
-        .child(field_row(
-            vec![
-                // Opacity / corner radius 都是原版白名单里可绑定的数值字段
-                // （`paints.rs::appearance` 用 `variable_ui::number_field_mixed`）。
-                bindable(f, "opacity", d.bound.get("opacity").map(String::as_str), &d.number_variables, opacity.clone().into_any_element()),
-                bindable(f, "cornerRadius", d.bound.get("cornerRadius").map(String::as_str), &d.number_variables, corner.clone().into_any_element()),
-            ],
-            corner_row_trail,
-        ));
+    sec = sec.child(sublabel_row2(tr("Opacity"), tr("Corner radius"))).child(field_row(
+        vec![
+            // Opacity / corner radius 都是原版白名单里可绑定的数值字段
+            // （`paints.rs::appearance` 用 `variable_ui::number_field_mixed`）。
+            bindable(f, "opacity", d.bound.get("opacity").map(String::as_str), &d.number_variables, opacity.clone().into_any_element()),
+            bindable(f, "cornerRadius", d.bound.get("cornerRadius").map(String::as_str), &d.number_variables, corner.clone().into_any_element()),
+        ],
+        corner_row_trail,
+    ));
     // 展开区（egui 同序）：四个独立圆角字段（仅 indep_ok 的类型画，egui 的
     // `chunks(2).filter(|_| indep_ok)`）+ 平滑圆角按钮。折叠时整块不画——平滑按钮随之隐藏。
     if indep_open && smooth_ok {
@@ -3104,12 +3086,8 @@ fn local_styles_block(f: &RightFields, d: &PanelData, window: &mut Window, cx: &
     let mut rows: Vec<Div> = Vec::new();
     let mut y = 0.0;
     let mut groups = 0usize;
-    static GROUPS: &[(&'static str, &'static str)] = &[
-        ("text", "Text styles"),
-        ("paint", "Color styles"),
-        ("effect", "Effect styles"),
-        ("grid", "Grid styles"),
-    ];
+    static GROUPS: &[(&'static str, &'static str)] =
+        &[("text", "Text styles"), ("paint", "Color styles"), ("effect", "Effect styles"), ("grid", "Grid styles")];
 
     for &(ty, cap_key) in GROUPS {
         let list: Vec<&LocalStyleRow> = d.styles.iter().filter(|s| s.ty == ty).collect();
@@ -3196,16 +3174,7 @@ fn local_styles_block(f: &RightFields, d: &PanelData, window: &mut Window, cx: &
     // 选中块必须先加：它是行的背景，后加会把整行内容盖住（用户 2026-11-15）。
     {
         let st = ui.borrow();
-        let band = |y0: f32, h: f32, c| {
-            div()
-                .absolute()
-                .left(pt(LS_INSET))
-                .right(pt(LS_INSET))
-                .top(pt(y0))
-                .h(pt(h))
-                .rounded(pt(5.0))
-                .bg(rgba(c))
-        };
+        let band = |y0: f32, h: f32, c| div().absolute().left(pt(LS_INSET)).right(pt(LS_INSET)).top(pt(y0)).h(pt(h)).rounded(pt(5.0)).bg(rgba(c));
         // ① 选中单一样式行：深块。
         if let Some(k) = st.sel
             && let Some(r) = st.rows.get(k)
@@ -3216,9 +3185,7 @@ fn local_styles_block(f: &RightFields, d: &PanelData, window: &mut Window, cx: &
         //    「Selected 父 + Child 后代」表现，用户 2026-11-15）。子树 = 紧跟其后、
         //    depth 更深的连续行；遇到同级/更浅的行停止。
         if let Some(ref key) = st.sel_folder {
-            if let Some(i) = st.slots.iter().position(|s| {
-                matches!(&s.kind, LsSlotKind::Header { path } if format!("{}/{}", s.ty, path) == *key)
-            }) {
+            if let Some(i) = st.slots.iter().position(|s| matches!(&s.kind, LsSlotKind::Header { path } if format!("{}/{}", s.ty, path) == *key)) {
                 let d = st.slots[i].depth;
                 let r = &st.slots[i];
                 root = root.child(band(r.y0, r.y1 - r.y0, t.selected_row));
@@ -3318,9 +3285,7 @@ fn local_styles_block(f: &RightFields, d: &PanelData, window: &mut Window, cx: &
         let st = ui.borrow();
         if let Some(drag) = st.drag.as_ref().filter(|d| d.armed) {
             if let Some(ly) = drag.line_y {
-                root = root.child(
-                    div().absolute().left(pt(LS_INSET)).right(pt(LS_INSET)).top(pt(ly - 1.0)).h(pt(2.0)).bg(rgba(t.accent)),
-                );
+                root = root.child(div().absolute().left(pt(LS_INSET)).right(pt(LS_INSET)).top(pt(ly - 1.0)).h(pt(2.0)).bg(rgba(t.accent)));
             }
             let (ox, oy) = st.origin.unwrap_or((0.0, 0.0));
             let gx = f32::from(drag.pointer.x) - ox + 14.0;
@@ -3693,22 +3658,15 @@ fn local_style_folder(
 
     // lizard `local_styles`：文件夹行 `allocate_exact_size(vec2(w, 24.0))`，
     // 左右各内缩 8 pt，hover band 圆角 5。
-    div()
-        .relative()
-        .w_full()
-        .h(pt(LS_FOLDER_H))
-        .px(pt(LS_INSET))
-        .child(
-            div()
-                .w_full()
-                .h_full()
-                .rounded(pt(5.0))
-                .hover(|s| s.bg(rgba(t.hover)))
-                .child(name_area)
-                .child(
-                    div().absolute().right(pt(LS_INSET)).top_0().h_full().flex().items_center().child(plus),
-                ),
-        )
+    div().relative().w_full().h(pt(LS_FOLDER_H)).px(pt(LS_INSET)).child(
+        div()
+            .w_full()
+            .h_full()
+            .rounded(pt(5.0))
+            .hover(|s| s.bg(rgba(t.hover)))
+            .child(name_area)
+            .child(div().absolute().right(pt(LS_INSET)).top_0().h_full().flex().items_center().child(plus)),
+    )
 }
 
 /// 文件夹 `+` 新建样式所用的默认名（egui `StyleSlot::default_name`）。
@@ -4031,25 +3989,15 @@ fn local_style_row(
     // 名字占满中间，文本样式的 "32/Auto" 贴行尾（egui 的 meta 右对齐在 `r.max.x - LS_TRAIL`）。
     // 双击改名期间名字位换成内联输入框（与文件夹改名共用同一个控件实体）。
     body = if is_renaming {
-        body.child(
-            div()
-                .flex_1()
-                .min_w(px(0.0))
-                .h_full()
-                .flex()
-                .items_center()
-                .children(f.local_style_rename_input.borrow().clone()),
-        )
+        body.child(div().flex_1().min_w(px(0.0)).h_full().flex().items_center().children(f.local_style_rename_input.borrow().clone()))
     } else {
         // 名字用 `static_text`（canvas + 与编辑态同一个居中式）绘制，不再是
         // `div().child(name)`：两条渲染管线的行盒取整不同，切换编辑时会差 1 像素。
-        let b = body.child(
-            div().flex_1().min_w(px(0.0)).h_full().flex().items_center().overflow_hidden().child(crate::inline_input::static_text(
-                gpui::SharedString::from(name.clone()),
-                rgba(t.text).into(),
-                LS_ROW_H,
-            )),
-        );
+        let b = body.child(div().flex_1().min_w(px(0.0)).h_full().flex().items_center().overflow_hidden().child(crate::inline_input::static_text(
+            gpui::SharedString::from(name.clone()),
+            rgba(t.text).into(),
+            LS_ROW_H,
+        )));
         match &s.text_meta {
             Some(meta) => b.child(
                 div().flex_none().pl(pt(5.0)).text_size(pt(10.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(format!("· {meta}"))),
@@ -4074,11 +4022,7 @@ fn local_style_row(
         let dup = dup_label.clone();
         let del = del_label.clone();
         let dup_trail = if cfg!(target_os = "windows") { "Ctrl+D" } else { "⌘D" };
-        let rows = vec![
-            MenuRow::new(edit.clone()),
-            MenuRow::new(dup.clone()).trail(dup_trail),
-            MenuRow::new(del.clone()).trail("Del"),
-        ];
+        let rows = vec![MenuRow::new(edit.clone()), MenuRow::new(dup.clone()).trail(dup_trail), MenuRow::new(del.clone()).trail("Del")];
         let Some(root) = root.clone() else { return };
         let anchor = gpui::Bounds::new(e.position, gpui::size(px(0.0), px(0.0)));
         root.update(cx, move |cv, cx| {
@@ -4193,18 +4137,17 @@ pub(crate) fn page(f: &RightFields, d: &PanelData, row_w: f32, n: &mut usize, wi
     let color = figcraft_color::Color::from_hex(&p.background).unwrap_or(figcraft_color::Color::WHITE);
     let cf = ColorField::new(cx, figcraft_color::Paint::solid(color), ColorText::Hex(SharedString::from(p.background.clone())), row_w, hex_ed, op_ed);
     // swatch → picker (`toggle_picker(PickerTarget::PageBackground)`).
-    let (cf, swatch_hit) =
-        color_pick(
-            f,
-            cf,
-            Color32::from_hex(&p.background).unwrap_or(Color32::WHITE),
-            "page.setBackground",
-            json!({}),
-            "color",
-            None,
-            "color-page".to_string(),
-            Vec::new(),
-        );
+    let (cf, swatch_hit) = color_pick(
+        f,
+        cf,
+        Color32::from_hex(&p.background).unwrap_or(Color32::WHITE),
+        "page.setBackground",
+        json!({}),
+        "color",
+        None,
+        "color-page".to_string(),
+        Vec::new(),
+    );
     sec = sec.child(field_row_full(crate::popovers::with_button_bounds(cf, swatch_hit)));
     // egui keeps this as local UI state and opens a dialog; GPUI has no dialog yet, so the
     // engine's `file.colorProfile` command is the equivalent. `node.set {"colorProfile": …}`

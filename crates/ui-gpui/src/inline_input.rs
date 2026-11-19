@@ -198,7 +198,6 @@ impl InlineInput {
         }
         if !active && self.was_active { EditState::Ended } else { EditState::Editing }
     }
-
 }
 
 /// 行盒补偿量（pt）：把「随内容变化的基线」拉回参考基线。

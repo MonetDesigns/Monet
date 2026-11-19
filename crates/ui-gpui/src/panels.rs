@@ -153,10 +153,10 @@ pub(crate) const DEFAULT_RIGHT_PANEL: f32 = 241.0;
 ///      └ Frame 180 Horizontal gap=4 pad=[T0,R4,B0,L4]     （文件名 → chevron）
 ///
 /// 每处 gap 都有灰尘级差异，不能用一个 4.0 抹平，故逐个按参考命名。
-pub(crate) const HEADER_PAD_V: f32 = 8.0;   // Frame 38 / 182 的 T/B padding
-pub(crate) const HEADER_PAD_H: f32 = 8.0;   // Frame 38 的 L/R padding
+pub(crate) const HEADER_PAD_V: f32 = 8.0; // Frame 38 / 182 的 T/B padding
+pub(crate) const HEADER_PAD_H: f32 = 8.0; // Frame 38 的 L/R padding
 pub(crate) const LEFT_HEADER_PAD_H: f32 = 12.0; // Frame 182 的 L/R padding
-pub(crate) const HEADER_GAP: f32 = 4.0;     // 头像组→按钮→分享 / Design↔Prototype / 文件名→chevron
+pub(crate) const HEADER_GAP: f32 = 4.0; // 头像组→按钮→分享 / Design↔Prototype / 文件名→chevron
 
 /// UI 字体（MiSans）字重映射，按用户 2026-11-17 给定：
 /// 普通=NORMAL(305)，粗体=REGULAR(330)。MiSans 这两档字形名与常见字体相反
@@ -1212,8 +1212,7 @@ impl RightFields {
         }
         let scale_ctx = std::rc::Rc::new(std::cell::RefCell::new(crate::panels::right::data::ScaleData::default()));
         let local_style_renaming = std::rc::Rc::new(std::cell::RefCell::new(None::<(String, String)>));
-        let local_style_rename_style =
-            std::rc::Rc::new(std::cell::RefCell::new(None::<(String, String, String, Option<String>)>));
+        let local_style_rename_style = std::rc::Rc::new(std::cell::RefCell::new(None::<(String, String, String, Option<String>)>));
         let mut fields = Self {
             x: n(cx, "X", 0.0, "", 1.0, Some(Prop::X)),
             y: n(cx, "Y", 0.0, "", 1.0, Some(Prop::Y)),
@@ -1246,9 +1245,7 @@ impl RightFields {
             local_style_rename_style: local_style_rename_style.clone(),
             local_style_rename_input: std::rc::Rc::new(std::cell::RefCell::new(None)),
             local_style_folded: std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashSet::new())),
-            local_styles_ui: std::rc::Rc::new(std::cell::RefCell::new(
-                crate::panels::right::sections::LocalStyleUi::default(),
-            )),
+            local_styles_ui: std::rc::Rc::new(std::cell::RefCell::new(crate::panels::right::sections::LocalStyleUi::default())),
             local_style_focus: cx.focus_handle(),
             comment_ui: std::rc::Rc::new(std::cell::RefCell::new(crate::comments::CommentUi::default())),
             inspect_lang: std::rc::Rc::new(std::cell::RefCell::new(0usize)),
@@ -2677,13 +2674,8 @@ pub(crate) fn auto_layout_section(
         // 把内容整体顶上去。`flex_col` + `items_start` 让整列从顶部排成两个 32 行。
         // gap / crossGap 也是白名单字段（原版 `layout_panel.rs::spacing` 用
         // `variable_ui::number_field_or(..., "gap"/"crossGap", ...)`）。
-        let gap_el = right::sections::bindable(
-            f,
-            "gap",
-            data.bound.get("gap").map(String::as_str),
-            &data.number_variables,
-            f.gap.clone().into_any_element(),
-        );
+        let gap_el =
+            right::sections::bindable(f, "gap", data.bound.get("gap").map(String::as_str), &data.number_variables, f.gap.clone().into_any_element());
         let cross_el = right::sections::bindable(
             f,
             "crossGap",
@@ -2718,11 +2710,8 @@ pub(crate) fn auto_layout_section(
         let settings_data = data.clone();
         // 跨帧稳定探针：第一次按下就量到按钮真实顶部，窗口顶部严格对齐按钮顶部。
         let layout_dots = crate::popovers::with_window_trigger(
-            IconButton::new(Icon::Menu)
-                .id("layout-settings-dots")
-                .size(24.0)
-                .active(popups.is_open("layout"))
-                .on_click(move |_e, window, cx: &mut App| {
+            IconButton::new(Icon::Menu).id("layout-settings-dots").size(24.0).active(popups.is_open("layout")).on_click(
+                move |_e, window, cx: &mut App| {
                     if std::env::var_os("FC_DEBUG_POPUP_BTN").is_some() {
                         eprintln!("[popup-btn] layout dots clicked");
                     }
@@ -2730,7 +2719,8 @@ pub(crate) fn auto_layout_section(
                     right::sections::open_detached_with(popups.clone(), "layout", Some(top), cx, |anchor, cx| {
                         crate::popovers::WindowState::layout(settings_queue.clone(), &settings_data, cx, anchor)
                     });
-                }),
+                },
+            ),
             "layout",
         );
         sec = sec.child(sublabel_row2(left_cap, tr("Spacing"))).child(crate::widgets::field_row_h(

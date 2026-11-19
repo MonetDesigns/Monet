@@ -11,18 +11,20 @@
 
 use crate::canvas::geom::Color32;
 use crate::panels::right::data::{EffectRow, GridRow, PanelData, TextData};
-use crate::picker_icons::{self, PickerIcon};
 use crate::panels::right::variables::{self, VariablesData, VariablesEditor};
 use crate::panels::{Cmd, Cmds};
+use crate::picker_icons::{self, PickerIcon};
 use crate::widgets::menu::menu_popup_in;
 use crate::widgets::popover::{self, HEADER_H, Open, Surface, WIDTH, popover_body, popover_window, title_text};
 use crate::widgets::typ_icons::TypIcon;
-use crate::widgets::{Icon, IconButton, SegItem, Segmented, Slot, Slider, TextEdit, TextField, number_field, number_field_ranged, pt, rgba, search_field, tokens};
+use crate::widgets::{
+    Icon, IconButton, SegItem, Segmented, Slider, Slot, TextEdit, TextField, number_field, number_field_ranged, pt, rgba, search_field, tokens,
+};
 use crate::widgets::{MenuRow, dropdown};
 use figcraft_i18n::tr;
 use gpui::{
-    AnyElement, App, Bounds, Corners, Entity, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, PathBuilder, Pixels, Point, SharedString, Size,
-    Window, div, point, prelude::*, px, size,
+    AnyElement, App, Bounds, Corners, Entity, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, PathBuilder, Pixels, Point, SharedString,
+    Size, Window, div, point, prelude::*, px, size,
 };
 use serde_json::{Value, json};
 use std::cell::{Cell, RefCell};
@@ -427,11 +429,7 @@ pub(crate) fn cache_page_colors(doc: &figcraft_doc::Document, page: figcraft_doc
         if c.0 == Some(key) {
             return;
         }
-        c.1 = figcraft_engine::cmd::styles::document_colors(doc, page)
-            .into_iter()
-            .take(21)
-            .map(|(col, _)| picker_c32(col))
-            .collect();
+        c.1 = figcraft_engine::cmd::styles::document_colors(doc, page).into_iter().take(21).map(|(col, _)| picker_c32(col)).collect();
         c.0 = Some(key);
     });
 }
@@ -445,10 +443,8 @@ fn swatch_grid(colors: Vec<Color32>, pick: Rc<dyn Fn(Color32, &mut Window, &mut 
     let mut grid = div().w(pt(240.0)).grid().grid_cols(6).gap(pt(6.0));
     for col in colors {
         let p = pick.clone();
-        grid = grid.child(
-            crate::widgets::swatch(figcraft_color::Paint::solid(picker_color(col)), 20.0)
-                .on_click(move |window, cx| p(col, window, cx)),
-        );
+        grid =
+            grid.child(crate::widgets::swatch(figcraft_color::Paint::solid(picker_color(col)), 20.0).on_click(move |window, cx| p(col, window, cx)));
     }
     grid
 }
@@ -542,8 +538,14 @@ pub(crate) struct PaintPicker {
 #[derive(Clone)]
 pub(crate) enum StyleProp {
     /// `index` 是它在样式 paints 数组里的原始下标（egui `EditPaint(id, i)` 用同一个 i）。
-    Paint { label: String, paint: figcraft_color::Paint, index: usize },
-    Icon { label: String },
+    Paint {
+        label: String,
+        paint: figcraft_color::Paint,
+        index: usize,
+    },
+    Icon {
+        label: String,
+    },
 }
 
 /// 样式编辑器正文（egui `style_picker::editor`）：Name / Description 两个输入框 + 属性行 +
@@ -578,7 +580,6 @@ struct StyleSnap {
     effects: Option<Vec<EffectRow>>,
     grids: Option<Vec<GridRow>>,
 }
-
 
 #[derive(Clone)]
 struct ColorState {
@@ -810,13 +811,7 @@ fn style_write_queue(cmds: &Cmds, style_id: String, text: Rc<RefCell<Value>>) ->
 
 /// 一行“下拉式”设置（PR #823）：描边的枚举设置是列表，不是左右分格。
 fn stroke_dropdown(tab: u8, label: SharedString, current: impl Into<SharedString>, options: Vec<Opt>) -> Setting {
-    Setting::Dropdown {
-        tab,
-        label,
-        current: Rc::new(RefCell::new(current.into())),
-        anchor: Rc::new(RefCell::new(None)),
-        options,
-    }
+    Setting::Dropdown { tab, label, current: Rc::new(RefCell::new(current.into())), anchor: Rc::new(RefCell::new(None)), options }
 }
 
 /// `node.set` 的 cap id 是 lowerCamelCase（`none`、`lineArrow`…），不是 Debug 名。
@@ -1044,10 +1039,8 @@ impl WindowState {
         );
         let miter_field = mk_number(cx, 28.6, "node.set", Rc::new(|v| json!({ "props": { "miterAngle": v } })));
         // 全部 6 个 preset（旧版只列 4 个，丢了 Rounded / Pinch）。
-        let profiles: Vec<Opt> = figcraft_doc::WidthPreset::ALL
-            .iter()
-            .map(|p| Opt::new(tr(p.label()), "stroke.widthProfile", json!({ "preset": p.id() })))
-            .collect();
+        let profiles: Vec<Opt> =
+            figcraft_doc::WidthPreset::ALL.iter().map(|p| Opt::new(tr(p.label()), "stroke.widthProfile", json!({ "preset": p.id() }))).collect();
         // Brushes are read from external `.abr` files in the user's brushes directory; the engine
         // contains no built-in shapes. Group / folder / name keeps packs of hundreds selectable.
         let installed = figcraft_abr::infos();
@@ -1078,35 +1071,55 @@ impl WindowState {
         let brush_fields = data.brush.clone().map(|b| {
             let spacing = {
                 let b = b.clone();
-                mk_number(cx, b.spacing, "node.set", Rc::new(move |v| {
-                    let mut nb = b.clone();
-                    nb.spacing = v;
-                    json!({ "props": { "brush": serde_json::to_value(nb.sanitized()).unwrap_or_default() } })
-                }))
+                mk_number(
+                    cx,
+                    b.spacing,
+                    "node.set",
+                    Rc::new(move |v| {
+                        let mut nb = b.clone();
+                        nb.spacing = v;
+                        json!({ "props": { "brush": serde_json::to_value(nb.sanitized()).unwrap_or_default() } })
+                    }),
+                )
             };
             let scatter = {
                 let b = b.clone();
-                mk_number(cx, b.scatter, "node.set", Rc::new(move |v| {
-                    let mut nb = b.clone();
-                    nb.scatter = v;
-                    json!({ "props": { "brush": serde_json::to_value(nb.sanitized()).unwrap_or_default() } })
-                }))
+                mk_number(
+                    cx,
+                    b.scatter,
+                    "node.set",
+                    Rc::new(move |v| {
+                        let mut nb = b.clone();
+                        nb.scatter = v;
+                        json!({ "props": { "brush": serde_json::to_value(nb.sanitized()).unwrap_or_default() } })
+                    }),
+                )
             };
             let size_jitter = {
                 let b = b.clone();
-                mk_number(cx, b.size_jitter * 100.0, "node.set", Rc::new(move |v| {
-                    let mut nb = b.clone();
-                    nb.size_jitter = v / 100.0;
-                    json!({ "props": { "brush": serde_json::to_value(nb.sanitized()).unwrap_or_default() } })
-                }))
+                mk_number(
+                    cx,
+                    b.size_jitter * 100.0,
+                    "node.set",
+                    Rc::new(move |v| {
+                        let mut nb = b.clone();
+                        nb.size_jitter = v / 100.0;
+                        json!({ "props": { "brush": serde_json::to_value(nb.sanitized()).unwrap_or_default() } })
+                    }),
+                )
             };
             let rotation_jitter = {
                 let b = b.clone();
-                mk_number(cx, b.rotation_jitter * 100.0, "node.set", Rc::new(move |v| {
-                    let mut nb = b.clone();
-                    nb.rotation_jitter = v / 100.0;
-                    json!({ "props": { "brush": serde_json::to_value(nb.sanitized()).unwrap_or_default() } })
-                }))
+                mk_number(
+                    cx,
+                    b.rotation_jitter * 100.0,
+                    "node.set",
+                    Rc::new(move |v| {
+                        let mut nb = b.clone();
+                        nb.rotation_jitter = v / 100.0;
+                        json!({ "props": { "brush": serde_json::to_value(nb.sanitized()).unwrap_or_default() } })
+                    }),
+                )
             };
             [spacing, scatter, size_jitter, rotation_jitter]
         });
@@ -1189,10 +1202,7 @@ impl WindowState {
             1,
             tr("Brush library").into(),
             tr("Brush library").to_string(),
-            vec![
-                Opt::new(tr("Import brushes…"), "brush.import", json!({})),
-                Opt::new(tr("Reload"), "brush.reload", json!({})),
-            ],
+            vec![Opt::new(tr("Import brushes…"), "brush.import", json!({})), Opt::new(tr("Reload"), "brush.reload", json!({}))],
         ));
         settings.push(Setting::Dropdown {
             tab: 1,
@@ -1581,12 +1591,7 @@ impl WindowState {
     // ── ⑥ 变量编辑器右侧列表（egui `dialogs/variables_panel.rs::table()`）─────────────────
     // 只搬右边的表格：左侧集合/分组 sidebar、顶部搜索、编辑与拖拽都还没做。
     // 标题用集合名（egui 的浮动面板标题），右侧放变量总数的计数 chip。
-    pub(crate) fn variables_table(
-        cmds: Cmds,
-        anchor: Point<Pixels>,
-        data: VariablesData,
-        popups: Option<crate::panels::PopupReqs>,
-    ) -> Self {
+    pub(crate) fn variables_table(cmds: Cmds, anchor: Point<Pixels>, data: VariablesData, popups: Option<crate::panels::PopupReqs>) -> Self {
         let mut w = Self::base(WindowKind::VariablesTable, tr("Variables"), cmds, Open::Anchor(anchor));
         w.width = variables::WINDOW_W;
         w.height = variables::WINDOW_H;
@@ -1605,14 +1610,7 @@ impl WindowState {
     /// 被引擎 `refuse_ignored_effect_keys` 判为 unknown properties 后整条 `effect.set` 拒收，
     /// 命令静默失效 —— 这就是「有一些效果点了、选中图层在画布中没有效果」的根因。
     /// `effect.add` 走 `Effect::of_type`，所以从 `+` 菜单添加一直是正常的。
-    pub(crate) fn effect_settings(
-        cmds: Cmds,
-        cx: &mut App,
-        anchor: Point<Pixels>,
-        index: usize,
-        label: SharedString,
-        effect: Value,
-    ) -> Self {
+    pub(crate) fn effect_settings(cmds: Cmds, cx: &mut App, anchor: Point<Pixels>, index: usize, label: SharedString, effect: Value) -> Self {
         let mut w = Self::base(WindowKind::EffectSettings, label.clone(), cmds.clone(), Open::Anchor(anchor));
         w.width = 248.0;
         w.height = 320.0;
@@ -1623,17 +1621,12 @@ impl WindowState {
         let options: Vec<Opt> = figcraft_doc::Effect::TYPES
             .iter()
             .map(|(l, t)| {
-                let clean = figcraft_doc::Effect::of_type(*t)
-                    .and_then(|e| serde_json::to_value(e).ok())
-                    .unwrap_or(Value::Null);
+                let clean = figcraft_doc::Effect::of_type(*t).and_then(|e| serde_json::to_value(e).ok()).unwrap_or(Value::Null);
                 Opt::new(tr(*l), "effect.set", json!({ "index": index, "effect": clean }))
             })
             .collect();
-        let current: SharedString = figcraft_doc::Effect::TYPES
-            .iter()
-            .find(|(_, t)| *t == ty)
-            .map(|(l, _)| tr(*l).into())
-            .unwrap_or_else(|| label.clone());
+        let current: SharedString =
+            figcraft_doc::Effect::TYPES.iter().find(|(_, t)| *t == ty).map(|(l, _)| tr(*l).into()).unwrap_or_else(|| label.clone());
         settings.push(Setting::Dropdown {
             tab: 0,
             label: tr("Type").into(),
@@ -1741,18 +1734,13 @@ impl WindowState {
         let value = self.smoothing.as_ref().map(|c| c.get()).unwrap_or(0.0);
         let cell = self.smoothing.clone();
         let cmds = self.cmds.clone();
-        let slider = Slider::new(value * 100.0, 0.0, 100.0)
-            .step(1.0)
-            .show_value()
-            .suffix("%")
-            .precision(0)
-            .on_change(move |pct, _w, _cx| {
-                let v = (pct / 100.0).clamp(0.0, 1.0);
-                if let Some(c) = &cell {
-                    c.set(v);
-                }
-                cmds.push(Cmd { id: "node.set", params: Some(json!({ "props": { "cornerSmoothing": v } })) });
-            });
+        let slider = Slider::new(value * 100.0, 0.0, 100.0).step(1.0).show_value().suffix("%").precision(0).on_change(move |pct, _w, _cx| {
+            let v = (pct / 100.0).clamp(0.0, 1.0);
+            if let Some(c) = &cell {
+                c.set(v);
+            }
+            cmds.push(Cmd { id: "node.set", params: Some(json!({ "props": { "cornerSmoothing": v } })) });
+        });
         popover_body().child(slider.render()).into_any_element()
     }
 
@@ -1810,14 +1798,7 @@ impl WindowState {
     // ── ⑥ 样式选择弹窗（egui `widgets/style_picker.rs`：Color/Effect/Grid/Text 共用一类窗口）──
     /// `ty` 是 slot 类型（`text`/`paint`/`effect`/`grid`），只影响标题栏「新建样式」推的
     /// `style.create {type}` 与默认名；四类窗口的正文（搜索 + 列表 + 筛选）完全一致。
-    pub(crate) fn styles(
-        cmds: Cmds,
-        cx: &mut App,
-        anchor: Point<Pixels>,
-        title: impl Into<SharedString>,
-        ty: &'static str,
-        rows: Vec<Row>,
-    ) -> Self {
+    pub(crate) fn styles(cmds: Cmds, cx: &mut App, anchor: Point<Pixels>, title: impl Into<SharedString>, ty: &'static str, rows: Vec<Row>) -> Self {
         let mut w = Self::base(WindowKind::TextStyles, title, cmds, Open::Anchor(anchor));
         w.surface = Surface::Menu;
         w.pad = 8.0;
@@ -1877,17 +1858,19 @@ impl WindowState {
         // 表面色不指定：`Setting` 行 / `TextField` 的墨色与字段底色都按默认 `Surface::Panel`
         // 调好，调用方指定 surface 会把整套配色打乱。
 
-        let settings = Self::style_editor_settings(cx, ty, id.clone(), name.clone(), description.clone(), paints.clone(), text.clone(), effects.clone(), grids.clone(), cmds.clone());
-        w.style_edit = Some(StyleEditState {
-            id,
-            has_selection: false,
-            paints,
-            text,
-            effects,
-            grids,
-            popups,
-            picker: Rc::new(RefCell::new(None)),
-        });
+        let settings = Self::style_editor_settings(
+            cx,
+            ty,
+            id.clone(),
+            name.clone(),
+            description.clone(),
+            paints.clone(),
+            text.clone(),
+            effects.clone(),
+            grids.clone(),
+            cmds.clone(),
+        );
+        w.style_edit = Some(StyleEditState { id, has_selection: false, paints, text, effects, grids, popups, picker: Rc::new(RefCell::new(None)) });
         w.settings = Rc::new(RefCell::new(settings));
         w
     }
@@ -2037,9 +2020,30 @@ impl WindowState {
                 let style_name = Self::json_str_opt(&tf, &["fontStyle", "font_style"]).unwrap_or_default();
                 let families: Vec<SharedString> = figcraft_text::family_names().into_iter().map(SharedString::from).collect();
                 let font_styles: Vec<SharedString> = figcraft_text::family_styles(&family).into_iter().map(SharedString::from).collect();
-                let size_field = Self::text_number(cx, Self::json_num(&tf, &["fontSize", "font_size"]).unwrap_or(12.0), "font_size", tid.clone(), text_state.clone(), cmds.clone());
-                let line_field = Self::text_number_auto(cx, Self::json_num(&tf, &["lineHeight", "line_height"]), "line_height", tid.clone(), text_state.clone(), cmds.clone());
-                let spacing_field = Self::text_number_auto(cx, Self::json_num(&tf, &["letterSpacing", "letter_spacing"]), "letter_spacing", tid.clone(), text_state.clone(), cmds.clone());
+                let size_field = Self::text_number(
+                    cx,
+                    Self::json_num(&tf, &["fontSize", "font_size"]).unwrap_or(12.0),
+                    "font_size",
+                    tid.clone(),
+                    text_state.clone(),
+                    cmds.clone(),
+                );
+                let line_field = Self::text_number_auto(
+                    cx,
+                    Self::json_num(&tf, &["lineHeight", "line_height"]),
+                    "line_height",
+                    tid.clone(),
+                    text_state.clone(),
+                    cmds.clone(),
+                );
+                let spacing_field = Self::text_number_auto(
+                    cx,
+                    Self::json_num(&tf, &["letterSpacing", "letter_spacing"]),
+                    "letter_spacing",
+                    tid.clone(),
+                    text_state.clone(),
+                    cmds.clone(),
+                );
                 settings.push(Setting::TextControls {
                     tab: 0,
                     family: Rc::new(RefCell::new(SharedString::from(family))),
@@ -2063,9 +2067,7 @@ impl WindowState {
                         *menu = figcraft_doc::Effect::TYPES
                             .iter()
                             .filter_map(|(label, kind)| {
-                                figcraft_doc::Effect::of_type(kind)
-                                    .and_then(|e| serde_json::to_value(e).ok())
-                                    .map(|v| (tr(label).into(), v))
+                                figcraft_doc::Effect::of_type(kind).and_then(|e| serde_json::to_value(e).ok()).map(|v| (tr(label).into(), v))
                             })
                             .collect();
                     }
@@ -2134,21 +2136,26 @@ impl WindowState {
                 (
                     Vec::new(),
                     None,
-                    Some(list.iter().enumerate().map(|(index, e)| EffectRow {
-                        index,
-                        label: e.label().to_string(),
-                        ty: match e.kind {
-                            figcraft_doc::EffectKind::DropShadow(_) => "dropShadow",
-                            figcraft_doc::EffectKind::InnerShadow(_) => "innerShadow",
-                            figcraft_doc::EffectKind::LayerBlur(_) => "layerBlur",
-                            figcraft_doc::EffectKind::BackgroundBlur(_) => "backgroundBlur",
-                            figcraft_doc::EffectKind::Noise(_) => "noise",
-                            figcraft_doc::EffectKind::Texture(_) => "texture",
-                            figcraft_doc::EffectKind::Glass(_) => "glass",
-                        },
-                        visible: e.visible,
-                        effect: serde_json::to_value(e).unwrap_or(serde_json::Value::Null),
-                    }).collect()),
+                    Some(
+                        list.iter()
+                            .enumerate()
+                            .map(|(index, e)| EffectRow {
+                                index,
+                                label: e.label().to_string(),
+                                ty: match e.kind {
+                                    figcraft_doc::EffectKind::DropShadow(_) => "dropShadow",
+                                    figcraft_doc::EffectKind::InnerShadow(_) => "innerShadow",
+                                    figcraft_doc::EffectKind::LayerBlur(_) => "layerBlur",
+                                    figcraft_doc::EffectKind::BackgroundBlur(_) => "backgroundBlur",
+                                    figcraft_doc::EffectKind::Noise(_) => "noise",
+                                    figcraft_doc::EffectKind::Texture(_) => "texture",
+                                    figcraft_doc::EffectKind::Glass(_) => "glass",
+                                },
+                                visible: e.visible,
+                                effect: serde_json::to_value(e).unwrap_or(serde_json::Value::Null),
+                            })
+                            .collect(),
+                    ),
                     None,
                 )
             }
@@ -2158,13 +2165,18 @@ impl WindowState {
                     Vec::new(),
                     None,
                     None,
-                    Some(gl.iter().enumerate().map(|(index, g)| GridRow {
-                        index,
-                        label: crate::panels::right::data::grid_label(g),
-                        color: g.color.to_hex(),
-                        visible: g.visible,
-                        grids: serde_json::to_value(&gl).unwrap_or(serde_json::Value::Array(vec![])),
-                    }).collect()),
+                    Some(
+                        gl.iter()
+                            .enumerate()
+                            .map(|(index, g)| GridRow {
+                                index,
+                                label: crate::panels::right::data::grid_label(g),
+                                color: g.color.to_hex(),
+                                visible: g.visible,
+                                grids: serde_json::to_value(&gl).unwrap_or(serde_json::Value::Array(vec![])),
+                            })
+                            .collect(),
+                    ),
                 )
             }
         };
@@ -2172,7 +2184,13 @@ impl WindowState {
     }
 
     /// 卡片高度估算（与 `style_editor` 打开时一致）：命令增删属性行后重算，避免卡片定位偏移。
-    fn style_editor_height(ty: &'static str, paints: &[figcraft_color::Paint], _text: &Option<serde_json::Value>, effects: &Option<Vec<EffectRow>>, grids: &Option<Vec<GridRow>>) -> f32 {
+    fn style_editor_height(
+        ty: &'static str,
+        paints: &[figcraft_color::Paint],
+        _text: &Option<serde_json::Value>,
+        effects: &Option<Vec<EffectRow>>,
+        grids: &Option<Vec<GridRow>>,
+    ) -> f32 {
         let rows = match ty {
             "paint" => paints.len().max(1) as f32 * 32.0,
             "text" => 3.0 * 24.0 + 2.0 * 8.0,
@@ -2191,7 +2209,18 @@ impl WindowState {
     pub(crate) fn apply_style_snapshot(&mut self, cx: &mut App, snap: StyleSnap) {
         let StyleSnap { ty, name, description, paints, text, effects, grids } = snap;
         let id = self.style_edit.as_ref().map(|e| e.id.clone()).unwrap_or_default();
-        let mut settings = Self::style_editor_settings(cx, ty, id.clone(), name, description, paints.clone(), text.clone(), effects.clone(), grids.clone(), self.cmds.clone());
+        let mut settings = Self::style_editor_settings(
+            cx,
+            ty,
+            id.clone(),
+            name,
+            description,
+            paints.clone(),
+            text.clone(),
+            effects.clone(),
+            grids.clone(),
+            self.cmds.clone(),
+        );
         // 拖动「%」时每一步都会写回文档并触发本刷新。若整份 settings 连同编辑器一起重建，
         // 正在 scrub 的 Entity 会被换掉，拖动就断了（用户 2026-11-15）。按 (tab, index)
         // 复用 PaintRow 的 hex / opacity 编辑器，只让 paint 数据跟上文档。
@@ -2319,11 +2348,7 @@ impl WindowState {
                     Value::Number(n) => n.as_f64(),
                     Value::String(s) => {
                         let s = s.trim();
-                        if s.eq_ignore_ascii_case("auto") {
-                            None
-                        } else {
-                            s.trim_end_matches('%').trim().parse().ok()
-                        }
+                        if s.eq_ignore_ascii_case("auto") { None } else { s.trim_end_matches('%').trim().parse().ok() }
                     }
                     Value::Object(o) => o.get("px").and_then(|p| p.as_f64()).or_else(|| o.get("value").and_then(|p| p.as_f64())),
                     _ => None,
@@ -2720,14 +2745,8 @@ impl WindowState {
                         let cmds = self.cmds.clone();
                         let top = self.origin.y;
                         row = row.child(IconButton::new(Icon::Plus).size(24.0).on_click(move |_, _window, cx| {
-                            let mut child = WindowState::styles(
-                                cmds.clone(),
-                                cx,
-                                Point { x: px(0.0), y: top },
-                                tr("Color styles"),
-                                "paint",
-                                styles.clone(),
-                            );
+                            let mut child =
+                                WindowState::styles(cmds.clone(), cx, Point { x: px(0.0), y: top }, tr("Color styles"), "paint", styles.clone());
                             child.anchor_to_button_top(top);
                             *sub.borrow_mut() = Some(Box::new(child));
                             cmds.wake();
@@ -2759,10 +2778,7 @@ impl WindowState {
                     .gap(pt(4.0))
                     .child(div().flex_1().child(title_text(self.title.clone())))
                     .child(IconButton::new(Icon::Plus).size(20.0).on_click(move |_, _, _| {
-                        cmds.push(Cmd {
-                            id: "style.create",
-                            params: Some(json!({ "type": create_type, "name": default_name })),
-                        });
+                        cmds.push(Cmd { id: "style.create", params: Some(json!({ "type": create_type, "name": default_name })) });
                     }))
                     .into_any_element()
             }
@@ -2791,9 +2807,12 @@ impl WindowState {
             }
             // 变量编辑器把「标题 + 计数」画进自己的工具条：整窗一个插槽，顶部只有一行。
             WindowKind::VariablesTable => div().into_any_element(),
-            WindowKind::Layout | WindowKind::Stroke | WindowKind::EffectSettings | WindowKind::StyleEditor | WindowKind::CornerSmoothing | WindowKind::FontPicker => {
-                title_text(self.title.clone()).into_any_element()
-            }
+            WindowKind::Layout
+            | WindowKind::Stroke
+            | WindowKind::EffectSettings
+            | WindowKind::StyleEditor
+            | WindowKind::CornerSmoothing
+            | WindowKind::FontPicker => title_text(self.title.clone()).into_any_element(),
             // Type settings 的标题栏就是三页签（截图顶部没有单独的 "Type settings" 标题文字），
             // 与 lizard `type_settings_panel` 把 Tabs 放进 header 一致。
             WindowKind::TypeSettings => {
@@ -2843,10 +2862,7 @@ impl WindowState {
         if c.paint.is_some() && !c.nested {
             h += 40.0;
         }
-        let grad = matches!(
-            c.paint_state.as_ref().map(|s| s.borrow().kind.clone()),
-            Some(figcraft_color::PaintKind::Gradient(_))
-        );
+        let grad = matches!(c.paint_state.as_ref().map(|s| s.borrow().kind.clone()), Some(figcraft_color::PaintKind::Gradient(_)));
         if grad {
             // 类型行 48 + 预览条 8/48 + 「断点」标题 8/32 + 每行 32 + 底部 12
             let stops = c
@@ -2940,11 +2956,7 @@ impl WindowState {
                     }
                 }
                 None => {
-                    let text = if COLOR_MODELS.get(model) == Some(&"CSS") {
-                        picker_color(current).to_css()
-                    } else {
-                        current.to_hex()
-                    };
+                    let text = if COLOR_MODELS.get(model) == Some(&"CSS") { picker_color(current).to_css() } else { current.to_hex() };
                     c.hex.update(cx, |tf, _| tf.set_value(text));
                 }
             }
@@ -3006,73 +3018,75 @@ impl WindowState {
             .w(pt(SPECTRUM))
             .h(pt(SPECTRUM))
             .child(
-                div()
-                    .w(pt(SPECTRUM))
-                    .h(pt(SPECTRUM))
-                    .rounded(pt(5.0))
-                    .border_1()
-                    .border_color(rgba(t.border))
-                    .overflow_hidden()
-                    .child(
-                        gpui::canvas(
-                            move |bounds, _, _| sv_prepaint.set(Some(bounds)),
-                            move |bounds, _, window, _| {
-                                let white = gpui::Hsla::from(rgba(Color32::from_rgb(255, 255, 255)));
-                                let pure = gpui::Hsla::from(rgba(hue_c));
-                                let clear = gpui::transparent_black();
-                                let black = gpui::Hsla::from(rgba(Color32::from_rgb(0, 0, 0)));
-                                // 90° = 左→右（饱和度 0→1），180° = 上→下（明度 1→0）。
-                                window.paint_quad(gpui::fill(
-                                    bounds,
-                                    gpui::linear_gradient(90.0, gpui::linear_color_stop(white, 0.0), gpui::linear_color_stop(pure, 1.0)),
-                                ));
-                                window.paint_quad(gpui::fill(
-                                    bounds,
-                                    gpui::linear_gradient(180.0, gpui::linear_color_stop(clear, 0.0), gpui::linear_color_stop(black, 1.0)),
-                                ));
-                                // AA 达标边界白线：一条连续 stroke 折线（lyon 自动补 join + 抗锯齿）。
-                                if let Some((lighter, darker)) = &aa_boundary_paint {
-                                    let bx = f32::from(bounds.origin.x);
-                                    let by = f32::from(bounds.origin.y);
-                                    let bw = f32::from(bounds.size.width);
-                                    let bh = f32::from(bounds.size.height);
-                                    let sc = rgba(Color32::from_rgba_unmultiplied(255, 255, 255, 217));
-                                    for l in [lighter, darker] {
-                                        if l.len() < 2 { continue; }
-                                        let mut b = gpui::PathBuilder::stroke(px(1.25));
-                                        for (i, pt) in l.iter().enumerate() {
-                                            let p = point(px(bx + pt.s * bw), px(by + (1.0 - pt.v) * bh));
-                                            if i == 0 { b.move_to(p); } else { b.line_to(p); }
+                div().w(pt(SPECTRUM)).h(pt(SPECTRUM)).rounded(pt(5.0)).border_1().border_color(rgba(t.border)).overflow_hidden().child(
+                    gpui::canvas(
+                        move |bounds, _, _| sv_prepaint.set(Some(bounds)),
+                        move |bounds, _, window, _| {
+                            let white = gpui::Hsla::from(rgba(Color32::from_rgb(255, 255, 255)));
+                            let pure = gpui::Hsla::from(rgba(hue_c));
+                            let clear = gpui::transparent_black();
+                            let black = gpui::Hsla::from(rgba(Color32::from_rgb(0, 0, 0)));
+                            // 90° = 左→右（饱和度 0→1），180° = 上→下（明度 1→0）。
+                            window.paint_quad(gpui::fill(
+                                bounds,
+                                gpui::linear_gradient(90.0, gpui::linear_color_stop(white, 0.0), gpui::linear_color_stop(pure, 1.0)),
+                            ));
+                            window.paint_quad(gpui::fill(
+                                bounds,
+                                gpui::linear_gradient(180.0, gpui::linear_color_stop(clear, 0.0), gpui::linear_color_stop(black, 1.0)),
+                            ));
+                            // AA 达标边界白线：一条连续 stroke 折线（lyon 自动补 join + 抗锯齿）。
+                            if let Some((lighter, darker)) = &aa_boundary_paint {
+                                let bx = f32::from(bounds.origin.x);
+                                let by = f32::from(bounds.origin.y);
+                                let bw = f32::from(bounds.size.width);
+                                let bh = f32::from(bounds.size.height);
+                                let sc = rgba(Color32::from_rgba_unmultiplied(255, 255, 255, 217));
+                                for l in [lighter, darker] {
+                                    if l.len() < 2 {
+                                        continue;
+                                    }
+                                    let mut b = gpui::PathBuilder::stroke(px(1.25));
+                                    for (i, pt) in l.iter().enumerate() {
+                                        let p = point(px(bx + pt.s * bw), px(by + (1.0 - pt.v) * bh));
+                                        if i == 0 {
+                                            b.move_to(p);
+                                        } else {
+                                            b.line_to(p);
                                         }
-                                        if let Ok(path) = b.build() { window.paint_path(path, sc); }
+                                    }
+                                    if let Ok(path) = b.build() {
+                                        window.paint_path(path, sc);
                                     }
                                 }
-                                // 拖动监听必须挂在窗口级：指针一旦移出色域方块就收不到元素的
-                                // move，手柄会卡住（用户实测「手柄拖不动 / 放不下」）。
-                                {
-                                    let dragging = sv_drag_win.clone();
-                                    let hit = sv_hit_win.clone();
-                                    let pick = sv_pick_win.clone();
-                                    window.on_mouse_event(move |e: &MouseMoveEvent, phase, window, cx| {
-                                        if !phase.bubble() || !dragging.get() {
-                                            return;
-                                        }
-                                        let Some(b) = hit.get() else { return };
-                                        let s = ((f32::from(e.position.x) - f32::from(b.origin.x)) / f32::from(b.size.width).max(1.0)).clamp(0.0, 1.0);
-                                        let v = 1.0 - ((f32::from(e.position.y) - f32::from(b.origin.y)) / f32::from(b.size.height).max(1.0)).clamp(0.0, 1.0);
-                                        pick(hue, s, v, window, cx);
-                                    });
-                                    let dragging = sv_drag_end.clone();
-                                    window.on_mouse_event(move |_e: &gpui::MouseUpEvent, phase, _, _| {
-                                        if phase.bubble() {
-                                            dragging.set(false);
-                                        }
-                                    });
-                                }
-                            },
-                        )
-                        .size_full(),
-                    ),
+                            }
+                            // 拖动监听必须挂在窗口级：指针一旦移出色域方块就收不到元素的
+                            // move，手柄会卡住（用户实测「手柄拖不动 / 放不下」）。
+                            {
+                                let dragging = sv_drag_win.clone();
+                                let hit = sv_hit_win.clone();
+                                let pick = sv_pick_win.clone();
+                                window.on_mouse_event(move |e: &MouseMoveEvent, phase, window, cx| {
+                                    if !phase.bubble() || !dragging.get() {
+                                        return;
+                                    }
+                                    let Some(b) = hit.get() else { return };
+                                    let s = ((f32::from(e.position.x) - f32::from(b.origin.x)) / f32::from(b.size.width).max(1.0)).clamp(0.0, 1.0);
+                                    let v =
+                                        1.0 - ((f32::from(e.position.y) - f32::from(b.origin.y)) / f32::from(b.size.height).max(1.0)).clamp(0.0, 1.0);
+                                    pick(hue, s, v, window, cx);
+                                });
+                                let dragging = sv_drag_end.clone();
+                                window.on_mouse_event(move |_e: &gpui::MouseUpEvent, phase, _, _| {
+                                    if phase.bubble() {
+                                        dragging.set(false);
+                                    }
+                                });
+                            }
+                        },
+                    )
+                    .size_full(),
+                ),
             )
             // 拾色点：Figma `_1t0vmmd5/7` 是 16 pt 白环 + 4 pt 白边 + 中间填当前色，
             // 环外还有一圈 1 px `controlknoboffoutline`（这里用 18 pt 半透明底托出来）。
@@ -3114,10 +3128,7 @@ impl WindowState {
                     let a = hsb_color(i as f32 * 60.0, 1.0, 1.0);
                     let b = hsb_color((i + 1) as f32 * 60.0, 1.0, 1.0);
                     window.paint_quad(gpui::fill(
-                        Bounds {
-                            origin: point(px(x0 + w * i as f32 / 6.0), px(y0)),
-                            size: size(px(w / 6.0 + 0.5), px(h)),
-                        },
+                        Bounds { origin: point(px(x0 + w * i as f32 / 6.0), px(y0)), size: size(px(w / 6.0 + 0.5), px(h)) },
                         gpui::linear_gradient(
                             90.0,
                             gpui::linear_color_stop(gpui::Hsla::from(rgba(a)), 0.0),
@@ -3185,15 +3196,7 @@ impl WindowState {
         } else {
             fields_row = fields_row.child(cell(c.hex.clone().into_any_element()));
         }
-        fields_row = fields_row.child(
-            div()
-                .flex_none()
-                .w(pt(54.0))
-                .h(pt(24.0))
-                .rounded(pt(5.0))
-                .bg(rgba(t.field))
-                .child(c.alpha.clone()),
-        );
+        fields_row = fields_row.child(div().flex_none().w(pt(54.0)).h(pt(24.0)).rounded(pt(5.0)).bg(rgba(t.field)).child(c.alpha.clone()));
 
         // ⑤ 色板：色板集下拉 + 16 pt 色块（节奏 24，一行 9 个，与 Figma 的 216 内容宽一致）。
         let set = c.swatch_set.get();
@@ -3229,8 +3232,7 @@ impl WindowState {
                 let p = pick.clone();
                 let col = *col;
                 r = r.child(
-                    crate::widgets::swatch(figcraft_color::Paint::solid(picker_color(col)), CHIT)
-                        .on_click(move |window, cx| p(col, window, cx)),
+                    crate::widgets::swatch(figcraft_color::Paint::solid(picker_color(col)), CHIT).on_click(move |window, cx| p(col, window, cx)),
                 );
             }
             grid = grid.child(r);
@@ -3255,12 +3257,8 @@ impl WindowState {
                 let cx = f32::from(bounds.origin.x) + r;
                 let cy = f32::from(bounds.origin.y) + r;
                 let bg_rgba = rgba(crate::widgets::swatch::color32(bg_dot.with_alpha(1.0)));
-                window.paint_quad(gpui::fill(
-                    Bounds { origin: point(px(cx - r), px(cy - r)), size: size(px(r), px(2.0 * r)) }, bg_rgba,
-                ));
-                window.paint_quad(gpui::fill(
-                    Bounds { origin: point(px(cx), px(cy - r)), size: size(px(r), px(2.0 * r)) }, rgba(Color32::WHITE),
-                ));
+                window.paint_quad(gpui::fill(Bounds { origin: point(px(cx - r), px(cy - r)), size: size(px(r), px(2.0 * r)) }, bg_rgba));
+                window.paint_quad(gpui::fill(Bounds { origin: point(px(cx), px(cy - r)), size: size(px(r), px(2.0 * r)) }, rgba(Color32::WHITE)));
             },
         )
         .size(pt(14.0));
@@ -3285,7 +3283,9 @@ impl WindowState {
                     .rounded_full()
                     .border_1()
                     .border_color(rgba(if aa_pass { t.text } else { t.text_secondary }))
-                    .flex().items_center().justify_center()
+                    .flex()
+                    .items_center()
+                    .justify_center()
                     .child(if aa_pass { "✓" } else { "/" }),
             )
             .child(div().text_size(pt(11.0)).text_color(rgba(t.text)).child("AA"));
@@ -3337,32 +3337,80 @@ impl WindowState {
             let graphics_label: SharedString = tr("图形").into();
             let aa_label: SharedString = format!("AA · Essential ({:.1} : 1)", aa_min.unwrap_or(3.0)).into();
             let aaa_label: SharedString = tr("AAA · 仅限文本").into();
-            let row_auto = auto_label.clone(); let row_large = large_label.clone(); let row_normal = normal_label.clone();
-            let row_graphics = graphics_label.clone(); let row_aa = aa_label.clone(); let row_aaa = aaa_label.clone();
+            let row_auto = auto_label.clone();
+            let row_large = large_label.clone();
+            let row_normal = normal_label.clone();
+            let row_graphics = graphics_label.clone();
+            let row_aa = aa_label.clone();
+            let row_aaa = aaa_label.clone();
             let has_aaa = figcraft_color::minimum(aa_category_val, figcraft_color::ContrastLevel::AAA).is_some();
             let on_pick_menu = Rc::new(move |picked: &str, _w: &mut Window, _cx: &mut App| {
-                if picked == aaa_label.as_ref() && !has_aaa { *anchor_close.borrow_mut() = None; wake2.wake(); return; }
-                if picked == auto_label.as_ref() { *cat.borrow_mut() = None; }
-                else if picked == large_label.as_ref() { *cat.borrow_mut() = Some(figcraft_color::ContrastCategory::LargeText); }
-                else if picked == normal_label.as_ref() { *cat.borrow_mut() = Some(figcraft_color::ContrastCategory::NormalText); }
-                else if picked == graphics_label.as_ref() { *cat.borrow_mut() = Some(figcraft_color::ContrastCategory::Graphics); }
-                else if picked == aa_label.as_ref() { *lvl.borrow_mut() = figcraft_color::ContrastLevel::AA; }
-                else if picked == aaa_label.as_ref() { *lvl.borrow_mut() = figcraft_color::ContrastLevel::AAA; }
+                if picked == aaa_label.as_ref() && !has_aaa {
+                    *anchor_close.borrow_mut() = None;
+                    wake2.wake();
+                    return;
+                }
+                if picked == auto_label.as_ref() {
+                    *cat.borrow_mut() = None;
+                } else if picked == large_label.as_ref() {
+                    *cat.borrow_mut() = Some(figcraft_color::ContrastCategory::LargeText);
+                } else if picked == normal_label.as_ref() {
+                    *cat.borrow_mut() = Some(figcraft_color::ContrastCategory::NormalText);
+                } else if picked == graphics_label.as_ref() {
+                    *cat.borrow_mut() = Some(figcraft_color::ContrastCategory::Graphics);
+                } else if picked == aa_label.as_ref() {
+                    *lvl.borrow_mut() = figcraft_color::ContrastLevel::AA;
+                } else if picked == aaa_label.as_ref() {
+                    *lvl.borrow_mut() = figcraft_color::ContrastLevel::AAA;
+                }
                 *anchor_close.borrow_mut() = None;
                 wake2.wake();
             });
             let anchor_dismiss = aa_anchor.clone();
             let wake3 = self.cmds.clone();
-            let dismiss = Rc::new(move |_: &mut Window, _: &mut App| { *anchor_dismiss.borrow_mut() = None; wake3.wake(); });
+            let dismiss = Rc::new(move |_: &mut Window, _: &mut App| {
+                *anchor_dismiss.borrow_mut() = None;
+                wake3.wake();
+            });
             let sel_cat = *c.aa_category.borrow();
             let sel_lvl = *c.aa_level.borrow();
             let rows = vec![
                 MenuRow { label: row_auto, trail: None, key: None, checked: Some(sel_cat.is_none()), separator_before: false },
-                MenuRow { label: row_large, trail: None, key: None, checked: Some(sel_cat == Some(figcraft_color::ContrastCategory::LargeText)), separator_before: false },
-                MenuRow { label: row_normal, trail: None, key: None, checked: Some(sel_cat == Some(figcraft_color::ContrastCategory::NormalText)), separator_before: false },
-                MenuRow { label: row_graphics, trail: None, key: None, checked: Some(sel_cat == Some(figcraft_color::ContrastCategory::Graphics)), separator_before: false },
-                MenuRow { label: row_aa, trail: None, key: None, checked: Some(sel_lvl == figcraft_color::ContrastLevel::AA), separator_before: true },
-                MenuRow { label: row_aaa, trail: None, key: None, checked: Some(sel_lvl == figcraft_color::ContrastLevel::AAA), separator_before: false },
+                MenuRow {
+                    label: row_large,
+                    trail: None,
+                    key: None,
+                    checked: Some(sel_cat == Some(figcraft_color::ContrastCategory::LargeText)),
+                    separator_before: false,
+                },
+                MenuRow {
+                    label: row_normal,
+                    trail: None,
+                    key: None,
+                    checked: Some(sel_cat == Some(figcraft_color::ContrastCategory::NormalText)),
+                    separator_before: false,
+                },
+                MenuRow {
+                    label: row_graphics,
+                    trail: None,
+                    key: None,
+                    checked: Some(sel_cat == Some(figcraft_color::ContrastCategory::Graphics)),
+                    separator_before: false,
+                },
+                MenuRow {
+                    label: row_aa,
+                    trail: None,
+                    key: None,
+                    checked: Some(sel_lvl == figcraft_color::ContrastLevel::AA),
+                    separator_before: true,
+                },
+                MenuRow {
+                    label: row_aaa,
+                    trail: None,
+                    key: None,
+                    checked: Some(sel_lvl == figcraft_color::ContrastLevel::AAA),
+                    separator_before: false,
+                },
             ];
             // 通用菜单 + **宽度自适应**（None，不再硬编码 180）；与按钮**中心对齐**、
             // 顶部在按钮底部下方 4pt（BottomCenter 的默认 gap 就是 4）。
@@ -3434,29 +3482,9 @@ impl WindowState {
                                 eyedrop_cmds.push(Cmd { id: "edit.pickColor", params: Some(json!({ "apply": false })) });
                             }),
                     )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(pt(0.0))
-                            .h(pt(48.0))
-                            .flex()
-                            .flex_col()
-                            .justify_between()
-                            .child(hue_slider)
-                            .child(alpha_slider),
-                    ),
+                    .child(div().flex_1().min_w(pt(0.0)).h(pt(48.0)).flex().flex_col().justify_between().child(hue_slider).child(alpha_slider)),
             );
-            col = col.child(
-                div()
-                    .w(pt(PANEL_W))
-                    .h(pt(40.0))
-                    .px(pt(16.0))
-                    .flex()
-                    .items_center()
-                    .gap(pt(8.0))
-                    .child(format_select)
-                    .child(fields_row),
-            );
+            col = col.child(div().w(pt(PANEL_W)).h(pt(40.0)).px(pt(16.0)).flex().items_center().gap(pt(8.0)).child(format_select).child(fields_row));
             col = col.child(swatch_panel);
         }
 
@@ -3479,15 +3507,10 @@ impl WindowState {
                 }
             });
             let dismiss: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(move |_w, _cx| close.set(None));
-            self.push_overlay(menu_popup_in(
-                anchor,
-                Some(56.0),
-                rows,
-                on_pick,
-                dismiss.clone(),
-                f32::from(self.viewport.width),
-                f32::from(self.viewport.height),
-            ), dismiss);
+            self.push_overlay(
+                menu_popup_in(anchor, Some(56.0), rows, on_pick, dismiss.clone(), f32::from(self.viewport.width), f32::from(self.viewport.height)),
+                dismiss,
+            );
         }
         // The blend-mode menu, on the window root like the model menu.
         if let Some(anchor) = c.blend_anchor.get()
@@ -3515,15 +3538,10 @@ impl WindowState {
             let dismiss: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(move |_w, _cx| close.set(None));
             // 混色（水滴）菜单：**左边缘对齐按钮左缘**、顶部在按钮底部下方 4pt
             // （通用 Menu 默认 BottomStart + gap 4），宽度跟随按钮。
-            self.push_overlay(menu_popup_in(
-                anchor,
-                None,
-                rows,
-                on_pick,
-                dismiss.clone(),
-                f32::from(self.viewport.width),
-                f32::from(self.viewport.height),
-            ), dismiss);
+            self.push_overlay(
+                menu_popup_in(anchor, None, rows, on_pick, dismiss.clone(), f32::from(self.viewport.width), f32::from(self.viewport.height)),
+                dismiss,
+            );
         }
         // The swatch-set menu (在此页面 / 最近使用), same parking rule.
         if let Some(anchor) = c.swatch_anchor.get() {
@@ -3542,15 +3560,10 @@ impl WindowState {
                 }
             });
             let dismiss: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(move |_w, _cx| close.set(None));
-            self.push_overlay(menu_popup_in(
-                anchor,
-                Some(PANEL_W),
-                rows,
-                on_pick,
-                dismiss.clone(),
-                f32::from(self.viewport.width),
-                f32::from(self.viewport.height),
-            ), dismiss);
+            self.push_overlay(
+                menu_popup_in(anchor, Some(PANEL_W), rows, on_pick, dismiss.clone(), f32::from(self.viewport.width), f32::from(self.viewport.height)),
+                dismiss,
+            );
         }
         // 渐变类型下拉（线性 / 径向 / 角度 / 菱形）：与其它浮层内菜单一样挂在窗口根。
         if let Some(anchor) = c.grad_kind_anchor.get()
@@ -3590,15 +3603,10 @@ impl WindowState {
             let dismiss: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(move |_w, _cx| close.set(None));
             // 与上面的通用 dropdown 按钮（96）保持同一视觉尺度，略放宽到 104 让长项
             // （Angular / Diamond）不贴边。
-            self.push_overlay(menu_popup_in(
-                anchor,
-                Some(104.0),
-                rows,
-                on_pick,
-                dismiss.clone(),
-                f32::from(self.viewport.width),
-                f32::from(self.viewport.height),
-            ), dismiss);
+            self.push_overlay(
+                menu_popup_in(anchor, Some(104.0), rows, on_pick, dismiss.clone(), f32::from(self.viewport.width), f32::from(self.viewport.height)),
+                dismiss,
+            );
         }
         col.into_any_element()
     }
@@ -3626,15 +3634,8 @@ impl WindowState {
         ];
         for (i, picker_icon, icon) in icons {
             let on = i == kind_idx;
-            let mut b = div()
-                .w(pt(24.0))
-                .h(pt(24.0))
-                .rounded(pt(5.0))
-                .flex()
-                .items_center()
-                .justify_center()
-                .cursor_pointer()
-                .hover(|s| s.bg(rgba(t.hover)));
+            let mut b =
+                div().w(pt(24.0)).h(pt(24.0)).rounded(pt(5.0)).flex().items_center().justify_center().cursor_pointer().hover(|s| s.bg(rgba(t.hover)));
             b = match icon {
                 Some(icon) => b.child(crate::widgets::icon::paint(icon, rgba(t.icon), 24.0)),
                 None => b.child(picker_icons::paint(picker_icon, rgba(t.icon), 24.0)),
@@ -3785,7 +3786,12 @@ impl WindowState {
                 cache.clear();
                 c.stop_shown.borrow_mut().clear();
                 for (i, s) in g.stops.iter().enumerate() {
-                    let hex = format!("#{:02X}{:02X}{:02X}", (s.color.r * 255.0).round() as u8, (s.color.g * 255.0).round() as u8, (s.color.b * 255.0).round() as u8);
+                    let hex = format!(
+                        "#{:02X}{:02X}{:02X}",
+                        (s.color.r * 255.0).round() as u8,
+                        (s.color.g * 255.0).round() as u8,
+                        (s.color.b * 255.0).round() as u8
+                    );
                     let shown = (format!("{}", (s.position * 100.0).round() as i64), hex.clone(), format!("{}", (s.color.a * 100.0).round() as i64));
                     cache.push(stop_fields(cx, state, &write, i, &shown));
                     c.stop_shown.borrow_mut().push(shown);
@@ -3797,7 +3803,12 @@ impl WindowState {
         {
             let mut shown = c.stop_shown.borrow_mut();
             for (i, s) in g.stops.iter().enumerate() {
-                let hex = format!("#{:02X}{:02X}{:02X}", (s.color.r * 255.0).round() as u8, (s.color.g * 255.0).round() as u8, (s.color.b * 255.0).round() as u8);
+                let hex = format!(
+                    "#{:02X}{:02X}{:02X}",
+                    (s.color.r * 255.0).round() as u8,
+                    (s.color.g * 255.0).round() as u8,
+                    (s.color.b * 255.0).round() as u8
+                );
                 let now = (format!("{}", (s.position * 100.0).round() as i64), hex, format!("{}", (s.color.a * 100.0).round() as i64));
                 let Some(f) = fields.get(i) else { continue };
                 if shown.get(i) == Some(&now) {
@@ -3817,111 +3828,94 @@ impl WindowState {
         let ramp_bounds = bounds.clone();
         // canvas 直绘不受父级圆角裁剪，圆角靠绘制末尾用面板底色补四角（见下）。
         let ramp_panel_bg = rgba(t.panel);
-        let ramp = div()
-            .absolute()
-            .left(px(0.0))
-            .top(px(16.0))
-            .w(pt(208.0))
-            .h(pt(32.0))
-            .rounded(pt(5.0))
-            .overflow_hidden()
-            .child(
-                gpui::canvas(
-                    move |b, _, _| ramp_bounds.set(Some(b)),
-                    move |b, _, window, _| {
-                        let w = f32::from(b.size.width).max(1.0);
-                        let h = f32::from(b.size.height).max(1.0);
-                        // 透明色需要棋盘格垫底，否则看起来像纯色。
-                        let light = gpui::Hsla::from(rgba(Color32::from_rgb(255, 255, 255)));
-                        let dark = gpui::Hsla::from(rgba(Color32::from_rgb(0xCC, 0xCC, 0xCC)));
-                        let cell: f32 = 8.0;
-                        let mut y = 0.0;
-                        let mut cy = 0;
-                        while y < h {
-                            let mut x = 0.0;
-                            let mut cx_ = 0;
-                            while x < w {
-                                let quad = Bounds {
-                                    origin: point(px(f32::from(b.origin.x) + x), px(f32::from(b.origin.y) + y)),
-                                    size: size(px((cell).min(w - x)), px((cell).min(h - y))),
-                                };
-                                window.paint_quad(gpui::fill(quad, if (cx_ + cy) % 2 == 0 { light } else { dark }));
-                                x += cell;
-                                cx_ += 1;
-                            }
-                            y += cell;
-                            cy += 1;
-                        }
-                        let mut ss = ramp_g.stops.clone();
-                        ss.sort_by(|a, b| a.position.partial_cmp(&b.position).unwrap_or(std::cmp::Ordering::Equal));
-                        let Some(first) = ss.first() else { return };
-                        let last = ss.last().unwrap();
-                        let stop_hsla = |c: figcraft_color::Color| gpui::Hsla::from(rgba(picker_c32(c)));
-                        // 首断点之前 / 末断点之后是纯色。
-                        let x0 = first.position.clamp(0.0, 1.0) * w;
-                        if x0 > 0.0 {
-                            window.paint_quad(gpui::fill(
-                                Bounds { origin: b.origin, size: size(px(x0), b.size.height) },
-                                stop_hsla(first.color),
-                            ));
-                        }
-                        for pair in ss.windows(2) {
-                            let (a, c) = (&pair[0], &pair[1]);
-                            let xa = a.position.clamp(0.0, 1.0) * w;
-                            let xb = c.position.clamp(0.0, 1.0) * w;
-                            if xb <= xa {
-                                continue;
-                            }
+        let ramp = div().absolute().left(px(0.0)).top(px(16.0)).w(pt(208.0)).h(pt(32.0)).rounded(pt(5.0)).overflow_hidden().child(
+            gpui::canvas(
+                move |b, _, _| ramp_bounds.set(Some(b)),
+                move |b, _, window, _| {
+                    let w = f32::from(b.size.width).max(1.0);
+                    let h = f32::from(b.size.height).max(1.0);
+                    // 透明色需要棋盘格垫底，否则看起来像纯色。
+                    let light = gpui::Hsla::from(rgba(Color32::from_rgb(255, 255, 255)));
+                    let dark = gpui::Hsla::from(rgba(Color32::from_rgb(0xCC, 0xCC, 0xCC)));
+                    let cell: f32 = 8.0;
+                    let mut y = 0.0;
+                    let mut cy = 0;
+                    while y < h {
+                        let mut x = 0.0;
+                        let mut cx_ = 0;
+                        while x < w {
                             let quad = Bounds {
-                                origin: point(px(f32::from(b.origin.x) + xa), b.origin.y),
-                                size: size(px(xb - xa), b.size.height),
+                                origin: point(px(f32::from(b.origin.x) + x), px(f32::from(b.origin.y) + y)),
+                                size: size(px((cell).min(w - x)), px((cell).min(h - y))),
                             };
-                            window.paint_quad(gpui::fill(
-                                quad,
-                                gpui::linear_gradient(
-                                    90.0,
-                                    gpui::linear_color_stop(stop_hsla(a.color), 0.0),
-                                    gpui::linear_color_stop(stop_hsla(c.color), 1.0),
-                                ),
-                            ));
+                            window.paint_quad(gpui::fill(quad, if (cx_ + cy) % 2 == 0 { light } else { dark }));
+                            x += cell;
+                            cx_ += 1;
                         }
-                        let xe = last.position.clamp(0.0, 1.0) * w;
-                        if xe < w {
-                            window.paint_quad(gpui::fill(
-                                Bounds {
-                                    origin: point(px(f32::from(b.origin.x) + xe), b.origin.y),
-                                    size: size(px(w - xe), b.size.height),
-                                },
-                                stop_hsla(last.color),
-                            ));
+                        y += cell;
+                        cy += 1;
+                    }
+                    let mut ss = ramp_g.stops.clone();
+                    ss.sort_by(|a, b| a.position.partial_cmp(&b.position).unwrap_or(std::cmp::Ordering::Equal));
+                    let Some(first) = ss.first() else { return };
+                    let last = ss.last().unwrap();
+                    let stop_hsla = |c: figcraft_color::Color| gpui::Hsla::from(rgba(picker_c32(c)));
+                    // 首断点之前 / 末断点之后是纯色。
+                    let x0 = first.position.clamp(0.0, 1.0) * w;
+                    if x0 > 0.0 {
+                        window.paint_quad(gpui::fill(Bounds { origin: b.origin, size: size(px(x0), b.size.height) }, stop_hsla(first.color)));
+                    }
+                    for pair in ss.windows(2) {
+                        let (a, c) = (&pair[0], &pair[1]);
+                        let xa = a.position.clamp(0.0, 1.0) * w;
+                        let xb = c.position.clamp(0.0, 1.0) * w;
+                        if xb <= xa {
+                            continue;
                         }
-                        // 四角 rx5 圆角：canvas 直绘不被父级 overflow 圆角裁剪，用面板底色
-                        // 盖掉四个直角三角（弧形斜边近似 1/4 圆）。
-                        let bx = f32::from(b.origin.x);
-                        let by = f32::from(b.origin.y);
-                        let bw = f32::from(b.size.width);
-                        let bh = f32::from(b.size.height);
-                        let rr = 5.0_f32;
-                        let corners = [
-                            [(bx, by), (bx + rr, by), (bx, by + rr)],
-                            [(bx + bw, by), (bx + bw - rr, by), (bx + bw, by + rr)],
-                            [(bx + bw, by + bh), (bx + bw - rr, by + bh), (bx + bw, by + bh - rr)],
-                            [(bx, by + bh), (bx + rr, by + bh), (bx, by + bh - rr)],
-                        ];
-                        for c in corners {
-                            let mut pb = gpui::PathBuilder::fill();
-                            pb.move_to(point(px(c[0].0), px(c[0].1)));
-                            pb.line_to(point(px(c[1].0), px(c[1].1)));
-                            pb.curve_to(point(px(c[2].0), px(c[2].1)), point(px(c[0].0), px(c[0].1)));
-                            pb.close();
-                            if let Ok(path) = pb.build() {
-                                window.paint_path(path, ramp_panel_bg);
-                            }
+                        let quad = Bounds { origin: point(px(f32::from(b.origin.x) + xa), b.origin.y), size: size(px(xb - xa), b.size.height) };
+                        window.paint_quad(gpui::fill(
+                            quad,
+                            gpui::linear_gradient(
+                                90.0,
+                                gpui::linear_color_stop(stop_hsla(a.color), 0.0),
+                                gpui::linear_color_stop(stop_hsla(c.color), 1.0),
+                            ),
+                        ));
+                    }
+                    let xe = last.position.clamp(0.0, 1.0) * w;
+                    if xe < w {
+                        window.paint_quad(gpui::fill(
+                            Bounds { origin: point(px(f32::from(b.origin.x) + xe), b.origin.y), size: size(px(w - xe), b.size.height) },
+                            stop_hsla(last.color),
+                        ));
+                    }
+                    // 四角 rx5 圆角：canvas 直绘不被父级 overflow 圆角裁剪，用面板底色
+                    // 盖掉四个直角三角（弧形斜边近似 1/4 圆）。
+                    let bx = f32::from(b.origin.x);
+                    let by = f32::from(b.origin.y);
+                    let bw = f32::from(b.size.width);
+                    let bh = f32::from(b.size.height);
+                    let rr = 5.0_f32;
+                    let corners = [
+                        [(bx, by), (bx + rr, by), (bx, by + rr)],
+                        [(bx + bw, by), (bx + bw - rr, by), (bx + bw, by + rr)],
+                        [(bx + bw, by + bh), (bx + bw - rr, by + bh), (bx + bw, by + bh - rr)],
+                        [(bx, by + bh), (bx + rr, by + bh), (bx, by + bh - rr)],
+                    ];
+                    for c in corners {
+                        let mut pb = gpui::PathBuilder::fill();
+                        pb.move_to(point(px(c[0].0), px(c[0].1)));
+                        pb.line_to(point(px(c[1].0), px(c[1].1)));
+                        pb.curve_to(point(px(c[2].0), px(c[2].1)), point(px(c[0].0), px(c[0].1)));
+                        pb.close();
+                        if let Ok(path) = pb.build() {
+                            window.paint_path(path, ramp_panel_bg);
                         }
-                    },
-                )
-                .size_full(),
-            );
+                    }
+                },
+            )
+            .size_full(),
+        );
         // 点预览条 = 在该位置插入断点（颜色取当前位置的采样色）。
         let ramp = {
             let write = write.clone();
@@ -4162,13 +4156,7 @@ impl WindowState {
                 .items_center()
                 .pl(pt(16.0))
                 .pr(pt(8.0))
-                .child(
-                    div()
-                        .flex_1()
-                        .text_size(pt(11.0))
-                        .text_color(rgba(t.text))
-                        .child(tr("Stops")),
-                )
+                .child(div().flex_1().text_size(pt(11.0)).text_color(rgba(t.text)).child(tr("Stops")))
                 .child(plus)
         };
 
@@ -4183,7 +4171,12 @@ impl WindowState {
             let sel_c = sel.clone();
             let cur_c = current.clone();
             let stop_color = s.color;
-            let hex = format!("#{:02X}{:02X}{:02X}", (s.color.r * 255.0).round() as u8, (s.color.g * 255.0).round() as u8, (s.color.b * 255.0).round() as u8);
+            let hex = format!(
+                "#{:02X}{:02X}{:02X}",
+                (s.color.r * 255.0).round() as u8,
+                (s.color.g * 255.0).round() as u8,
+                (s.color.b * 255.0).round() as u8
+            );
             let (pct_el, hex_ed, op_ed) = match fields.get(i).cloned() {
                 Some(f) => (f.pct.clone(), f.hex.clone(), f.opacity.clone()),
                 None => {
@@ -4263,11 +4256,8 @@ impl WindowState {
         }
         if let Some(search) = &self.search {
             let mut row = div().w_full().flex().items_center();
-            row = if fonts {
-                row.h(pt(40.0)).pl(pt(16.0)).pr(pt(12.0)).border_b_1().border_color(rgba(t.border))
-            } else {
-                row.h(pt(32.0)).pb(pt(4.0))
-            };
+            row =
+                if fonts { row.h(pt(40.0)).pl(pt(16.0)).pr(pt(12.0)).border_b_1().border_color(rgba(t.border)) } else { row.h(pt(32.0)).pb(pt(4.0)) };
             col = col.child(row.child(search.clone()));
         }
         let mut list = div().id("window-list").w_full().flex().flex_col().overflow_y_scroll();
@@ -4308,14 +4298,8 @@ impl WindowState {
             };
             let row_h = if row.font_family.is_some() { pt(28.0) } else { pt(24.0) };
             // 字体行：`padding: 0 18px 0 12px`、悬停用面板 hover（不是菜单 hover）。
-            let mut row_el = div()
-                .h(row_h)
-                .w_full()
-                .flex()
-                .flex_row()
-                .items_center()
-                .text_size(pt(11.0))
-                .on_mouse_down(MouseButton::Left, move |_, _, _| {
+            let mut row_el =
+                div().h(row_h).w_full().flex().flex_row().items_center().text_size(pt(11.0)).on_mouse_down(MouseButton::Left, move |_, _, _| {
                     cmds.push(Cmd { id: cmd, params: Some(params.clone()) });
                 });
             row_el = if fonts {
@@ -4323,15 +4307,20 @@ impl WindowState {
             } else {
                 row_el.px(pt(8.0)).rounded(pt(4.0)).text_color(rgba(t.menu_text)).hover(|s| s.bg(rgba(t.menu_hover)))
             };
-            list = list.child(row_el.child(label_el).children(trail.map(|tr| {
-                div().text_color(rgba(if fonts { t.text_secondary } else { t.menu_dim })).child(tr)
-            })));
+            list = list.child(
+                row_el.child(label_el).children(trail.map(|tr| div().text_color(rgba(if fonts { t.text_secondary } else { t.menu_dim })).child(tr))),
+            );
             shown += 1;
         }
         if shown == 0 {
-            list = list.child(div().py(pt(12.0)).px(pt(12.0)).text_size(pt(11.0)).text_color(rgba(if fonts { t.text_secondary } else { t.menu_dim })).child(
-                if self.rows.is_empty() { "No items yet." } else { "No matching items" },
-            ));
+            list = list.child(
+                div()
+                    .py(pt(12.0))
+                    .px(pt(12.0))
+                    .text_size(pt(11.0))
+                    .text_color(rgba(if fonts { t.text_secondary } else { t.menu_dim }))
+                    .child(if self.rows.is_empty() { "No items yet." } else { "No matching items" }),
+            );
         }
         col = col.child(list);
         let _ = cx;
@@ -4469,28 +4458,12 @@ impl WindowState {
                     .flex_row()
                     .items_center()
                     .child(
-                        div()
-                            .flex_none()
-                            .w(pt(24.0))
-                            .flex()
-                            .justify_center()
-                            .child(
-                                div()
-                                    .size(pt(14.0))
-                                    .rounded(pt(3.0))
-                                    .overflow_hidden()
-                                    .child(crate::widgets::swatch::swatch(paint.clone(), 14.0)),
-                            ),
+                        div().flex_none().w(pt(24.0)).flex().justify_center().child(
+                            div().size(pt(14.0)).rounded(pt(3.0)).overflow_hidden().child(crate::widgets::swatch::swatch(paint.clone(), 14.0)),
+                        ),
                     )
                     .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .overflow_hidden()
-                            .pl(pt(2.0))
-                            .text_size(pt(11.0))
-                            .text_color(rgba(t.text))
-                            .child(label.clone()),
+                        div().flex_1().min_w(px(0.0)).overflow_hidden().pl(pt(2.0)).text_size(pt(11.0)).text_color(rgba(t.text)).child(label.clone()),
                     );
                 // 属性行点开取色器（egui `Act::EditPaint` → `open_picker(Style { id, index })`），
                 // 写回走 `style.update {value: paints}`（整组 paints，顺序不变）。
@@ -4502,30 +4475,33 @@ impl WindowState {
                     let sid = edit.id.clone();
                     let all = edit.paints.clone();
                     let current = paint.solid_color().map(crate::widgets::swatch::color32).unwrap_or(crate::canvas::geom::Color32::BLACK);
-                    row = row.hover(|s| s.bg(rgba(t.hover))).cursor_pointer().on_mouse_down(MouseButton::Left, move |e: &MouseDownEvent, _w, cx: &mut App| {
-                        let write = {
-                            let cmds = cmds.clone();
-                            let sid = sid.clone();
-                            let all = all.clone();
-                            move |np: figcraft_color::Paint, _w: &mut Window, _cx: &mut App| {
-                                let mut ps = all.clone();
-                                if let Some(slot) = ps.get_mut(idx) {
-                                    *slot = np;
+                    row = row.hover(|s| s.bg(rgba(t.hover))).cursor_pointer().on_mouse_down(
+                        MouseButton::Left,
+                        move |e: &MouseDownEvent, _w, cx: &mut App| {
+                            let write = {
+                                let cmds = cmds.clone();
+                                let sid = sid.clone();
+                                let all = all.clone();
+                                move |np: figcraft_color::Paint, _w: &mut Window, _cx: &mut App| {
+                                    let mut ps = all.clone();
+                                    if let Some(slot) = ps.get_mut(idx) {
+                                        *slot = np;
+                                    }
+                                    cmds.push(Cmd { id: "style.update", params: Some(json!({ "style": sid, "value": ps })) });
                                 }
-                                cmds.push(Cmd { id: "style.update", params: Some(json!({ "style": sid, "value": ps })) });
-                            }
-                        };
-                        let picker = PaintPicker { paint: all[idx].clone(), on_write: Rc::new(write), styles: Vec::new() };
-                        let on_pick: Rc<dyn Fn(crate::canvas::geom::Color32, &mut Window, &mut App)> = Rc::new(|_, _, _| {});
-                        // 走右栏统一的打开入口：触发标识 + 再点关闭 + 精确顶部一套逻辑。
-                        crate::panels::right::sections::open_detached_with(
-                            popups.clone(),
-                            format!("style-paint-{sid}-{idx}"),
-                            None,
-                            cx,
-                            |anchor, cx| Self::color(cx, anchor, current, Some(picker), Default::default(), on_pick, cmds.clone()),
-                        );
-                    });
+                            };
+                            let picker = PaintPicker { paint: all[idx].clone(), on_write: Rc::new(write), styles: Vec::new() };
+                            let on_pick: Rc<dyn Fn(crate::canvas::geom::Color32, &mut Window, &mut App)> = Rc::new(|_, _, _| {});
+                            // 走右栏统一的打开入口：触发标识 + 再点关闭 + 精确顶部一套逻辑。
+                            crate::panels::right::sections::open_detached_with(
+                                popups.clone(),
+                                format!("style-paint-{sid}-{idx}"),
+                                None,
+                                cx,
+                                |anchor, cx| Self::color(cx, anchor, current, Some(picker), Default::default(), on_pick, cmds.clone()),
+                            );
+                        },
+                    );
                 }
                 Some(row.into_any_element())
             }
@@ -4608,10 +4584,7 @@ impl WindowState {
                         *slot.borrow_mut() = Some(Box::new(child));
                         open_cmds.wake();
                     });
-                    return Some(with_button_bounds(
-                        crate::widgets::panel_section::field_row_full_trailing(cf, vec![eye, minus]),
-                        hit,
-                    ));
+                    return Some(with_button_bounds(crate::widgets::panel_section::field_row_full_trailing(cf, vec![eye, minus]), hit));
                 }
                 Some(crate::widgets::panel_section::field_row_full_trailing(cf, vec![eye, minus]).into_any_element())
             }
@@ -4630,24 +4603,18 @@ impl WindowState {
                         .justify_center()
                         .pt(pt(16.0))
                         .child(
-                            div()
-                                .w(pt(272.0))
-                                .h(pt(104.0))
-                                .border_1()
-                                .border_color(border)
-                                .overflow_hidden()
-                                .child(
-                                    gpui::canvas(
-                                        |_, _, _| {},
-                                        move |bounds, _, window, _| {
-                                            crate::widgets::swatch::checker(window, bounds, 12.0);
-                                            if let Some(c) = solid {
-                                                window.paint_quad(gpui::fill(bounds, rgba(c)));
-                                            }
-                                        },
-                                    )
-                                    .size_full(),
-                                ),
+                            div().w(pt(272.0)).h(pt(104.0)).border_1().border_color(border).overflow_hidden().child(
+                                gpui::canvas(
+                                    |_, _, _| {},
+                                    move |bounds, _, window, _| {
+                                        crate::widgets::swatch::checker(window, bounds, 12.0);
+                                        if let Some(c) = solid {
+                                            window.paint_quad(gpui::fill(bounds, rgba(c)));
+                                        }
+                                    },
+                                )
+                                .size_full(),
+                            ),
                         )
                         .into_any_element(),
                 )
@@ -4683,7 +4650,9 @@ impl WindowState {
                         .flex()
                         .flex_row()
                         .items_center()
-                        .child(div().w(pt(112.0)).flex_none().pl(pt(16.0)).text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(label.clone()))
+                        .child(
+                            div().w(pt(112.0)).flex_none().pl(pt(16.0)).text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(label.clone()),
+                        )
                         .child(div().w(pt(176.0)).h(pt(24.0)).child(field.clone()))
                         .into_any_element(),
                 )
@@ -4822,11 +4791,7 @@ impl WindowState {
                     let wake2 = self.cmds.clone();
                     // 效果小窗：切换类型后下面那批数值行还属于旧类型，拿旧键写回会被引擎拒收。
                     // 选中即关窗，重新点开时按新类型重建设置项；其它窗口的行为不变。
-                    let close_window = if self.kind == WindowKind::EffectSettings {
-                        self.dismiss.borrow().clone()
-                    } else {
-                        None
-                    };
+                    let close_window = if self.kind == WindowKind::EffectSettings { self.dismiss.borrow().clone() } else { None };
                     let on_pick = Rc::new(move |picked: &str, w: &mut Window, cx: &mut App| {
                         if let Some(o) = opts.iter().find(|o| o.label == picked) {
                             *cur_state.borrow_mut() = o.label.clone();
@@ -5021,11 +4986,8 @@ impl WindowState {
                                     }
 
                                     // ② 样本圆：白 50%；叠了 layer blur 就用多层柔化圆代替硬边。
-                                    let layer_blur = vis
-                                        .iter()
-                                        .filter(|e| is(e, "layerBlur"))
-                                        .map(|e| fnum(e, "radius", 4.0).max(0.0))
-                                        .fold(0.0_f32, f32::max);
+                                    let layer_blur =
+                                        vis.iter().filter(|e| is(e, "layerBlur")).map(|e| fnum(e, "radius", 4.0).max(0.0)).fold(0.0_f32, f32::max);
                                     if layer_blur > 0.5 {
                                         let steps = 16usize;
                                         let a = (128.0 / steps as f32 * 1.25).clamp(1.0, 255.0) as u8;
@@ -5250,7 +5212,18 @@ impl WindowState {
                             *at3.borrow_mut() = None;
                             wake3.wake();
                         });
-                        self.push_overlay(menu_popup_in(rect, None, rows, on_pick, dismiss.clone(), f32::from(self.viewport.width), f32::from(self.viewport.height)), dismiss);
+                        self.push_overlay(
+                            menu_popup_in(
+                                rect,
+                                None,
+                                rows,
+                                on_pick,
+                                dismiss.clone(),
+                                f32::from(self.viewport.width),
+                                f32::from(self.viewport.height),
+                            ),
+                            dismiss,
+                        );
                     }
                     row = row.child(
                         div()
@@ -5267,9 +5240,18 @@ impl WindowState {
                 Some(row.into_any_element())
             }
             Setting::TextControls {
-                tab: st, family, families, font_style, font_styles,
-                size_field, line_field, spacing_field,
-                style_id, text, family_anchor, style_anchor,
+                tab: st,
+                family,
+                families,
+                font_style,
+                font_styles,
+                size_field,
+                line_field,
+                spacing_field,
+                style_id,
+                text,
+                family_anchor,
+                style_anchor,
             } => {
                 if *st != tab {
                     return None;
@@ -5292,10 +5274,7 @@ impl WindowState {
                         wake.wake();
                     });
                     if let Some(rect) = *anchor.borrow() {
-                        let rows: Vec<MenuRow> = options
-                            .iter()
-                            .map(|o| MenuRow::new(o.clone()).checked(Some(*o == *current.borrow())))
-                            .collect();
+                        let rows: Vec<MenuRow> = options.iter().map(|o| MenuRow::new(o.clone()).checked(Some(*o == *current.borrow()))).collect();
                         let sid = style_id.clone();
                         let ts = text.clone();
                         let cmds = self.cmds.clone();
@@ -5319,7 +5298,18 @@ impl WindowState {
                             *at3.borrow_mut() = None;
                             wake3.wake();
                         });
-                        self.push_overlay(menu_popup_in(rect, None, rows, on_pick, dismiss.clone(), f32::from(self.viewport.width), f32::from(self.viewport.height)), dismiss);
+                        self.push_overlay(
+                            menu_popup_in(
+                                rect,
+                                None,
+                                rows,
+                                on_pick,
+                                dismiss.clone(),
+                                f32::from(self.viewport.width),
+                                f32::from(self.viewport.height),
+                            ),
+                            dismiss,
+                        );
                     }
                     trigger.into_any_element()
                 };
@@ -5328,10 +5318,19 @@ impl WindowState {
                 // 数字框必须在 120 宽的 flex_none 容器里：直接作为 flex_row 子项会被交叉轴/剩余
                 // 空间拉宽，第二行「字号」会一路撑到卡片右边（lizard 是固定 ControlWidth::Fixed(120)）。
                 let fixed = |w: f32, el: AnyElement| div().w(pt(w)).h(pt(24.0)).flex_none().child(el).into_any_element();
-                let row = |el: AnyElement| div().w_full().h(pt(24.0)).flex().flex_row().items_center().pl(pt(16.0)).gap(pt(8.0)).child(el).into_any_element();
+                let row = |el: AnyElement| {
+                    div().w_full().h(pt(24.0)).flex().flex_row().items_center().pl(pt(16.0)).gap(pt(8.0)).child(el).into_any_element()
+                };
                 let mut r2 = div().w_full().h(pt(24.0)).flex().flex_row().items_center().pl(pt(16.0)).gap(pt(8.0)).child(style_select);
                 r2 = r2.child(fixed(120.0, size_field.clone().into_any_element()));
-                let mut r3 = div().w_full().h(pt(24.0)).flex().flex_row().items_center().pl(pt(16.0)).gap(pt(8.0))
+                let mut r3 = div()
+                    .w_full()
+                    .h(pt(24.0))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .pl(pt(16.0))
+                    .gap(pt(8.0))
                     .child(fixed(120.0, line_field.clone().into_any_element()))
                     .child(fixed(120.0, spacing_field.clone().into_any_element()));
                 // 行尾 Dots：打开 Type settings —— 和「选中文本节点」的同一个面板，只是写入
@@ -5424,10 +5423,8 @@ impl WindowState {
                     wake.wake();
                 });
                 if let Some(rect) = *anchor.borrow() {
-                    let rows: Vec<MenuRow> = figcraft_doc::Effect::TYPES
-                        .iter()
-                        .map(|(l, _)| MenuRow::new(tr(l)).checked(Some(tr(l) == label.as_ref())))
-                        .collect();
+                    let rows: Vec<MenuRow> =
+                        figcraft_doc::Effect::TYPES.iter().map(|(l, _)| MenuRow::new(tr(l)).checked(Some(tr(l) == label.as_ref()))).collect();
                     let arr2 = arr.clone();
                     let cmds2 = cmds.clone();
                     let sid2 = sid.clone();
@@ -5456,7 +5453,10 @@ impl WindowState {
                         *at3.borrow_mut() = None;
                         wake3.wake();
                     });
-                    self.push_overlay(menu_popup_in(rect, None, rows, on_pick, dismiss.clone(), f32::from(self.viewport.width), f32::from(self.viewport.height)), dismiss);
+                    self.push_overlay(
+                        menu_popup_in(rect, None, rows, on_pick, dismiss.clone(), f32::from(self.viewport.width), f32::from(self.viewport.height)),
+                        dismiss,
+                    );
                 }
                 Some(crate::widgets::panel_section::field_row_full_trailing(dd, vec![eye, minus]).into_any_element())
             }
@@ -5545,7 +5545,10 @@ impl WindowState {
                         *at3.borrow_mut() = None;
                         wake3.wake();
                     });
-                    self.push_overlay(menu_popup_in(rect, None, rows, on_pick, dismiss.clone(), f32::from(self.viewport.width), f32::from(self.viewport.height)), dismiss);
+                    self.push_overlay(
+                        menu_popup_in(rect, None, rows, on_pick, dismiss.clone(), f32::from(self.viewport.width), f32::from(self.viewport.height)),
+                        dismiss,
+                    );
                 }
                 Some(crate::widgets::panel_section::field_row_full_trailing(dd, vec![eye, minus]).into_any_element())
             }
@@ -5683,12 +5686,7 @@ impl WindowState {
         // 那条 40pt 空 title 把整排操作顶到 X 下面一行、侧栏被夹在中间——full / floating 都在犯。
         // 一律不挂外层 title；X 由 popover 独立绝对定位浮在右上角，内层 header 已为它留 48pt。
         let no_header = self.kind == WindowKind::VariablesTable;
-        let mut pop = popover_window(open)
-            .width(width)
-            .pad(pad)
-            .flush(full)
-            .surface(self.surface)
-            .height(height);
+        let mut pop = popover_window(open).width(width).pad(pad).flush(full).surface(self.surface).height(height);
         if !no_header {
             pop = pop.title(self.title_slot());
         }
@@ -6130,7 +6128,8 @@ fn open_stop_color(
 }
 
 /// 面板内容宽（= 240）。所有行的宽度都用它，行内再自己给 8 / 16 的内缩。
-const PANEL_W: f32 = 240.0;/// 色域方块边长（208 = 240 − 16×2）。
+const PANEL_W: f32 = 240.0;
+/// 色域方块边长（208 = 240 − 16×2）。
 const SPECTRUM: f32 = 208.0;
 /// 色块边长与节奏（16 + 8）。
 const CHIT: f32 = 16.0;
@@ -6150,34 +6149,23 @@ const GRADIENT_KINDS: [figcraft_color::GradientKind; 4] = [
 /// 环外一圈 1 px 半透明描边（用 18 pt 的半透明底托出 `controlknoboffoutline`）。
 /// `x`/`y` 是环心的位置（相对父容器的 `relative` 原点）。
 fn picker_knob(x: f32, y: f32, fill: Color32) -> gpui::Div {
-    div()
-        .absolute()
-        .left(px(x - 9.0))
-        .top(px(y - 9.0))
-        .w(pt(18.0))
-        .h(pt(18.0))
-        .rounded_full()
-        .bg(rgba(Color32::from_black_alpha(20)))
-        .child(
-            div()
-                .absolute()
-                .left(pt(1.0))
-                .top(pt(1.0))
-                .w(pt(16.0))
-                .h(pt(16.0))
-                .rounded_full()
-                .border(pt(4.0))
-                .border_color(rgba(Color32::WHITE))
-                .bg(rgba(fill)),
-        )
+    div().absolute().left(px(x - 9.0)).top(px(y - 9.0)).w(pt(18.0)).h(pt(18.0)).rounded_full().bg(rgba(Color32::from_black_alpha(20))).child(
+        div()
+            .absolute()
+            .left(pt(1.0))
+            .top(pt(1.0))
+            .w(pt(16.0))
+            .h(pt(16.0))
+            .rounded_full()
+            .border(pt(4.0))
+            .border_color(rgba(Color32::WHITE))
+            .bg(rgba(fill)),
+    )
 }
 
 /// 记录元素矩形（弹窗菜单锚点 / 浮窗精确顶部）的透明探针：prepaint 存盒子，绘制阶段什么都不画。
 pub(crate) fn bounds_probe(hit: Rc<Cell<Option<Bounds<Pixels>>>>) -> gpui::Div {
-    div().absolute().left_0().top_0().w_full().h_full().child(gpui::canvas(
-        move |bounds, _, _| hit.set(Some(bounds)),
-        |_, _, _, _| {},
-    ))
+    div().absolute().left_0().top_0().w_full().h_full().child(gpui::canvas(move |bounds, _, _| hit.set(Some(bounds)), |_, _, _, _| {}))
 }
 
 /// Attach a bounds probe as a child of the trigger element itself. Never wrap in a new `div()`:
@@ -6494,7 +6482,11 @@ mod tests {
             ("layerBlur", figcraft_doc::Effect::layer_blur(), &["type", "radius", "blur_type", "start_radius"]),
             ("noise", figcraft_doc::Effect::noise(), &["type", "mode", "size", "density", "opacity"]),
             ("texture", figcraft_doc::Effect::texture(), &["type", "size", "radius", "clip_to_shape"]),
-            ("glass", figcraft_doc::Effect::glass(), &["type", "light_angle", "light_intensity", "refraction", "depth", "dispersion", "frost", "splay"]),
+            (
+                "glass",
+                figcraft_doc::Effect::glass(),
+                &["type", "light_angle", "light_intensity", "refraction", "depth", "dispersion", "frost", "splay"],
+            ),
         ];
         for (name, e, keys) in cases {
             let v = serde_json::to_value(e).unwrap();
@@ -6522,5 +6514,4 @@ mod tests {
             assert!(v.as_object().unwrap().len() < 16, "{ty} carries too many fields: {v}");
         }
     }
-
 }

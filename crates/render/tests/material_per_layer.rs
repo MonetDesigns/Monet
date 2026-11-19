@@ -15,8 +15,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use figcraft_doc::{Document, NodeId, NodeKind};
-use figcraft_render::shade::{premultiplied, ShadeBoard, Shaded, ShaderSpec};
-use figcraft_render::{render_view, to_rgba8, Options, View};
+use figcraft_render::shade::{ShadeBoard, Shaded, ShaderSpec, premultiplied};
+use figcraft_render::{Options, View, render_view, to_rgba8};
 
 fn make_doc() -> (Document, NodeId) {
     let mut doc = Document::new("per-layer");

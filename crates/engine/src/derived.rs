@@ -132,11 +132,8 @@ pub fn normalize(doc: &mut Document, before: &Document) {
     }
     touched.extend(doc.take_dirty());
     // 4. Auto layout for frames where something that sizes or places layers changed.
-    let moved: Vec<NodeId> =
-        live(doc, &touched).into_iter().filter(|id| affects_layout(before, doc, *id)).collect();
-    let unchanged_box = |a: &Node, b: &Node| {
-        a.transform == b.transform && a.width == b.width && a.height == b.height && a.parent == b.parent
-    };
+    let moved: Vec<NodeId> = live(doc, &touched).into_iter().filter(|id| affects_layout(before, doc, *id)).collect();
+    let unchanged_box = |a: &Node, b: &Node| a.transform == b.transform && a.width == b.width && a.height == b.height && a.parent == b.parent;
     let run = |frames: BTreeSet<NodeId>, doc: &mut Document| {
         let mut frames: Vec<NodeId> = frames.into_iter().collect();
         frames.sort_by_key(|id| std::cmp::Reverse(doc.ancestors(*id).len()));

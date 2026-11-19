@@ -1127,12 +1127,7 @@ pub struct ContrastContext {
 
 impl Default for ContrastContext {
     fn default() -> Self {
-        Self {
-            bg: figcraft_color::Color::WHITE,
-            is_text: false,
-            runs: Vec::new(),
-            auto_category: figcraft_color::ContrastCategory::Graphics,
-        }
+        Self { bg: figcraft_color::Color::WHITE, is_text: false, runs: Vec::new(), auto_category: figcraft_color::ContrastCategory::Graphics }
     }
 }
 
@@ -1158,10 +1153,9 @@ fn read_contrast_context(doc: &Document, ids: &[NodeId], page: Option<NodeId>) -
         match doc.node(*id).map(|n| &n.kind) {
             Some(figcraft_doc::NodeKind::Text(t)) => {
                 runs.push(figcraft_color::TextRun { font_size: t.style.font_size as f32, font_weight: u32::from(t.style.weight()) });
-                runs.extend(t.runs.iter().map(|r| figcraft_color::TextRun {
-                    font_size: r.style.font_size as f32,
-                    font_weight: u32::from(r.style.weight()),
-                }));
+                runs.extend(
+                    t.runs.iter().map(|r| figcraft_color::TextRun { font_size: r.style.font_size as f32, font_weight: u32::from(r.style.weight()) }),
+                );
             }
             _ => is_text = false,
         }
@@ -1552,8 +1546,7 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
                 StyleKind::Effect { effects } => {
                     let effs = effects.clone();
                     Some(
-                        effs
-                            .iter()
+                        effs.iter()
                             .enumerate()
                             .map(|(index, e)| EffectRow {
                                 index,
@@ -2210,8 +2203,7 @@ mod tests {
         let r = s.execute("shape.rectangle", &json!({ "x": 0.0, "y": 0.0, "width": 64.0, "height": 64.0 })).expect("rect");
         let id: NodeId = serde_json::from_value(r["id"].clone()).expect("id");
         s.execute("variable.createCollection", &json!({ "name": "Tokens" })).expect("collection");
-        s.execute("variable.create", &json!({ "collection": "Tokens", "name": "Space/Small", "type": "number", "value": 12.0 }))
-            .expect("variable");
+        s.execute("variable.create", &json!({ "collection": "Tokens", "name": "Space/Small", "type": "number", "value": 12.0 })).expect("variable");
         s.execute("variable.bind", &json!({ "ids": [id], "field": "width", "variable": "Space/Small" })).expect("width binds");
         let d = read(s.doc().expect("doc"), &[id], None, 0);
         assert_eq!(d.bound.get("width").map(String::as_str), Some("Space/Small"), "the bound name reaches the panel");

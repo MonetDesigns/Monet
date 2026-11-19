@@ -29,8 +29,8 @@ use crate::widgets::popover::{Open, clamp, popover_window, title_text};
 use crate::widgets::{Checkbox, MenuRow, Slot, TextField, field_row, field_row_full, number_field, pt, rgba, text_field, tokens};
 use figcraft_i18n::tr;
 use gpui::{
-    AnyElement, App, Bounds, Div, Entity, Hsla, ImageSource, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Point, RenderImage, SharedString, Size,
-    Window, div, img, prelude::*, px, size,
+    AnyElement, App, Bounds, Div, Entity, Hsla, ImageSource, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Point, RenderImage, SharedString,
+    Size, Window, div, img, prelude::*, px, size,
 };
 use serde_json::{Map, Value, json};
 use std::cell::RefCell;
@@ -356,10 +356,19 @@ fn parse_hex(s: &str) -> Hsla {
 /// The four live values of the Rename layers dialog (egui's `BatchRenameUi` fields).
 fn rename_state(sources: &[(String, Value)]) -> (String, String, bool, f64) {
     let get = |k: &str| sources.iter().find(|(key, _)| key == k).map(|(_, v)| v.clone());
-    let find = match get("find") { Some(Value::String(s)) => s, _ => String::new() };
-    let to = match get("to") { Some(Value::String(s)) => s, _ => String::new() };
+    let find = match get("find") {
+        Some(Value::String(s)) => s,
+        _ => String::new(),
+    };
+    let to = match get("to") {
+        Some(Value::String(s)) => s,
+        _ => String::new(),
+    };
     let regex = matches!(get("regex"), Some(Value::Bool(true)));
-    let start = match get("start") { Some(Value::Number(n)) => n.as_f64().unwrap_or(1.0), _ => 1.0 };
+    let start = match get("start") {
+        Some(Value::Number(n)) => n.as_f64().unwrap_or(1.0),
+        _ => 1.0,
+    };
     (find, to, regex, start)
 }
 
@@ -374,7 +383,10 @@ pub(crate) fn batch_rename_params(base: &Value, sources: &[(String, Value)]) -> 
     if find.is_empty() && to.is_empty() {
         return None;
     }
-    let mut p = match base { Value::Object(m) => m.clone(), _ => Map::new() };
+    let mut p = match base {
+        Value::Object(m) => m.clone(),
+        _ => Map::new(),
+    };
     p.insert("regex".into(), json!(regex));
     p.insert("start".into(), json!(start.clamp(0.0, 1_000_000.0).round() as u64));
     if find.is_empty() {
@@ -559,8 +571,7 @@ pub(crate) fn import_report_data(command: &str, params: &Value, result: &Value) 
     if pasted && warnings.is_empty() {
         return None;
     }
-    let file_name =
-        params.get("path").and_then(Value::as_str).and_then(|p| std::path::Path::new(p).file_name()).and_then(|n| n.to_str());
+    let file_name = params.get("path").and_then(Value::as_str).and_then(|p| std::path::Path::new(p).file_name()).and_then(|n| n.to_str());
     if command != "file.import" && warnings.is_empty() && file_name.is_some_and(|n| n.to_ascii_lowercase().ends_with(".svg")) {
         return None;
     }
@@ -678,14 +689,16 @@ pub(crate) fn spec(kind: Kind, data: &Value) -> Spec {
                 .field(Field::Number { key: "small", label: tr("Small nudge"), value: p["nudge_small"].as_f64().unwrap_or(1.0) })
                 .field(Field::Number { key: "big", label: tr("Big nudge"), value: p["nudge_big"].as_f64().unwrap_or(10.0) })
                 .button(Button::submit_only(tr("Apply nudge"), "pref.nudge", json!({}), vec!["small", "big"]))
-                .field(
-                    Field::choice("uiScale", tr("Interface size"), vec![tr("Default"), "Larger", "Smaller"], 0)
-                        .commands(vec!["pref.uiScaleReset", "pref.uiScaleUp", "pref.uiScaleDown"]),
-                )
-                .field(
-                    Field::choice("theme", tr("Theme"), vec![tr("Light"), tr("Dark"), tr("System")], theme_active)
-                        .commands(vec!["view.themeLight", "view.themeDark", "view.themeSystem"]),
-                )
+                .field(Field::choice("uiScale", tr("Interface size"), vec![tr("Default"), "Larger", "Smaller"], 0).commands(vec![
+                    "pref.uiScaleReset",
+                    "pref.uiScaleUp",
+                    "pref.uiScaleDown",
+                ]))
+                .field(Field::choice("theme", tr("Theme"), vec![tr("Light"), tr("Dark"), tr("System")], theme_active).commands(vec![
+                    "view.themeLight",
+                    "view.themeDark",
+                    "view.themeSystem",
+                ]))
                 // 主题颜色（强调色）：`pref.accent` 写 `prefs.accent`，根视图每帧重建 tokens，
                 // 选完立即生效并随偏好持久化。
                 .field(
@@ -704,16 +717,21 @@ pub(crate) fn spec(kind: Kind, data: &Value) -> Spec {
                     ]),
                 )
                 .field(
-                    Field::choice("language", tr("Language"), vec![tr("System"), "English", "简体中文", "日本語", "Deutsch", "Français"], lang_active)
-                        .commands(vec!["pref.language"; 6])
-                        .with_params(vec![
-                            json!({"language": "system"}),
-                            json!({"language": "en"}),
-                            json!({"language": "zh-Hans"}),
-                            json!({"language": "ja"}),
-                            json!({"language": "de"}),
-                            json!({"language": "fr"}),
-                        ]),
+                    Field::choice(
+                        "language",
+                        tr("Language"),
+                        vec![tr("System"), "English", "简体中文", "日本語", "Deutsch", "Français"],
+                        lang_active,
+                    )
+                    .commands(vec!["pref.language"; 6])
+                    .with_params(vec![
+                        json!({"language": "system"}),
+                        json!({"language": "en"}),
+                        json!({"language": "zh-Hans"}),
+                        json!({"language": "ja"}),
+                        json!({"language": "de"}),
+                        json!({"language": "fr"}),
+                    ]),
                 )
                 .with_cancel()
         }
@@ -785,11 +803,7 @@ pub(crate) fn spec(kind: Kind, data: &Value) -> Spec {
         // 提交时把字段值并进 `vector.offset`（`{ids?, offset}`，ids 缺省走选区）。
         Kind::OffsetPath => Spec::new(tr("Offset path"))
             .width(320.0)
-            .field(Field::Number {
-                key: "offset",
-                label: tr("Offset"),
-                value: data.get("offset").and_then(Value::as_f64).unwrap_or(0.0),
-            })
+            .field(Field::Number { key: "offset", label: tr("Offset"), value: data.get("offset").and_then(Value::as_f64).unwrap_or(0.0) })
             .button(Button::primary(tr("Offset"), "vector.offset", json!({})))
             .with_cancel(),
         // A17：`MenuInput::MoveToPage` —— 除当前页与分隔线外，每页一行；点行即
@@ -803,11 +817,8 @@ pub(crate) fn spec(kind: Kind, data: &Value) -> Spec {
             for p in &pages {
                 let id = p.get("id").and_then(Value::as_u64).unwrap_or_default();
                 let name = p.get("name").and_then(Value::as_str).unwrap_or_default();
-                spec = spec.field(Field::Action {
-                    label: SharedString::from(name.to_string()),
-                    id: "object.moveToPage",
-                    params: json!({ "page": id }),
-                });
+                spec =
+                    spec.field(Field::Action { label: SharedString::from(name.to_string()), id: "object.moveToPage", params: json!({ "page": id }) });
             }
             spec.with_cancel()
         }
@@ -926,9 +937,7 @@ pub(crate) fn spec(kind: Kind, data: &Value) -> Spec {
             let list = data["plugins"].as_array().cloned().unwrap_or_default();
             let mut spec = Spec::new(tr("Plugins")).width(440.0).field(Field::Section { title: tr("Installed") });
             if list.is_empty() {
-                spec = spec.field(Field::Note {
-                    text: tr("No plugins yet. Import a development plugin from its figcraft-plugin.json.").to_string(),
-                });
+                spec = spec.field(Field::Note { text: tr("No plugins yet. Import a development plugin from its figcraft-plugin.json.").to_string() });
             }
             for p in &list {
                 let id = p["id"].as_str().unwrap_or("").to_string();
@@ -1064,10 +1073,14 @@ impl DialogState {
                 Field::Number { value, .. } => (Some(number_field(cx, 200.0, Some(*value), "", 1.0, Slot::None)), Rc::new(RefCell::new(0usize))),
                 Field::Choice { active, .. } => (None, Rc::new(RefCell::new(*active))),
                 Field::Toggle { value, .. } => (None, Rc::new(RefCell::new(if *value { 1 } else { 0 }))),
-                Field::Note { .. } | Field::Preview { .. } | Field::Section { .. } | Field::Action { .. } | Field::Color { .. }
-                | Field::InsertCodes { .. } | Field::RenamePreview { .. } | Field::FontRows { .. } => {
-                    (None, Rc::new(RefCell::new(0usize)))
-                }
+                Field::Note { .. }
+                | Field::Preview { .. }
+                | Field::Section { .. }
+                | Field::Action { .. }
+                | Field::Color { .. }
+                | Field::InsertCodes { .. }
+                | Field::RenamePreview { .. }
+                | Field::FontRows { .. } => (None, Rc::new(RefCell::new(0usize))),
             };
             rendered.push(Rendered { field: f.clone(), input, active });
         }
@@ -1178,8 +1191,14 @@ impl DialogState {
                 Field::Number { key, .. } => r.input.clone().map(|e| Source::Number(key, e)).unwrap_or(Source::Note),
                 Field::Choice { key, options, values, .. } => Source::Choice(key, options.clone(), values.clone(), r.active.clone()),
                 Field::Toggle { key, .. } => Source::Toggle(key, r.active.clone()),
-                Field::Note { .. } | Field::Preview { .. } | Field::Section { .. } | Field::Action { .. } | Field::Color { .. }
-                | Field::InsertCodes { .. } | Field::RenamePreview { .. } | Field::FontRows { .. } => Source::Note,
+                Field::Note { .. }
+                | Field::Preview { .. }
+                | Field::Section { .. }
+                | Field::Action { .. }
+                | Field::Color { .. }
+                | Field::InsertCodes { .. }
+                | Field::RenamePreview { .. }
+                | Field::FontRows { .. } => Source::Note,
             })
             .collect()
     }
@@ -1228,7 +1247,11 @@ impl DialogState {
                 Field::Text { label, .. } | Field::Number { label, .. } | Field::Choice { label, .. } => SharedString::from(*label),
                 Field::Preview { label } | Field::Section { title: label } => SharedString::from(*label),
                 Field::Action { label, .. } => label.clone(),
-                Field::Note { .. } | Field::Color { .. } | Field::Toggle { .. } | Field::InsertCodes { .. } | Field::RenamePreview { .. }
+                Field::Note { .. }
+                | Field::Color { .. }
+                | Field::Toggle { .. }
+                | Field::InsertCodes { .. }
+                | Field::RenamePreview { .. }
                 | Field::FontRows { .. } => SharedString::from(""),
             };
             let label = || {
@@ -1348,12 +1371,11 @@ impl DialogState {
                 Field::Toggle { label, .. } => {
                     let active = r.active.clone();
                     let checked = *active.borrow() == 1;
-                    let cb = Checkbox::new(SharedString::from(format!("dialog-toggle-{label}")))
-                        .label(*label)
-                        .checked(checked)
-                        .on_change(move |&next, _, _| {
+                    let cb = Checkbox::new(SharedString::from(format!("dialog-toggle-{label}"))).label(*label).checked(checked).on_change(
+                        move |&next, _, _| {
                             *active.borrow_mut() = if next { 1 } else { 0 };
-                        });
+                        },
+                    );
                     field_row_full(cb)
                 }
                 Field::InsertCodes { target, codes } => {
@@ -1414,10 +1436,11 @@ impl DialogState {
                         }
                         if names.len() > rows.len() && !rows.is_empty() {
                             col = col.child(
-                                div()
-                                    .text_size(pt(10.0))
-                                    .text_color(rgba(t.text_secondary))
-                                    .child(SharedString::from(figcraft_i18n::trn("and {n} more", names.len() - rows.len(), &[]))),
+                                div().text_size(pt(10.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(figcraft_i18n::trn(
+                                    "and {n} more",
+                                    names.len() - rows.len(),
+                                    &[],
+                                ))),
                             );
                         }
                     }
@@ -1443,10 +1466,13 @@ impl DialogState {
                             let family = f.family.clone();
                             let cmds_row = self.cmds.clone();
                             row = row.child(
-                                div().flex_none().child(dialog_button(tr("Download"), false, true, move |_: &MouseDownEvent, _w: &mut Window, _cx: &mut App| {
-                                    cmds_row.push(Cmd { id: "font.download", params: Some(json!({ "family": family.clone() })) });
-                                    cmds_row.wake();
-                                })).child(tr("Download")),
+                                div()
+                                    .flex_none()
+                                    .child(dialog_button(tr("Download"), false, true, move |_: &MouseDownEvent, _w: &mut Window, _cx: &mut App| {
+                                        cmds_row.push(Cmd { id: "font.download", params: Some(json!({ "family": family.clone() })) });
+                                        cmds_row.wake();
+                                    }))
+                                    .child(tr("Download")),
                             );
                         }
                         col = col.child(row);
@@ -1565,11 +1591,7 @@ fn dropdown_field(
     dropdown(current, 0.0, None)
         .fill()
         .on_click(move |anchor: Bounds<Pixels>, _w: &mut Window, cx: &mut App| {
-            let rows: Vec<MenuRow> = opts
-                .iter()
-                .enumerate()
-                .map(|(i, o)| MenuRow::new(o.clone()).checked(Some(i == *active.borrow())))
-                .collect();
+            let rows: Vec<MenuRow> = opts.iter().enumerate().map(|(i, o)| MenuRow::new(o.clone()).checked(Some(i == *active.borrow()))).collect();
             let act = active.clone();
             let opts = opts.clone();
             let cmd_list = cmd_list.clone();
@@ -1604,11 +1626,7 @@ fn dialog_button(label: &'static str, primary: bool, enabled: bool, on_click: im
         .text_size(pt(11.0))
         .text_color(rgba(if primary && enabled { t.accent_on } else { t.text_secondary }))
         .child(SharedString::from(label));
-    if enabled {
-        d.cursor_pointer().on_mouse_down(MouseButton::Left, on_click)
-    } else {
-        d
-    }
+    if enabled { d.cursor_pointer().on_mouse_down(MouseButton::Left, on_click) } else { d }
 }
 
 #[cfg(test)]
@@ -1667,27 +1685,19 @@ mod tests {
         // 打开没有警告的 SVG：不弹（原生格式的 repairs 由引擎消息显示）。
         assert_eq!(import_report_data("file.open", &json!({"path": "/tmp/a.svg"}), &json!({"warnings": []})), None);
         // 放到当前页的 SVG import 且无警告：不弹；有警告才弹，且说明是放置。
-        assert_eq!(
-            import_report_data("file.import", &json!({"path": "/tmp/a.svg"}), &json!({"warnings": []})),
-            None
-        );
-        let placed = import_report_data(
-            "file.import",
-            &json!({"path": "/tmp/a.svg"}),
-            &json!({"warnings": ["Treatment not supported."]}),
-        )
-        .expect("a placed SVG with warnings reports");
+        assert_eq!(import_report_data("file.import", &json!({"path": "/tmp/a.svg"}), &json!({"warnings": []})), None);
+        let placed = import_report_data("file.import", &json!({"path": "/tmp/a.svg"}), &json!({"warnings": ["Treatment not supported."]}))
+            .expect("a placed SVG with warnings reports");
         assert!(placed["message"].as_str().unwrap_or_default().contains("Placed on the current page"), "{placed}");
         // 追加页面的 import（有 pages）即使无警告也报告，并说明页面已加入。
-        let appended = import_report_data("file.import", &json!({"path": "/tmp/a.fig"}), &json!({"pages": 2, "warnings": []}))
-            .expect("appended pages report");
+        let appended =
+            import_report_data("file.import", &json!({"path": "/tmp/a.fig"}), &json!({"pages": 2, "warnings": []})).expect("appended pages report");
         assert!(appended["message"].as_str().unwrap_or_default().contains("Pages added to the document"), "{appended}");
         // openRecent 与粘贴设计图层走同一条规则；粘贴无警告不弹。
         assert!(import_report_data("file.openRecent", &open, &result).is_some());
         assert_eq!(import_report_data("edit.pasteDesignLayers", &json!({}), &json!({"warnings": []})), None);
-        let pasted =
-            import_report_data("edit.pasteDesignLayers", &json!({}), &json!({"warnings": ["An effect was dropped."]}))
-                .expect("a paste with warnings reports");
+        let pasted = import_report_data("edit.pasteDesignLayers", &json!({}), &json!({"warnings": ["An effect was dropped."]}))
+            .expect("a paste with warnings reports");
         assert!(pasted["warnings"].as_str().unwrap_or_default().contains("An effect was dropped."));
         // 其它命令永远不弹。
         assert_eq!(import_report_data("shape.rectangle", &open, &result), None);
@@ -1720,14 +1730,13 @@ mod tests {
     #[test]
     fn import_report_is_capped() {
         let many: Vec<Value> = (0..MAX_IMPORT_NOTES + 50).map(|i| json!(format!("warning {i}"))).collect();
-        let data = import_report_data("file.open", &json!({"path": "/tmp/a.fig"}), &json!({"warnings": many}))
-            .expect("many warnings still report");
+        let data = import_report_data("file.open", &json!({"path": "/tmp/a.fig"}), &json!({"warnings": many})).expect("many warnings still report");
         let notes = data["warnings"].as_str().unwrap_or_default();
         assert_eq!(notes.lines().count(), MAX_IMPORT_NOTES, "at most MAX_NOTES notes");
 
         let long = "x".repeat(MAX_IMPORT_NOTE_CHARS + 10);
-        let data = import_report_data("file.open", &json!({"path": "/tmp/a.fig"}), &json!({"warnings": [long]}))
-            .expect("one long note still reports");
+        let data =
+            import_report_data("file.open", &json!({"path": "/tmp/a.fig"}), &json!({"warnings": [long]})).expect("one long note still reports");
         let note = data["warnings"].as_str().unwrap_or_default();
         assert_eq!(note.chars().count(), MAX_IMPORT_NOTE_CHARS + 1, "truncated plus an ellipsis");
         assert!(note.ends_with('…'));
@@ -1777,10 +1786,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert!(
-            presets.iter().any(|p| p == "PNG @2x") && presets.iter().any(|p| p == ".fig (experimental)"),
-            "{presets:?}"
-        );
+        assert!(presets.iter().any(|p| p == "PNG @2x") && presets.iter().any(|p| p == ".fig (experimental)"), "{presets:?}");
         assert!(presets.len() >= 8, "all the original presets are listed");
         let prefs = spec(Kind::Preferences, &json!({}));
         assert!(prefs.buttons.iter().any(|b| matches!(&b.action, Action::SubmitFields { id: "pref.nudge", .. })));
@@ -1850,11 +1856,7 @@ mod tests {
         // variable in its collection, or (no collection) a new collection and the variable in it.
         // Style → style.create (a paint).
         let style = resolve_sampled(
-            &[
-                ("name".to_string(), json!("Accent")),
-                ("variable".to_string(), json!(false)),
-                ("collection".to_string(), Value::Null),
-            ],
+            &[("name".to_string(), json!("Accent")), ("variable".to_string(), json!(false)), ("collection".to_string(), Value::Null)],
             &json!({ "color": "#ff0000", "existing": [] }),
         );
         assert_eq!(style.len(), 1);
@@ -1863,11 +1865,7 @@ mod tests {
 
         // Variable in an existing collection → variable.create.
         let var = resolve_sampled(
-            &[
-                ("name".to_string(), json!("Accent")),
-                ("variable".to_string(), json!(true)),
-                ("collection".to_string(), json!("col-1")),
-            ],
+            &[("name".to_string(), json!("Accent")), ("variable".to_string(), json!(true)), ("collection".to_string(), json!("col-1"))],
             &json!({ "color": "#ff0000", "existing": [] }),
         );
         assert_eq!(var.len(), 1);
@@ -1876,11 +1874,7 @@ mod tests {
 
         // Variable, no collection → command.batch (new collection + variable, $ref), one undo step.
         let batch = resolve_sampled(
-            &[
-                ("name".to_string(), json!("Accent")),
-                ("variable".to_string(), json!(true)),
-                ("collection".to_string(), Value::Null),
-            ],
+            &[("name".to_string(), json!("Accent")), ("variable".to_string(), json!(true)), ("collection".to_string(), Value::Null)],
             &json!({ "color": "#ff0000", "existing": [] }),
         );
         assert_eq!(batch.len(), 1);
@@ -1894,11 +1888,7 @@ mod tests {
 
         // Empty name → nothing queued (egui disables Create until a name is entered).
         let none = resolve_sampled(
-            &[
-                ("name".to_string(), json!("")),
-                ("variable".to_string(), json!(false)),
-                ("collection".to_string(), Value::Null),
-            ],
+            &[("name".to_string(), json!("")), ("variable".to_string(), json!(false)), ("collection".to_string(), Value::Null)],
             &json!({ "color": "#ff0000", "existing": [] }),
         );
         assert!(none.is_empty(), "nothing is queued without a name");
@@ -1927,12 +1917,7 @@ mod tests {
     // ── A8: the Rename layers dialog (1:1 with ui-egui/dialogs/batch_rename.rs) ──────────
 
     fn rename_sources(find: &str, to: &str, regex: bool, start: f64) -> Vec<(String, Value)> {
-        vec![
-            ("find".into(), json!(find)),
-            ("to".into(), json!(to)),
-            ("regex".into(), json!(regex)),
-            ("start".into(), json!(start)),
-        ]
+        vec![("find".into(), json!(find)), ("to".into(), json!(to)), ("regex".into(), json!(regex)), ("start".into(), json!(start))]
     }
 
     #[test]

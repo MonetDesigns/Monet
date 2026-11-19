@@ -13,7 +13,7 @@ mod input;
 mod layout;
 mod scroll;
 
-pub use input::{wants_key, Ev};
+pub use input::{Ev, wants_key};
 #[allow(unused_imports)]
 pub use layout::{Geom, Place, RectPx};
 
@@ -21,9 +21,7 @@ use crate::app::CanvasApp;
 use crate::canvas::render_worker::screen_image;
 use crate::widgets::icon::paint as paint_icon;
 use crate::widgets::{Icon, pt, rgba, tokens};
-use figcraft_doc::proto::{
-    Action, AnimationOp, Easing, OverlayAnchor, OverlayPosition, PrototypeSettings, Transition, Trigger,
-};
+use figcraft_doc::proto::{Action, AnimationOp, Easing, OverlayAnchor, OverlayPosition, PrototypeSettings, Transition, Trigger};
 use figcraft_doc::{Document, NodeId};
 use figcraft_geom::Rect;
 use figcraft_i18n::tr;
@@ -500,8 +498,7 @@ impl PresentState {
         self.stop_scrolling();
         self.scroll.retain(|f, _| doc.contains(*f));
         if let Some(laid) = self.laid.as_ref() {
-            let clamped: Vec<(NodeId, (f64, f64))> =
-                self.scroll.iter().map(|(f, s)| (*f, scroll::clamp_scroll(*s, self.range(laid, *f)))).collect();
+            let clamped: Vec<(NodeId, (f64, f64))> = self.scroll.iter().map(|(f, s)| (*f, scroll::clamp_scroll(*s, self.range(laid, *f)))).collect();
             self.scroll.extend(clamped);
         }
         self.rev += 1;
@@ -632,14 +629,7 @@ impl PresentState {
 
     fn fire_from(&mut self, node: NodeId, k: usize, rect: Option<RectPx>, now: f64, live: bool) -> bool {
         let _ = live;
-        let Some(it) = self
-            .laid
-            .as_ref()
-            .or(self.design.as_ref())
-            .and_then(|d| d.node(node))
-            .and_then(|n| n.interactions.get(k))
-            .cloned()
-        else {
+        let Some(it) = self.laid.as_ref().or(self.design.as_ref()).and_then(|d| d.node(node)).and_then(|n| n.interactions.get(k)).cloned() else {
             return false;
         };
         let dur = it.easing.seconds(it.duration_ms);
@@ -654,9 +644,8 @@ impl PresentState {
             did |= self.perform(a, node, it.transition, dur, it.easing, rect, now, 0);
         }
         if did && let (Some(press), Some(snap)) = (temp, snap) {
-            let rect = rect
-                .or_else(|| self.hot.iter().find(|(id, _)| *id == node).map(|(_, r)| *r))
-                .unwrap_or(RectPx { x: 0.0, y: 0.0, w: 0.0, h: 0.0 });
+            let rect =
+                rect.or_else(|| self.hot.iter().find(|(id, _)| *id == node).map(|(_, r)| *r)).unwrap_or(RectPx { x: 0.0, y: 0.0, w: 0.0, h: 0.0 });
             self.temp = Some(Temp { rect, press, snap, transition: it.transition, dur, easing: it.easing });
         }
         did
@@ -1129,14 +1118,7 @@ fn shade([r, g, b]: [u8; 3], k: f32) -> gpui::Rgba {
 }
 
 fn dev_rect(r: RectPx, area: RectPx, radius: f32, color: gpui::Rgba) -> Div {
-    div()
-        .absolute()
-        .left(px(r.x - area.x))
-        .top(px(r.y - area.y))
-        .w(px(r.w))
-        .h(px(r.h))
-        .rounded(px(radius))
-        .bg(color)
+    div().absolute().left(px(r.x - area.x)).top(px(r.y - area.y)).w(px(r.w)).h(px(r.h)).rounded(px(radius)).bg(color)
 }
 
 /// 机身：eGUI `device::device_body`。颜色带 + 黑色玻璃，Mac / Desktop 另加底座。
@@ -1155,12 +1137,7 @@ fn device_body(stage: Div, g: &Geom, area: RectPx) -> Div {
     match d.name {
         "MacBook Air" => {
             let inner = slab;
-            let base = RectPx {
-                x: inner.x - w * 0.08,
-                y: inner.y + inner.h,
-                w: inner.w + w * 0.16,
-                h: (w * 0.022).max(6.0),
-            };
+            let base = RectPx { x: inner.x - w * 0.08, y: inner.y + inner.h, w: inner.w + w * 0.16, h: (w * 0.022).max(6.0) };
             out = out.child(dev_rect(base, area, 4.0, metal));
             out = out.child(dev_rect(inner, area, b * 1.2, body));
             let notch = RectPx { x: base.x + base.w / 2.0 - w * 0.06, y: base.y + 1.5, w: w * 0.12, h: 3.0 };
@@ -1170,12 +1147,7 @@ fn device_body(stage: Div, g: &Geom, area: RectPx) -> Div {
         }
         "Desktop" => {
             let inner = slab;
-            let neck = RectPx {
-                x: inner.x + inner.w / 2.0 - w * 0.06,
-                y: inner.y + inner.h,
-                w: w * 0.12,
-                h: w * 0.08,
-            };
+            let neck = RectPx { x: inner.x + inner.w / 2.0 - w * 0.06, y: inner.y + inner.h, w: w * 0.12, h: w * 0.08 };
             let foot = RectPx { x: neck.x - w * 0.06, y: neck.y + neck.h, w: neck.w + w * 0.12, h: 6.0 };
             out = out.child(dev_rect(neck, area, 0.0, metal));
             out = out.child(dev_rect(foot, area, 3.0, edge));
@@ -1241,13 +1213,7 @@ fn device_glass(stage: Div, g: &Geom, area: RectPx) -> Div {
     ];
     let mut out = stage;
     for (x, y, tl, tr, br, bl) in masks {
-        let mut m = div()
-            .absolute()
-            .left(px(x - area.x))
-            .top(px(y - area.y))
-            .w(px(r))
-            .h(px(r))
-            .bg(glass);
+        let mut m = div().absolute().left(px(x - area.x)).top(px(y - area.y)).w(px(r)).h(px(r)).bg(glass);
         if tl {
             m = m.rounded_tl(px(r));
         }
@@ -1325,9 +1291,7 @@ pub fn render(app: &CanvasApp, state: &PresentState, vp: (f32, f32), canvas: (f3
 
     let mut stage = div().relative().flex_1().min_h(px(0.0)).w_full().overflow_hidden();
     if let Some(g) = g.as_ref() {
-        let screen_r = g
-            .device
-            .map_or(0.0, |d| layout::bezel(d.name, layout::upright_w(g.screen.w, g.screen.h, g.landscape)).1);
+        let screen_r = g.device.map_or(0.0, |d| layout::bezel(d.name, layout::upright_w(g.screen.w, g.screen.h, g.landscape)).1);
         // 1) 设备机身（屏幕外侧的颜色带 + 黑色玻璃）。
         stage = device_body(stage, g, area);
         // 2) 屏幕层：剪到屏幕矩形；圆角由第 8 步的 `device_glass` 遮罩补齐。
@@ -1423,11 +1387,7 @@ pub fn render(app: &CanvasApp, state: &PresentState, vp: (f32, f32), canvas: (f3
         {
             let uw = layout::upright_w(g.screen.w, g.screen.h, g.landscape);
             let (pw, ph) = if g.landscape { (uw * 0.085, uw * 0.3) } else { (uw * 0.3, uw * 0.085) };
-            let (ccx, ccy) = if g.landscape {
-                (uw * 0.045, g.screen.h / 2.0)
-            } else {
-                (g.screen.w / 2.0, uw * 0.045)
-            };
+            let (ccx, ccy) = if g.landscape { (uw * 0.045, g.screen.h / 2.0) } else { (g.screen.w / 2.0, uw * 0.045) };
             layer = layer.child(
                 div()
                     .absolute()
@@ -1446,14 +1406,7 @@ pub fn render(app: &CanvasApp, state: &PresentState, vp: (f32, f32), canvas: (f3
         {
             let r = g.place.rect(b);
             layer = layer.child(
-                div()
-                    .absolute()
-                    .left(px(r.x - g.screen.x))
-                    .top(px(r.y - g.screen.y))
-                    .w(px(r.w))
-                    .h(px(r.h))
-                    .border_1()
-                    .border_color(rgba(t.accent)),
+                div().absolute().left(px(r.x - g.screen.x)).top(px(r.y - g.screen.y)).w(px(r.w)).h(px(r.h)).border_1().border_color(rgba(t.accent)),
             );
         }
         stage = stage.child(layer);
@@ -1469,17 +1422,8 @@ pub fn render(app: &CanvasApp, state: &PresentState, vp: (f32, f32), canvas: (f3
                     continue;
                 }
                 let (x, y) = (r.x - area.x, r.y - area.y);
-                stage = stage.child(
-                    div()
-                        .absolute()
-                        .left(px(x))
-                        .top(px(y))
-                        .w(px(r.w))
-                        .h(px(r.h))
-                        .rounded(px(4.0))
-                        .bg(rgba(t.accent))
-                        .opacity(0.25 * a),
-                );
+                stage =
+                    stage.child(div().absolute().left(px(x)).top(px(y)).w(px(r.w)).h(px(r.h)).rounded(px(4.0)).bg(rgba(t.accent)).opacity(0.25 * a));
                 // eGUI 是 1.5px 外描边：GPUI 没有外描边，外扩 1.5 再内描 1px 近似。
                 stage = stage.child(
                     div()
@@ -1568,18 +1512,11 @@ pub fn render(app: &CanvasApp, state: &PresentState, vp: (f32, f32), canvas: (f3
         .bg(rgba(t.panel))
         .border_b_1()
         .border_color(rgba(t.border))
-        .child(
-            div()
-                .flex_none()
-                .w(px(28.0))
-                .h(px(28.0))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(pt(4.0))
-                .bg(rgba(t.field))
-                .child(paint_icon(Icon::Frame, rgba(t.text_secondary), 16.0)),
-        )
+        .child(div().flex_none().w(px(28.0)).h(px(28.0)).flex().items_center().justify_center().rounded(pt(4.0)).bg(rgba(t.field)).child(paint_icon(
+            Icon::Frame,
+            rgba(t.text_secondary),
+            16.0,
+        )))
         .child(
             div()
                 .flex_1()
@@ -1598,14 +1535,7 @@ pub fn render(app: &CanvasApp, state: &PresentState, vp: (f32, f32), canvas: (f3
                         .child(SharedString::from(flow_name.clone())),
                 )
                 .child(div().flex_none().text_size(pt(11.5)).text_color(rgba(t.text_tertiary)).child("/"))
-                .child(
-                    div()
-                        .min_w(px(0.0))
-                        .text_size(pt(11.5))
-                        .text_color(rgba(t.text))
-                        .overflow_hidden()
-                        .child(SharedString::from(name.clone())),
-                ),
+                .child(div().min_w(px(0.0)).text_size(pt(11.5)).text_color(rgba(t.text)).overflow_hidden().child(SharedString::from(name.clone()))),
         )
         .child(title_button(1, tr("Inspect").into(), 6, state.inspect))
         .child(title_button(2, tr("Comments").into(), 5, state.comments))
@@ -1620,11 +1550,8 @@ pub fn render(app: &CanvasApp, state: &PresentState, vp: (f32, f32), canvas: (f3
     let has_prev = index.and_then(|i| i.checked_sub(1)).is_some();
     let has_next = index.and_then(|i| frames.get(i + 1)).is_some();
     let settings = page_settings(doc, state.current);
-    let device_label: SharedString = if settings.device == "None" || settings.device.is_empty() {
-        tr("No device").into()
-    } else {
-        SharedString::from(settings.device.clone())
-    };
+    let device_label: SharedString =
+        if settings.device == "None" || settings.device.is_empty() { tr("No device").into() } else { SharedString::from(settings.device.clone()) };
     let nav_btn = |icon: Icon, action: u8, enabled: bool| {
         div()
             .id(("present-nav-btn", u64::from(action)))
@@ -1684,7 +1611,11 @@ pub fn render(app: &CanvasApp, state: &PresentState, vp: (f32, f32), canvas: (f3
 
     let device_menu = if state.device_open {
         let mut list = menu_shell("present-device-menu");
-        let none = menu_item(tr("No device").into(), settings.device == "None", Box::new(|_, _| SET_DEVICE.with(|d| *d.borrow_mut() = Some("None".to_string()))));
+        let none = menu_item(
+            tr("No device").into(),
+            settings.device == "None",
+            Box::new(|_, _| SET_DEVICE.with(|d| *d.borrow_mut() = Some("None".to_string()))),
+        );
         list = list.child(none);
         for d in PrototypeSettings::DEVICES.iter() {
             let n = d.name;
@@ -1728,15 +1659,11 @@ pub fn render(app: &CanvasApp, state: &PresentState, vp: (f32, f32), canvas: (f3
             .border_color(rgba(t.border))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(nav_btn(Icon::ChevronLeft, 8, has_prev))
-            .child(
-                div()
-                    .min_w(px(48.0))
-                    .flex()
-                    .justify_center()
-                    .text_size(pt(11.0))
-                    .text_color(rgba(t.text))
-                    .child(SharedString::from(format!("{} / {}", index.map_or(0, |i| i + 1), frames.len()))),
-            )
+            .child(div().min_w(px(48.0)).flex().justify_center().text_size(pt(11.0)).text_color(rgba(t.text)).child(SharedString::from(format!(
+                "{} / {}",
+                index.map_or(0, |i| i + 1),
+                frames.len()
+            ))))
             .child(nav_btn(Icon::ChevronRight, 9, has_next))
             .child(div().w(px(1.0)).h(px(16.0)).bg(rgba(t.border)))
             .child(
@@ -1816,17 +1743,13 @@ pub fn render(app: &CanvasApp, state: &PresentState, vp: (f32, f32), canvas: (f3
                     body = body.child(crate::panels::right::inspect::inspect_section(&sec));
                 }
             } else {
-                body = body.child(
-                    div()
-                        .text_size(pt(11.0))
-                        .text_color(rgba(t.text_secondary))
-                        .child(tr("Hover a layer to see its properties")),
-                );
+                body = body.child(div().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(tr("Hover a layer to see its properties")));
             }
         } else {
             // eGUI `comments::panel` 的列表（筛选/排序用默认档，演示里不需要那套操作控件）。
             let me = figcraft_engine::cmd::comment::user_name(&app.session);
-            let rows = crate::comments::read_rows(doc, &me, figcraft_engine::cmd::comment::Filter::Open, figcraft_engine::cmd::comment::Sort::Date, "");
+            let rows =
+                crate::comments::read_rows(doc, &me, figcraft_engine::cmd::comment::Filter::Open, figcraft_engine::cmd::comment::Sort::Date, "");
             if rows.is_empty() {
                 body = body.child(div().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(tr("No comments yet")));
             } else {
@@ -1847,13 +1770,19 @@ pub fn render(app: &CanvasApp, state: &PresentState, vp: (f32, f32), canvas: (f3
                                     .items_center()
                                     .justify_between()
                                     .text_size(pt(11.0))
-                                    .child(div().font_weight(gpui::FontWeight::SEMIBOLD).text_color(rgba(t.text)).child(SharedString::from(r.author.clone())))
+                                    .child(
+                                        div()
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .text_color(rgba(t.text))
+                                            .child(SharedString::from(r.author.clone())),
+                                    )
                                     .child(div().text_color(rgba(t.text_tertiary)).child(SharedString::from(r.ago.clone()))),
                             )
                             .child(div().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(r.body.clone())))
-                            .children((!r.meta.is_empty()).then(|| {
-                                div().text_size(pt(10.0)).text_color(rgba(t.text_tertiary)).child(SharedString::from(r.meta.clone()))
-                            })),
+                            .children(
+                                (!r.meta.is_empty())
+                                    .then(|| div().text_size(pt(10.0)).text_color(rgba(t.text_tertiary)).child(SharedString::from(r.meta.clone()))),
+                            ),
                     );
                 }
             }
@@ -2048,8 +1977,7 @@ pub fn push_move(x: f64, y: f64) {
 /// 调试：上一帧 hotspot 矩形（`present.hot` 控制命令用）。
 pub fn debug_hot() -> (Option<(f64, f64)>, Vec<u64>, Vec<(u64, f32, f32, f32, f32)>) {
     let (pos, hover) = input::PTR_DBG.with(|q| q.borrow().clone());
-    let hot = input::HOT_DBG
-        .with(|q| q.borrow().iter().map(|(id, r)| (id.0, r.x, r.y, r.w, r.h)).collect());
+    let hot = input::HOT_DBG.with(|q| q.borrow().iter().map(|(id, r)| (id.0, r.x, r.y, r.w, r.h)).collect());
     (pos, hover.into_iter().map(|n| n.0).collect(), hot)
 }
 

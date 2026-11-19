@@ -4,6 +4,8 @@
 //! `show()` 负责「同步视口尺寸 → 请求/轮询渲染 → 画页面底色与贴图 → 画叠加层」，
 //! 叠加层各自在子模块里（标尺、手柄、overlays…），全部沿用原实现的画法。
 
+/// A27：画板自动连线（照 `ui-egui/src/canvas/board_connect.rs`）。
+pub mod board_connect;
 pub mod builder;
 pub mod cursors;
 /// Dev Mode 画布层（注解气泡 + 已存测量线，egui `dev_mode::draw` / `saved_lines`）。
@@ -23,8 +25,6 @@ pub mod overlays;
 pub mod painter;
 /// Prototype 连线叠加层（原型连线 / 「+」手柄 / Manual overlay ghost）。
 pub mod proto_canvas;
-/// A27：画板自动连线（照 `ui-egui/src/canvas/board_connect.rs`）。
-pub mod board_connect;
 pub mod render;
 pub mod render_worker;
 pub mod rulers;
@@ -272,8 +272,7 @@ pub fn show(app: &mut CanvasApp, worker: &mut Worker, ppp: f32, t: &Tokens, rena
     // 为 Some，所以必须用它、不能用 drop_target）。此时和 Resize 一样提升 `affected_root`：被拖层
     // 的 parent 已被 reparent 成目标容器（同容器重排则本就是它），沿父链爬到该容器，补丁整块重绘，
     // 兄弟的旧/新位一次盖全，与选框同一帧。
-    let dragging_into_flow = !redraw
-        && app.session.tool.overlay.insert_line.is_some();
+    let dragging_into_flow = !redraw && app.session.tool.overlay.insert_line.is_some();
     if (redraw && app.session.tool.live_reflows() || dragging_into_flow)
         && let Ok(ds) = app.session.ds()
     {
@@ -409,12 +408,8 @@ pub fn show(app: &mut CanvasApp, worker: &mut Worker, ppp: f32, t: &Tokens, rena
     // 整页兜底图：铺在清晰贴图**下面**（`image` 之后画，会盖住它没覆盖的部分）。
     // ⛔ 必须和当前文件/页面一致：切换标签后旧的整页图还在台上，不过滤就会在新画布上
     // 闪一下上一个（最先打开的）文件的内容（用户 2026-11-17）。
-    let overview_current = app
-        .session
-        .ds()
-        .ok()
-        .zip(app.canvas.overview_of)
-        .is_some_and(|(ds, (doc, page, _))| doc == Arc::as_ptr(&ds.doc) as usize && page == ds.page);
+    let overview_current =
+        app.session.ds().ok().zip(app.canvas.overview_of).is_some_and(|(ds, (doc, page, _))| doc == Arc::as_ptr(&ds.doc) as usize && page == ds.page);
     let overview = if overview_current {
         app.canvas.overview.as_ref().map(|(tex, v)| {
             let tl = app.to_screen(v.origin.0, v.origin.1);
@@ -452,7 +447,6 @@ pub fn show(app: &mut CanvasApp, worker: &mut Worker, ppp: f32, t: &Tokens, rena
     CanvasOutput { image, overview, live, painter, bg, in_flight, retired }
 }
 
-
 /// 台上贴图是否属于当前显示的文件/页面。图片显示与叠加层必须共用这一判定。
 fn texture_is_current(c: &CanvasState, shown: Option<(u64, NodeId)>) -> bool {
     shown.is_some() && c.tex_of == shown
@@ -461,11 +455,7 @@ fn texture_is_current(c: &CanvasState, shown: Option<(u64, NodeId)>) -> bool {
 /// 叠加层能用的台上贴图文档：贴图与当前显示的文件/页面一致时，才是同帧同基准。
 /// 没有清空 `tex_doc` / `tex_of` 的重置路径，文档或页面切换后靠这道闸门挡住上一个文档的几何。
 pub(crate) fn on_screen_tex_doc(c: &CanvasState, shown: Option<(u64, NodeId)>) -> Option<Arc<Document>> {
-    if texture_is_current(c, shown) {
-        c.tex_doc.clone()
-    } else {
-        None
-    }
+    if texture_is_current(c, shown) { c.tex_doc.clone() } else { None }
 }
 
 /// 叠加层能采用的台上贴图文档：画面由「本帧显示文档」或「当帧同步补丁」提供时，
@@ -473,26 +463,13 @@ pub(crate) fn on_screen_tex_doc(c: &CanvasState, shown: Option<(u64, NodeId)>) -
 /// `frame_doc_active` = Motion 预览或播放（`app.display_doc` 有值）；
 /// `live` = 拖动补丁还在台上（`app.canvas.live.is_some()`，含松手后补丁未撤）。
 /// 任一为真就忽略贴图文档，改由 `overlay_doc` 取 display → source。
-pub(crate) fn overlay_texture_doc(
-    c: &CanvasState,
-    shown: Option<(u64, NodeId)>,
-    frame_doc_active: bool,
-    live: bool,
-) -> Option<Arc<Document>> {
-    if frame_doc_active || live {
-        None
-    } else {
-        on_screen_tex_doc(c, shown)
-    }
+pub(crate) fn overlay_texture_doc(c: &CanvasState, shown: Option<(u64, NodeId)>, frame_doc_active: bool, live: bool) -> Option<Arc<Document>> {
+    if frame_doc_active || live { None } else { on_screen_tex_doc(c, shown) }
 }
 
 /// 叠加层读哪份文档：台上贴图的 > 本帧显示文档 > 源文档。
 /// 抽成纯函数，回归「选框与画面同帧」这条契约。
-pub(crate) fn overlay_doc(
-    tex: Option<Arc<Document>>,
-    display: Option<Arc<Document>>,
-    source: &Arc<Document>,
-) -> Arc<Document> {
+pub(crate) fn overlay_doc(tex: Option<Arc<Document>>, display: Option<Arc<Document>>, source: &Arc<Document>) -> Arc<Document> {
     tex.or(display).unwrap_or_else(|| source.clone())
 }
 
@@ -517,12 +494,7 @@ pub(crate) fn draw_overlays(app: &mut CanvasApp, painter: &mut Painter, t: &Toke
     // · Motion 预览 / 播放：`display_doc` 每帧新建，贴图是后台上一帧，绑 `tex_doc`
     //   会让选框慢一帧；渲染请求、补丁与其余叠加层都读本帧文档，选框必须跟它们一致。
     let shown = app.session.ds().map(|ds| (ds.uid, ds.page)).ok();
-    let tex_doc = overlay_texture_doc(
-        &app.canvas,
-        shown,
-        app.display_doc.is_some(),
-        app.canvas.live.is_some(),
-    );
+    let tex_doc = overlay_texture_doc(&app.canvas, shown, app.display_doc.is_some(), app.canvas.live.is_some());
     let display_doc = app.display_doc.clone();
     let (doc, sel) = match app.session.ds() {
         Ok(ds) => (overlay_doc(tex_doc, display_doc, &ds.doc), ds.selection.clone()),
@@ -609,7 +581,6 @@ fn patch_rect(start: [f64; 4], now: figcraft_geom::Rect, pad: f64, visible: [f64
     (r[2] - r[0] >= 0.5 && r[3] - r[1] >= 0.5).then_some(r)
 }
 
-
 fn patch_for(
     app: &mut CanvasApp,
     ppp: f32,
@@ -635,12 +606,7 @@ fn patch_for(
         }
     }
     let (ox, oy) = ds.view.origin();
-    let visible = [
-        ox,
-        oy,
-        ox + f64::from(app.canvas.rect.width()) / zoom,
-        oy + f64::from(app.canvas.rect.height()) / zoom,
-    ];
+    let visible = [ox, oy, ox + f64::from(app.canvas.rect.width()) / zoom, oy + f64::from(app.canvas.rect.height()) / zoom];
     let Some(rect) = patch_rect(start, now, pad, visible) else { return None };
     let doc = display_doc.unwrap_or_else(|| ds.doc.clone());
     let page = ds.page;
@@ -650,12 +616,7 @@ fn patch_for(
     // 单边不得超过纹理上限：先按边长收尺度，再按面积收，避免把补丁硬截断成缺一块。
     let side = f64::from(MAX_TEXTURE_SIDE);
     scale = scale.min(side / (rect[2] - rect[0])).min(side / (rect[3] - rect[1]));
-    let size = |k: f64| {
-        (
-            ((rect[2] - rect[0]) * k).ceil().max(1.0) as u32,
-            ((rect[3] - rect[1]) * k).ceil().max(1.0) as u32,
-        )
-    };
+    let size = |k: f64| (((rect[2] - rect[0]) * k).ceil().max(1.0) as u32, ((rect[3] - rect[1]) * k).ceil().max(1.0) as u32);
     let (mut w, mut h) = size(scale);
     let area = f64::from(w) * f64::from(h);
     if area > MAX_PATCH_PIXELS {
@@ -670,12 +631,7 @@ fn patch_for(
     let v = &done.view;
     let sz = done.image.size(0);
     let (iw, ih) = (u32::from(sz.width), u32::from(sz.height));
-    let page_rect = [
-        v.origin.0,
-        v.origin.1,
-        v.origin.0 + f64::from(iw) / v.scale,
-        v.origin.1 + f64::from(ih) / v.scale,
-    ];
+    let page_rect = [v.origin.0, v.origin.1, v.origin.0 + f64::from(iw) / v.scale, v.origin.1 + f64::from(ih) / v.scale];
     Some((done.image, page_rect))
 }
 
@@ -808,17 +764,9 @@ mod display_doc_tests {
         // 忽略贴图后，叠加层必须落到本帧显示文档 / 源文档，而不是那张冻结贴图。
         let display = doc("display");
         let source = doc("source");
-        let chosen = overlay_doc(
-            overlay_texture_doc(&c, Some((7, NodeId(3))), true, true),
-            Some(display.clone()),
-            &source,
-        );
+        let chosen = overlay_doc(overlay_texture_doc(&c, Some((7, NodeId(3))), true, true), Some(display.clone()), &source);
         assert!(Arc::ptr_eq(&chosen, &display));
-        let chosen_static = overlay_doc(
-            overlay_texture_doc(&c, Some((7, NodeId(3))), false, false),
-            None,
-            &source,
-        );
+        let chosen_static = overlay_doc(overlay_texture_doc(&c, Some((7, NodeId(3))), false, false), None, &source);
         assert!(Arc::ptr_eq(&chosen_static, &tex));
     }
 
@@ -852,7 +800,13 @@ mod display_doc_tests {
                             let display = has_display.then(|| preview.clone());
                             let tex_doc = has_tex.then(|| tex.clone());
                             let chosen = overlay_doc(tex_doc, display, &source);
-                            let expected = if has_tex { &tex } else if has_display { &preview } else { &source };
+                            let expected = if has_tex {
+                                &tex
+                            } else if has_display {
+                                &preview
+                            } else {
+                                &source
+                            };
                             assert!(Arc::ptr_eq(&chosen, expected), "{case}: 文档基准不对");
 
                             // 旋转后的左上角：吸附必须落在设备像素上，且与特效/状态无关。

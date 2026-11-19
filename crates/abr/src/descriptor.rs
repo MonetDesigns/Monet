@@ -34,11 +34,7 @@ impl Id {
 
     fn read(r: &mut Reader<'_>) -> Result<Self> {
         let n = r.u32()? as usize;
-        if n == 0 {
-            Ok(Id::Code(r.arr::<4>()?))
-        } else {
-            Ok(Id::Str(r.take(n)?.to_vec()))
-        }
+        if n == 0 { Ok(Id::Code(r.arr::<4>()?)) } else { Ok(Id::Str(r.take(n)?.to_vec())) }
     }
 
     fn write(&self, w: &mut Writer) {

@@ -136,7 +136,12 @@ fn glyph(kind: Glyph, size: f32, ink: gpui::Rgba) -> impl IntoElement {
                             gpui::Bounds { origin: point(px(x + dx - 2.0), px(y - r * 0.7)), size: gpui::size(px(3.2), px(r * 1.4)) },
                             ink,
                         )
-                        .corner_radii(gpui::Corners { top_left: px(1.0), top_right: px(1.0), bottom_right: px(1.0), bottom_left: px(1.0) });
+                        .corner_radii(gpui::Corners {
+                            top_left: px(1.0),
+                            top_right: px(1.0),
+                            bottom_right: px(1.0),
+                            bottom_left: px(1.0),
+                        });
                         window.paint_quad(quad);
                     }
                 }
@@ -165,10 +170,7 @@ fn divider() -> impl IntoElement {
 
 fn label(text: impl Into<SharedString>, secondary: bool) -> impl IntoElement {
     let t = tokens();
-    div()
-        .text_size(px(12.0))
-        .text_color(rgba(if secondary { t.text_secondary } else { t.text }))
-        .child(text.into())
+    div().text_size(px(12.0)).text_color(rgba(if secondary { t.text_secondary } else { t.text })).child(text.into())
 }
 
 /// 弹层外壳（与菜单同一套观感）。
@@ -251,19 +253,17 @@ pub(crate) fn pill(app: &CanvasApp, cmds: Cmds, st: &Rc<RefCell<State>>) -> Opti
                 "paused" => t.text_secondary,
                 _ => t.text,
             };
-            row = row
-                .child(div().w(px(18.0)).flex().items_center().justify_center().child(glyph(Glyph::Clock, 16.0, rgba(color))))
-                .child(
-                    div()
-                        .w(px(CLOCK_W))
-                        .h(px(CELL))
-                        .flex()
-                        .items_center()
-                        .text_size(px(13.0))
-                        .font_weight(crate::panels::UI_FONT_REGULAR)
-                        .text_color(rgba(color))
-                        .child(SharedString::from(text)),
-                );
+            row = row.child(div().w(px(18.0)).flex().items_center().justify_center().child(glyph(Glyph::Clock, 16.0, rgba(color)))).child(
+                div()
+                    .w(px(CLOCK_W))
+                    .h(px(CELL))
+                    .flex()
+                    .items_center()
+                    .text_size(px(13.0))
+                    .font_weight(crate::panels::UI_FONT_REGULAR)
+                    .text_color(rgba(color))
+                    .child(SharedString::from(text)),
+            );
             if editable {
                 if state != "done" {
                     let (kind, action) = match timer {
@@ -276,24 +276,18 @@ pub(crate) fn pill(app: &CanvasApp, cmds: Cmds, st: &Rc<RefCell<State>>) -> Opti
                     } else {
                         glyph(Glyph::Pause, 14.0, rgba(t.text)).into_any_element()
                     };
-                    row = row.child(
-                        icon_cell("bf-timer-toggle", el).on_click(move |_, _, _| {
-                            cmds_toggle.push(Cmd { id: "board.timer", params: Some(json!({ "action": action })) });
-                        }),
-                    );
+                    row = row.child(icon_cell("bf-timer-toggle", el).on_click(move |_, _, _| {
+                        cmds_toggle.push(Cmd { id: "board.timer", params: Some(json!({ "action": action })) });
+                    }));
                 }
                 let cmds_add = cmds.clone();
-                row = row.child(
-                    icon_cell("bf-timer-add", icon::paint(Icon::Plus, rgba(t.text), 14.0)).on_click(move |_, _, _| {
-                        cmds_add.push(Cmd { id: "board.timer", params: Some(json!({ "action": "add", "minutes": 1 })) });
-                    }),
-                );
+                row = row.child(icon_cell("bf-timer-add", icon::paint(Icon::Plus, rgba(t.text), 14.0)).on_click(move |_, _, _| {
+                    cmds_add.push(Cmd { id: "board.timer", params: Some(json!({ "action": "add", "minutes": 1 })) });
+                }));
                 let cmds_stop = cmds.clone();
-                row = row.child(
-                    icon_cell("bf-timer-stop", icon::paint(Icon::Close, rgba(t.text), 14.0)).on_click(move |_, _, _| {
-                        cmds_stop.push(Cmd { id: "board.timer", params: Some(json!({ "action": "stop" })) });
-                    }),
-                );
+                row = row.child(icon_cell("bf-timer-stop", icon::paint(Icon::Close, rgba(t.text), 14.0)).on_click(move |_, _, _| {
+                    cmds_stop.push(Cmd { id: "board.timer", params: Some(json!({ "action": "stop" })) });
+                }));
             }
         }
     }
@@ -306,15 +300,13 @@ pub(crate) fn pill(app: &CanvasApp, cmds: Cmds, st: &Rc<RefCell<State>>) -> Opti
             row = row.child(vote_button(st, editable));
             if results {
                 let st2 = st.clone();
-                row = row.child(
-                    small_button("bf-results", figcraft_i18n::tr("Results"), false).on_click(move |_, _, _| {
-                        let mut s = st2.borrow_mut();
-                        // CodeRabbit PR#17: toggle so a read-only user can close the results popup
-                        // (the clear/vote close paths aren't available to them).
-                        s.results_open = !s.results_open;
-                        s.pick = 0;
-                    }),
-                );
+                row = row.child(small_button("bf-results", figcraft_i18n::tr("Results"), false).on_click(move |_, _, _| {
+                    let mut s = st2.borrow_mut();
+                    // CodeRabbit PR#17: toggle so a read-only user can close the results popup
+                    // (the clear/vote close paths aren't available to them).
+                    s.results_open = !s.results_open;
+                    s.pick = 0;
+                }));
             }
         }
         VoteView::Running { left } => {
@@ -323,11 +315,9 @@ pub(crate) fn pill(app: &CanvasApp, cmds: Cmds, st: &Rc<RefCell<State>>) -> Opti
                 .child(label(figcraft_i18n::trn("{n} votes left", left as usize, &[]), false));
             if editable {
                 let cmds = cmds.clone();
-                row = row.child(
-                    small_button("bf-end-vote", figcraft_i18n::tr("End vote"), true).on_click(move |_, _, _| {
-                        cmds.push(Cmd { id: "board.vote", params: Some(json!({ "action": "end" })) });
-                    }),
-                );
+                row = row.child(small_button("bf-end-vote", figcraft_i18n::tr("End vote"), true).on_click(move |_, _, _| {
+                    cmds.push(Cmd { id: "board.vote", params: Some(json!({ "action": "end" })) });
+                }));
             }
         }
     }
@@ -420,12 +410,11 @@ fn timer_popup(cmds: Cmds, st: Rc<RefCell<State>>) -> AnyElement {
     for m in PRESETS {
         let cmds = cmds.clone();
         let st2 = st.clone();
-        presets = presets.child(
-            small_button(("bf-preset", m as usize), figcraft_i18n::trf("{n} min", &[("n", &m)]), false).on_click(move |_, _, _| {
+        presets =
+            presets.child(small_button(("bf-preset", m as usize), figcraft_i18n::trf("{n} min", &[("n", &m)]), false).on_click(move |_, _, _| {
                 cmds.push(Cmd { id: "board.timer", params: Some(json!({ "action": "start", "minutes": m })) });
                 st2.borrow_mut().timer_open = false;
-            }),
-        );
+            }));
     }
     let minutes = st.borrow().minutes.clamp(1, 1440);
     let st1 = st.clone();
@@ -437,17 +426,10 @@ fn timer_popup(cmds: Cmds, st: Rc<RefCell<State>>) -> AnyElement {
             .items_center()
             .gap(px(6.0))
             .child(label(figcraft_i18n::tr("Minutes"), true))
-            .child(
-                icon_cell(
-                    "bf-minutes-minus",
-                    icon::paint(Icon::Minus, rgba(tokens().text), 12.0),
-                )
-                .size(px(22.0))
-                .on_click(move |_, _, _| {
-                    let mut s = st1.borrow_mut();
-                    s.minutes = s.minutes.clamp(1, 1440).saturating_sub(1).max(1);
-                }),
-            )
+            .child(icon_cell("bf-minutes-minus", icon::paint(Icon::Minus, rgba(tokens().text), 12.0)).size(px(22.0)).on_click(move |_, _, _| {
+                let mut s = st1.borrow_mut();
+                s.minutes = s.minutes.clamp(1, 1440).saturating_sub(1).max(1);
+            }))
             .child(div().w(px(28.0)).flex().justify_center().child(label(minutes.to_string(), false)))
             .child(icon_cell("bf-minutes-plus", icon::paint(Icon::Plus, rgba(tokens().text), 12.0)).size(px(22.0)).on_click(move |_, _, _| {
                 let mut s = st2.borrow_mut();
@@ -455,15 +437,13 @@ fn timer_popup(cmds: Cmds, st: Rc<RefCell<State>>) -> AnyElement {
             })),
     );
     let st3 = st.clone();
-    root = root.child(
-        div().flex().flex_row().justify_end().child(
-            small_button("bf-minutes-start", figcraft_i18n::tr("Start"), true).on_click(move |_, _, _| {
-                let minutes = st3.borrow().minutes.clamp(1, 1440);
-                st3.borrow_mut().timer_open = false;
-                cmds.push(Cmd { id: "board.timer", params: Some(json!({ "action": "start", "minutes": minutes })) });
-            }),
-        ),
-    );
+    root = root.child(div().flex().flex_row().justify_end().child(small_button("bf-minutes-start", figcraft_i18n::tr("Start"), true).on_click(
+        move |_, _, _| {
+            let minutes = st3.borrow().minutes.clamp(1, 1440);
+            st3.borrow_mut().timer_open = false;
+            cmds.push(Cmd { id: "board.timer", params: Some(json!({ "action": "start", "minutes": minutes })) });
+        },
+    )));
     root.into_any_element()
 }
 
@@ -511,8 +491,8 @@ fn vote_popup(app: &CanvasApp, cmds: Cmds, st: Rc<RefCell<State>>) -> AnyElement
 
     let st4 = st.clone();
     let ids: Vec<figcraft_doc::NodeId> = app.session.selection().to_vec();
-    root = root.child(div().flex().flex_row().justify_end().child(
-        small_button("bf-vote-start", figcraft_i18n::tr("Start vote"), true).on_click(move |_, _, _| {
+    root = root.child(div().flex().flex_row().justify_end().child(small_button("bf-vote-start", figcraft_i18n::tr("Start vote"), true).on_click(
+        move |_, _, _| {
             let s = st4.borrow();
             // CodeRabbit PR#17/#23: apply the same "selection needs a selection" normalisation the
             // popup renders, otherwise Start submits `on: selection` with empty ids and is rejected.
@@ -526,8 +506,8 @@ fn vote_popup(app: &CanvasApp, cmds: Cmds, st: Rc<RefCell<State>>) -> AnyElement
             }
             cmds.push(Cmd { id: "board.vote", params: Some(params) });
             st4.borrow_mut().vote_open = false;
-        }),
-    ));
+        },
+    )));
     root.into_any_element()
 }
 
@@ -578,10 +558,7 @@ fn results_popup(app: &CanvasApp, cmds: Cmds, st: Rc<RefCell<State>>, editable: 
                         s.pick = s.pick.saturating_sub(1);
                     }),
             )
-            .child(label(
-                figcraft_i18n::trf("{n} of {total}", &[("n", &(pick + 1)), ("total", &total)]),
-                true,
-            ))
+            .child(label(figcraft_i18n::trf("{n} of {total}", &[("n", &(pick + 1)), ("total", &total)]), true))
             .child(
                 icon_cell("bf-results-next", icon::paint(Icon::ChevronRight, rgba(t.menu_text), 12.0))
                     .size(px(20.0))
@@ -657,11 +634,7 @@ fn voters_line(row: &facilitate::ResultRow) -> String {
         .iter()
         .map(|(_, name, n)| {
             let name = name.clone().unwrap_or_else(|| figcraft_i18n::tr("Someone who left").to_string());
-            if *n > 1 {
-                figcraft_i18n::trf("{name} ×{n}", &[("name", &name), ("n", &n.to_string())])
-            } else {
-                name
-            }
+            if *n > 1 { figcraft_i18n::trf("{name} ×{n}", &[("name", &name), ("n", &n.to_string())]) } else { name }
         })
         .collect();
     who.join(", ")

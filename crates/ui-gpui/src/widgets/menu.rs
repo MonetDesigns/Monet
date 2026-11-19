@@ -197,7 +197,9 @@ pub fn menu_popup_in_aligned(
         }
         // 标签占满剩余宽度，超长裁掉（egui 把文字裁到 `r.max.x - 8.0`）。
         row = row.child(div().flex_1().min_w(pt(0.0)).overflow_hidden().whitespace_nowrap().child(label)).when_some(trail, |d, tr| {
-            d.child(div().ml(pt(crate::widgets::MENU_TRAIL_GAP)).pr(pt(10.0)).whitespace_nowrap().text_color(crate::menu_metrics::trail_ink()).child(tr))
+            d.child(
+                div().ml(pt(crate::widgets::MENU_TRAIL_GAP)).pr(pt(10.0)).whitespace_nowrap().text_color(crate::menu_metrics::trail_ink()).child(tr),
+            )
         });
         col = col.child(row);
     }

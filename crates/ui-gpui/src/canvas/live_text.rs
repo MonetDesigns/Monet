@@ -31,9 +31,7 @@ pub(crate) fn draw(app: &CanvasApp, painter: &mut Painter) {
         }
         // CodeRabbit PR#22: don't draw a remote caret/selection/label over a hidden text layer or
         // under a hidden ancestor — the peer may still be editing a layer the local user can't see.
-        if !ds.doc.node(e.node).is_some_and(|n| n.visible)
-            || ds.doc.ancestors(e.node).iter().any(|a| !ds.doc.node(*a).is_some_and(|n| n.visible))
-        {
+        if !ds.doc.node(e.node).is_some_and(|n| n.visible) || ds.doc.ancestors(e.node).iter().any(|a| !ds.doc.node(*a).is_some_and(|n| n.visible)) {
             continue;
         }
         let Some(text) = TextOnScreen::of(&ds.doc, e.node) else { continue };

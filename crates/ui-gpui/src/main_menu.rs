@@ -411,7 +411,14 @@ pub(crate) fn render(
             }
             r = r.child(div().flex_1().min_w(px(0.0)).overflow_hidden().whitespace_nowrap().child(row.label.clone()));
             if let Some(trail) = row.trail.clone() {
-                r = r.child(div().ml(pt(crate::widgets::MENU_TRAIL_GAP)).pr(pt(10.0)).whitespace_nowrap().text_color(crate::menu_metrics::trail_ink()).child(trail));
+                r = r.child(
+                    div()
+                        .ml(pt(crate::widgets::MENU_TRAIL_GAP))
+                        .pr(pt(10.0))
+                        .whitespace_nowrap()
+                        .text_color(crate::menu_metrics::trail_ink())
+                        .child(trail),
+                );
             }
             col = col.child(r);
         }

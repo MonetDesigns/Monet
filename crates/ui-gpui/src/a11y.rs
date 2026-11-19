@@ -100,15 +100,8 @@ pub(crate) fn tab_next(cx: &mut App, region: Region, step: i32, focused: Option<
     if list.is_empty() {
         return None;
     }
-    let cur = focused
-        .and_then(|f| list.iter().position(|c| c.focus.as_ref() == Some(f)))
-        .and_then(|i| i32::try_from(i).ok())
-        .unwrap_or(-1);
-    let next = if cur < 0 {
-        if step > 0 { 0 } else { list.len() - 1 }
-    } else {
-        (cur + step).rem_euclid(list.len() as i32) as usize
-    };
+    let cur = focused.and_then(|f| list.iter().position(|c| c.focus.as_ref() == Some(f))).and_then(|i| i32::try_from(i).ok()).unwrap_or(-1);
+    let next = if cur < 0 { if step > 0 { 0 } else { list.len() - 1 } } else { (cur + step).rem_euclid(list.len() as i32) as usize };
     list.get(next).and_then(|c| c.focus.clone())
 }
 

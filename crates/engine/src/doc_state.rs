@@ -1,5 +1,7 @@
 use super::view_state::ViewState;
-use super::{Arc, BTreeMap, BTreeSet, Deserialize, Document, NodeId, Serialize, cmd, components, file_access, guides, library, rotation_origin, vectoredit};
+use super::{
+    Arc, BTreeMap, BTreeSet, Deserialize, Document, NodeId, Serialize, cmd, components, file_access, guides, library, rotation_origin, vectoredit,
+};
 
 /// One undo step.
 #[derive(Clone, Debug)]

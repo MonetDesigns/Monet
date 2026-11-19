@@ -401,9 +401,7 @@ fn polyline_path(pts: &[Point]) -> BezPath {
 /// How far the worst sample sits from `path`.
 fn stray(path: &BezPath, pts: &[Point]) -> f64 {
     let segs: Vec<_> = path.segments().collect();
-    pts.iter()
-        .map(|p| segs.iter().map(|s| s.nearest(*p, 1e-6).distance_sq).fold(f64::INFINITY, f64::min).sqrt())
-        .fold(0.0, f64::max)
+    pts.iter().map(|p| segs.iter().map(|s| s.nearest(*p, 1e-6).distance_sq).fold(f64::INFINITY, f64::min).sqrt()).fold(0.0, f64::max)
 }
 
 fn counts(path: &BezPath) -> (usize, usize) {
@@ -463,11 +461,15 @@ fn a_stroke_that_turns_back_does_not_shoot_past() {
 fn a_fitted_stroke_starts_and_ends_on_its_samples() {
     let pts = circle_samples(120, 0.0);
     let path = fit_polyline(&pts, 0.75).unwrap_or_default();
-    let ends: Vec<Point> = path.elements().iter().filter_map(|el| match el {
-        kurbo::PathEl::MoveTo(p) | kurbo::PathEl::LineTo(p) => Some(*p),
-        kurbo::PathEl::CurveTo(_, _, p) => Some(*p),
-        _ => None,
-    }).collect();
+    let ends: Vec<Point> = path
+        .elements()
+        .iter()
+        .filter_map(|el| match el {
+            kurbo::PathEl::MoveTo(p) | kurbo::PathEl::LineTo(p) => Some(*p),
+            kurbo::PathEl::CurveTo(_, _, p) => Some(*p),
+            _ => None,
+        })
+        .collect();
     assert_eq!(ends.first(), pts.first(), "the stroke must start where it was drawn");
     let last = ends.last().copied().unwrap_or_default();
     let want = *pts.last().unwrap_or(&Point::ZERO);

@@ -5,7 +5,6 @@
 //! Glue between the Motion state machine and the root view: drain actions each frame, advance
 //! playback, build the inspector / timeline / clip window from reusable widgets.
 
-
 use figcraft_doc::Document;
 use gpui::{AnyElement, Context, Div, IntoElement, Stateful, Window};
 
@@ -66,11 +65,7 @@ impl CanvasView {
         // 播放态不设置：播放时预览文档每帧重建，若把它交给命中/拖拽/缩放/旋转工具，
         // 手势起点与后续帧的几何基准会一直变，表现为「图形乱跑」。
         // 写操作不受影响——引擎的 `display_doc` 只用于命中几何，编辑仍走 `ds.doc`。
-        self.app.session.display_doc = if self.motion && !self.motion_ui.playing {
-            self.motion_ui.preview_doc.clone()
-        } else {
-            None
-        };
+        self.app.session.display_doc = if self.motion && !self.motion_ui.playing { self.motion_ui.preview_doc.clone() } else { None };
         // 画布这一帧显示的文档：渲染请求与叠加层都读它，ds.doc 不再被临时替换。
         self.app.display_doc = self.motion_ui.preview_doc.clone();
     }

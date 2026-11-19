@@ -9,7 +9,7 @@ use figcraft_doc::proto::{Direction, KeyMods, Trigger};
 use figcraft_doc::{Document, NodeId};
 
 use super::layout::{Geom, Place};
-use super::scroll::{clamp_scroll, rubber_band, scrollers_at, units_per_point, COAST_MIN, DECAY_DRAG, DECAY_WHEEL, RUBBER_PTS};
+use super::scroll::{COAST_MIN, DECAY_DRAG, DECAY_WHEEL, RUBBER_PTS, clamp_scroll, rubber_band, scrollers_at, units_per_point};
 use super::{Fling, PresentState, Scroller};
 
 /// 一帧内收到的输入事件（窗口坐标）。
@@ -45,20 +45,15 @@ fn mods_empty(m: KeyMods) -> bool {
 
 /// 演示层是否希望消费这个按键（原型触发器优先，其次播放器自己的键）。
 pub fn wants_key(doc: &Document, root: NodeId, key: &str, mods: KeyMods, pane: bool) -> bool {
-    let used = doc.subtree(root).into_iter().any(|id| {
-        doc.node(id)
-            .is_some_and(|n| n.interactions.iter().any(|it| it.trigger.fires_on_key(key, mods)))
-    });
+    let used =
+        doc.subtree(root).into_iter().any(|id| doc.node(id).is_some_and(|n| n.interactions.iter().any(|it| it.trigger.fires_on_key(key, mods))));
     if used {
         return true;
     }
     if !mods_empty(mods) {
         return false;
     }
-    matches!(
-        key.to_ascii_lowercase().as_str(),
-        "r" | "arrowleft" | "arrowright" | "space" | "n"
-    ) || (key.eq_ignore_ascii_case("z") && !pane)
+    matches!(key.to_ascii_lowercase().as_str(), "r" | "arrowleft" | "arrowright" | "space" | "n") || (key.eq_ignore_ascii_case("z") && !pane)
 }
 
 fn find_trigger(doc: &Document, id: NodeId, want: impl Fn(&Trigger) -> bool) -> Option<usize> {
@@ -77,11 +72,7 @@ fn layer_at(doc: &Document, root: NodeId, place: &Place, q: (f64, f64)) -> Optio
         }
         if let Some(b) = doc.world_bounds(id) {
             let r = place.rect(b);
-            if q.0 >= f64::from(r.x)
-                && q.0 <= f64::from(r.x + r.w)
-                && q.1 >= f64::from(r.y)
-                && q.1 <= f64::from(r.y + r.h)
-            {
+            if q.0 >= f64::from(r.x) && q.0 <= f64::from(r.x + r.w) && q.1 >= f64::from(r.y) && q.1 <= f64::from(r.y + r.h) {
                 hit = Some(id);
             }
         }
@@ -225,10 +216,7 @@ pub fn tick(st: &mut PresentState, geom: Option<&Geom>, now: f64) {
     st.down = down_now;
     st.last_move_at = last_move_at;
     st.inside = pos.is_some_and(|q| {
-        q.0 >= f64::from(g.area.x)
-            && q.0 <= f64::from(g.area.x + g.area.w)
-            && q.1 >= f64::from(g.area.y)
-            && q.1 <= f64::from(g.area.y + g.area.h)
+        q.0 >= f64::from(g.area.x) && q.0 <= f64::from(g.area.x + g.area.w) && q.1 >= f64::from(g.area.y) && q.1 <= f64::from(g.area.y + g.area.h)
     }) || st.press.is_some();
     st.cursor = CURSOR_DEFAULT;
     follow_drag(st, pos, down_now);
@@ -242,11 +230,8 @@ pub fn tick(st: &mut PresentState, geom: Option<&Geom>, now: f64) {
     // 响应式原型：被演示画框按设备屏幕 / 可用区改尺寸（eGUI `respond_to`，在 layout 里做）。
     let base = st.laid.clone().unwrap_or_else(|| disp.clone());
     let settings = super::scroll::page_settings(&base, st.current);
-    let fit = settings.responsive.then(|| {
-        settings
-            .device()
-            .map_or((f64::from(g.area.w.round()), f64::from(g.area.h.round())), |d| (d.width, d.height))
-    });
+    let fit =
+        settings.responsive.then(|| settings.device().map_or((f64::from(g.area.w.round()), f64::from(g.area.h.round())), |d| (d.width, d.height)));
     st.respond_to(fit);
     let base = st.laid.clone().unwrap_or(base);
     let scope = disp.top_level_frame(root).unwrap_or(root);
@@ -292,10 +277,7 @@ pub fn tick(st: &mut PresentState, geom: Option<&Geom>, now: f64) {
         && let Some(q) = pos
         && st.inside
     {
-        let mut targets: Vec<Scroller> = scrollers_at(st, &base, &disp, root, place, q)
-            .into_iter()
-            .map(Scroller::Frame)
-            .collect();
+        let mut targets: Vec<Scroller> = scrollers_at(st, &base, &disp, root, place, q).into_iter().map(Scroller::Frame).collect();
         if st.pan_range != (0.0, 0.0) {
             targets.push(Scroller::View);
         }
@@ -310,8 +292,7 @@ pub fn tick(st: &mut PresentState, geom: Option<&Geom>, now: f64) {
     st.last_input = now;
 
     // 指针在 hotspot 上：手型光标。
-    let hits: Vec<(NodeId, super::layout::RectPx)> =
-        hot.iter().rev().filter(|(_, r)| pos.is_some_and(|q| r.contains(q))).copied().collect();
+    let hits: Vec<(NodeId, super::layout::RectPx)> = hot.iter().rev().filter(|(_, r)| pos.is_some_and(|q| r.contains(q))).copied().collect();
     if !hits.is_empty() {
         st.cursor = CURSOR_POINTER;
     }
@@ -324,8 +305,7 @@ pub fn tick(st: &mut PresentState, geom: Option<&Geom>, now: f64) {
 
     // 进入 / 离开 / 悬停。
     let ids: Vec<NodeId> = hits.iter().map(|h| h.0).collect();
-    let entered: Vec<(NodeId, super::layout::RectPx)> =
-        hits.iter().filter(|(id, _)| !st.hovered.contains(id)).copied().collect();
+    let entered: Vec<(NodeId, super::layout::RectPx)> = hits.iter().filter(|(id, _)| !st.hovered.contains(id)).copied().collect();
     let left: Vec<NodeId> = st.hovered.iter().filter(|id| !ids.contains(id)).copied().collect();
     st.hovered = ids;
     for id in left {
@@ -360,11 +340,8 @@ pub fn tick(st: &mut PresentState, geom: Option<&Geom>, now: f64) {
         st.dragged = false;
         st.wheel = None;
         // 按下会抓住惯性；只有还在越界回弹中的那一个继续弹（eGUI `overscrolled`）。
-        let overscrolled = |f: &Fling| {
-            st.design
-                .as_ref()
-                .is_some_and(|b| clamp_scroll(st.offset(f.target), st.limits(b, f.target)) != st.offset(f.target))
-        };
+        let overscrolled =
+            |f: &Fling| st.design.as_ref().is_some_and(|b| clamp_scroll(st.offset(f.target), st.limits(b, f.target)) != st.offset(f.target));
         st.fling = st.fling.filter(overscrolled);
         // 点在最上层覆盖层外：按需关闭它。
         if let (Some((_, _, orect)), Some(o), Some(q)) = (g.overlays.last(), st.overlays.last(), pos)
@@ -395,13 +372,10 @@ pub fn tick(st: &mut PresentState, geom: Option<&Geom>, now: f64) {
         && (start.0 - q.0).hypot(start.1 - q.1) > 6.0
     {
         st.dragged = true;
-        let at_start: Vec<(NodeId, super::layout::RectPx)> =
-            hot.iter().rev().filter(|(_, r)| r.contains(start)).copied().collect();
+        let at_start: Vec<(NodeId, super::layout::RectPx)> = hot.iter().rev().filter(|(_, r)| r.contains(start)).copied().collect();
         let d = (q.0 - start.0, q.1 - start.1);
         let drags = |id: NodeId| {
-            evaluated.node(id)?.interactions.iter().position(|it| {
-                it.trigger == Trigger::OnDrag && it.transition.accepts_drag(d.0 as f32, d.1 as f32)
-            })
+            evaluated.node(id)?.interactions.iter().position(|it| it.trigger == Trigger::OnDrag && it.transition.accepts_drag(d.0 as f32, d.1 as f32))
         };
         if let Some((id, k, r)) = at_start.iter().find_map(|(id, r)| drags(*id).map(|k| (*id, k, *r))) {
             let it = evaluated.node(id).and_then(|n| n.interactions.get(k)).cloned();
@@ -411,11 +385,7 @@ pub fn tick(st: &mut PresentState, geom: Option<&Geom>, now: f64) {
                 let (dir, len) = it.as_ref().map_or(((0.0, 0.0), 1.0), |it| {
                     let (x, y) = it.transition.direction().map_or_else(
                         || {
-                            if d.0.abs() >= d.1.abs() {
-                                (d.0.signum(), 0.0)
-                            } else {
-                                (0.0, d.1.signum())
-                            }
+                            if d.0.abs() >= d.1.abs() { (d.0.signum(), 0.0) } else { (0.0, d.1.signum()) }
                         },
                         direction_vec,
                     );
@@ -470,10 +440,7 @@ pub fn tick(st: &mut PresentState, geom: Option<&Geom>, now: f64) {
 
     // 按键：原型触发器优先，其次播放器自己的键。
     for (key, mods) in &keys {
-        let found = evaluated
-            .subtree(root)
-            .into_iter()
-            .find_map(|id| find_trigger(&evaluated, id, |t| t.fires_on_key(key, *mods)).map(|k| (id, k)));
+        let found = evaluated.subtree(root).into_iter().find_map(|id| find_trigger(&evaluated, id, |t| t.fires_on_key(key, *mods)).map(|k| (id, k)));
         if let Some((id, k)) = found {
             if st.fire_node(id, k, now) {
                 return;

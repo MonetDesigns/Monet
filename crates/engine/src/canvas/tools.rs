@@ -189,10 +189,7 @@ impl ToolId {
     }
     /// The tools of a board's toolbar (a design file's toolbar has the others).
     pub fn on_boards(self) -> bool {
-        matches!(
-            self,
-            ToolId::Sticky | ToolId::BoardShape | ToolId::Connector | ToolId::Eraser | ToolId::Stamp
-        )
+        matches!(self, ToolId::Sticky | ToolId::BoardShape | ToolId::Connector | ToolId::Eraser | ToolId::Stamp)
     }
     /// The tool's key (from [`crate::keymap`]; empty when it has none).
     pub fn shortcut(self) -> &'static str {

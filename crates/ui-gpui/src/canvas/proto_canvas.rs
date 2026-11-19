@@ -174,12 +174,7 @@ fn arrow(painter: &mut Painter, pts: &[Pos2; 4], col: Color32) {
     let raw = pts[3] - bezier(pts, 0.9);
     let dir = if raw.x.is_finite() && raw.y.is_finite() && raw.length() > 0.5 { raw.normalized() } else { vec2(1.0, 0.0) };
     let n = vec2(-dir.y, dir.x);
-    painter.add_shape(
-        vec![tip, tip - dir * 8.0 + n * 4.5, tip - dir * 8.0 - n * 4.5],
-        true,
-        col,
-        Stroke::NONE,
-    );
+    painter.add_shape(vec![tip, tip - dir * 8.0 + n * 4.5, tip - dir * 8.0 - n * 4.5], true, col, Stroke::NONE);
 }
 
 fn plus_handle(painter: &mut Painter, c: Pos2, hot: bool, accent: Color32) {
@@ -416,11 +411,7 @@ fn ghost_move(app: &mut CanvasApp, p: Pos2) {
         return;
     }
     let at = app.to_page(p);
-    let o = [
-        (d.start[0] + at.x - d.grab[0]).round(),
-        (d.start[1] + at.y - d.grab[1]).round(),
-    ]
-    .map(|v| v.clamp(-100_000.0, 100_000.0));
+    let o = [(d.start[0] + at.x - d.grab[0]).round(), (d.start[1] + at.y - d.grab[1]).round()].map(|v| v.clamp(-100_000.0, 100_000.0));
     if o != d.last {
         let mut action = d.action.clone();
         if let Action::OpenOverlay { offset, .. } = &mut action {
@@ -463,10 +454,7 @@ mod tests {
         let actions = vec![
             Action::Back,
             Action::Conditional {
-                blocks: vec![ConditionalBlock {
-                    condition: Default::default(),
-                    actions: vec![Action::CloseOverlay, overlay([4.0, 6.0])],
-                }],
+                blocks: vec![ConditionalBlock { condition: Default::default(), actions: vec![Action::CloseOverlay, overlay([4.0, 6.0])] }],
             },
         ];
         let mut path = Vec::new();

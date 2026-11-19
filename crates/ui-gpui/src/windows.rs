@@ -8,7 +8,7 @@
 //! lookups use the window the user is actually interacting with.
 
 use crate::CanvasView;
-use gpui::{AnyWindowHandle, App, Bounds, Context, Entity, Point, Pixels, SharedString, WindowBounds, WindowId, WindowOptions, point, size, px};
+use gpui::{AnyWindowHandle, App, Bounds, Context, Entity, Pixels, Point, SharedString, WindowBounds, WindowId, WindowOptions, point, px, size};
 use serde_json::{Value, json};
 use std::cell::RefCell;
 
@@ -113,11 +113,7 @@ impl Windows {
         if id == 0 {
             return None;
         }
-        self.list
-            .iter()
-            .find(|w| w.id == id)
-            .and_then(|w| w.active)
-            .or_else(|| self.pending.iter().find(|p| p.id == id).map(|p| p.uid))
+        self.list.iter().find(|w| w.id == id).and_then(|w| w.active).or_else(|| self.pending.iter().find(|p| p.id == id).map(|p| p.uid))
     }
 
     /// The window drawing now shows this file.
@@ -330,12 +326,8 @@ pub(crate) fn requests(
                 // （它只借一份演示播放器），合并别的文件不能把它关掉（CodeRabbit PR#32）。
                 // 关窗会租借 `CanvasView`，必须在 `Windows` 借用结束后 defer 执行，否则重入
                 // panic（CodeRabbit PR#30/#31）。
-                let empties: Vec<_> = w
-                    .list
-                    .iter()
-                    .filter(|e| e.docs.is_empty() && e.borrowed.is_none())
-                    .filter_map(|e| w.entry(e.id).map(|en| en.handle))
-                    .collect();
+                let empties: Vec<_> =
+                    w.list.iter().filter(|e| e.docs.is_empty() && e.borrowed.is_none()).filter_map(|e| w.entry(e.id).map(|en| en.handle)).collect();
                 w.list.retain(|e| !e.docs.is_empty() || e.borrowed.is_some());
                 w.focused = 0;
                 cx.defer(move |cx| {
@@ -373,14 +365,7 @@ pub(crate) fn list(windows: &Windows, cx: &App, root: &Entity<CanvasView>) -> Va
             windows.entry(id).and_then(|w| w.active)
         }
     };
-    let names = root
-        .read(cx)
-        .app
-        .session
-        .docs
-        .iter()
-        .map(|d| (d.uid, d.doc.name.to_string()))
-        .collect::<Vec<_>>();
+    let names = root.read(cx).app.session.docs.iter().map(|d| (d.uid, d.doc.name.to_string())).collect::<Vec<_>>();
     let ids = std::iter::once(0).chain(windows.list.iter().map(|w| w.id));
     Value::Array(
         ids.map(|id| {

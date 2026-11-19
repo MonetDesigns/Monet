@@ -61,9 +61,7 @@ pub fn classify(is_text: bool, runs: &[TextRun]) -> ContrastCategory {
     if !is_text {
         return ContrastCategory::Graphics;
     }
-    if !runs.is_empty()
-        && runs.iter().all(|s| s.font_size >= 24.0 || (s.font_size >= 19.0 && s.font_weight >= 700))
-    {
+    if !runs.is_empty() && runs.iter().all(|s| s.font_size >= 24.0 || (s.font_size >= 19.0 && s.font_weight >= 700)) {
         ContrastCategory::LargeText
     } else {
         ContrastCategory::NormalText
@@ -100,12 +98,7 @@ pub fn resolve(level: ContrastLevel, categories: &[ContrastCategory]) -> Option<
 /// always measures the colour you actually see, so a 50%-alpha foreground is blended first.
 pub fn composite(fg: Color, bg: Color) -> Color {
     let a = fg.a;
-    Color::new(
-        fg.r * a + bg.r * (1.0 - a),
-        fg.g * a + bg.g * (1.0 - a),
-        fg.b * a + bg.b * (1.0 - a),
-        1.0,
-    )
+    Color::new(fg.r * a + bg.r * (1.0 - a), fg.g * a + bg.g * (1.0 - a), fg.b * a + bg.b * (1.0 - a), 1.0)
 }
 
 fn round2(v: f32) -> f32 {
@@ -129,11 +122,7 @@ pub struct ContrastResult {
 /// `Ef(g)`: ratio + pass flags for `fg` over `bg`, with the AA/AAA minima supplied by the table.
 pub fn measure(fg: Color, bg: Color, aa_min: f32, aaa_min: Option<f32>) -> ContrastResult {
     let ratio = contrast_ratio(fg, bg);
-    ContrastResult {
-        ratio,
-        aa_pass: ratio >= aa_min,
-        aaa_pass: aaa_min.map(|m| ratio >= m),
-    }
+    ContrastResult { ratio, aa_pass: ratio >= aa_min, aaa_pass: aaa_min.map(|m| ratio >= m) }
 }
 
 // ── inverse boundary (module 245726 `o/u/d`) ────────────────────────────────────────────────
@@ -143,16 +132,8 @@ pub fn measure(fg: Color, bg: Color, aa_min: f32, aaa_min: Option<f32>) -> Contr
 /// `L = ratio·(Lbg + 0.05) − 0.05` (lighter) or `(Lbg + 0.05)/ratio − 0.05` (darker).
 pub fn boundary_luminance(bg: Color, ratio: f32, lighter: bool) -> Option<f32> {
     let lbg = bg.luminance();
-    let l = if lighter {
-        ratio * (lbg + 0.05) - 0.05
-    } else {
-        (lbg + 0.05) / ratio - 0.05
-    };
-    if l.is_finite() && (0.0..=1.0).contains(&l) {
-        Some(l)
-    } else {
-        None
-    }
+    let l = if lighter { ratio * (lbg + 0.05) - 0.05 } else { (lbg + 0.05) / ratio - 0.05 };
+    if l.is_finite() && (0.0..=1.0).contains(&l) { Some(l) } else { None }
 }
 
 /// Binary-search the HSV brightness `v` (at fixed hue `h`, saturation `s`) whose fully-opaque
@@ -215,19 +196,11 @@ pub fn boundary_line(bg: Color, ratio: f32, hue: f32) -> (Vec<BoundaryPoint>, Ve
 
 // ── CIEDE2000 (`_W/x`, module 640649) ───────────────────────────────────────────────────────
 
-const XYZ: [[f64; 3]; 3] = [
-    [0.4124, 0.3576, 0.1805],
-    [0.2126, 0.7152, 0.0722],
-    [0.0193, 0.1192, 0.9505],
-];
+const XYZ: [[f64; 3]; 3] = [[0.4124, 0.3576, 0.1805], [0.2126, 0.7152, 0.0722], [0.0193, 0.1192, 0.9505]];
 const WHITE: [f64; 3] = [0.95047, 1.0, 1.08883];
 
 fn srgb_linear(c: f64) -> f64 {
-    if c <= 0.04045 {
-        c / 12.92
-    } else {
-        ((c + 0.055) / 1.055).powf(2.4)
-    }
+    if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
 }
 
 /// sRGB (composited over white if translucent) → CIE L*a*b* (D65), the input to ΔE2000.
@@ -239,11 +212,7 @@ pub fn lab(c: Color) -> [f64; 3] {
         xyz[i] = XYZ[i][0] * rgb[0] + XYZ[i][1] * rgb[1] + XYZ[i][2] * rgb[2];
     }
     let f = |t: f64| {
-        if t > 216.0 / 24389.0 {
-            t.cbrt()
-        } else {
-            (24389.0 / 27.0 * t + 16.0) / 116.0
-        }
+        if t > 216.0 / 24389.0 { t.cbrt() } else { (24389.0 / 27.0 * t + 16.0) / 116.0 }
     };
     let fx = f(xyz[0] / WHITE[0]);
     let fy = f(xyz[1] / WHITE[1]);
@@ -290,8 +259,8 @@ pub fn delta_e(c1: Color, c2: Color) -> f64 {
     } else {
         (h1p + h2p - 360.0) * 0.5
     };
-    let t = 1.0 - 0.17 * (h_bar_p - 30.0).cos() + 0.24 * (2.0 * h_bar_p).cos() + 0.32 * (3.0 * h_bar_p + 6.0).cos()
-        - 0.20 * (4.0 * h_bar_p - 63.0).cos();
+    let t =
+        1.0 - 0.17 * (h_bar_p - 30.0).cos() + 0.24 * (2.0 * h_bar_p).cos() + 0.32 * (3.0 * h_bar_p + 6.0).cos() - 0.20 * (4.0 * h_bar_p - 63.0).cos();
     let dtheta = 30.0 * (-(((h_bar_p - 275.0) / 25.0).powi(2))).exp();
     let rc = 2.0 * (c_bar_p.powi(7) / (c_bar_p.powi(7) + 25.0_f64.powi(7))).sqrt();
     let sl = 1.0 + (0.015 * (l_bar - 50.0).powi(2)) / (20.0 + (l_bar - 50.0).powi(2)).sqrt();
@@ -363,10 +332,7 @@ mod contrast_tests {
     fn level_picker_jj() {
         assert_eq!(resolve(ContrastLevel::AA, &[ContrastCategory::Graphics]), Some((ContrastCategory::Graphics, Some(3.0))));
         assert_eq!(resolve(ContrastLevel::AAA, &[ContrastCategory::Graphics]), Some((ContrastCategory::Graphics, None)));
-        assert_eq!(
-            resolve(ContrastLevel::AA, &[ContrastCategory::NormalText, ContrastCategory::LargeText]),
-            None
-        );
+        assert_eq!(resolve(ContrastLevel::AA, &[ContrastCategory::NormalText, ContrastCategory::LargeText]), None);
         assert_eq!(
             resolve(ContrastLevel::AAA, &[ContrastCategory::LargeText, ContrastCategory::Graphics]),
             Some((ContrastCategory::Mixed, Some(4.5)))

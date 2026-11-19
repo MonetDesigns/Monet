@@ -36,8 +36,8 @@ use figcraft_engine::components::default_variant;
 use figcraft_engine::keymap::{GESTURES, Group, KEYS, Platform};
 use figcraft_i18n::tr;
 use gpui::{
-    App, Bounds, ClickEvent, Div, Entity, Hsla, ImageSource, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Point,
-    RenderImage, SharedString, Window, canvas, div, img, prelude::*, px, rgb,
+    App, Bounds, ClickEvent, Div, Entity, Hsla, ImageSource, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Point, RenderImage,
+    SharedString, Window, canvas, div, img, prelude::*, px, rgb,
 };
 use serde_json::{Value, json};
 use std::cell::RefCell;
@@ -769,7 +769,8 @@ fn compare_body(app: &CanvasApp, cmds: &Cmds, state: &ExtraState, id: Option<fig
 
     let mut body = div().flex().flex_col().w_full().h_full().gap(pt(8.0)).p(pt(12.0));
     let summary = format!("{} · {} added · {} removed · {} modified", cmp.name, cmp.added, cmp.removed, cmp.modified);
-    body = body.child(div().text_size(pt(12.0)).font_weight(crate::panels::UI_FONT_REGULAR).text_color(rgba(t.text)).child(SharedString::from(summary)));
+    body =
+        body.child(div().text_size(pt(12.0)).font_weight(crate::panels::UI_FONT_REGULAR).text_color(rgba(t.text)).child(SharedString::from(summary)));
     if let Some(v) = &chosen {
         if let Some(name) = ds.versions.iter().find(|x| &x.id == v).map(|x| x.name.clone()) {
             body = body
@@ -1183,9 +1184,9 @@ fn style_badge(s: &Style) -> Div {
         }
         StyleKind::Text { .. } => boxed(IconButton::new(Icon::Text).size(14.0)),
         StyleKind::Grid { .. } => boxed(IconButton::new(Icon::ViewGrid).size(14.0)),
-        StyleKind::Effect { .. } => {
-            boxed(div().text_size(pt(9.0)).font_weight(crate::panels::UI_FONT_REGULAR).text_color(rgba(t.text_secondary)).child(SharedString::from("fx")))
-        }
+        StyleKind::Effect { .. } => boxed(
+            div().text_size(pt(9.0)).font_weight(crate::panels::UI_FONT_REGULAR).text_color(rgba(t.text_secondary)).child(SharedString::from("fx")),
+        ),
     }
 }
 

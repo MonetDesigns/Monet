@@ -10,7 +10,7 @@
 // so `figcraft-ui-gpui` builds on Linux/macOS (a11y::install simply returns None there).
 #[cfg(windows)]
 mod win {
-    use accesskit::{ActionHandler, ActivationHandler, ActionRequest, TreeUpdate};
+    use accesskit::{ActionHandler, ActionRequest, ActivationHandler, TreeUpdate};
     use accesskit_windows::{HWND, SubclassingAdapter};
     use gpui::Window;
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -58,10 +58,7 @@ mod win {
         /// Show the window now that `WM_GETOBJECT` is intercepted.
         pub(crate) fn show(&self) {
             unsafe {
-                let _ = windows::Win32::UI::WindowsAndMessaging::ShowWindow(
-                    self.hwnd,
-                    windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL,
-                );
+                let _ = windows::Win32::UI::WindowsAndMessaging::ShowWindow(self.hwnd, windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL);
             }
         }
 
@@ -90,8 +87,12 @@ pub(crate) struct PlatformA11y;
 
 #[cfg(not(windows))]
 impl PlatformA11y {
-    pub(crate) fn install(_window: &gpui::Window) -> Option<Self> { None }
+    pub(crate) fn install(_window: &gpui::Window) -> Option<Self> {
+        None
+    }
     pub(crate) fn show(&self) {}
     pub(crate) fn update(&mut self, _update: accesskit::TreeUpdate) {}
-    pub(crate) fn drain(&self) -> Vec<accesskit::ActionRequest> { Vec::new() }
+    pub(crate) fn drain(&self) -> Vec<accesskit::ActionRequest> {
+        Vec::new()
+    }
 }

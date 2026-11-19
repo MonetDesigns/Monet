@@ -16,13 +16,14 @@ use crate::panels::right::virtual_list::{VirtualListScrollHandle, v_virtual_list
 use crate::panels::{Cmd, Cmds};
 use crate::widgets::icon::paint as paint_icon;
 use crate::widgets::{
-    Checkbox, Icon, IconButton, PopoverOpen, Slot, Surface, TextField, number_field, popover_window, pt, rgba, search_field, text_field, title_text, tokens,
+    Checkbox, Icon, IconButton, PopoverOpen, Slot, Surface, TextField, number_field, popover_window, pt, rgba, search_field, text_field, title_text,
+    tokens,
 };
 use figcraft_i18n::tr;
 use figcraft_i18n::tr_noop;
 use gpui::{
-    AnyElement, App, Bounds, CursorStyle, Div, Entity, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle, SharedString, Size,
-    Stateful, Window, div, point, prelude::*, px, size,
+    AnyElement, App, Bounds, CursorStyle, Div, Entity, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle,
+    SharedString, Size, Stateful, Window, div, point, prelude::*, px, size,
 };
 use serde_json::{Value, json};
 use std::cell::{Cell, RefCell};
@@ -484,8 +485,14 @@ enum RowItem {
     Gap,
     /// 分组标题。`first` 是该组第一个变量：拖拽落在这里 = 移到该组**上方**（组外），
     /// 提交时用它当 `before` 并显式 `group: ""`。
-    GroupHeader { name: String, first: String },
-    Row { index: usize, row: VarRow },
+    GroupHeader {
+        name: String,
+        first: String,
+    },
+    Row {
+        index: usize,
+        row: VarRow,
+    },
 }
 
 /// 拖拽行里的分组标题锚点前缀：`\u{1}g\u{1}{组名}\u{1}{组首变量 id}`。
@@ -686,10 +693,7 @@ fn group_header_div(name: &str) -> Div {
 /// 行左右各 8 + 卡片外框左右各 [`crate::menu_metrics::MENU_PAD`]。
 /// 通用 `Menu` 只按**左缘**定位；需要「右缘对齐触发按钮」时先用它反推锚点左缘。
 fn menu_fit_width(window: &Window, items: &[MenuItem]) -> f32 {
-    let text_w = items
-        .iter()
-        .map(|i| crate::bidi::measure(window, &i.label, 11.0))
-        .fold(0.0_f32, f32::max);
+    let text_w = items.iter().map(|i| crate::bidi::measure(window, &i.label, 11.0)).fold(0.0_f32, f32::max);
     (text_w + 16.0 + 2.0 * crate::menu_metrics::MENU_PAD).ceil()
 }
 
@@ -843,10 +847,7 @@ impl VariablesEditor {
                             })
                             .collect();
                         if !steps.is_empty() {
-                            c.push(Cmd {
-                                id: "command.batch",
-                                params: Some(json!({ "label": tr("Rename group"), "commands": steps })),
-                            });
+                            c.push(Cmd { id: "command.batch", params: Some(json!({ "label": tr("Rename group"), "commands": steps })) });
                         }
                     }
                 }
@@ -1136,10 +1137,7 @@ impl VariablesEditor {
         if steps.is_empty() {
             return;
         }
-        cmds.push(Cmd {
-            id: "command.batch",
-            params: Some(json!({ "label": tr("Paste column"), "commands": steps })),
-        });
+        cmds.push(Cmd { id: "command.batch", params: Some(json!({ "label": tr("Paste column"), "commands": steps })) });
     }
 
     fn push(&self, id: &'static str, params: Value) {
@@ -1189,13 +1187,8 @@ impl VariablesEditor {
         // 一级组在前，二级组紧跟其父组，三级组再跟在二级组后面（用户 2026-11-17）。
         // 新建变量没有组、引擎追加在集合末尾，以前会落到某个组后面，看起来像「进了组」。
         list.sort_by(|a, b| {
-            let key = |r: &VarRow| -> (u8, Vec<usize>) {
-                if r.group.is_empty() {
-                    (0, Vec::new())
-                } else {
-                    (1, group_rank(&r.group, &st.group_order))
-                }
-            };
+            let key =
+                |r: &VarRow| -> (u8, Vec<usize>) { if r.group.is_empty() { (0, Vec::new()) } else { (1, group_rank(&r.group, &st.group_order)) } };
             // `sort_by` 是稳定排序：同 key 保持引擎里的原始顺序。
             key(a).cmp(&key(b))
         });
@@ -1243,9 +1236,7 @@ impl VariablesEditor {
                 }
             }
             if let Some(input) = self.row_caches.borrow().collection_rename_input.clone() {
-                if s.rename_collection.is_some()
-                    && input.update(cx, |f, cx| f.poll_active(window, cx)) == crate::inline_input::EditState::Ended
-                {
+                if s.rename_collection.is_some() && input.update(cx, |f, cx| f.poll_active(window, cx)) == crate::inline_input::EditState::Ended {
                     s.rename_collection = None;
                 }
             }
@@ -1672,13 +1663,11 @@ impl VariablesEditor {
                     inner.child(div().flex_1().min_w(pt(0.0)).child(c.name.clone()))
                 }
             } else {
-                inner.child(
-                    div()
-                        .flex_1()
-                        .min_w(pt(0.0))
-                        .overflow_hidden()
-                        .child(crate::inline_input::static_text(c.name.clone().into(), gpui::Hsla::from(rgba(t.text)), 24.0)),
-                )
+                inner.child(div().flex_1().min_w(pt(0.0)).overflow_hidden().child(crate::inline_input::static_text(
+                    c.name.clone().into(),
+                    gpui::Hsla::from(rgba(t.text)),
+                    24.0,
+                )))
             };
             inner = inner.child(div().text_size(pt(11.0)).text_color(rgba(t.text_tertiary)).child(format!("{}", c.rows.len())));
             let coll_bounds = self.row_caches.borrow().drag_bounds.clone();
@@ -1869,8 +1858,7 @@ impl VariablesEditor {
             let ord = st.borrow().group_order.clone();
             groups.sort_by_key(|g| group_rank(g, &ord));
         }
-        let visible_groups: Vec<String> =
-            groups.iter().filter(|g| !collapsed.iter().any(|c| g.starts_with(&format!("{c}/")))).cloned().collect();
+        let visible_groups: Vec<String> = groups.iter().filter(|g| !collapsed.iter().any(|c| g.starts_with(&format!("{c}/")))).cloned().collect();
         let group_ids: Vec<String> = visible_groups.clone();
         // 行快照：虚拟列表的渲染闭包必须是 'static，只能拿 owned / Rc 数据。
         #[derive(Clone)]
@@ -1890,13 +1878,7 @@ impl VariablesEditor {
                 let prefix = format!("{g}/");
                 let members: Vec<String> = coll_snap
                     .as_ref()
-                    .map(|c| {
-                        c.rows
-                            .iter()
-                            .filter(|r| r.group == *g || r.group.starts_with(&prefix))
-                            .map(|r| r.id.clone())
-                            .collect()
-                    })
+                    .map(|c| c.rows.iter().filter(|r| r.group == *g || r.group.starts_with(&prefix)).map(|r| r.id.clone()).collect())
                     .unwrap_or_default();
                 GroupRow {
                     full: g.clone(),
@@ -1927,8 +1909,7 @@ impl VariablesEditor {
             })
             .flatten();
         let sel_run = Rc::new(sel_run);
-        let item_sizes: Rc<Vec<Size<Pixels>>> =
-            Rc::new((0..row_count).map(|_| Size::new(px(sidebar_w), px(SIDE_ROW_H))).collect());
+        let item_sizes: Rc<Vec<Size<Pixels>>> = Rc::new((0..row_count).map(|_| Size::new(px(sidebar_w), px(SIDE_ROW_H))).collect());
         let group_rows = Rc::new(group_rows);
         let group_ids = Rc::new(group_ids);
         let caches = self.row_caches.clone();
@@ -2043,7 +2024,8 @@ impl VariablesEditor {
                                 chev_wake.wake();
                             })
                             .child(if gr.has_children {
-                                paint_icon(if gr.is_collapsed { Icon::ChevronRight } else { Icon::ChevronDown }, rgba(t.text_secondary), 12.0).into_any_element()
+                                paint_icon(if gr.is_collapsed { Icon::ChevronRight } else { Icon::ChevronDown }, rgba(t.text_secondary), 12.0)
+                                    .into_any_element()
                             } else {
                                 div().into_any_element()
                             }),
@@ -2067,13 +2049,11 @@ impl VariablesEditor {
                             inner.child(gr.short.clone())
                         }
                     } else {
-                        inner.child(
-                            div().flex_1().min_w(pt(0.0)).overflow_hidden().child(crate::inline_input::static_text(
-                                gr.short.clone().into(),
-                                gpui::Hsla::from(rgba(t.text)),
-                                24.0,
-                            )),
-                        )
+                        inner.child(div().flex_1().min_w(pt(0.0)).overflow_hidden().child(crate::inline_input::static_text(
+                            gr.short.clone().into(),
+                            gpui::Hsla::from(rgba(t.text)),
+                            24.0,
+                        )))
                     };
                     inner = inner.child(div().pr(pt(8.0)).text_size(pt(10.0)).text_color(rgba(t.text_tertiary)).child(format!("{}", gr.count)));
                     let g_toggle = g.clone();
@@ -2149,17 +2129,29 @@ impl VariablesEditor {
         // ⑥ 侧栏右缘拖动柄（egui `vars_sidebar_edge`，180..420）。
         // 热区必须**以分隔线为中心左右各 3pt**：原来 `right(0)` 让 6pt 全落在线的左侧，
         // 指针在线的右边（表格一侧）拖不动（用户 2026-11-17）。
-        col.child(div().absolute().right(pt(-3.0)).top(pt(0.0)).w(pt(6.0)).h_full().cursor(CursorStyle::ResizeLeftRight).on_mouse_down(MouseButton::Left, {
-            let st = st.clone();
-            move |e: &MouseDownEvent, _, _| {
-                let mut s = st.borrow_mut();
-                s.sidebar_resize = Some((f32::from(e.position.x), s.sidebar_w));
-            }
-        }))
+        col.child(div().absolute().right(pt(-3.0)).top(pt(0.0)).w(pt(6.0)).h_full().cursor(CursorStyle::ResizeLeftRight).on_mouse_down(
+            MouseButton::Left,
+            {
+                let st = st.clone();
+                move |e: &MouseDownEvent, _, _| {
+                    let mut s = st.borrow_mut();
+                    s.sidebar_resize = Some((f32::from(e.position.x), s.sidebar_w));
+                }
+            },
+        ))
     }
 
     // ── table ─────────────────────────────────────────────────────────────────────────────
-    fn table(&mut self, st: &State, coll: &Option<CollectionSnap>, cx: &mut App, window: &mut Window, body_h: f32, table_w: f32, table_left: f32) -> Stateful<Div> {
+    fn table(
+        &mut self,
+        st: &State,
+        coll: &Option<CollectionSnap>,
+        cx: &mut App,
+        window: &mut Window,
+        body_h: f32,
+        table_w: f32,
+        table_left: f32,
+    ) -> Stateful<Div> {
         let t = tokens();
         let Some(c) = coll else {
             return div().id("vars-empty").flex_1().min_w(pt(0.0)).h_full().flex().flex_col().child(
@@ -2234,23 +2226,26 @@ impl VariablesEditor {
                 .child(tr("Name"))
                 .child(div().absolute().right_0().top_0().w(pt(1.0)).h_full().bg(rgba(t.border)))
                 // 右缘 6pt 拖动柄；双击自动适配。悬停显示左右拖动光标。
-                .child(div().absolute().right(pt(0.0)).top(pt(0.0)).w(pt(6.0)).h_full().cursor(CursorStyle::ResizeLeftRight).on_mouse_down(MouseButton::Left, {
-                    let st = st.clone();
-                    move |e: &MouseDownEvent, _, cx: &mut App| {
-                        // 列宽柄是单元格的子节点：不拦冒泡的话，父级 mode 单元格的
-                        // on_mouse_down 会把 `last_mode_down` 覆盖成 mode id，双击判定
-                        // 永远等不到同一个键 → 双击列边永远不生效（用户 2026-11-07）。
-                        cx.stop_propagation();
-                        let mut s = st.borrow_mut();
-                        let dbl = s.last_mode_down.as_ref().is_some_and(|(at, id)| id == "__name" && at.elapsed().as_millis() < 400);
-                        s.last_mode_down = Some((Instant::now(), "__name".into()));
-                        if dbl {
-                            s.name_w = auto_name_w;
-                        } else {
-                            s.col_resize = Some((f32::from(e.position.x), s.name_w));
+                .child(div().absolute().right(pt(0.0)).top(pt(0.0)).w(pt(6.0)).h_full().cursor(CursorStyle::ResizeLeftRight).on_mouse_down(
+                    MouseButton::Left,
+                    {
+                        let st = st.clone();
+                        move |e: &MouseDownEvent, _, cx: &mut App| {
+                            // 列宽柄是单元格的子节点：不拦冒泡的话，父级 mode 单元格的
+                            // on_mouse_down 会把 `last_mode_down` 覆盖成 mode id，双击判定
+                            // 永远等不到同一个键 → 双击列边永远不生效（用户 2026-11-07）。
+                            cx.stop_propagation();
+                            let mut s = st.borrow_mut();
+                            let dbl = s.last_mode_down.as_ref().is_some_and(|(at, id)| id == "__name" && at.elapsed().as_millis() < 400);
+                            s.last_mode_down = Some((Instant::now(), "__name".into()));
+                            if dbl {
+                                s.name_w = auto_name_w;
+                            } else {
+                                s.col_resize = Some((f32::from(e.position.x), s.name_w));
+                            }
                         }
-                    }
-                })),
+                    },
+                )),
         );
         let n_modes = c.modes.len();
         // mode 列区：固定宽度 + 裁切，内容按 `sx` 左移（egui `modes_rect` + `sx`）。
@@ -2382,25 +2377,28 @@ impl VariablesEditor {
                     }
                 });
             cell = cell.child(div().absolute().right_0().top_0().w(pt(1.0)).h_full().bg(rgba(t.border)));
-            cell = cell.child(div().absolute().right(pt(0.0)).top(pt(0.0)).w(pt(6.0)).h_full().cursor(CursorStyle::ResizeLeftRight).on_mouse_down(MouseButton::Left, {
-                let st = st.clone();
-                let edge_key = format!("{mid}-edge");
-                move |e: &MouseDownEvent, _, cx: &mut App| {
-                    // 同 Name 列：先拦冒泡，父级单元格不会再把 `last_mode_down`
-                    // 覆盖成 mode id（否则双击列边自动宽度永远不生效）。
-                    cx.stop_propagation();
-                    let mut s = st.borrow_mut();
-                    let dbl = s.last_mode_down.as_ref().is_some_and(|(at, id)| id == &edge_key && at.elapsed().as_millis() < 400);
-                    s.last_mode_down = Some((Instant::now(), edge_key.clone()));
-                    if dbl {
-                        if let Some(w) = s.mode_ws.get_mut(mi) {
-                            *w = auto_mw;
+            cell = cell.child(div().absolute().right(pt(0.0)).top(pt(0.0)).w(pt(6.0)).h_full().cursor(CursorStyle::ResizeLeftRight).on_mouse_down(
+                MouseButton::Left,
+                {
+                    let st = st.clone();
+                    let edge_key = format!("{mid}-edge");
+                    move |e: &MouseDownEvent, _, cx: &mut App| {
+                        // 同 Name 列：先拦冒泡，父级单元格不会再把 `last_mode_down`
+                        // 覆盖成 mode id（否则双击列边自动宽度永远不生效）。
+                        cx.stop_propagation();
+                        let mut s = st.borrow_mut();
+                        let dbl = s.last_mode_down.as_ref().is_some_and(|(at, id)| id == &edge_key && at.elapsed().as_millis() < 400);
+                        s.last_mode_down = Some((Instant::now(), edge_key.clone()));
+                        if dbl {
+                            if let Some(w) = s.mode_ws.get_mut(mi) {
+                                *w = auto_mw;
+                            }
+                        } else {
+                            s.mode_resize = Some((mi, f32::from(e.position.x), mw));
                         }
-                    } else {
-                        s.mode_resize = Some((mi, f32::from(e.position.x), mw));
                     }
-                }
-            }));
+                },
+            ));
             modes_inner = modes_inner.child(cell);
         }
         modes_head = modes_head.child(modes_inner);
@@ -2759,13 +2757,11 @@ impl VariablesEditor {
             }
         } else {
             // 与编辑态同源绘制（inline_input::static_text），否则进入/退出编辑时文字会上下跳。
-            name_cell = name_cell.child(
-                div()
-                    .flex_1()
-                    .min_w(pt(0.0))
-                    .overflow_hidden()
-                    .child(crate::inline_input::static_text(rname.clone().into(), gpui::Hsla::from(rgba(t.text)), ROW_H)),
-            );
+            name_cell = name_cell.child(div().flex_1().min_w(pt(0.0)).overflow_hidden().child(crate::inline_input::static_text(
+                rname.clone().into(),
+                gpui::Hsla::from(rgba(t.text)),
+                ROW_H,
+            )));
         }
         name_cell = name_cell.child(div().absolute().right_0().top_0().w(pt(1.0)).h_full().bg(rgba(t.border)));
         row = row.child(name_cell);
@@ -3046,10 +3042,8 @@ impl VariablesEditor {
                                 // 引擎解析失败 → 颜色永远写不回去（用户 2026-11-17）。
                                 // `to_hex_alpha()` 带上透明度，色板里的 alpha 才不会丢。
                                 let hex = c.to_hex_alpha();
-                                cmds_pick.push(Cmd {
-                                    id: "variable.set",
-                                    params: Some(json!({ "variable": vid, "mode": mid, "value": json!(hex) })),
-                                });
+                                cmds_pick
+                                    .push(Cmd { id: "variable.set", params: Some(json!({ "variable": vid, "mode": mid, "value": json!(hex) })) });
                             }
                         });
                         let w = crate::popovers::WindowState::color(cx, pos, current, None, Default::default(), on_pick, cmds_pick.clone());
@@ -3269,12 +3263,8 @@ impl VariablesEditor {
                             "ui.renameMode" => {
                                 if let Some(v) = params["mode"].as_str() {
                                     let name = item_name.clone().unwrap_or_default();
-                                    let coll = data
-                                        .collections
-                                        .iter()
-                                        .find(|c| c.modes.iter().any(|m| m.id == v))
-                                        .map(|c| c.id.clone())
-                                        .unwrap_or_default();
+                                    let coll =
+                                        data.collections.iter().find(|c| c.modes.iter().any(|m| m.id == v)).map(|c| c.id.clone()).unwrap_or_default();
                                     Self::start_mode_rename(&caches, &state, &cmds, coll, v.to_string(), name, window, cx);
                                 }
                             }
@@ -3336,10 +3326,7 @@ impl VariablesEditor {
                                     .map(|id| json!({ "command": "variable.delete", "params": { "variable": id } }))
                                     .collect();
                                 if !steps.is_empty() {
-                                    cmds.push(Cmd {
-                                        id: "command.batch",
-                                        params: Some(json!({ "label": tr("Delete group"), "commands": steps })),
-                                    });
+                                    cmds.push(Cmd { id: "command.batch", params: Some(json!({ "label": tr("Delete group"), "commands": steps })) });
                                 }
                             }
                             _ => cmds.push(Cmd { id: cmd, params: Some(params.clone()) }),
@@ -3348,8 +3335,7 @@ impl VariablesEditor {
                     .child(label),
             );
         }
-        crate::widgets::menu(at).align(align).gap(gap).width(width).show(|| col.into_any_element())
-            .unwrap_or_else(|| div().into_any_element())
+        crate::widgets::menu(at).align(align).gap(gap).width(width).show(|| col.into_any_element()).unwrap_or_else(|| div().into_any_element())
     }
 
     // ── 拖拽 ──────────────────────────────────────────────────────────────────────────────
@@ -3358,14 +3344,7 @@ impl VariablesEditor {
     /// 不能用按下点当行顶：指针常落在行中间，纵向偏移会被算成整列偏移，
     /// 插入线因此错位、并且要拖出大半行才动一格（用户 2026-11-17）。
     /// 平面列表 `can_into = false`，所以 `resolve` 只会在 Above / Below 之间选，`gap` 即插入缝。
-    fn begin_drag(
-        kind: DragList,
-        from: usize,
-        ids: &[String],
-        hit: Point<Pixels>,
-        tops: &[f32],
-        hit_rect: Option<Bounds<Pixels>>,
-    ) -> ListDragState {
+    fn begin_drag(kind: DragList, from: usize, ids: &[String], hit: Point<Pixels>, tops: &[f32], hit_rect: Option<Bounds<Pixels>>) -> ListDragState {
         let h = match kind {
             DragList::Variables => ROW_H,
             _ => SIDE_ROW_H,
@@ -3407,10 +3386,7 @@ impl VariablesEditor {
         let mut s = st.borrow_mut();
         // 「Edit variable」浮层标题栏拖动：位置是窗口坐标，按按下的抓取偏移平移。
         if let Some(grab) = s.details_drag {
-            s.details_pos = Some(point(
-                px(f32::from(pointer.x) - f32::from(grab.x)),
-                px(f32::from(pointer.y) - f32::from(grab.y)),
-            ));
+            s.details_pos = Some(point(px(f32::from(pointer.x) - f32::from(grab.x)), px(f32::from(pointer.y) - f32::from(grab.y))));
         }
         // 横向滚动条：按住滑块（或轨道）拖动，按行程把指针位移换算成滚动量。
         if let Some((x0, off0, range, max_scroll)) = s.hscroll_drag {
@@ -3598,10 +3574,7 @@ impl VariablesEditor {
                 .text_xs()
                 .checked(hidden)
                 .on_change(move |next: &bool, _, _| {
-                    hid_cmds.push(Cmd {
-                        id: "variable.update",
-                        params: Some(json!({ "variable": hid_vid, "hiddenFromPublishing": *next })),
-                    });
+                    hid_cmds.push(Cmd { id: "variable.update", params: Some(json!({ "variable": hid_vid, "hiddenFromPublishing": *next })) });
                 }),
         );
         body = body.child(detail_label(tr("Code syntax")));
@@ -3692,11 +3665,7 @@ impl VariablesEditor {
         let w = f32::from(rb.size.width);
         let h = f32::from(rb.size.height);
         let table_left = if s.sidebar { s.sidebar_w + 1.0 } else { 0.0 };
-        let (x0, x1) = if tg.line.x0 > 0.0 {
-            (tg.line.x0 - ox, (tg.line.x1 - ox).min(w))
-        } else {
-            (table_left, (table_left + tg.line.x1).min(w))
-        };
+        let (x0, x1) = if tg.line.x0 > 0.0 { (tg.line.x0 - ox, (tg.line.x1 - ox).min(w)) } else { (table_left, (table_left + tg.line.x1).min(w)) };
         let y = tg.line.y - oy;
         if y < 0.0 || y > h || x1 <= x0 {
             return None;
