@@ -1,0 +1,115 @@
+﻿分类	界面元素	绑定命令	行为备注
+工具栏·主工具栏 Move 组	Move tools (group button)	tool.set	显示组内当前工具；点击触发选择
+工具栏·主工具栏 Move 组 flyout	Move	tool.set	组内>1 显示 flyout
+工具栏·主工具栏 Move 组 flyout	Hand	tool.set
+工具栏·主工具栏 Move 组 flyout	Scale	tool.set
+工具栏·主工具栏 Frame 组	Frame tools (group button)	tool.set
+工具栏·主工具栏 Frame 组 flyout	Frame	tool.set	draws_shape；已选中时 Enter 放置
+工具栏·主工具栏 Frame 组 flyout	Section	tool.set
+工具栏·主工具栏 Frame 组 flyout	Slice	tool.set
+工具栏·主工具栏 Shape 组	Shape tools (group button)	tool.set
+工具栏·主工具栏 Shape 组 flyout	Rectangle	tool.set
+工具栏·主工具栏 Shape 组 flyout	Line	tool.set
+工具栏·主工具栏 Shape 组 flyout	Arrow	tool.set
+工具栏·主工具栏 Shape 组 flyout	Ellipse	tool.set
+工具栏·主工具栏 Shape 组 flyout	Polygon	tool.set
+工具栏·主工具栏 Shape 组 flyout	Star	tool.set
+工具栏·主工具栏 Drawing 组	Drawing tools (group button)	tool.set
+工具栏·主工具栏 Drawing 组 flyout	Pen tool	tool.set	贝塞尔钢笔
+工具栏·主工具栏 Drawing 组 flyout	Brush	tool.set	自由手绘带笔刷；N
+工具栏·主工具栏 Drawing 组 flyout	Pen	tool.set	自由手绘等宽；Shift+P
+工具栏·主工具栏 Drawing 组 flyout	Shape builder	tool.set	选中后切成 builder 工具栏
+工具栏·主工具栏 Text 组	Text (group button)	tool.set
+工具栏·主工具栏 Text 组 flyout	Text	tool.set
+工具栏·主工具栏 Text 组 flyout	Text on a path	tool.set
+工具栏·主工具栏 Comment 组	Comment tool button	tool.set	单工具无 flyout
+工具栏·主工具栏	Flyout caret (chevron)	—	组>1 或有 options 时显示；点击开合，Esc 关闭
+工具栏·主工具栏	Actions	—	打开 Actions 面板
+工具栏·主工具栏	Divider	—	Actions 与模式切换之间
+工具栏·主工具栏 模式切换	Draw mode	tool.set	pencil；切 Design tab
+工具栏·主工具栏 模式切换	Design mode	tool.set	当前为 pencil 则切 move
+工具栏·主工具栏 模式切换	Prototype mode	—	仅切右栏到 Prototype
+工具栏·主工具栏 模式切换	Inspect mode	—	仅切右栏到 Inspect；Dev 模式工具选择退回 Design
+工具栏·主工具栏	Help and resources button	—	画布右下角；与 pill 重叠时上移
+工具栏·主工具栏 帮助菜单	Getting started	help.gettingStarted
+工具栏·主工具栏 帮助菜单	Keyboard shortcuts	help.shortcuts
+工具栏·主工具栏 帮助菜单	Help page	help.page
+工具栏·主工具栏 帮助菜单	Check for updates…	help.checkForUpdates
+工具栏·主工具栏 帮助菜单	About FigCraft	help.about
+工具栏·画板工具栏	Move tools (group button)	tool.set	画板组
+工具栏·画板工具栏 Move 组 flyout	Move	tool.set
+工具栏·画板工具栏 Move 组 flyout	Hand	tool.set
+工具栏·画板工具栏	Drawing tools (group button)	tool.set	ink 组
+工具栏·画板工具栏 ink 组 flyout	Pen	tool.set	原马克笔=ink 样式
+工具栏·画板工具栏 ink 组 flyout	Highlighter	tool.set	pen 的 highlighter 样式
+工具栏·画板工具栏 ink 组 flyout	Eraser	tool.set
+工具栏·画板工具栏	Sticky note colors (group button)	tool.sticky	单工具+Colors flyout
+工具栏·画板工具栏 Sticky 颜色	Yellow	tool.sticky	{"color":"yellow"}
+工具栏·画板工具栏 Sticky 颜色	Orange	tool.sticky	{"color":"orange"}
+工具栏·画板工具栏 Sticky 颜色	Red	tool.sticky	{"color":"red"}
+工具栏·画板工具栏 Sticky 颜色	Pink	tool.sticky	{"color":"pink"}
+工具栏·画板工具栏 Sticky 颜色	Violet	tool.sticky	{"color":"violet"}
+工具栏·画板工具栏 Sticky 颜色	Blue	tool.sticky	{"color":"blue"}
+工具栏·画板工具栏 Sticky 颜色	Green	tool.sticky	{"color":"green"}
+工具栏·画板工具栏 Sticky 颜色	Gray	tool.sticky	{"color":"gray"}
+工具栏·画板工具栏	Shapes (group button)	tool.shape	单工具+Shapes flyout
+工具栏·画板工具栏 Shapes flyout	Rectangle	tool.shape	{"shape":"rectangle"}
+工具栏·画板工具栏 Shapes flyout	Rounded rectangle	tool.shape	{"shape":"roundedRectangle"}
+工具栏·画板工具栏 Shapes flyout	Ellipse	tool.shape	{"shape":"ellipse"}
+工具栏·画板工具栏 Shapes flyout	Diamond	tool.shape	{"shape":"diamond"}
+工具栏·画板工具栏 Shapes flyout	Triangle	tool.shape	{"shape":"triangle"}
+工具栏·画板工具栏 Shapes flyout	Triangle down	tool.shape	{"shape":"triangleDown"}
+工具栏·画板工具栏 Shapes flyout	Parallelogram right	tool.shape	{"shape":"parallelogramRight"}
+工具栏·画板工具栏 Shapes flyout	Parallelogram left	tool.shape	{"shape":"parallelogramLeft"}
+工具栏·画板工具栏 Shapes flyout	Trapezoid	tool.shape	{"shape":"trapezoid"}
+工具栏·画板工具栏 Shapes flyout	Pentagon	tool.shape	{"shape":"pentagon"}
+工具栏·画板工具栏 Shapes flyout	Hexagon	tool.shape	{"shape":"hexagon"}
+工具栏·画板工具栏 Shapes flyout	Octagon	tool.shape	{"shape":"octagon"}
+工具栏·画板工具栏 Shapes flyout	Star	tool.shape	{"shape":"star"}
+工具栏·画板工具栏 Shapes flyout	Plus	tool.shape	{"shape":"plus"}
+工具栏·画板工具栏 Shapes flyout	Arrow left	tool.shape	{"shape":"arrowLeft"}
+工具栏·画板工具栏 Shapes flyout	Arrow right	tool.shape	{"shape":"arrowRight"}
+工具栏·画板工具栏 Shapes flyout	Chevron	tool.shape	{"shape":"chevron"}
+工具栏·画板工具栏 Shapes flyout	Speech bubble	tool.shape	{"shape":"speechBubble"}
+工具栏·画板工具栏 Shapes flyout	Database	tool.shape	{"shape":"database"}
+工具栏·画板工具栏 Shapes flyout	Document	tool.shape	{"shape":"document"}
+工具栏·画板工具栏 Shapes flyout	Predefined process	tool.shape	{"shape":"predefinedProcess"}
+工具栏·画板工具栏 Shapes flyout	Manual input	tool.shape	{"shape":"manualInput"}
+工具栏·画板工具栏 Shapes flyout	Internal storage	tool.shape	{"shape":"internalStorage"}
+工具栏·画板工具栏	Connector tool button	tool.set	单工具
+工具栏·画板工具栏	Text tool button	tool.set	单工具
+工具栏·画板工具栏	Section tool button	tool.set	单工具
+工具栏·画板工具栏	Stamps (group button)	tool.stamp	单工具+Stamps flyout
+工具栏·画板工具栏 Stamps flyout	Thumbs up	tool.stamp	{"stamp":"thumbsUp"}
+工具栏·画板工具栏 Stamps flyout	Heart	tool.stamp	{"stamp":"heart"}
+工具栏·画板工具栏 Stamps flyout	Plus one	tool.stamp	{"stamp":"plusOne"}
+工具栏·画板工具栏 Stamps flyout	Star	tool.stamp	{"stamp":"star"}
+工具栏·画板工具栏 Stamps flyout	Question	tool.stamp	{"stamp":"question"}
+工具栏·画板工具栏 Stamps flyout	Check	tool.stamp	{"stamp":"check"}
+工具栏·画板工具栏	Comment tool button	tool.set	单工具
+工具栏·画板工具栏	Board picker (templates) button	—	打开模板选择器
+工具栏·画板工具栏	Design panel button	view.design	面板被请求前隐藏
+工具栏·只读工具栏	Move	tool.set	只读时；编辑工具被过滤
+工具栏·只读工具栏	Hand	tool.set	只读时
+工具栏·只读工具栏	Comment	tool.set	仅 comment-only 时显示
+工具栏·只读工具栏	View only / Can comment / Publishing… badge	—	只读状态；hover 显示原因
+工具栏·矢量编辑工具栏	Move	vector.edit.tool	{"tool":"move"}；按 Cmd 时 Bend 高亮
+工具栏·矢量编辑工具栏	Pen	vector.edit.tool	{"tool":"pen"}
+工具栏·矢量编辑工具栏	Bend	vector.edit.tool	{"tool":"bend"}
+工具栏·矢量编辑工具栏	Paint bucket	vector.edit.tool	{"tool":"paint"}
+工具栏·矢量编辑工具栏	Lasso	vector.edit.tool	{"tool":"lasso"}
+工具栏·矢量编辑工具栏	Cut	vector.edit.tool	{"tool":"cut"}
+工具栏·矢量编辑工具栏	Eraser	vector.edit.tool	{"tool":"eraser"}
+工具栏·矢量编辑工具栏	Variable width	vector.edit.tool	{"tool":"width"}
+工具栏·矢量编辑工具栏	Done editing	vector.edit.end	Esc
+工具栏·ShapeBuilder 工具栏	Merge regions	shapeBuilder.mode	{"mode":"merge"}
+工具栏·ShapeBuilder 工具栏	Remove regions	shapeBuilder.mode	{"mode":"remove"}
+工具栏·ShapeBuilder 工具栏	Builder hint text	—	无区域时「Select overlapping shapes」
+工具栏·ShapeBuilder 工具栏	Done	tool.set	{"tool":"move"}；Enter
+工具栏·Drawing 设置条	Stroke colour swatch	—	每支笔各自 drawStyle.color
+工具栏·Drawing 设置条	Weight −/值/+	—	tool.drawStyle weight
+工具栏·Drawing 设置条	Flow −/值/+	tool.drawStyle	仅 Brush；一笔内墨量
+工具栏·Drawing 设置条	Opacity −/值/+	tool.drawStyle	仅 Brush；整笔上限
+工具栏·Drawing 设置条	Smoothing −/值/+	tool.drawStyle	三支笔都有；稳定器
+工具栏·Drawing 设置条	Brush preset dropdown	tool.drawStyle	仅 Brush；外部 .abr
+工具栏·Drawing 设置条	Done	—	仅贝塞尔钢笔

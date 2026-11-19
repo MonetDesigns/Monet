@@ -1,0 +1,75 @@
+﻿分类	界面元素	绑定命令	行为备注
+对话框	About FigCraft (About tab)	help.about	居中；三 tab；Escape 关闭；非模态
+对话框	About > Contributors	help.about	子页；姓名模式/排序/Grab bag
+对话框	About > Models	help.about	AI 模型贡献表
+对话框	Preferences	app.preferences	居中宽 360；偏好开关/界面尺寸/网格/主题/语言/用户名/共享服务器/nudge；Escape 关闭
+对话框	Keyboard shortcuts	help.shortcuts	底部居中；按 Group 分 tab；三列键帽+搜索；Escape 关闭
+对话框	Find and replace	edit.findReplace	左上角固定 (260,120) 宽 280；结果 toast；Escape 关闭
+对话框	Rename layers (批量)	object.batchRename	居中宽 320；Match/正则/Rename to/编号/5 行预览；Escape 关闭
+对话框	Menu input — Create link	text.link	居中宽 320；填 URL 后提交
+对话框	Menu input — Offset path	vector.offset	数值字段 clamp ±100000
+对话框	Menu input — Move to page	object.moveToPage	列出其他非分隔页；无其他页显示 No other pages
+对话框	Export	file.export / file.exportSvg	居中宽 320；图层各自/多图层预设/整文件 .fig；含 PDF 选项
+对话框	Color profile	file.colorProfile	居中宽 340；sRGB/P3 + Keep appearance/values
+对话框	Import report	file.open / import / edit.pasteDesignLayers 后自动	居中宽 420；页/图层/图像+兼容性 notes；随文档关闭消失
+对话框	Missing fonts	text.missingFonts	居中宽 380；列出未装字体+Download/Try again；无缺失不显示
+对话框	Create from color	取色器 Cmd+Shift	居中宽 280；Style/Variable + 名称 + collection
+对话框	Plugins (Installed tab)	plugins.manage	居中宽 400；两 tab；关闭时取消后台请求
+对话框	Plugins > Browse tab	plugin.directory.list / install	服务器地址+搜索+Install/Remove；Browse 前不请求
+对话框	Plugin install/update confirm	plugin.directory.install	居中宽 340；显示权限/来源/SHA-256
+对话框	Plugin parameters form	plugin.run	居中宽 320；两列参数 + Run/Cancel
+对话框	Plugin panels	plugin.event / plugin.close / widget.insert	浮动宽 320；贴属性面板左侧
+对话框	Updates (检查更新)	help.checkForUpdates	居中窗口；显示当前版本/新版本/下载入口；工具栏帮助菜单或菜单项打开
+对话框	Save file (插件请求保存)	dialog.pluginSave	浏览器下载/桌面 pick_save
+对话框	Remove from server (在线文件)	collab.manageFile	居中宽 380；Home▸Online 行打开
+对话框	Rename on the server	collab.manageFile	居中宽 380
+对话框	Join live session	collab.join	居中宽 380；邀请码/链接+用户名
+对话框	Publish to server	collab.publish	预填上次服务器地址
+对话框	File published	—	发布成功后确认
+对话框	Unsaved changes (关闭窗口)	—	前景居中宽 340；Don't Save/Cancel/Save；Save 默认（Enter）
+对话框	Unsaved changes (关闭 tab)	file.save / file.saveAs	同 unsaved_question；分支 tab 的改动视为已在主文件
+对话框	Pending open card	—	打开文件前显示卡片
+独立窗口	Main window (id 0)	window.focus	显示无其他窗口持有的打开文件
+独立窗口	New window	window.new	有读屏或嵌入视口时退化为 tab
+独立窗口	Focus window	window.focus	置前并把后续控制请求发往它
+独立窗口	Fullscreen	window.fullscreen	切换当前视口全屏
+独立窗口	Variables editor	ui.set {variables}	可调大小 min 600×240；默认 880×480 居中；左集合列表+右变量表
+独立窗口	Edit variable	—	variable.update；宽 260
+独立窗口	Edit variables (批量)	—	variable.update；宽 260；Details/Scope 两 tab
+首页	Home screen	home / home.templates	无打开文件时显示；整窗为拖放目标
+首页	Home Sidebar	app.preferences	左侧 240 宽；搜索/Recents/Online/Templates/底部 Preferences
+首页	Recents New design file	file.new	新建后 home=false
+首页	Recents New board	file.newBoard
+首页	Recents Open file	—	系统文件对话框
+首页	Recents Join with a code	collab.join	live::join_row
+首页	Recents Getting started tips	help.gettingStarted	6 条提示；关闭后 Help 菜单可恢复
+首页	Recents Open files list	doc.switch	点击切换 tab 并 home=false
+首页	Recents Recent files (grid/list)	file.open / file.openRecent	最多 12；Grid/List 切换、Sort by；右键 Reveal/Remove
+首页	Recents Start from a template	file.newFromTemplate	无最近文件时前 4 个模板卡
+首页	Templates section	file.newFromTemplate	搜索+Kind 过滤+模板卡网格
+首页	Search results	file.open / collab.openFile / file.newFromTemplate	侧栏搜索非空时；无结果引导
+首页	Online 在线文件列表	collab.files / collab.openFile	无搜索且 section=Online 时自绘
+首页	Online 文件行菜单	collab.manageFile / collab.forgetFile	Open/Start-Stop sharing/Copy code/Rename/Remove/Forget
+首页	Online Team list	collab.join	服务器团队当前共享文件
+首页	Online 服务器状态	collab.files	Checking/离线错误+Try again/旧服务器提示
+首页	拖放打开文件	—	整窗拖放目标；支持 .figcraft/.fig/.jam/.sketch/.json/.svg/图片
+Dev Mode	Dev Mode (Inspect tab 主界面)	view.devMode	进入时结束文本/矢量编辑
+Dev Mode	Measurements	dev.measure	画布 hover 测量，类别过滤
+Dev Mode	Code / Playground	codeConnect.set	选 React/Leptos/Vue/SwiftUI/Compose/ArkUI/Flutter
+Dev Mode	Connect to code	codeConnect.set / remove
+Dev Mode	Annotations	annotation.add / edit / remove
+Dev Mode	Dev resources	devResource.add / edit / remove
+Dev Mode	Status (Ready for dev / Compare)	dev.focus / dev.compare
+Dev Mode	Categories	annotation.update	管理标注分类
+Dev Mode	Ready list	dev.focus / select.set / view.zoomSelection	列出 ready for dev 图层
+Dev Mode	Focus bar	dev.focus / dev.unfocus / dev.compare	画布聚焦导航条
+动画	Animation controls (原型转场)	proto.settings	仅原型交互的转场设置；EGUI 无独立时间线
+演示	Prototype preview (画布内预览窗)	proto.preview	浮动默认 320×600；贴画布右上角
+演示	Present (全屏演示)	proto.present	全屏 Presenter；Escape/Close 结束
+演示	Present 导航栏	present.options / proto.settings	底部居中；上/下一帧/设备/缩放；Cmd+\ 隐藏
+演示	Present Inspect panel	present.options	右侧 Panel；可开关
+演示	Present Link notice / Comment mode	proto.linkNotice / Shift+C	外链提示 + 演示中评论
+通知	Toast	—	底部居中；约 4 秒自动消失
+颜色选择器	Color picker popover	edit.pickColor	S/B 方块+Hue/Alpha 滑条+数值+渐变+图片；外部点击/Escape 关闭
+颜色选择器	Eyedropper	edit.pickColor	取样写当前 paint；Cmd+Shift 取样弹 Create from color
+颜色选择器	Recent colors / Page colors	edit.pickColor	最近使用色与页面色快捷色板

@@ -1,0 +1,14 @@
+﻿分类	界面元素	绑定命令	行为备注
+动画·GPUI 特有	MotionInspector (动画右栏整页)	motion.preset / motion.keyframe	打开 Motion 时替换 Design 面板；复用 Design 的 Fill/Stroke/Effects 行
+动画·GPUI 特有	AnimationSection (presets + "+"菜单)	motion.preset
+动画·GPUI 特有	KeyframeFields (Transform/Layout/Appearance 行)	motion.keyframe	每个可动画值一个字段，行尾菱形切换关键帧
+动画·GPUI 特有	MotionTimelineBar (底部时间线条)	motion.keyframe / motion.timeline / motion.track	替换 animation_bar；可拖高度；顶边 4px resize
+动画·GPUI 特有	TimelineRuler + Playhead	motion.timeline	标尺右半与 header 同带；播放头最后画
+动画·GPUI 特有	TimelineLayerRows + Tracks	motion.track	图层摘要行+属性轨道；滚动行不渗入 header
+动画·GPUI 特有	KeyframeDiamonds	motion.keyframe / keyframeMove / keyframeDelete / keyframeCopy	空心/选中实心；拖动吸附帧网格，开一次 undo
+动画·GPUI 特有	ClipBars (片段条)	motion.clip / clipUpdate / clipDelete	先于关键帧轨道画
+动画·GPUI 特有	DurationHandle (时长右端手柄)	motion.timeline	指针不动也续帧伸长
+动画·GPUI 特有	EditableTimeBoxes (当前/时长时间框)	motion.timeline	header 中两个可编辑时间字段
+动画·GPUI 特有	ClipSettingsPopover	motion.clip / clipUpdate / clipDelete / keyframeEase	枚举行点开 options 菜单
+动画·GPUI 特有	EasingEditor (Curve/Spring)	motion.keyframeEase	Curve|Spring 页签+图形手柄+数值/弹簧参数
+动画·GPUI 特有	MotionOverlay (运动路径+变换手柄)	motion.keyframe / keyframeHandle / autoKey	有动画时显示、播放中隐藏；空间贝塞尔手柄可拖改曲线
