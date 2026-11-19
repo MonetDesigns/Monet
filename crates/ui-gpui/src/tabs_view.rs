@@ -27,7 +27,7 @@ use serde_json::json;
 
 use crate::panels::{Cmd, Cmds};
 use crate::tabs::{
-    BAR_BUTTON, BAR_ICON, CLOSE_ICON, HEIGHT, LIVE_MARK_WIDTH, LiveBadge, NEW_TAB_MARGIN_X, OVERFLOW_WIDTH, TAB_BUTTON, TAB_BUTTON_RADIUS,
+    BAR_BUTTON, BAR_GLYPH, BAR_ICON, CLOSE_ICON, HEIGHT, LIVE_MARK_WIDTH, LiveBadge, NEW_TAB_MARGIN_X, OVERFLOW_WIDTH, TAB_BUTTON, TAB_BUTTON_RADIUS,
     TAB_CLOSE_RIGHT, TAB_FONT, TAB_GAP, TAB_LABEL_MAX, TAB_PAD_X, TabMotion, VisibleTab, live_badge, preferred_width, tab_drop_position,
     tab_layout,
 };
@@ -369,7 +369,7 @@ fn tab_ink() -> TabInk {
     TabInk { text: t.text, secondary: t.text_secondary, brand: t.accent, hover: t.hover, pressed: t.pressed, panel: t.panel, border: t.border }
 }
 
-/// 一条 32pt 方形按钮（新标签 / 主题）：上游 `BAR_BUTTON=32` / `BAR_ICON=20`。
+/// 一条 32pt 方形按钮（新标签 / 主题）：上游 `BAR_BUTTON=32` / `BAR_ICON=32`（用户指定）。
 /// `IconButton` 内部把字形锁在 16pt，这里按 #1729 的规范用 Kit 的 `icon::paint` 画 20pt。
 fn bar_button(icon: Icon, t: crate::theme::Tokens, id: &'static str) -> Stateful<Div> {
     div()
@@ -382,7 +382,7 @@ fn bar_button(icon: Icon, t: crate::theme::Tokens, id: &'static str) -> Stateful
         .justify_center()
         .rounded(pt(5.0))
         .hover(move |s| s.bg(rgba(t.hover)))
-        .child(icon::paint(icon, rgba(t.icon), BAR_ICON))
+        .child(icon::paint(icon, rgba(t.icon), BAR_GLYPH))
 }
 
 /// Figma `.tab_bar--newTabButtonUI3`：24×24、圆角 5、左右外边距 7，
@@ -795,7 +795,7 @@ pub(crate) fn tab_strip(
                     .flex_none()
                     .w(pt(BAR_ICON))
                     .h(pt(BAR_ICON))
-                    .child(icon::paint(glyph, rgba(if is_active { ink.brand } else { ink.secondary }), BAR_ICON))
+                    .child(icon::paint(glyph, rgba(if is_active { ink.brand } else { ink.secondary }), BAR_GLYPH))
                     .when(!is_active, |d| {
                         d.child(
                             div()
@@ -803,7 +803,7 @@ pub(crate) fn tab_strip(
                                 .inset_0()
                                 .opacity(0.0)
                                 .group_hover(tab_group.clone(), |s| s.opacity(1.0))
-                                .child(icon::paint(glyph, rgba(ink.brand), BAR_ICON)),
+                                .child(icon::paint(glyph, rgba(ink.brand), BAR_GLYPH)),
                         )
                     }),
             )
@@ -828,7 +828,7 @@ pub(crate) fn tab_strip(
                 } else {
                     (Icon::LinkOff, t.text_secondary)
                 };
-                d.child(icon::paint(glyph, rgba(color), BAR_ICON))
+                d.child(icon::paint(glyph, rgba(color), BAR_GLYPH))
             });
 
         // Figma `.tab--button`：24×24、圆角 5px、图标 text-secondary；hover 铺 hover 色，
@@ -958,7 +958,7 @@ pub(crate) fn tab_strip(
                 .on_click(move |_e: &ClickEvent, _window, cx: &mut App| {
                     open_overflow_menu(&me_menu, &cmds_menu, &docs_menu, &present_menu, active, home_menu, chevron_x, cx);
                 })
-                .child(icon::paint(Icon::ChevronDown, rgba(t.icon), BAR_ICON)),
+                .child(icon::paint(Icon::ChevronDown, rgba(t.icon), BAR_GLYPH)),
         );
     }
 

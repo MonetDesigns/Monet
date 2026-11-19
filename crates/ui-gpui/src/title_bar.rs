@@ -64,9 +64,9 @@ pub fn content_width(viewport_w: f32) -> f32 {
     (viewport_w - LEFT_PAD - CONTROLS_W).max(0.0)
 }
 
-/// 最大化按钮图标：已最大化时画还原（上游 `WinRestore`）。
+/// 最大化按钮图标：已最大化时画还原，未最大化时用产品的纯线框方框（Icon::Rectangle）。
 pub fn maximize_icon(maximized: bool) -> Icon {
-    if maximized { Icon::WinRestore } else { Icon::WinMaximize }
+    if maximized { Icon::WinRestore } else { Icon::Rectangle }
 }
 
 /// 一个窗口控制按钮：hover 底色，关闭键 hover 变红且图标由常态墨色翻成白色。
@@ -118,7 +118,7 @@ fn control_button(id: &'static str, icon: Icon, close: bool, area: WindowControl
 /// kit `TitleBar::new().child(content)`：整条注册成系统标题栏拖拽区，
 /// 左留白与内容空白区也标 Drag（覆盖子 hitbox 的空隙），右侧三个按钮各归系统。
 pub fn title_bar(content: impl IntoElement, maximized: bool) -> Div {
-    let min = control_button("title-min", Icon::WinMinimize, false, WindowControlArea::Min);
+    let min = control_button("title-min", Icon::Minus, false, WindowControlArea::Min);
     let max = control_button("title-max", maximize_icon(maximized), false, WindowControlArea::Max);
     let close = control_button("title-close", Icon::Close, true, WindowControlArea::Close);
 
@@ -154,7 +154,7 @@ mod tests {
 
     #[test]
     fn maximize_button_switches_between_maximize_and_restore() {
-        assert_eq!(maximize_icon(false), Icon::WinMaximize);
+        assert_eq!(maximize_icon(false), Icon::Rectangle);
         assert_eq!(maximize_icon(true), Icon::WinRestore);
     }
 

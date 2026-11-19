@@ -126,11 +126,17 @@ mod divider_tests {
 pub(crate) const MIN_PANEL: f32 = 240.0;
 pub(crate) const MAX_PANEL: f32 = 500.0;
 pub(crate) const DEFAULT_PANEL: f32 = 280.0;
-/// 窗口布局的默认宽度，按 Figma 参考（`--left-panel-width: 421px` /
-/// `--right-panel-width: 374px` / `--left-rail-width: 57px`）。左右栏宽度本来就不同，
-/// 不能再共用一个 `DEFAULT_PANEL`。
-pub(crate) const DEFAULT_LEFT_PANEL: f32 = 421.0;
-pub(crate) const DEFAULT_RIGHT_PANEL: f32 = 374.0;
+/// Figma 快照里两个分隔条的 ARIA 范围：左栏 240..443，右栏 241..500。
+/// 用户要求按各自的范围夹取，不再左右共用一个上下限。
+pub(crate) const MIN_LEFT_PANEL: f32 = 240.0;
+pub(crate) const MAX_LEFT_PANEL: f32 = 443.0;
+pub(crate) const MIN_RIGHT_PANEL: f32 = 241.0;
+pub(crate) const MAX_RIGHT_PANEL: f32 = 500.0;
+/// 窗口布局的默认宽度，按 Figma 参考快照根节点的 CSS 变量：
+/// `--left-panel-width: 240px` / `--right-panel-width: 241px`（左 rail 仍是 57）。
+/// 左右栏宽度本来就不同，不再共用一个 `DEFAULT_PANEL`。
+pub(crate) const DEFAULT_LEFT_PANEL: f32 = 240.0;
+pub(crate) const DEFAULT_RIGHT_PANEL: f32 = 241.0;
 
 /// 左右栏头部间距，直接取自 Figma 参考 `Figma (7).fig` 的 **AutoLayout 数据**
 /// （不是量坐标猜的）。`AutoLayout { gap, padding, main_align, cross_align }`：
@@ -2153,7 +2159,7 @@ fn rail_item(
         .justify_center()
         .when(active, |d| d.bg(rgba(t.selected_row)))
         .when(!active, |d| d.group_hover(group.clone(), |s| s.bg(rgba(t.hover))))
-        .child(crate::widgets::icon::paint(icon, rgba(if active { t.accent } else { t.icon }), 16.0));
+        .child(crate::widgets::icon::paint(icon, rgba(if active { t.accent } else { t.icon }), 32.0));
     let mut item = div()
         .id(id)
         .flex_none()

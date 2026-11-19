@@ -13,8 +13,10 @@ pub const HEIGHT: f32 = 38.0;
 pub const MIN_TAB_WIDTH: f32 = 96.0;
 /// 溢出按钮宽度（上游 `OVERFLOW_WIDTH`）。
 pub const OVERFLOW_WIDTH: f32 = 32.0;
-/// Home / 新标签 / 主题 / 文件类型 / live / chevron 图标的边长（上游 `#1729` 图标规范）。
-pub const BAR_ICON: f32 = 20.0;
+/// Home / 新标签 / 主题 / 文件类型 / live / chevron / 标签前置图标的**格子**边长。
+pub const BAR_ICON: f32 = 32.0;
+/// 图标随 32pt 格子等比放大到 32pt；线宽由 ICON_STROKE 反算补偿，保持不变。
+pub const BAR_GLYPH: f32 = 32.0;
 /// 新标签与主题按钮的边长。
 pub const BAR_BUTTON: f32 = 32.0;
 /// 标签右上角关闭叉的边长。

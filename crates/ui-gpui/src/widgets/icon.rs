@@ -62,6 +62,10 @@ pub enum Icon {
     Search,
     Dot,
     Variable,
+    /// `#` — a number field's mark (user-supplied 24-grid SVG).
+    Number,
+    /// Toggle — a boolean field's mark (user-supplied 24-grid SVG).
+    Boolean,
     LinkOn,
     LinkOff,
     Section,
@@ -232,6 +236,8 @@ impl Icon {
         Icon::Search,
         Icon::Dot,
         Icon::Variable,
+        Icon::Number,
+        Icon::Boolean,
         Icon::LinkOn,
         Icon::LinkOff,
         Icon::Section,
@@ -331,6 +337,8 @@ impl Icon {
             Icon::Search => "search",
             Icon::Dot => "dot",
             Icon::Variable => "variable",
+            Icon::Number => "number",
+            Icon::Boolean => "boolean",
             Icon::Logo => "logo",
             Icon::Assets => "assets",
             Icon::Variables => "variables",
@@ -498,14 +506,19 @@ pub fn natural_size(icon: Icon) -> f32 {
         .unwrap_or_else(|| view_box_size(&table()[icon as usize].svg))
 }
 
-/// Draw a shape-tool mark at its natural 24 pt size, not a forced glyph size.
-pub fn paint_tool(icon: Icon, color: impl Into<gpui::Rgba>) -> impl IntoElement {
+/// Draw a shape-tool mark at `size` pt. Geometry scales with the box; the stroke is
+/// compensated at load time so its visual width stays exactly [`ICON_STROKE`].
+pub fn paint_tool_at(icon: Icon, color: impl Into<gpui::Rgba>, size: f32) -> impl IntoElement {
     let rgba: gpui::Rgba = color.into();
     let path = tool_stem(icon)
-        .map(|stem| SharedString::from(format!("tools/{stem}.svg")))
-        .unwrap_or_else(|| icon.asset_path());
-    let s = natural_size(icon);
-    svg().path(path).w(px(s)).h(px(s)).flex_none().text_color(Hsla::from(rgba))
+        .map(|stem| SharedString::from(format!("tools/{stem}@{size}.svg")))
+        .unwrap_or_else(|| sized_icon_path(icon, size));
+    svg().path(path).w(px(size)).h(px(size)).flex_none().text_color(Hsla::from(rgba))
+}
+
+/// Draw a shape-tool mark at its natural 24 pt size.
+pub fn paint_tool(icon: Icon, color: impl Into<gpui::Rgba>) -> impl IntoElement {
+    paint_tool_at(icon, color, natural_size(icon))
 }
 
 /// Figma 的四个 24×24 描边图标（用户 2026-11-15）：加号 / 减号 / 叉号 / 下拉小箭头。
@@ -521,19 +534,20 @@ const FIGMA_UI_ICONS: [(Icon, &str); 17] = [
     (Icon::ChevronLeft, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><g transform="rotate(90 12 12)"><path d="M8.99994 11L12 14L14.9999 11" stroke="black" stroke-width="__STROKE__" stroke-linecap="round" stroke-linejoin="round"/></g></svg>"#),
     (Icon::ChevronRight, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><g transform="rotate(-90 12 12)"><path d="M8.99994 11L12 14L14.9999 11" stroke="black" stroke-width="__STROKE__" stroke-linecap="round" stroke-linejoin="round"/></g></svg>"#),
     (Icon::ChevronUp, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><g transform="rotate(180 12 12)"><path d="M8.99994 11L12 14L14.9999 11" stroke="black" stroke-width="__STROKE__" stroke-linecap="round" stroke-linejoin="round"/></g></svg>"#),
-    // 用户 2026-11-19 提供的 6 个 24 网格线框图标。几何照抄，所有 stroke-width
-    // 统一由 __STROKE__ 注入；颜色交给调用方的 text_color（GPUI 只取 SVG alpha）。
-    (Icon::Frame, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M10.5 6.5L9.5 17.5" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/><path d="M14.5 6.5L13.5 17.5" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/><path d="M6.5 10H17.5M6.5 14H17.5" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/></svg>"#),
-    (Icon::Section, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M6 8H18M6 16H18M8 6V18M16 18V6" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/></svg>"#),
+    // 用户 2026-11-19 提供的 6 个 24 网格线框图标（逐项对应，不再乱套）：
+    // Frame-4 → Frame（画框），Frame → Number（#），Frame-2 → Boolean，
+    // Frame 163 → Text，Frame-1 → Pen，Frame-3 → Page。
+    (Icon::Frame, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M6 8H18M6 16H18M8 6V18M16 18V6" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/></svg>"#),
+    (Icon::Number, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M10.5 6.5L9.5 17.5" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/><path d="M14.5 6.5L13.5 17.5" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/><path d="M6.5 10H17.5M6.5 14H17.5" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/></svg>"#),
+    (Icon::Boolean, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><mask id="stroke0_274_459" fill="white"><path d="M9 16H15C17.2091 16 19 14.2091 19 12C19 9.79086 17.2091 8 15 8H9C6.79086 8 5 9.79086 5 12C5 14.2091 6.79086 16 9 16Z"/></mask><path d="M15 16H9C6.79086 16 5 14.2091 5 12C5 9.79086 6.79086 8 9 8H15C17.2091 8 19 9.79086 19 12C19 14.2091 17.2091 16 15 16Z" stroke="black" stroke-width="__STROKE__" mask="url(#stroke0_274_459)"/><circle cx="9.5" cy="12" r="2" stroke="black" stroke-width="__STROKE__"/></svg>"#),
     (Icon::Text, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M6.5 9V6.5H12M17.5 9V6.5H12M12 6.5V17.5M12 17.5H9.5M12 17.5H14.5" stroke="black" stroke-width="__STROKE__" stroke-linecap="round" stroke-linejoin="round"/></svg>"#),
     (Icon::Pen, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M13.5 17.5L14.6464 18.6464C14.8417 18.8417 15.1583 18.8417 15.3536 18.6464L18.6464 15.3536C18.8417 15.1583 18.8417 14.8417 18.6464 14.6464L17.5 13.5M13.5 17.5L17.5 13.5M13.5 17.5L11.0205 17.0041C9.48501 16.697 8.26993 15.5222 7.91128 13.9979L6.62759 8.54225C6.54827 8.20514 6.64902 7.85098 6.8939 7.6061L7.25 7.25M17.5 13.5L17.0041 11.0205C16.697 9.48501 15.5222 8.26993 13.9979 7.91128L8.54225 6.62759C8.20514 6.54827 7.85098 6.64902 7.6061 6.8939L7.25 7.25M7.25 7.25L11 11" stroke="black" stroke-width="__STROKE__" stroke-linejoin="round"/><circle cx="12" cy="12" r="1.5" stroke="black" stroke-width="__STROKE__"/></svg>"#),
-    (Icon::Variables, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="5" y="8" width="14" height="8" rx="4" stroke="black" stroke-width="__STROKE__"/><circle cx="9.5" cy="12" r="2" stroke="black" stroke-width="__STROKE__"/></svg>"#),
     (Icon::Page, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M8.5 6H12.793C12.925 6 13.052 6.053 13.146 6.146L16.854 9.854C16.947 9.947 17 10.075 17 10.208V16.5C17 17.328 16.328 18 15.5 18H8.5C7.672 18 7 17.328 7 16.5V7.5C7 6.672 7.672 6 8.5 6Z" stroke="black" stroke-width="__STROKE__" stroke-linejoin="round"/><path d="M13 7V10H16" stroke="black" stroke-width="__STROKE__" stroke-linejoin="round"/></svg>"#),
-    // 移动工具：产品指针的纯线框版（不填充），线宽同样走 ICON_STROKE。
-    (Icon::Move, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M6 3L6 20.4L10.35 16.35L13.2 22.2L15.9 21L13.05 15.3L18.9 15.3Z" stroke="black" stroke-width="__STROKE__" stroke-linejoin="round"/></svg>"#),
-    // 标题栏三键：减号 / 方框 / 还原，与 X 同一套 24 网格与线宽。
-    (Icon::WinMinimize, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M6.5 12H17.5" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/></svg>"#),
-    (Icon::WinMaximize, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="6.5" y="6.5" width="11" height="11" fill="none" stroke="black" stroke-width="__STROKE__"/></svg>"#),
+    // Move = 主菜单用的商标（monet-mono）纯线框版，几何不动，线宽走 ICON_STROKE。
+    (Icon::Move, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M6.58595 6.58595C7.14047 6.03143 7.96787 5.8517 8.70216 6.12697L16.7022 9.12697C17.5218 9.43433 18.0467 10.2394 17.9971 11.1133C17.9473 11.9873 17.3346 12.728 16.4854 12.9404L13.6494 13.6494L12.9404 16.4854C12.728 17.3346 11.9873 17.9473 11.1133 17.9971C10.2394 18.0467 9.43433 17.5218 9.12697 16.7022L6.12697 8.70216C5.8517 7.96787 6.03143 7.14047 6.58595 6.58595Z" stroke="black" stroke-width="__STROKE__" stroke-linejoin="round"/></svg>"#),
+    // 标题栏用产品自带的减号 / 方框，不另造 Win* 图标。
+    (Icon::Play, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><g transform="rotate(90 12 12)"><path d="M10.9173 6.87673L5.58153 16.1253C5.10076 16.9586 5.70219 17.9999 6.66427 17.9999H17.3357C18.2978 17.9999 18.8992 16.9586 18.4185 16.1253L13.0827 6.87672C12.6017 6.04293 11.3983 6.04293 10.9173 6.87673Z" stroke="black" stroke-width="__STROKE__" stroke-linejoin="round"/></g></svg>"#),
+    (Icon::Rectangle, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="6.5" y="6.5" width="11" height="11" rx="1" stroke="black" stroke-width="__STROKE__"/></svg>"#),
     (Icon::WinRestore, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="8.5" y="5.5" width="9" height="9" fill="none" stroke="black" stroke-width="__STROKE__"/><path d="M15.5 15.5V18.5H6.5V9.5H9.5" fill="none" stroke="black" stroke-width="__STROKE__" stroke-linejoin="round"/></svg>"#),
 ];
 
@@ -545,13 +559,33 @@ fn figma_ui_icon(icon: Icon, size: f32) -> Option<Vec<u8>> {
     Some(src.replace("__STROKE__", &format!("{}", width)).into_bytes())
 }
 
-/// 四个 Figma 图标按显示尺寸各有一个资源路径（`icons/<name>@<size>.svg`）。
-fn figma_ui_icon_path(icon: Icon, size: f32) -> Option<SharedString> {
-    if FIGMA_UI_ICONS.iter().any(|(i, _)| *i == icon) {
-        Some(SharedString::from(format!("icons/{}@{}.svg", icon.asset_name(), size)))
-    } else {
-        None
+/// 每个图标按显示尺寸各有一个资源路径（`icons/<name>@<size>.svg`）。
+/// 资源加载时按网格反算 stroke-width，所以任意尺寸下视觉线宽都等于 ICON_STROKE。
+fn sized_icon_path(icon: Icon, size: f32) -> SharedString {
+    SharedString::from(format!("icons/{}@{}.svg", icon.asset_name(), size))
+}
+
+/// 把 SVG 里所有 `stroke-width` 统一改成 ICON_STROKE 按 `grid / size` 反算后的值：
+/// 无论原资源写的是 1、1.6 还是 2.4，等比缩放后视觉线宽都精确等于 ICON_STROKE。
+fn rescale_strokes(bytes: &[u8], grid: f32, size: f32) -> Vec<u8> {
+    let src = String::from_utf8_lossy(bytes);
+    let width = ICON_STROKE * grid / size.max(0.001);
+    let needle = "stroke-width=\"";
+    let mut out = String::with_capacity(src.len());
+    let mut rest: &str = &src;
+    while let Some(i) = rest.find(needle) {
+        out.push_str(&rest[..i + needle.len()]);
+        let after = &rest[i + needle.len()..];
+        let end = after.find('"').unwrap_or(after.len());
+        if after[..end].parse::<f32>().is_ok() {
+            out.push_str(&format!("{}", width));
+        } else {
+            out.push_str(&after[..end]);
+        }
+        rest = &after[end..];
     }
+    out.push_str(rest);
+    out.into_bytes()
 }
 
 /// 只在首次访问时把 79 个图标编译成 SVG；之后 `AssetSource::load()` 零拷贝返回。
@@ -590,19 +624,30 @@ pub struct IconAssets;
 
 impl AssetSource for IconAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
-        // 24×24 的 Figma 图标：按显示尺寸等比缩放，stroke-width 反向补偿，线宽不变。
+        // `icons/<name>@<size>.svg`：所有图标（不只是 Figma 那几个）按尺寸反算线宽。
         if let Some(rest) = path.strip_prefix("icons/").and_then(|p| p.strip_suffix(".svg")) {
             if let Some((name, sz)) = rest.rsplit_once('@') {
                 if let Ok(size) = sz.parse::<f32>() {
                     if let Some((icon, _)) = FIGMA_UI_ICONS.iter().find(|(i, _)| i.asset_name() == name) {
                         return Ok(figma_ui_icon(*icon, size).map(Cow::Owned));
                     }
+                    if let Some(icon) = Icon::ALL.iter().copied().find(|i| i.asset_name() == name) {
+                        if let Some(stem) = tool_stem(icon) {
+                            return Ok(tool_bytes(stem).map(|b| Cow::Owned(rescale_strokes(b, 24.0, size))));
+                        }
+                        let grid = if icon == Icon::Logo { 24.0 } else { 16.0 };
+                        return Ok(table().get(icon as usize).map(|a| Cow::Owned(rescale_strokes(&a.svg, grid, size))));
+                    }
                 }
             }
         }
         // The shape-tool marks keep their own 24x24 viewBox and one shared stroke width.
-        if let Some(stem) = path.strip_prefix("tools/").and_then(|p| p.strip_suffix(".svg")) {
-            return Ok(tool_bytes(stem).map(|bytes| Cow::Owned(normalise_stroke(bytes))));
+        if let Some(rest) = path.strip_prefix("tools/").and_then(|p| p.strip_suffix(".svg")) {
+            let (stem, size) = match rest.rsplit_once('@') {
+                Some((s, sz)) => (s, sz.parse::<f32>().ok().unwrap_or(24.0)),
+                None => (rest, 24.0),
+            };
+            return Ok(tool_bytes(stem).map(|bytes| Cow::Owned(rescale_strokes(bytes, 24.0, size))));
         }
         // lizard's layer-tree glyphs are the original 16x16 SVGs, served verbatim.
         if let Some(bytes) = crate::widgets::layer_icons::load(path) {
@@ -766,6 +811,8 @@ fn svg_canvas(icon: Icon) -> SvgCanvas {
             stroke_path(&mut p, ox, oy, s, &pts, true, 1.4);
             disc(&mut p, ox, oy, s, 8.0, 8.0, 1.7);
         }
+        // Real glyphs come from FIGMA_UI_ICONS (user-supplied 24-grid SVGs).
+        Icon::Number | Icon::Boolean => {}
         Icon::LinkOn | Icon::LinkOff => {
             let capsule = |a: (f32, f32), b: (f32, f32), r: f32| -> Vec<(f32, f32)> {
                 let (dx, dy) = (b.0 - a.0, b.1 - a.1);
@@ -1338,7 +1385,7 @@ fn ring(p: &mut SvgCanvas, ox: f32, oy: f32, s: f32, cx: f32, cy: f32, r: f32, w
 /// 调用点（`icon::paint(icon, rgba(t.icon), 14.0)`）一行都不用改。
 pub fn paint(icon: Icon, color: impl Into<gpui::Rgba>, size: f32) -> impl IntoElement {
     let rgba: gpui::Rgba = color.into();
-    let path = figma_ui_icon_path(icon, size).unwrap_or_else(|| icon.asset_path());
+    let path = sized_icon_path(icon, size);
     svg().path(path).w(px(size)).h(px(size)).flex_none().text_color(Hsla::from(rgba))
 }
 
@@ -1351,7 +1398,7 @@ mod tests {
     fn every_icon_emits_a_well_formed_svg() {
         let t = table();
         assert_eq!(t.len(), Icon::ALL.len());
-        assert_eq!(t.len(), 94, "Icon 变体数变了：请同步 ALL / asset_name / 本断言");
+        assert_eq!(t.len(), 96, "Icon 变体数变了：请同步 ALL / asset_name / 本断言");
         let mut names = HashSet::new();
         for a in t {
             assert!(names.insert(a.name), "duplicate asset name {}", a.name);
@@ -1409,6 +1456,13 @@ mod tests {
             let got = IconAssets.load(&format!("tools/{stem}.svg")).unwrap().unwrap();
             assert_eq!(&*got, bytes.as_slice(), "{stem} resolves");
         }
+    }
+
+    #[test]
+    fn rescale_binds_every_stroke_to_one_width() {
+        let src = br#"<svg><path stroke-width="2.4"/><path stroke-width="4.8"/></svg>"#;
+        let out = String::from_utf8(rescale_strokes(src, 16.0, 32.0)).unwrap();
+        assert_eq!(out.matches("stroke-width=\"0.5\"").count(), 2, "{out}");
     }
 
     #[test]

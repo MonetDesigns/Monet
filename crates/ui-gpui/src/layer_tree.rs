@@ -43,6 +43,14 @@ const ROW_INSET: f32 = 8.0;
 /// Row pitch 32 = a 24 pt block plus 8 pt of gap. A row's block is 24 pt tall and the gap
 /// between two separate blocks is 8 pt; blocks never merge into one strip.
 const ROW_H: f32 = 32.0;
+/// Pages/Layers 区块的竖向尺寸，来自 Figma 参考快照（内联 `style="height: …px"`）
+/// 与其脚本里的 `Math.min(页数 * 32 + 8, 视口 25%)`：
+/// 3 页 = 104（通常），7 页 = 232（上限），1 页 = 40（下限）。
+const PAGES_MIN_H: f32 = 40.0;
+const PAGES_DEFAULT_H: f32 = 104.0;
+const PAGES_MAX_H: f32 = 232.0;
+/// 图层区吃掉剩余高度，但至少留下与 Pages 默认高度相同的空间。
+const LAYERS_MIN_H: f32 = 104.0;
 /// The icon **cell** is 24×24; the glyph inside it stays 16, so the icon does not fill the cell.
 const ICON_BOX: f32 = 24.0;
 const ICON_GLYPH: f32 = 16.0;
@@ -268,7 +276,7 @@ impl CanvasView {
             .child(SectionHeader::new(tr("Layers")).variant(SectionHeaderVariant::Normal))
             .child({
                 let me_layers = cx.entity();
-                div().flex_1().min_h(px(0.0)).relative()
+                div().flex_1().min_h(px(LAYERS_MIN_H)).relative()
                     // 图层列表的空白处（行下面那一层）点一下取消选中。
                     .child(div().absolute().size_full().on_mouse_down(MouseButton::Left, move |_e, _, cx| {
                         me_layers.update(cx, |cv, cx| cv.run_command("select.none", serde_json::json!({}), cx));
@@ -409,7 +417,13 @@ impl CanvasView {
         // lizard `pages()`: `resp.double_clicked()` starts an inline rename of that page row.
         let renaming_page = self.inline_rename.as_ref().filter(|r| r.target == crate::InlineRenameTarget::Page).and_then(|r| r.ids.first().copied());
         let rename_editor = self.inline_rename_field.clone();
-        let mut list = div().id("pages-list").relative().w_full().flex().flex_col().gap(pt(8.0)).pb(pt(8.0)).max_h(px(220.0)).overflow_y_scroll();
+        // Figma: 列表高度 = 页数 * 32 + 8，夹到 40..232；空表用 104 的默认高度。
+        let pages_h = if pages.is_empty() {
+            PAGES_DEFAULT_H
+        } else {
+            (pages.len() as f32 * ROW_H + 8.0).clamp(PAGES_MIN_H, PAGES_MAX_H)
+        };
+        let mut list = div().id("pages-list").relative().w_full().flex().flex_col().gap(pt(8.0)).pb(pt(8.0)).h(px(pages_h)).min_h(px(PAGES_MIN_H)).max_h(px(PAGES_MAX_H)).overflow_y_scroll();
         // 列表空白处（含行间 8 pt 缝）点一下取消选中；行在它上面，点行不会落到底层。
         {
             let me_blank = me.clone();
