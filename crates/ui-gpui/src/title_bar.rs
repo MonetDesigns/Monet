@@ -69,13 +69,17 @@ pub fn maximize_icon(maximized: bool) -> Icon {
     if maximized { Icon::WinRestore } else { Icon::WinMaximize }
 }
 
-/// 一个窗口控制按钮：hover 底色，关闭键 hover 变红。命中区交给平台，动作由系统执行。
+/// 一个窗口控制按钮：hover 底色，关闭键 hover 变红且图标由常态墨色翻成白色。
+/// 命中区交给平台，动作由系统执行。
 fn control_button(id: &'static str, icon: Icon, close: bool, area: WindowControlArea) -> gpui::Stateful<Div> {
     let t = tokens();
     let hover = if close { rgba(t.danger) } else { rgba(t.hover) };
-    let ink = if close { gpui::Rgba { r: 1.0, g: 1.0, b: 1.0, a: 1.0 } } else { rgba(t.icon) };
+    let ink = rgba(t.icon);
+    let white = gpui::Rgba { r: 1.0, g: 1.0, b: 1.0, a: 1.0 };
+    let group = SharedString::from(format!("title-control-{id}"));
     div()
         .id(SharedString::from(id))
+        .group(group.clone())
         .flex_none()
         .w(pt(CONTROL_W))
         .h_full()
@@ -92,7 +96,23 @@ fn control_button(id: &'static str, icon: Icon, close: bool, area: WindowControl
             WindowControlArea::Close => window.remove_window(),
             WindowControlArea::Drag => {}
         })
-        .child(icon::paint(icon, ink, 20.0))
+        // svg 的显式色不继承父 text_color：叠一层白图标，hover 时显隐。
+        .child(
+            div()
+                .relative()
+                .flex_none()
+                .child(icon::paint(icon, ink, 20.0))
+                .when(close, |d| {
+                    d.child(
+                        div()
+                            .absolute()
+                            .inset_0()
+                            .opacity(0.0)
+                            .group_hover(group.clone(), |s| s.opacity(1.0))
+                            .child(icon::paint(icon, white, 20.0)),
+                    )
+                }),
+        )
 }
 
 /// kit `TitleBar::new().child(content)`：整条注册成系统标题栏拖拽区，

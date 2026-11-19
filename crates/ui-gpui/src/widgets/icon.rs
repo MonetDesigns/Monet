@@ -511,16 +511,30 @@ pub fn paint_tool(icon: Icon, color: impl Into<gpui::Rgba>) -> impl IntoElement 
 /// Figma 的四个 24×24 描边图标（用户 2026-11-15）：加号 / 减号 / 叉号 / 下拉小箭头。
 /// **网格和路径坐标保持原样**，只有显示尺寸会等比缩放；`__STROKE__` 由
 /// [`ICON_STROKE`] 按缩放比反算注入，缩放后视觉线宽恒为 1 pt。
-const FIGMA_UI_ICONS: [(Icon, &str); 7] = [
+const FIGMA_UI_ICONS: [(Icon, &str); 17] = [
     (Icon::Plus, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M12 6.5V12M12 12V17.5M12 12H6.5M12 12H17.5" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/></svg>"#),
     (Icon::Minus, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M6.5 12H17.5" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/></svg>"#),
-    (Icon::Close, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M6.5 6.5L12 12M12 12L17.5 17.5M12 12L6.50003 17.5M12 12L13.6109 10.3891L17.5 6.50006" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/></svg>"#),
+    (Icon::Close, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M6.50003 17.5L13.6109 10.3891L17.5 6.50006M6.5 6.5L17.5 17.5" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/></svg>"#),
     (Icon::ChevronDown, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M8.99994 11L12 14L14.9999 11" stroke="black" stroke-width="__STROKE__" stroke-linecap="round" stroke-linejoin="round"/></svg>"#),
     // 其余三个方向都是同一个小箭头**旋转**出来的（用户 2026-11-15）：
     // 向下箭头顺时针 90° = 向左；逆时针 90° = 向右；180° = 向上。路径坐标不动。
     (Icon::ChevronLeft, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><g transform="rotate(90 12 12)"><path d="M8.99994 11L12 14L14.9999 11" stroke="black" stroke-width="__STROKE__" stroke-linecap="round" stroke-linejoin="round"/></g></svg>"#),
     (Icon::ChevronRight, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><g transform="rotate(-90 12 12)"><path d="M8.99994 11L12 14L14.9999 11" stroke="black" stroke-width="__STROKE__" stroke-linecap="round" stroke-linejoin="round"/></g></svg>"#),
     (Icon::ChevronUp, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><g transform="rotate(180 12 12)"><path d="M8.99994 11L12 14L14.9999 11" stroke="black" stroke-width="__STROKE__" stroke-linecap="round" stroke-linejoin="round"/></g></svg>"#),
+    // 用户 2026-11-19 提供的 6 个 24 网格线框图标。几何照抄，所有 stroke-width
+    // 统一由 __STROKE__ 注入；颜色交给调用方的 text_color（GPUI 只取 SVG alpha）。
+    (Icon::Frame, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M10.5 6.5L9.5 17.5" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/><path d="M14.5 6.5L13.5 17.5" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/><path d="M6.5 10H17.5M6.5 14H17.5" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/></svg>"#),
+    (Icon::Section, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M6 8H18M6 16H18M8 6V18M16 18V6" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/></svg>"#),
+    (Icon::Text, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M6.5 9V6.5H12M17.5 9V6.5H12M12 6.5V17.5M12 17.5H9.5M12 17.5H14.5" stroke="black" stroke-width="__STROKE__" stroke-linecap="round" stroke-linejoin="round"/></svg>"#),
+    (Icon::Pen, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M13.5 17.5L14.6464 18.6464C14.8417 18.8417 15.1583 18.8417 15.3536 18.6464L18.6464 15.3536C18.8417 15.1583 18.8417 14.8417 18.6464 14.6464L17.5 13.5M13.5 17.5L17.5 13.5M13.5 17.5L11.0205 17.0041C9.48501 16.697 8.26993 15.5222 7.91128 13.9979L6.62759 8.54225C6.54827 8.20514 6.64902 7.85098 6.8939 7.6061L7.25 7.25M17.5 13.5L17.0041 11.0205C16.697 9.48501 15.5222 8.26993 13.9979 7.91128L8.54225 6.62759C8.20514 6.54827 7.85098 6.64902 7.6061 6.8939L7.25 7.25M7.25 7.25L11 11" stroke="black" stroke-width="__STROKE__" stroke-linejoin="round"/><circle cx="12" cy="12" r="1.5" stroke="black" stroke-width="__STROKE__"/></svg>"#),
+    (Icon::Variables, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="5" y="8" width="14" height="8" rx="4" stroke="black" stroke-width="__STROKE__"/><circle cx="9.5" cy="12" r="2" stroke="black" stroke-width="__STROKE__"/></svg>"#),
+    (Icon::Page, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M8.5 6H12.793C12.925 6 13.052 6.053 13.146 6.146L16.854 9.854C16.947 9.947 17 10.075 17 10.208V16.5C17 17.328 16.328 18 15.5 18H8.5C7.672 18 7 17.328 7 16.5V7.5C7 6.672 7.672 6 8.5 6Z" stroke="black" stroke-width="__STROKE__" stroke-linejoin="round"/><path d="M13 7V10H16" stroke="black" stroke-width="__STROKE__" stroke-linejoin="round"/></svg>"#),
+    // 移动工具：产品指针的纯线框版（不填充），线宽同样走 ICON_STROKE。
+    (Icon::Move, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M6 3L6 20.4L10.35 16.35L13.2 22.2L15.9 21L13.05 15.3L18.9 15.3Z" stroke="black" stroke-width="__STROKE__" stroke-linejoin="round"/></svg>"#),
+    // 标题栏三键：减号 / 方框 / 还原，与 X 同一套 24 网格与线宽。
+    (Icon::WinMinimize, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M6.5 12H17.5" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/></svg>"#),
+    (Icon::WinMaximize, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="6.5" y="6.5" width="11" height="11" fill="none" stroke="black" stroke-width="__STROKE__"/></svg>"#),
+    (Icon::WinRestore, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="8.5" y="5.5" width="9" height="9" fill="none" stroke="black" stroke-width="__STROKE__"/><path d="M15.5 15.5V18.5H6.5V9.5H9.5" fill="none" stroke="black" stroke-width="__STROKE__" stroke-linejoin="round"/></svg>"#),
 ];
 
 /// `size` 是最终显示的点数：24 网格等比缩到 `size` 时把描边反向放大 `24/size`，
@@ -1344,8 +1358,9 @@ mod tests {
             let s = std::str::from_utf8(&a.svg).expect("svg is utf8");
             assert!(s.starts_with("<svg "), "{}: {}", a.name, s);
             assert!(s.trim_end().ends_with("</svg>"), "{}", a.name);
-            // The product mark is drawn on a 24-unit grid; every other glyph is 16.
-            let grid = if a.icon == Icon::Logo { "0 0 24 24" } else { "0 0 16 16" };
+            // 产品标记与 24 网格线框图标走 24-unit grid，其余生成字形是 16。
+            let grid24 = a.icon == Icon::Logo || FIGMA_UI_ICONS.iter().any(|(i, _)| *i == a.icon);
+            let grid = if grid24 { "0 0 24 24" } else { "0 0 16 16" };
             assert!(s.contains(&format!("viewBox=\"{grid}\"")), "{}", a.name);
             assert!(!s.contains("NaN") && !s.contains("inf"), "{}: {}", a.name, s);
             assert!(s.contains("<path") || s.contains("<circle") || s.contains("<rect"), "{} has no shapes: {}", a.name, s);
@@ -1374,7 +1389,7 @@ mod tests {
             let parsed = usvg::Tree::from_data(&a.svg, &usvg::Options::default());
             assert!(parsed.is_ok(), "{}: {:?}", a.name, parsed.err());
             let tree = parsed.unwrap();
-            let side = if a.icon == Icon::Logo { 24.0 } else { 16.0 };
+            let side = if a.icon == Icon::Logo || FIGMA_UI_ICONS.iter().any(|(i, _)| *i == a.icon) { 24.0 } else { 16.0 };
             assert_eq!(tree.size().width(), side, "{} viewBox width", a.name);
             assert_eq!(tree.size().height(), side, "{} viewBox height", a.name);
         }
@@ -1398,10 +1413,12 @@ mod tests {
 
     #[test]
     fn figma_ui_icons_keep_their_grid_and_stroke_width() {
-        for icon in [Icon::Plus, Icon::Minus, Icon::Close, Icon::ChevronDown] {
+        for (icon, _) in FIGMA_UI_ICONS {
             let full = String::from_utf8(figma_ui_icon(icon, 24.0).unwrap()).unwrap();
             assert!(full.contains("viewBox=\"0 0 24 24\""), "{icon:?} grid changed");
             assert!(full.contains(&format!("stroke-width=\"{}\"", ICON_STROKE)), "{icon:?} stroke not bound");
+            assert!(!full.contains("__STROKE__"), "{icon:?} placeholder left");
+            assert!(usvg::Tree::from_data(full.as_bytes(), &usvg::Options::default()).is_ok(), "{icon:?} invalid svg");
             // 缩到 12pt 时描边先放大两倍，等比缩放回去后视觉线宽仍是 ICON_STROKE。
             let half = String::from_utf8(figma_ui_icon(icon, 12.0).unwrap()).unwrap();
             assert!(half.contains(&format!("stroke-width=\"{}\"", ICON_STROKE * 2.0)), "{icon:?} stroke scaled");
