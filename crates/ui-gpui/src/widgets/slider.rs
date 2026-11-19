@@ -8,7 +8,16 @@ use crate::widgets::{rgba, tokens};
 use gpui::prelude::*;
 use gpui::{App, Bounds, Corners, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, SharedString, Window, div, px};
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::rc::Rc;
+
+thread_local! {
+    /// 跨帧稳定的拖拽状态：`render()` 每帧重建控件，局部 `Cell` 会在第一次
+    /// `on_change` 触发重绘后丢失，导致滑条只能动一下（用户 2026-11-19 实测）。
+    /// 带 `id()` 的滑条按 id 复用同一个 `Cell`。
+    static DRAGS: std::cell::RefCell<HashMap<SharedString, Rc<Cell<bool>>>> =
+        std::cell::RefCell::new(HashMap::new());
+}
 
 /// 轨道高度（gpui-kit 默认 6 pt）。
 const TRACK_H: f32 = 6.0;
@@ -27,6 +36,8 @@ pub struct Slider {
     max: f32,
     step: f32,
     width: Option<f32>,
+    /// 跨帧稳定的拖拽 id（同一条滑条每帧都会重建，靠它复用拖拽状态）。
+    id: Option<SharedString>,
     show_value: bool,
     suffix: SharedString,
     precision: usize,
@@ -54,6 +65,7 @@ impl Slider {
             precision: 0,
             paint_track: None,
             on_change: None,
+            id: None,
             hit: Rc::new(Cell::new(None)),
             last: Rc::new(Cell::new(value.clamp(min, max))),
         }
@@ -68,6 +80,12 @@ impl Slider {
     /// 固定宽度；不设时占满容器。
     pub fn width(mut self, w: f32) -> Self {
         self.width = Some(w);
+        self
+    }
+
+    /// 跨帧稳定的拖拽 id：同一条滑条每帧重建，靠它复用拖拽状态。
+    pub fn id(mut self, id: impl Into<SharedString>) -> Self {
+        self.id = Some(id.into());
         self
     }
 
@@ -111,14 +129,18 @@ impl Slider {
         let hit_move = hit.clone();
         // CodeRabbit PR#23: track whether *this* slider owns the drag. A global "left button held"
         // check let a drag started on the hue track also move the alpha track under the pointer.
-        let dragging = Rc::new(Cell::new(false));
+        let dragging = match &self.id {
+            Some(id) => DRAGS.with(|m| m.borrow_mut().entry(id.clone()).or_insert_with(|| Rc::new(Cell::new(false))).clone()),
+            None => Rc::new(Cell::new(false)),
+        };
         let drag_down = dragging.clone();
-        let drag_move = dragging.clone();
-        let drag_up = dragging.clone();
+        let drag_win = dragging.clone();
+        let drag_end = dragging.clone();
         let last_down = self.last.clone();
-        let last_move = self.last.clone();
+        let last_win = self.last.clone();
+        let hit_win = hit.clone();
         let on_change = self.on_change.clone();
-        let on_change_move = self.on_change.clone();
+        let on_change_win = self.on_change.clone();
         let paint_track = self.paint_track.clone();
         let track = rgba(t.border);
         let fill = rgba(t.accent);
@@ -156,6 +178,36 @@ impl Slider {
                     size: gpui::size(px(THUMB - 2.0), px(THUMB - 2.0)),
                 };
                 window.paint_quad(gpui::fill(inner, thumb_fill).corner_radii(pill((THUMB - 2.0) / 2.0)));
+                // 拖动监听挂在窗口级：指针一旦移出轨道就收不到元素的 move/up，滑块会卡在
+                // 拖动状态（用户实测「滑条拖动很怪 / 放不下」）。
+                {
+                    let dragging = drag_win.clone();
+                    let hit = hit_win.clone();
+                    let last = last_win.clone();
+                    let cb = on_change_win.clone();
+                    window.on_mouse_event(move |e: &MouseMoveEvent, phase, window, cx| {
+                        if !phase.bubble() || !dragging.get() {
+                            return;
+                        }
+                        let Some(cb) = &cb else { return };
+                        let Some(b) = hit.get() else { return };
+                        let w = f32::from(b.size.width).max(1.0);
+                        let f = ((f32::from(e.position.x) - f32::from(b.origin.x)) / w).clamp(0.0, 1.0);
+                        let raw = min + f * (max - min);
+                        let next = (if step > 0.0 { (raw / step).round() * step } else { raw }).clamp(min, max);
+                        if (next - last.get()).abs() < 1e-4 {
+                            return;
+                        }
+                        last.set(next);
+                        cb(next, window, cx);
+                    });
+                    let dragging = drag_end.clone();
+                    window.on_mouse_event(move |_e: &MouseUpEvent, phase, _, _| {
+                        if phase.bubble() {
+                            dragging.set(false);
+                        }
+                    });
+                }
             },
         )
         .size_full();
@@ -179,28 +231,6 @@ impl Slider {
             } else {
                 let _ = next;
             }
-        })
-        .on_mouse_move(move |e: &MouseMoveEvent, window, cx| {
-            if !drag_move.get() {
-                return;
-            }
-            let Some(cb) = &on_change_move else { return };
-            let Some(b) = hit_move.get() else { return };
-            let w = f32::from(b.size.width).max(1.0);
-            let f = ((f32::from(e.position.x) - f32::from(b.origin.x)) / w).clamp(0.0, 1.0);
-            let raw = min + f * (max - min);
-            let next = (if step > 0.0 { (raw / step).round() * step } else { raw }).clamp(min, max);
-            // 值没变就不重复提交。Compare against the last committed value, not the constructor
-            // snapshot (CodeRabbit PR#23) — otherwise moving back toward the original value is
-            // swallowed while a document-driven rebuild is pending.
-            if (next - last_move.get()).abs() < 1e-4 {
-                return;
-            }
-            last_move.set(next);
-            cb(next, window, cx);
-        })
-        .on_mouse_up(MouseButton::Left, move |_e: &MouseUpEvent, _, _| {
-            drag_up.set(false);
         })
         .child(canvas);
 

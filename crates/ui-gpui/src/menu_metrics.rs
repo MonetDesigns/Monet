@@ -55,6 +55,55 @@ mod tests {
     use super::*;
 
     #[test]
+    fn menu_ink_lives_only_in_the_shared_surface() {
+        // 所有菜单行的默认文字颜色必须由通用 `menu_surface()` 一处注入：
+        // 主菜单 / 下拉 / 工具栏飞出 / 右键 / palette 都继承它。调用处再写一次
+        // 就会出现「三种菜单三种亮度」——2026-11-19 的回归就是这个原因。
+        fn code(src: &str) -> String {
+            src.lines().filter(|l| !l.trim_start().starts_with("//")).collect()
+        }
+        let surface = code(include_str!("widgets/menu_popup.rs"));
+        assert!(surface.contains("fn menu_surface"));
+        assert!(
+            surface.contains("text_color(crate::menu_metrics::ink())"),
+            "统一墨色必须写在通用 menu_surface() 内"
+        );
+
+        for (name, src) in [
+            ("menu_card", include_str!("menu_card.rs")),
+            ("main_menu", include_str!("main_menu.rs")),
+            ("widgets/menu", include_str!("widgets/menu.rs")),
+        ] {
+            let src = code(src);
+            assert!(!src.contains("t.menu_text"), "{name} 不能自己挑文字颜色");
+            assert!(!src.contains("t.menu_dim"), "{name} 不能自己挑图标颜色");
+            assert!(
+                !src.contains("text_color(crate::menu_metrics::ink())"),
+                "{name} 不要再设默认墨色，继承通用控件"
+            );
+        }
+
+        let toolbar = include_str!("toolbar.rs");
+        let more = toolbar
+            .split("fn vector_more_card")
+            .nth(1)
+            .unwrap_or_default()
+            .split("\nfn ")
+            .next()
+            .unwrap_or_default()
+            .split("\npub(crate) struct ")
+            .next()
+            .unwrap_or_default();
+        let more = code(more);
+        assert!(!more.contains("t.menu_text"), "工具栏飞出菜单不能自己挑文字颜色");
+        assert!(!more.contains("t.menu_dim"), "工具栏飞出菜单不能自己挑快捷键颜色");
+        assert!(
+            !more.contains("text_color(crate::menu_metrics::ink())"),
+            "工具栏飞出菜单要继承通用控件墨色"
+        );
+    }
+
+    #[test]
     fn every_menu_row_is_24_and_the_palette_is_white_percentages() {
         assert_eq!(MENU_ROW_H, 24.0);
         assert_eq!(MENU_SEP_H, 9.0);

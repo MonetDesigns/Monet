@@ -17,7 +17,7 @@ use crate::panels::{Cmd, Cmds};
 use crate::widgets::menu::menu_popup_in;
 use crate::widgets::popover::{self, HEADER_H, Open, Surface, WIDTH, popover_body, popover_window, title_text};
 use crate::widgets::typ_icons::TypIcon;
-use crate::widgets::{Icon, IconButton, SegItem, Segmented, Slot, Slider, TextEdit, TextField, number_field, pt, rgba, search_field, tokens};
+use crate::widgets::{Icon, IconButton, SegItem, Segmented, Slot, Slider, TextEdit, TextField, number_field, number_field_ranged, pt, rgba, search_field, tokens};
 use crate::widgets::{MenuRow, dropdown};
 use figcraft_i18n::tr;
 use gpui::{
@@ -534,6 +534,8 @@ pub(crate) struct PaintPicker {
     pub paint: figcraft_color::Paint,
     /// Write the whole paint back through the row's own command (`selection.setPaint`).
     pub on_write: Rc<dyn Fn(figcraft_color::Paint, &mut Window, &mut App)>,
+    /// 该 paint 所在的样式列表（填充/描边）。取色器头部的「+」用它弹出样式面板。
+    pub styles: Vec<Row>,
 }
 
 /// 样式编辑器的一行属性（egui `property_row`）：paint 带 14×14 色板，其余带类型图标。
@@ -597,6 +599,27 @@ struct ColorState {
     swatch_anchor: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The blend-mode dropdown's trigger rectangle while its menu is open.
     blend_anchor: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// 渐变类型下拉的触发矩形（菜单开着时 `Some`）。
+    grad_kind_anchor: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// 取色器自己的子浮层：点击渐变断点颜色 / 头部「+」时，在本卡片**左边**再开一张卡，
+    /// 不占 root 的单槽，因此取色器本身不会被替换掉。
+    sub: Rc<RefCell<Option<Box<WindowState>>>>,
+    /// 由断点弹出的取色器：隐藏顶部的纯色/渐变切换条（用户要求）。
+    nested: bool,
+    /// 每张取色器固定不变的编号，用于滑条等跨帧拖拽状态。
+    uid: usize,
+    /// 色板（饱和度/明度）是否正在拖动。
+    sv_drag: Rc<Cell<bool>>,
+    /// 渐变色阶的拖动状态：每帧重建 UI，必须存在 ColorState 里才能跨帧。
+    grad_drag: Rc<Cell<Option<usize>>>,
+    grad_press: Rc<Cell<Option<Point<Pixels>>>>,
+    grad_moved: Rc<Cell<bool>>,
+    grad_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// 断点行里的通用输入控件（百分比 / Hex / 透明度）。每帧重建元素树，但控件实体必须
+    /// 跨帧复用，否则一打字就被下一帧重置。断点数量变化时整体重建。
+    stop_fields: Rc<RefCell<Vec<StopFields>>>,
+    /// 上一次写进 `stop_fields` 的显示值，只有变化时才 `set_value`。
+    stop_shown: Rc<RefCell<Vec<(String, String, String)>>>,
     /// Which of [`COLOR_MODELS`] the value row shows.
     model: Rc<Cell<usize>>,
     /// Last (model, rgba) the fields were written for, so typing isn't overwritten every frame.
@@ -610,6 +633,14 @@ struct ColorState {
     /// Alpha percentage (all models except CSS).
     alpha: Entity<TextField>,
     on_pick: Rc<dyn Fn(Color32, &mut Window, &mut App)>,
+}
+
+/// 渐变断点行里的通用输入控件：位置百分比 + 通用颜色行（Hex + 透明度）。
+#[derive(Clone)]
+struct StopFields {
+    pct: Entity<TextField>,
+    hex: Entity<TextEdit>,
+    opacity: Entity<TextEdit>,
 }
 
 /// Everything an open detached window needs. Kept as data on the root view (a retained tree), not
@@ -678,6 +709,9 @@ pub(crate) struct WindowState {
     var_popups: Option<crate::panels::PopupReqs>,
     /// 浮层内通用下拉的菜单卡片（窗口坐标，作为 `render()` 的兄弟元素返回）。每帧清空重建。
     overlays: Rc<RefCell<Vec<AnyElement>>>,
+    /// 与 `overlays` 一一对应的关闭回调。菜单打开时在窗口根垫一层透明 backdrop，
+    /// 点击卡片以外的任何位置都能把所有菜单关掉（通用行为，不再每个菜单各写一套）。
+    overlay_dismiss: Rc<RefCell<Vec<Rc<dyn Fn(&mut Window, &mut App)>>>>,
     /// 当前浮层的关闭回调（`render()` 每帧写入），供菜单 `dismiss` 之外复用。
     dismiss: Rc<RefCell<Option<Rc<dyn Fn(&mut Window, &mut App)>>>>,
 }
@@ -871,6 +905,7 @@ impl WindowState {
             var_on_close: Rc::new(|_| {}),
             var_popups: None,
             overlays: Rc::new(RefCell::new(Vec::new())),
+            overlay_dismiss: Rc::new(RefCell::new(Vec::new())),
             dismiss: Rc::new(RefCell::new(None)),
         }
     }
@@ -2303,6 +2338,13 @@ impl WindowState {
         self.color.as_ref().map(|c| c.on_pick.clone())
     }
 
+    /// 登记当帧的内部菜单与其关闭回调。`render()` 据此在窗口根垫一层透明 backdrop：
+    /// 点击菜单以外的任何位置都会关闭菜单（通用行为）。
+    fn push_overlay(&self, el: AnyElement, dismiss: Rc<dyn Fn(&mut Window, &mut App)>) {
+        self.overlays.borrow_mut().push(el);
+        self.overlay_dismiss.borrow_mut().push(dismiss);
+    }
+
     pub(crate) fn color(
         cx: &mut App,
         origin: Point<Pixels>,
@@ -2331,6 +2373,9 @@ impl WindowState {
             p.on_write = Rc::new(move |np, w, cx| {
                 *cell.borrow_mut() = np.clone();
                 outer(np, w, cx);
+                // 命令队列只唤醒主窗口；取色器是独立 OS 窗口，必须自己刷新，
+                // 否则切换纯色/渐变/图片/图案后旧内容会一直留在画面上（用户 2026-11-19）。
+                w.refresh();
             });
             p
         });
@@ -2357,6 +2402,7 @@ impl WindowState {
             let grad_sel = grad_sel.clone();
             Rc::new(move |c: Color32, window: &mut Window, cx: &mut App| {
                 cur.set(c);
+                window.refresh();
                 remember_recent(c);
                 if let (Some(state), Some(write)) = (&paint_state, &paint_write) {
                     let mut np = state.borrow().clone();
@@ -2447,6 +2493,21 @@ impl WindowState {
             swatch_set,
             swatch_anchor,
             blend_anchor,
+            grad_kind_anchor: Rc::new(Cell::new(None)),
+            sub: Rc::new(RefCell::new(None)),
+            nested: false,
+            uid: {
+                use std::sync::atomic::{AtomicUsize, Ordering};
+                static NEXT: AtomicUsize = AtomicUsize::new(1);
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            },
+            sv_drag: Rc::new(Cell::new(false)),
+            grad_drag: Rc::new(Cell::new(None)),
+            grad_press: Rc::new(Cell::new(None)),
+            grad_moved: Rc::new(Cell::new(false)),
+            grad_bounds: Rc::new(Cell::new(None)),
+            stop_fields: Rc::new(RefCell::new(Vec::new())),
+            stop_shown: Rc::new(RefCell::new(Vec::new())),
             model,
             model_anchor,
             shown,
@@ -2457,6 +2518,24 @@ impl WindowState {
         });
         // 卡片高度按面板实际内容算（见 `color_card_height`），`render` 每帧会再同步一次，
         // 所以纯色 ↔ 渐变、色板行数变化时卡片会自己长/缩。
+        w.height = w.color_card_height();
+        w
+    }
+
+    /// 由渐变断点 / 断点行颜色弹出的取色器：同一张卡片，只是隐藏顶部「纯色 / 渐变」
+    /// 切换条（用户要求这个面板不带上那些条目）。
+    pub(crate) fn color_nested(
+        cx: &mut App,
+        origin: Point<Pixels>,
+        current: Color32,
+        paint: Option<PaintPicker>,
+        on_pick: Rc<dyn Fn(Color32, &mut Window, &mut App)>,
+        cmds: Cmds,
+    ) -> Self {
+        let mut w = Self::color(cx, origin, current, paint, on_pick, cmds);
+        if let Some(c) = w.color.as_mut() {
+            c.nested = true;
+        }
         w.height = w.color_card_height();
         w
     }
@@ -2521,9 +2600,24 @@ impl WindowState {
     // 下面几个访问器都借 `&self` + 内部 `RefCell`，好让根视图的窗口级 move / up 直接路由进来。
     /// 借进 `picker` 跑一段（子浮层存在时才执行）。渲染期它被临时取出来，这里会返回 `None`。
     fn with_sub<R>(&self, f: impl FnOnce(&mut WindowState) -> R) -> Option<R> {
-        let slot = self.style_edit.as_ref()?.picker.clone();
-        let mut b = slot.borrow_mut();
-        b.as_mut().map(|c| f(c.as_mut()))
+        if let Some(se) = &self.style_edit {
+            let slot = se.picker.clone();
+            let mut b = slot.borrow_mut();
+            if let Some(c) = b.as_mut() {
+                return Some(f(c.as_mut()));
+            }
+        }
+        // 取色器自己也能带一张子卡片（渐变断点色 / 样式面板）。它同样需要窗口级
+        // move / up 路由，否则拖动子卡片时松手事件收不到，卡片会一直粘在指针上
+        // （用户 2026-11-19：「拖出来之后我甚至都放不下去了」）。
+        if let Some(cs) = &self.color {
+            let slot = cs.sub.clone();
+            let mut b = slot.borrow_mut();
+            if let Some(c) = b.as_mut() {
+                return Some(f(c.as_mut()));
+            }
+        }
+        None
     }
     /// 子浮层已按下但还没越过死区。
     pub(crate) fn sub_pending(&self) -> bool {
@@ -2568,15 +2662,42 @@ impl WindowState {
         match self.kind {
             // A custom title: the current colour's swatch beside the usual label.
             WindowKind::Color => {
-                let c = self.color.as_ref().map(|c| c.current.get()).unwrap_or(Color32::BLACK);
-                div()
+                let c = self.color.as_ref();
+                let col = c.map(|c| c.current.get()).unwrap_or(Color32::BLACK);
+                let nested = c.is_some_and(|c| c.nested);
+                let mut row = div()
+                    .w_full()
                     .flex()
                     .flex_row()
                     .items_center()
                     .gap(pt(8.0))
-                    .child(div().size(pt(12.0)).rounded(pt(3.0)).bg(rgba(c)).border_1().border_color(rgba(t.border)))
-                    .child(title_text(tr("Custom")))
-                    .into_any_element()
+                    .child(div().size(pt(12.0)).rounded(pt(3.0)).bg(rgba(col)).border_1().border_color(rgba(t.border)))
+                    .child(div().flex_1().min_w(pt(0.0)).child(title_text(tr("Custom"))));
+                // 头部「+」：在取色器**左边**再开一张样式面板，取色器本身不关。
+                if let Some(c) = c
+                    && !nested
+                {
+                    let styles = c.paint.as_ref().map(|p| p.styles.clone()).unwrap_or_default();
+                    {
+                        let sub = c.sub.clone();
+                        let cmds = self.cmds.clone();
+                        let top = self.origin.y;
+                        row = row.child(IconButton::new(Icon::Plus).size(24.0).on_click(move |_, _window, cx| {
+                            let mut child = WindowState::styles(
+                                cmds.clone(),
+                                cx,
+                                Point { x: px(0.0), y: top },
+                                tr("Color styles"),
+                                "paint",
+                                styles.clone(),
+                            );
+                            child.anchor_to_button_top(top);
+                            *sub.borrow_mut() = Some(Box::new(child));
+                            cmds.wake();
+                        }));
+                    }
+                }
+                row.into_any_element()
             }
             // A custom title with a live control: create a style straight from the header.
             // egui `style_picker::open`：四个 slot 共用一类窗口，「+」按 slot 决定 create_type
@@ -2681,9 +2802,8 @@ impl WindowState {
     /// 渐变模式会多出「渐变类型 + 停靠点条」两段，色板行数随当前色板集变化。
     fn color_card_height(&self) -> f32 {
         let Some(c) = self.color.as_ref() else { return HEADER_H + 500.0 };
-        // 上下各 8 + 对比度 48 + 色域 208 + 滑轨 48 + 数值 40
-        let mut h = 8.0 + 48.0 + SPECTRUM + 48.0 + 40.0 + 8.0;
-        if c.paint.is_some() {
+        let mut h = 8.0;
+        if c.paint.is_some() && !c.nested {
             h += 40.0;
         }
         let grad = matches!(
@@ -2691,13 +2811,25 @@ impl WindowState {
             Some(figcraft_color::PaintKind::Gradient(_))
         );
         if grad {
-            // 渐变类型行 24（pt 4）+ 停靠点条 64（pt 8；ramp 16 + 4 + stops 18 + 4 + 按钮 22）
-            h += 4.0 + 24.0 + 8.0 + 64.0;
+            // 类型行 48 + 预览条 8/48 + 「断点」标题 8/32 + 每行 32 + 底部 12
+            let stops = c
+                .paint_state
+                .as_ref()
+                .and_then(|s| match &s.borrow().kind {
+                    figcraft_color::PaintKind::Gradient(g) => Some(g.stops.len()),
+                    _ => None,
+                })
+                .unwrap_or(2) as f32;
+            h += 48.0 + 8.0 + 48.0 + 8.0 + 32.0 + stops * 32.0 + 12.0;
+        } else {
+            // 对比度 48 + 色域 208 + 滑轨 48 + 数值 40 + 色板
+            h += 48.0 + SPECTRUM + 48.0 + 40.0;
+            let n = page_colors().len().max(recent_colors().len());
+            let rows = n.div_ceil(CHITS_PER_ROW).clamp(1, 3) as f32;
+            // 顶边 1 + 上 11 + 下拉 24 + 下 4 + 色块 rows×24 − 末行 8 + 底部 12
+            h += 1.0 + 11.0 + 24.0 + 4.0 + rows * CHIT_PITCH - (CHIT_PITCH - CHIT) + 12.0;
         }
-        let n = page_colors().len().max(recent_colors().len());
-        let rows = n.div_ceil(CHITS_PER_ROW).clamp(1, 3) as f32;
-        // 顶边 1 + 上 11 + 下拉 24 + 下 4 + 色块 rows×24 − 末行 8 + 底部 12
-        h += 1.0 + 11.0 + 24.0 + 4.0 + rows * CHIT_PITCH - (CHIT_PITCH - CHIT) + 12.0;
+        h += 8.0;
         HEADER_H + h
     }
 
@@ -2805,6 +2937,13 @@ impl WindowState {
             }
         };
         let hue_c = hsb_color(hue, 1.0, 1.0);
+        let sv_drag = c.sv_drag.clone();
+        let sv_drag_down = sv_drag.clone();
+        let sv_drag_win = sv_drag.clone();
+        let sv_drag_end = sv_drag.clone();
+        let sv_hit_win = sv_hit.clone();
+        let sv_pick_down = sv_pick.clone();
+        let sv_pick_win = sv_pick.clone();
         let spectrum = div()
             .relative()
             .w(pt(SPECTRUM))
@@ -2834,20 +2973,45 @@ impl WindowState {
                                     bounds,
                                     gpui::linear_gradient(180.0, gpui::linear_color_stop(clear, 0.0), gpui::linear_color_stop(black, 1.0)),
                                 ));
+                                // 拖动监听必须挂在窗口级：指针一旦移出色域方块就收不到元素的
+                                // move，手柄会卡住（用户实测「手柄拖不动 / 放不下」）。
+                                {
+                                    let dragging = sv_drag_win.clone();
+                                    let hit = sv_hit_win.clone();
+                                    let pick = sv_pick_win.clone();
+                                    window.on_mouse_event(move |e: &MouseMoveEvent, phase, window, cx| {
+                                        if !phase.bubble() || !dragging.get() {
+                                            return;
+                                        }
+                                        let Some(b) = hit.get() else { return };
+                                        let s = ((f32::from(e.position.x) - f32::from(b.origin.x)) / f32::from(b.size.width).max(1.0)).clamp(0.0, 1.0);
+                                        let v = 1.0 - ((f32::from(e.position.y) - f32::from(b.origin.y)) / f32::from(b.size.height).max(1.0)).clamp(0.0, 1.0);
+                                        pick(hue, s, v, window, cx);
+                                    });
+                                    let dragging = sv_drag_end.clone();
+                                    window.on_mouse_event(move |_e: &gpui::MouseUpEvent, phase, _, _| {
+                                        if phase.bubble() {
+                                            dragging.set(false);
+                                        }
+                                    });
+                                }
                             },
                         )
                         .size_full(),
-                    )
-                    .on_mouse_down(MouseButton::Left, move |e, window, cx| {
-                        let Some(b) = sv_click.get() else { return };
-                        let s = ((f32::from(e.position.x) - f32::from(b.origin.x)) / f32::from(b.size.width).max(1.0)).clamp(0.0, 1.0);
-                        let v = 1.0 - ((f32::from(e.position.y) - f32::from(b.origin.y)) / f32::from(b.size.height).max(1.0)).clamp(0.0, 1.0);
-                        sv_pick(hue, s, v, window, cx);
-                    }),
+                    ),
             )
             // 拾色点：Figma `_1t0vmmd5/7` 是 16 pt 白环 + 4 pt 白边 + 中间填当前色，
             // 环外还有一圈 1 px `controlknoboffoutline`（这里用 18 pt 半透明底托出来）。
-            .child(picker_knob(hsb.s * SPECTRUM, (1.0 - hsb.b) * SPECTRUM, current.with_alpha(255)));
+            .child(picker_knob(hsb.s * SPECTRUM, (1.0 - hsb.b) * SPECTRUM, current.with_alpha(255)))
+            // 事件挂在**外层**：手柄绝对定位盖在色板上，若只挂在色板 div 上，
+            // 按在手柄圆心上会点不到（用户实测手柄拖不动）。
+            .on_mouse_down(MouseButton::Left, move |e, window, cx| {
+                sv_drag_down.set(true);
+                let Some(b) = sv_click.get() else { return };
+                let s = ((f32::from(e.position.x) - f32::from(b.origin.x)) / f32::from(b.size.width).max(1.0)).clamp(0.0, 1.0);
+                let v = 1.0 - ((f32::from(e.position.y) - f32::from(b.origin.y)) / f32::from(b.size.height).max(1.0)).clamp(0.0, 1.0);
+                sv_pick_down(hue, s, v, window, cx);
+            });
 
         // ② 色相滑轨：通用 `Slider`（受控：拖动回调写回颜色，下一帧按新色相重算位置），
         //    轨道整条自绘成 6 段 60° 线性渐变。
@@ -2860,6 +3024,7 @@ impl WindowState {
             }
         };
         let hue_slider = crate::widgets::Slider::new(hue, 0.0, 360.0)
+            .id(format!("color-{}-hue", c.uid))
             .step(1.0)
             .paint_track(|window, bounds, _| {
                 let x0 = f32::from(bounds.origin.x);
@@ -2889,6 +3054,7 @@ impl WindowState {
         let alpha_pick = pick.clone();
         let opaque = current.with_alpha(255);
         let alpha_slider = crate::widgets::Slider::new(alpha, 0.0, 1.0)
+            .id(format!("color-{}-alpha", c.uid))
             .step(1.0 / 255.0)
             .paint_track(move |window, bounds, _| {
                 crate::widgets::swatch::checker(window, bounds, 4.0);
@@ -3035,71 +3201,80 @@ impl WindowState {
                     ),
             );
 
-        // ── 组装（顺序与 Figma 一致：类型条 → 渐变色阶 → 对比度 → 色域 → 滑轨 → 数值 → 色板）
-        let mut col = div().w(pt(PANEL_W)).flex().flex_col().pt(pt(8.0)).pb(pt(8.0));
-        if c.paint.is_some() {
+        // ── 组装（顺序与 Figma 一致：类型条 → 渐变编辑 / 或纯色编辑）
+        // 渐变页只保留「类型行 + 预览条 + 断点列表」，不再带色域/色相/透明度/色板，
+        // 否则切换后旧内容全留在上面（用户 2026-11-19）。
+        let kind_now = c.paint_state.as_ref().map(|s| s.borrow().kind.clone());
+        let is_grad = matches!(kind_now, Some(figcraft_color::PaintKind::Gradient(_)));
+        // 顶部不额外留白：类型条紧贴标题栏下方（Figma 取色器内容 257 = 类型条 41 + 渐变编辑 216）。
+        let mut col = div().w(pt(PANEL_W)).flex().flex_col();
+        if c.paint.is_some() && !c.nested {
             col = col.child(self.picker_toolbar(c));
         }
-        if let (Some(p), Some(state)) = (&c.paint, &c.paint_state) {
-            let grad = match &state.borrow().kind {
-                figcraft_color::PaintKind::Gradient(g) => Some(g.clone()),
-                _ => None,
-            };
-            if let Some(g) = grad {
-                col = col.child(div().px(pt(16.0)).pt(pt(4.0)).child(self.gradient_kind_row(p, state)));
-                col = col.child(div().px(pt(16.0)).pt(pt(8.0)).child(self.gradient_stops(p, state, g, c.grad_sel.clone(), c.current.clone())));
+        if is_grad {
+            if let (Some(p), Some(state)) = (&c.paint, &c.paint_state) {
+                let grad = match &state.borrow().kind {
+                    figcraft_color::PaintKind::Gradient(g) => Some(g.clone()),
+                    _ => None,
+                };
+                if let Some(g) = grad {
+                    // 两段各自管自己的内缩：类型行 pl16/pr8，预览条 px16，标题/断点行 px8。
+                    col = col.child(self.gradient_kind_row(c, p, state));
+                    col = col.child(self.gradient_stops(cx, c, p, state, g, c.grad_sel.clone(), c.current.clone()));
+                }
             }
+        } else {
+            col = col.child(contrast_row);
+            col = col.child(div().px(pt(16.0)).child(spectrum));
+            col = col.child(
+                div()
+                    .w(pt(PANEL_W))
+                    .h(pt(48.0))
+                    .px(pt(16.0))
+                    .flex()
+                    .items_center()
+                    .gap(pt(12.0))
+                    .child(
+                        div()
+                            .flex_none()
+                            .w(pt(24.0))
+                            .h(pt(24.0))
+                            .rounded(pt(5.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .hover(|s| s.bg(rgba(t.hover)))
+                            .child(picker_icons::paint(PickerIcon::Dropper, rgba(t.icon), 24.0))
+                            .on_mouse_down(MouseButton::Left, move |_, _, _| {
+                                eyedrop_cmds.push(Cmd { id: "edit.pickColor", params: Some(json!({ "apply": false })) });
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(pt(0.0))
+                            .h(pt(48.0))
+                            .flex()
+                            .flex_col()
+                            .justify_between()
+                            .child(hue_slider)
+                            .child(alpha_slider),
+                    ),
+            );
+            col = col.child(
+                div()
+                    .w(pt(PANEL_W))
+                    .h(pt(40.0))
+                    .px(pt(16.0))
+                    .flex()
+                    .items_center()
+                    .gap(pt(8.0))
+                    .child(format_select)
+                    .child(fields_row),
+            );
+            col = col.child(swatch_panel);
         }
-        col = col.child(contrast_row);
-        col = col.child(div().px(pt(16.0)).child(spectrum));
-        col = col.child(
-            div()
-                .w(pt(PANEL_W))
-                .h(pt(48.0))
-                .px(pt(16.0))
-                .flex()
-                .items_center()
-                .gap(pt(12.0))
-                .child(
-                    div()
-                        .flex_none()
-                        .w(pt(24.0))
-                        .h(pt(24.0))
-                        .rounded(pt(5.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .cursor_pointer()
-                        .hover(|s| s.bg(rgba(t.hover)))
-                        .child(picker_icons::paint(PickerIcon::Dropper, rgba(t.icon), 24.0))
-                        .on_mouse_down(MouseButton::Left, move |_, _, _| {
-                            eyedrop_cmds.push(Cmd { id: "edit.pickColor", params: Some(json!({ "apply": false })) });
-                        }),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(pt(0.0))
-                        .h(pt(48.0))
-                        .flex()
-                        .flex_col()
-                        .justify_between()
-                        .child(hue_slider)
-                        .child(alpha_slider),
-                ),
-        );
-        col = col.child(
-            div()
-                .w(pt(PANEL_W))
-                .h(pt(40.0))
-                .px(pt(16.0))
-                .flex()
-                .items_center()
-                .gap(pt(8.0))
-                .child(format_select)
-                .child(fields_row),
-        );
-        col = col.child(swatch_panel);
 
         // The model list is the shared dropdown menu (ui-egui's model dropdown), parked on the
         // window root so the popover card cannot clip it.
@@ -3120,15 +3295,15 @@ impl WindowState {
                 }
             });
             let dismiss: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(move |_w, _cx| close.set(None));
-            self.overlays.borrow_mut().push(menu_popup_in(
+            self.push_overlay(menu_popup_in(
                 anchor,
                 Some(56.0),
                 rows,
                 on_pick,
-                dismiss,
+                dismiss.clone(),
                 f32::from(self.viewport.width),
                 f32::from(self.viewport.height),
-            ));
+            ), dismiss);
         }
         // The blend-mode menu, on the window root like the model menu.
         if let Some(anchor) = c.blend_anchor.get()
@@ -3154,15 +3329,17 @@ impl WindowState {
                 }
             });
             let dismiss: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(move |_w, _cx| close.set(None));
-            self.overlays.borrow_mut().push(menu_popup_in(
+            // 宽度按内容自适应：混合模式按钮在卡片最右侧（x=208），固定 208 宽会被
+            // 视口水平贴边夹到最左边（跑离按钮）。自适应后菜单紧贴按钮下方。
+            self.push_overlay(menu_popup_in(
                 anchor,
-                Some(208.0),
+                None,
                 rows,
                 on_pick,
-                dismiss,
+                dismiss.clone(),
                 f32::from(self.viewport.width),
                 f32::from(self.viewport.height),
-            ));
+            ), dismiss);
         }
         // The swatch-set menu (在此页面 / 最近使用), same parking rule.
         if let Some(anchor) = c.swatch_anchor.get() {
@@ -3181,33 +3358,88 @@ impl WindowState {
                 }
             });
             let dismiss: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(move |_w, _cx| close.set(None));
-            self.overlays.borrow_mut().push(menu_popup_in(
+            self.push_overlay(menu_popup_in(
                 anchor,
                 Some(PANEL_W),
                 rows,
                 on_pick,
-                dismiss,
+                dismiss.clone(),
                 f32::from(self.viewport.width),
                 f32::from(self.viewport.height),
-            ));
+            ), dismiss);
+        }
+        // 渐变类型下拉（线性 / 径向 / 角度 / 菱形）：与其它浮层内菜单一样挂在窗口根。
+        if let Some(anchor) = c.grad_kind_anchor.get()
+            && let (Some(p), Some(state)) = (&c.paint, &c.paint_state)
+        {
+            let active = match &state.borrow().kind {
+                figcraft_color::PaintKind::Gradient(g) => match g.kind {
+                    figcraft_color::GradientKind::Linear => 0,
+                    figcraft_color::GradientKind::Radial => 1,
+                    figcraft_color::GradientKind::Angular => 2,
+                    figcraft_color::GradientKind::Diamond => 3,
+                },
+                _ => 0,
+            };
+            let labels = ["Linear", "Radial", "Angular", "Diamond"];
+            let rows: Vec<MenuRow> = labels
+                .iter()
+                .enumerate()
+                .map(|(i, l)| MenuRow { label: (*l).into(), trail: None, checked: Some(i == active), separator_before: false, key: None })
+                .collect();
+            let write = p.on_write.clone();
+            let st = state.clone();
+            let close = c.grad_kind_anchor.clone();
+            let on_pick: Rc<dyn Fn(&str, &mut Window, &mut App)> = Rc::new({
+                let close = close.clone();
+                move |label, window, cx| {
+                    if let Some(i) = labels.iter().position(|l| *l == label) {
+                        let cur = st.borrow().clone();
+                        let base = cur.preview_color();
+                        let mut np = cur;
+                        np.kind = figcraft_color::PaintKind::Gradient(figcraft_color::Gradient::default_for(GRADIENT_KINDS[i.min(3)], base));
+                        write(np, window, cx);
+                    }
+                    close.set(None);
+                }
+            });
+            let dismiss: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(move |_w, _cx| close.set(None));
+            self.push_overlay(menu_popup_in(
+                anchor,
+                Some(120.0),
+                rows,
+                on_pick,
+                dismiss.clone(),
+                f32::from(self.viewport.width),
+                f32::from(self.viewport.height),
+            ), dismiss);
         }
         col.into_any_element()
     }
 
-    /// 填充类型条（Figma `color_picker_v2--typeAndBlendMode`，UI3 版）：
-    /// 纯色 / 渐变两格 24 pt 图标按钮 + 右侧混合模式按钮，底边 1 px 分隔。
+    /// 填充类型条（对齐 EGUI `colorpicker.rs::paint_type_row`）：
+    /// 纯色 / 渐变 / 图片 / 图案 四格 24 pt 图标按钮 + 右侧混合模式按钮，底边 1 px 分隔。
     fn picker_toolbar(&self, c: &ColorState) -> gpui::Div {
         let t = tokens();
-        let is_grad = matches!(
-            c.paint_state.as_ref().map(|s| s.borrow().kind.clone()),
-            Some(figcraft_color::PaintKind::Gradient(_))
-        );
+        let kind_idx = match c.paint_state.as_ref().map(|s| s.borrow().kind.clone()) {
+            Some(figcraft_color::PaintKind::Solid { .. }) => 0usize,
+            Some(figcraft_color::PaintKind::Gradient(_)) => 1,
+            Some(figcraft_color::PaintKind::Image(_)) => 2,
+            Some(figcraft_color::PaintKind::Pattern(_)) => 3,
+            _ => 0,
+        };
         let write = c.paint.as_ref().map(|p| p.on_write.clone());
         let state = c.paint_state.clone();
         let grad_kind = c.grad_kind.clone();
         let mut tabs = div().flex().items_center().gap(pt(4.0));
-        for (i, icon) in [(0usize, PickerIcon::Solid), (1usize, PickerIcon::Gradient)] {
-            let on = (i == 1) == is_grad;
+        let icons = [
+            (0usize, PickerIcon::Solid, None),
+            (1usize, PickerIcon::Gradient, None),
+            (2usize, PickerIcon::Solid, Some(Icon::Image)),
+            (3usize, PickerIcon::Solid, Some(Icon::ViewGrid)),
+        ];
+        for (i, picker_icon, icon) in icons {
+            let on = i == kind_idx;
             let mut b = div()
                 .w(pt(24.0))
                 .h(pt(24.0))
@@ -3216,8 +3448,11 @@ impl WindowState {
                 .items_center()
                 .justify_center()
                 .cursor_pointer()
-                .hover(|s| s.bg(rgba(t.hover)))
-                .child(picker_icons::paint(icon, rgba(t.icon), 24.0));
+                .hover(|s| s.bg(rgba(t.hover)));
+            b = match icon {
+                Some(icon) => b.child(crate::widgets::icon::paint(icon, rgba(t.icon), 24.0)),
+                None => b.child(picker_icons::paint(picker_icon, rgba(t.icon), 24.0)),
+            };
             if on {
                 b = b.bg(rgba(t.hover));
             }
@@ -3229,10 +3464,11 @@ impl WindowState {
                 let cur = st.borrow().clone();
                 let base = cur.preview_color();
                 let mut np = cur;
-                np.kind = if i == 0 {
-                    figcraft_color::PaintKind::Solid { color: base }
-                } else {
-                    figcraft_color::PaintKind::Gradient(figcraft_color::Gradient::default_for(GRADIENT_KINDS[gk.get().min(3)], base))
+                np.kind = match i {
+                    0 => figcraft_color::PaintKind::Solid { color: base },
+                    1 => figcraft_color::PaintKind::Gradient(figcraft_color::Gradient::default_for(GRADIENT_KINDS[gk.get().min(3)], base)),
+                    2 => figcraft_color::Paint::image("", figcraft_color::ImageScaleMode::Fill).kind,
+                    _ => figcraft_color::PaintKind::Pattern(figcraft_color::PatternPaint::new(0)),
                 };
                 w(np, window, cx);
             });
@@ -3272,9 +3508,10 @@ impl WindowState {
             .child(div().flex().items_center().gap(pt(4.0)).child(blend_btn))
     }
 
-    /// 渐变类型：线性 / 径向 / 角度 / 菱形（Figma 渐变面板用分段控件切，这里用通用
-    /// [`Segmented`]，切换即整份 paint 重写）。
-    fn gradient_kind_row(&self, p: &PaintPicker, state: &Rc<RefCell<figcraft_color::Paint>>) -> gpui::Div {
+    /// 渐变类型：线性 / 径向 / 角度 / 菱形。Figma 的渐变面板用**下拉菜单**切类型，
+    /// 右侧两枚 24 pt 按钮分别是「交换」和「旋转 90°」。
+    fn gradient_kind_row(&self, c: &ColorState, p: &PaintPicker, state: &Rc<RefCell<figcraft_color::Paint>>) -> gpui::Div {
+        let labels = ["Linear", "Radial", "Angular", "Diamond"];
         let active = match &state.borrow().kind {
             figcraft_color::PaintKind::Gradient(g) => match g.kind {
                 figcraft_color::GradientKind::Linear => 0,
@@ -3284,23 +3521,61 @@ impl WindowState {
             },
             _ => 0,
         };
-        let items: Vec<SegItem> = ["Linear", "Radial", "Angular", "Diamond"].iter().map(|s| SegItem::Text((*s).into())).collect();
-        let write = p.on_write.clone();
-        let st = state.clone();
-        let seg = Segmented::new(items).active(Some(active)).on_pick(move |i, window, cx| {
-            let cur = st.borrow().clone();
-            let base = cur.preview_color();
-            let mut np = cur;
-            np.kind = figcraft_color::PaintKind::Gradient(figcraft_color::Gradient::default_for(GRADIENT_KINDS[i.min(3)], base));
-            write(np, window, cx);
+        let anchor = c.grad_kind_anchor.clone();
+        let dropdown = dropdown::Dropdown::new(labels[active], 96.0, None).on_click(move |rect: Bounds<Pixels>, window, _cx| {
+            anchor.set(Some(rect));
+            window.refresh();
         });
-        div().w(pt(SPECTRUM)).h(pt(24.0)).child(seg)
+        let write = p.on_write.clone();
+        // 交换：两端 stop 互换（位置镜像），与 Figma 的「翻转渐变」一致。
+        let swap = IconButton::new(Icon::FlipH).size(24.0).on_click({
+            let write = write.clone();
+            let st = state.clone();
+            move |_, window, cx| {
+                let mut np = st.borrow().clone();
+                if let figcraft_color::PaintKind::Gradient(g) = &mut np.kind {
+                    for s in &mut g.stops {
+                        s.position = 1.0 - s.position;
+                    }
+                }
+                write(np, window, cx);
+            }
+        });
+        // 旋转：把渐变主轴旋转 90°。
+        let rotate = IconButton::new(Icon::Rotate).size(24.0).on_click({
+            let write = write.clone();
+            let st = state.clone();
+            move |_, window, cx| {
+                let mut np = st.borrow().clone();
+                if let figcraft_color::PaintKind::Gradient(g) = &mut np.kind {
+                    let (fx, fy) = g.from;
+                    let rot = |(x, y): (f64, f64)| (fx - (y - fy), fy + (x - fx));
+                    g.to = rot(g.to);
+                    g.width = rot(g.width);
+                }
+                write(np, window, cx);
+            }
+        });
+        div()
+            .w(pt(PANEL_W))
+            .h(pt(48.0))
+            .pl(pt(16.0))
+            .pr(pt(8.0))
+            .flex()
+            .items_center()
+            .gap(pt(4.0))
+            .child(dropdown)
+            .child(div().flex_1())
+            .child(swap)
+            .child(rotate)
     }
 
-    /// Gradient stops: a 208 pt ramp with draggable handles plus Remove / Flip / Rotate 90°
-    /// (ui-egui's stop bar). Every change is written back as a whole paint.
+    /// 渐变预览条 + 断点手柄 + 「断点」标题行 + 断点列表（百分比 / 颜色 / 减号）。
+    /// 点击预览条添加断点、拖动手柄改位置、点击手柄或颜色控件弹出嵌套取色器。
     fn gradient_stops(
         &self,
+        cx: &mut App,
+        c: &ColorState,
         p: &PaintPicker,
         state: &Rc<RefCell<figcraft_color::Paint>>,
         g: figcraft_color::Gradient,
@@ -3309,125 +3584,429 @@ impl WindowState {
     ) -> gpui::Div {
         let t = tokens();
         let write = p.on_write.clone();
-        let bounds = Rc::new(Cell::new(None::<Bounds<Pixels>>));
-        let drag = Rc::new(Cell::new(None::<usize>));
+        let bounds = c.grad_bounds.clone();
+        let drag = c.grad_drag.clone();
+        let press = c.grad_press.clone();
+        let moved = c.grad_moved.clone();
+        let sub = c.sub.clone();
+        let cmds = self.cmds.clone();
 
+        // 断点行的通用输入控件（百分比 / Hex / 透明度）。每帧重建元素树，实体必须跨帧
+        // 复用；断点数量变化时整体重建，避免闭包里捕获的索引错位。
+        let fields: Vec<StopFields> = {
+            let mut cache = c.stop_fields.borrow_mut();
+            if cache.len() != g.stops.len() {
+                cache.clear();
+                c.stop_shown.borrow_mut().clear();
+                for (i, s) in g.stops.iter().enumerate() {
+                    let hex = format!("#{:02X}{:02X}{:02X}", (s.color.r * 255.0).round() as u8, (s.color.g * 255.0).round() as u8, (s.color.b * 255.0).round() as u8);
+                    let shown = (format!("{}", (s.position * 100.0).round() as i64), hex.clone(), format!("{}", (s.color.a * 100.0).round() as i64));
+                    cache.push(stop_fields(cx, state, &write, i, &shown));
+                    c.stop_shown.borrow_mut().push(shown);
+                }
+            }
+            cache.clone()
+        };
+        // 外部改动（拖手柄 / 拖动色阶）后把数值同步回输入框；只在真的变了才写，避免打字被重置。
+        {
+            let mut shown = c.stop_shown.borrow_mut();
+            for (i, s) in g.stops.iter().enumerate() {
+                let hex = format!("#{:02X}{:02X}{:02X}", (s.color.r * 255.0).round() as u8, (s.color.g * 255.0).round() as u8, (s.color.b * 255.0).round() as u8);
+                let now = (format!("{}", (s.position * 100.0).round() as i64), hex, format!("{}", (s.color.a * 100.0).round() as i64));
+                let Some(f) = fields.get(i) else { continue };
+                if shown.get(i) == Some(&now) {
+                    continue;
+                }
+                f.pct.update(cx, |tf, _| tf.set_value(now.0.clone()));
+                f.hex.update(cx, |te, _| te.set_value(now.1.clone()));
+                f.opacity.update(cx, |te, _| te.set_value(now.2.clone()));
+                if let Some(slot) = shown.get_mut(i) {
+                    *slot = now;
+                }
+            }
+        }
+
+        // ① 预览条 208×32：底板棋盘格 + 断点之间真正的两色线性渐变（不是 24 段近似色带）。
         let ramp_g = g.clone();
         let ramp_bounds = bounds.clone();
-        let ramp = div().w(pt(208.0)).h(pt(16.0)).rounded(pt(4.0)).overflow_hidden().child(
-            gpui::canvas(
-                move |b, _, _| ramp_bounds.set(Some(b)),
+        let ramp = div()
+            .absolute()
+            .left(px(0.0))
+            .top(px(16.0))
+            .w(pt(208.0))
+            .h(pt(32.0))
+            .rounded(pt(5.0))
+            .overflow_hidden()
+            .child(
+                gpui::canvas(
+                    move |b, _, _| ramp_bounds.set(Some(b)),
+                    move |b, _, window, _| {
+                        let w = f32::from(b.size.width).max(1.0);
+                        let h = f32::from(b.size.height).max(1.0);
+                        // 透明色需要棋盘格垫底，否则看起来像纯色。
+                        let light = gpui::Hsla::from(rgba(Color32::from_rgb(255, 255, 255)));
+                        let dark = gpui::Hsla::from(rgba(Color32::from_rgb(0xCC, 0xCC, 0xCC)));
+                        let cell: f32 = 8.0;
+                        let mut y = 0.0;
+                        let mut cy = 0;
+                        while y < h {
+                            let mut x = 0.0;
+                            let mut cx_ = 0;
+                            while x < w {
+                                let quad = Bounds {
+                                    origin: point(px(f32::from(b.origin.x) + x), px(f32::from(b.origin.y) + y)),
+                                    size: size(px((cell).min(w - x)), px((cell).min(h - y))),
+                                };
+                                window.paint_quad(gpui::fill(quad, if (cx_ + cy) % 2 == 0 { light } else { dark }));
+                                x += cell;
+                                cx_ += 1;
+                            }
+                            y += cell;
+                            cy += 1;
+                        }
+                        let mut ss = ramp_g.stops.clone();
+                        ss.sort_by(|a, b| a.position.partial_cmp(&b.position).unwrap_or(std::cmp::Ordering::Equal));
+                        let Some(first) = ss.first() else { return };
+                        let last = ss.last().unwrap();
+                        let stop_hsla = |c: figcraft_color::Color| gpui::Hsla::from(rgba(picker_c32(c)));
+                        // 首断点之前 / 末断点之后是纯色。
+                        let x0 = first.position.clamp(0.0, 1.0) * w;
+                        if x0 > 0.0 {
+                            window.paint_quad(gpui::fill(
+                                Bounds { origin: b.origin, size: size(px(x0), b.size.height) },
+                                stop_hsla(first.color),
+                            ));
+                        }
+                        for pair in ss.windows(2) {
+                            let (a, c) = (&pair[0], &pair[1]);
+                            let xa = a.position.clamp(0.0, 1.0) * w;
+                            let xb = c.position.clamp(0.0, 1.0) * w;
+                            if xb <= xa {
+                                continue;
+                            }
+                            let quad = Bounds {
+                                origin: point(px(f32::from(b.origin.x) + xa), b.origin.y),
+                                size: size(px(xb - xa), b.size.height),
+                            };
+                            window.paint_quad(gpui::fill(
+                                quad,
+                                gpui::linear_gradient(
+                                    90.0,
+                                    gpui::linear_color_stop(stop_hsla(a.color), 0.0),
+                                    gpui::linear_color_stop(stop_hsla(c.color), 1.0),
+                                ),
+                            ));
+                        }
+                        let xe = last.position.clamp(0.0, 1.0) * w;
+                        if xe < w {
+                            window.paint_quad(gpui::fill(
+                                Bounds {
+                                    origin: point(px(f32::from(b.origin.x) + xe), b.origin.y),
+                                    size: size(px(w - xe), b.size.height),
+                                },
+                                stop_hsla(last.color),
+                            ));
+                        }
+                    },
+                )
+                .size_full(),
+            );
+        // 点预览条 = 在该位置插入断点（颜色取当前位置的采样色）。
+        let ramp = {
+            let write = write.clone();
+            let state = state.clone();
+            let sel = sel.clone();
+            let bounds = bounds.clone();
+            let cur = current.clone();
+            ramp.on_mouse_down(MouseButton::Left, move |e: &gpui::MouseDownEvent, window, cx| {
+                let Some(b) = bounds.get() else { return };
+                let pos = ((f32::from(e.position.x) - f32::from(b.origin.x)) / f32::from(b.size.width).max(1.0)).clamp(0.0, 1.0);
+                let mut np = state.borrow().clone();
+                if let figcraft_color::PaintKind::Gradient(gg) = &mut np.kind {
+                    let color = gg.sample(pos);
+                    gg.stops.push(figcraft_color::ColorStop { position: pos, color });
+                    sel.set(gg.stops.len() - 1);
+                    cur.set(picker_c32(color));
+                }
+                write(np, window, cx);
+            })
+        };
+
+        // 显示顺序按位置升序（与 Figma 一致）；存储顺序保持稳定，闭包仍用原索引。
+        let mut order: Vec<usize> = (0..g.stops.len()).collect();
+        order.sort_by(|&a, &b| g.stops[a].position.partial_cmp(&g.stops[b].position).unwrap_or(std::cmp::Ordering::Equal));
+
+        let mut area = div().relative().w(pt(208.0)).h(pt(48.0)).child(ramp);
+        for &i in &order {
+            let s = &g.stops[i];
+            let x = (s.position as f32 * 208.0 - 12.0).clamp(-12.0, 196.0);
+            let sel_c = sel.clone();
+            let drag_c = drag.clone();
+            let press_c = press.clone();
+            let moved_c = moved.clone();
+            let cur_c = current.clone();
+            let stop_color = s.color;
+            let on = i == sel.get();
+            let hsla = rgba(picker_c32(stop_color));
+            // Figma `_1t0vmmd5/7`：24×30 手柄盒，盒子中央 14×14 圆点，盒内 y=24 处是
+            // 24×6、与断点同色的向下三角箭头（指向色条）。未选中圆点描 1 px 10% 黑边。
+            let arrow = gpui::canvas(
+                |_, _, _| {},
                 move |b, _, window, _| {
-                    let w = f32::from(b.size.width).max(1.0);
-                    for i in 0..24 {
-                        let a = (i as f32 + 0.5) / 24.0;
-                        let quad = Bounds {
-                            origin: point(px(f32::from(b.origin.x) + w * i as f32 / 24.0), b.origin.y),
-                            size: size(px(w / 24.0), b.size.height),
-                        };
-                        window.paint_quad(gpui::fill(quad, gpui::Hsla::from(rgba(picker_c32(ramp_g.sample(a).with_alpha(1.0))))));
+                    let mut pb = gpui::PathBuilder::fill();
+                    pb.move_to(point(b.origin.x, b.origin.y));
+                    pb.line_to(point(b.origin.x + b.size.width, b.origin.y));
+                    pb.line_to(point(b.origin.x + b.size.width / 2.0, b.origin.y + b.size.height));
+                    pb.close();
+                    if let Ok(path) = pb.build() {
+                        window.paint_path(path, hsla);
                     }
                 },
             )
-            .size_full(),
-        );
+            .absolute()
+            .left(px(0.0))
+            .top(pt(24.0))
+            .w(pt(24.0))
+            .h(pt(6.0));
+            let mut handle = div()
+                .absolute()
+                .left(px(x))
+                .top(px(0.0))
+                .w(pt(24.0))
+                .h(pt(30.0))
+                .cursor_pointer()
+                .child(
+                    div()
+                        .absolute()
+                        .left(pt(5.0))
+                        .top(pt(5.0))
+                        .w(pt(14.0))
+                        .h(pt(14.0))
+                        .rounded(pt(2.0))
+                        .bg(hsla)
+                        .border_1()
+                        .border_color(rgba(if on { t.accent } else { Color32::from_black_alpha(26) })),
+                )
+                .child(arrow)
+                .on_mouse_down(MouseButton::Left, move |e: &gpui::MouseDownEvent, _, _| {
+                    sel_c.set(i);
+                    drag_c.set(Some(i));
+                    press_c.set(Some(e.position));
+                    moved_c.set(false);
+                    cur_c.set(picker_c32(stop_color));
+                });
+            area = area.child(handle);
+        }
+        // 拖动改位置；没拖动就松开 = 点断点 → 弹出嵌套取色器。
+        // 监听必须挂在窗口级：指针一旦移出色条范围，元素级 move/up 就收不到，
+        // 手柄会卡在拖动状态（用户实测「色块拖不动 / 放不下」）。
+        {
+            let state_move = state.clone();
+            let write_move = write.clone();
+            let drag_move = drag.clone();
+            let press_move = press.clone();
+            let moved_move = moved.clone();
+            let bounds_move = bounds.clone();
+            let state_up = state.clone();
+            let drag_up = drag.clone();
+            let press_up = press.clone();
+            let moved_up = moved.clone();
+            let sub_up = sub.clone();
+            let cmds_up = cmds.clone();
+            let write_up = write.clone();
+            area = area.child(
+                gpui::canvas(
+                    |_, _, _| {},
+                    move |_, _, window, _| {
+                        let m_state = state_move.clone();
+                        let m_write = write_move.clone();
+                        let m_drag = drag_move.clone();
+                        let m_press = press_move.clone();
+                        let m_moved = moved_move.clone();
+                        let m_bounds = bounds_move.clone();
+                        window.on_mouse_event(move |e: &MouseMoveEvent, phase, window, cx| {
+                            if !phase.bubble() {
+                                return;
+                            }
+                            if let Some(start) = m_press.get() {
+                                let dx = f32::from(e.position.x) - f32::from(start.x);
+                                let dy = f32::from(e.position.y) - f32::from(start.y);
+                                if dx.abs() + dy.abs() > 2.0 {
+                                    m_moved.set(true);
+                                }
+                            }
+                            let Some(i) = m_drag.get() else { return };
+                            let Some(b) = m_bounds.get() else { return };
+                            let x = ((f32::from(e.position.x) - f32::from(b.origin.x)) / f32::from(b.size.width).max(1.0)).clamp(0.0, 1.0);
+                            let mut np = m_state.borrow().clone();
+                            if let figcraft_color::PaintKind::Gradient(gg) = &mut np.kind
+                                && let Some(st) = gg.stops.get_mut(i)
+                            {
+                                st.position = x;
+                            }
+                            m_write(np, window, cx);
+                        });
+                        let u_state = state_up.clone();
+                        let u_write = write_up.clone();
+                        let u_drag = drag_up.clone();
+                        let u_press = press_up.clone();
+                        let u_moved = moved_up.clone();
+                        let u_sub = sub_up.clone();
+                        let u_cmds = cmds_up.clone();
+                        window.on_mouse_event(move |e: &gpui::MouseUpEvent, phase, window, cx| {
+                            if !phase.bubble() {
+                                return;
+                            }
+                            let i = u_drag.get();
+                            if i.is_none() {
+                                return;
+                            }
+                            u_drag.set(None);
+                            u_press.set(None);
+                            if u_moved.replace(false) {
+                                return;
+                            }
+                            let Some(i) = i else { return };
+                            let color = match &u_state.borrow().kind {
+                                figcraft_color::PaintKind::Gradient(gg) => gg.stops.get(i).map(|s| s.color),
+                                _ => None,
+                            };
+                            let Some(color) = color else { return };
+                            open_stop_color(u_sub.clone(), u_state.clone(), u_write.clone(), i, color, e.position, u_cmds.clone(), window, cx);
+                        });
+                    },
+                )
+                .absolute()
+                .left(px(0.0))
+                .top(px(0.0))
+                .size_full(),
+            );
+        }
 
-        let mut stops = div().w(pt(208.0)).h(pt(18.0)).relative();
+        // ② 「断点」标题行：标题 + 右侧加号（添加断点）。
+        let header = {
+            let write_add = write.clone();
+            let state_add = state.clone();
+            let sel_add = sel.clone();
+            let cur_add = current.clone();
+            let plus = IconButton::new(Icon::Plus).size(24.0).on_click(move |_, window, cx| {
+                let mut np = state_add.borrow().clone();
+                if let figcraft_color::PaintKind::Gradient(gg) = &mut np.kind {
+                    // 在最大空档的中点插入，避免和已有断点重合。
+                    let mut ps: Vec<f32> = gg.stops.iter().map(|s| s.position).collect();
+                    ps.push(0.0);
+                    ps.push(1.0);
+                    ps.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                    let mut gap = 0.0f32;
+                    let mut pos = 0.5f32;
+                    for w in ps.windows(2) {
+                        let d = w[1] - w[0];
+                        if d > gap {
+                            gap = d;
+                            pos = (w[0] + w[1]) * 0.5;
+                        }
+                    }
+                    let color = gg.sample(pos);
+                    gg.stops.push(figcraft_color::ColorStop { position: pos, color });
+                    sel_add.set(gg.stops.len() - 1);
+                    cur_add.set(picker_c32(color));
+                }
+                write_add(np, window, cx);
+            });
+            div()
+                .w(pt(PANEL_W))
+                .h(pt(32.0))
+                .mt(pt(8.0))
+                .flex()
+                .items_center()
+                .pl(pt(16.0))
+                .pr(pt(8.0))
+                .child(
+                    div()
+                        .flex_1()
+                        .text_size(pt(11.0))
+                        .text_color(rgba(t.text))
+                        .child(tr("Stops")),
+                )
+                .child(plus)
+        };
+
+        // ③ 断点列表：每行 32，左百分比输入、中颜色控件（圆点 + Hex + 透明度输入）、右减号。
+        let mut rows = div().flex().flex_col();
         for (i, s) in g.stops.iter().enumerate() {
-            let x = (s.position as f32 * 208.0 - 6.0).clamp(-2.0, 194.0);
+            let on = i == sel.get();
+            let sub_c = sub.clone();
+            let state_c = state.clone();
+            let write_c = write.clone();
+            let cmds_c = cmds.clone();
             let sel_c = sel.clone();
-            let drag_c = drag.clone();
-            // 选中 stop 时把 picker 的 current 同步到该 stop 的颜色：否则选了蓝色 stop
-            // 后改 alpha，会把之前留在 picker 里的黑色写回去（CodeRabbit PR#29）。
             let cur_c = current.clone();
             let stop_color = s.color;
-            stops = stops.child(
-                div()
-                    .absolute()
-                    .left(px(x))
-                    .top(px(0.0))
-                    .w(pt(12.0))
-                    .h(pt(18.0))
-                    .rounded(pt(3.0))
-                    .bg(rgba(picker_c32(s.color.with_alpha(1.0))))
-                    .border_1()
-                    .border_color(rgba(if i == sel.get() { t.text } else { t.border }))
-                    .cursor_pointer()
-                    .on_mouse_down(MouseButton::Left, move |_, _, _| {
-                        sel_c.set(i);
-                        drag_c.set(Some(i));
-                        cur_c.set(picker_c32(stop_color));
-                    }),
-            );
-        }
-        let write_drag = write.clone();
-        let state_drag = state.clone();
-        let drag_d = drag.clone();
-        let drag_up = drag.clone();
-        let bounds_d = bounds.clone();
-        let stops = stops
-            .on_mouse_move(move |e: &MouseMoveEvent, window: &mut Window, cx: &mut App| {
-                let Some(i) = drag_d.get() else { return };
-                let Some(b) = bounds_d.get() else { return };
-                let x = ((f32::from(e.position.x) - f32::from(b.origin.x)) / f32::from(b.size.width).max(1.0)).clamp(0.0, 1.0);
-                let mut np = state_drag.borrow().clone();
-                if let figcraft_color::PaintKind::Gradient(gg) = &mut np.kind
-                    && let Some(st) = gg.stops.get_mut(i)
-                {
-                    st.position = x;
+            let hex = format!("#{:02X}{:02X}{:02X}", (s.color.r * 255.0).round() as u8, (s.color.g * 255.0).round() as u8, (s.color.b * 255.0).round() as u8);
+            let (pct_el, hex_ed, op_ed) = match fields.get(i).cloned() {
+                Some(f) => (f.pct.clone(), f.hex.clone(), f.opacity.clone()),
+                None => {
+                    let pct = number_field_ranged(cx, 39.0, None, "%", 1.0, Slot::None, Some(0.0), Some(100.0));
+                    let (h, o) = crate::widgets::ColorField::color_row_editors(cx, &hex, 100, |_, _, _| {}, |_, _, _| {});
+                    (pct, h, o)
                 }
-                write_drag(np, window, cx);
-            })
-            .on_mouse_up(MouseButton::Left, move |_, _, _| drag_up.set(None));
-
-        // Remove / Flip / Rotate 90° — the same three actions as ui-egui.
-        let mut buttons = div().flex().flex_row().items_center().gap(pt(4.0));
-        let actions: [(&str, fn(&mut figcraft_color::Gradient, usize)); 3] = [
-            ("Remove stop", |g, sel| {
-                if g.stops.len() > 2 {
-                    g.stops.remove(sel.min(g.stops.len() - 1));
+            };
+            // 行首百分比：通用数字输入框（0–100，提交写回 stop.position）。
+            // 中间：通用颜色行 `ColorField`（16 pt 色块 + Hex 编辑器 + 透明度数值 / 「%」单元），
+            // 不再自己拼 TextField / number_field；色块点击弹出嵌套取色器。
+            let cf = crate::widgets::ColorField::new(
+                cx,
+                figcraft_color::Paint::solid(stop_color),
+                crate::widgets::color_field::ColorText::Hex(SharedString::from(hex)),
+                136.0,
+                hex_ed,
+                op_ed,
+            )
+            .on_swatch(move |pos: Point<Pixels>, window, cx| {
+                sel_c.set(i);
+                cur_c.set(picker_c32(stop_color));
+                open_stop_color(sub_c.clone(), state_c.clone(), write_c.clone(), i, stop_color, pos, cmds_c.clone(), window, cx);
+            });
+            let minus = IconButton::new(Icon::Minus).size(24.0).on_click({
+                let state_m = state.clone();
+                let write_m = write.clone();
+                move |_, window, cx| {
+                    let mut np = state_m.borrow().clone();
+                    if let figcraft_color::PaintKind::Gradient(gg) = &mut np.kind
+                        && gg.stops.len() > 2
+                    {
+                        gg.stops.remove(i.min(gg.stops.len() - 1));
+                    }
+                    write_m(np, window, cx);
                 }
-            }),
-            ("Flip", |g, _| {
-                for s in &mut g.stops {
-                    s.position = 1.0 - s.position;
-                }
-            }),
-            ("Rotate 90°", |g, _| {
-                let (fx, fy) = g.from;
-                let rot = |(x, y): (f64, f64)| (fx - (y - fy), fy + (x - fx));
-                g.to = rot(g.to);
-                g.width = rot(g.width);
-            }),
-        ];
-        for (label, action) in actions {
-            let write_b = write.clone();
-            let state_b = state.clone();
-            let sel_b = sel.clone();
-            buttons = buttons.child(
-                div()
-                    .h(pt(22.0))
-                    .px(pt(6.0))
-                    .rounded(pt(3.0))
-                    .border_1()
-                    .border_color(rgba(t.border))
-                    .text_size(pt(10.0))
-                    .text_color(rgba(t.text))
-                    .cursor_pointer()
-                    .flex()
-                    .items_center()
-                    .child(label)
-                    .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                        let mut np = state_b.borrow().clone();
-                        if let figcraft_color::PaintKind::Gradient(gg) = &mut np.kind {
-                            action(gg, sel_b.get());
-                        }
-                        write_b(np, window, cx);
-                    }),
-            );
+            });
+            let mut row = div()
+                .h(pt(32.0))
+                .w(pt(PANEL_W))
+                .flex()
+                .items_center()
+                .gap(pt(8.0))
+                .pl(pt(8.0))
+                .pr(pt(8.0))
+                .child(div().flex_none().w(pt(40.0)).flex().items_center().child(pct_el))
+                .child(div().flex_1().min_w(pt(0.0)).child(cf))
+                .child(minus);
+            if on {
+                row = row.bg(rgba(t.selected_row));
+            }
+            rows = rows.child(row);
         }
 
-        div().w(pt(240.0)).flex().flex_col().gap(pt(4.0)).child(ramp).child(stops).child(buttons)
+        div()
+            .w(pt(PANEL_W))
+            .flex()
+            .flex_col()
+            // 手柄盒顶与编辑区顶部对齐（spec：盒顶 y=129），预览条在盒内 +16；
+            // 这里不再额外加顶部 margin，否则整条会再往下偏 16。
+            .child(div().w(pt(PANEL_W)).h(pt(48.0)).pl(pt(16.0)).child(area))
+            .child(header)
+            .child(rows)
+            .child(div().h(pt(12.0)))
     }
 
     fn list_element(&self, cx: &mut App, body_h: f32) -> AnyElement {
@@ -3695,7 +4274,7 @@ impl WindowState {
                                 cmds.push(Cmd { id: "style.update", params: Some(json!({ "style": sid, "value": ps })) });
                             }
                         };
-                        let picker = PaintPicker { paint: all[idx].clone(), on_write: Rc::new(write) };
+                        let picker = PaintPicker { paint: all[idx].clone(), on_write: Rc::new(write), styles: Vec::new() };
                         let on_pick: Rc<dyn Fn(crate::canvas::geom::Color32, &mut Window, &mut App)> = Rc::new(|_, _, _| {});
                         // 走右栏统一的打开入口：触发标识 + 再点关闭 + 精确顶部一套逻辑。
                         crate::panels::right::sections::open_detached_with(
@@ -3769,7 +4348,7 @@ impl WindowState {
                         }
                         write_cmds.push(Cmd { id: "style.update", params: Some(json!({ "style": write_sid, "value": ps })) });
                     });
-                    let pick = PaintPicker { paint: paint.clone(), on_write: write };
+                    let pick = PaintPicker { paint: paint.clone(), on_write: write, styles: Vec::new() };
                     let on_pick: Rc<dyn Fn(crate::canvas::geom::Color32, &mut Window, &mut App)> = Rc::new(|_, _, _| {});
                     let open_cmds = self.cmds.clone();
                     // 跨帧稳定探针：与右栏色块同一机制，按下即量到真实顶部。
@@ -4025,8 +4604,7 @@ impl WindowState {
                         wake3.wake();
                     });
                     // 3 项的 Wrap style 不会溢出，vw/vh 传 0 关掉防溢出即可。
-                    let menu = menu_popup_in(rect, None, rows, on_pick, dismiss, 0.0, 0.0);
-                    self.overlays.borrow_mut().push(menu);
+                    self.push_overlay(menu_popup_in(rect, None, rows, on_pick, dismiss.clone(), 0.0, 0.0), dismiss);
                 }
                 Some(type_row(label, &t, trigger.into_any_element()))
             }
@@ -4431,8 +5009,7 @@ impl WindowState {
                             *at3.borrow_mut() = None;
                             wake3.wake();
                         });
-                        let m = menu_popup_in(rect, None, rows, on_pick, dismiss, f32::from(self.viewport.width), f32::from(self.viewport.height));
-                        self.overlays.borrow_mut().push(m);
+                        self.push_overlay(menu_popup_in(rect, None, rows, on_pick, dismiss.clone(), f32::from(self.viewport.width), f32::from(self.viewport.height)), dismiss);
                     }
                     row = row.child(
                         div()
@@ -4501,8 +5078,7 @@ impl WindowState {
                             *at3.borrow_mut() = None;
                             wake3.wake();
                         });
-                        let m = menu_popup_in(rect, None, rows, on_pick, dismiss, f32::from(self.viewport.width), f32::from(self.viewport.height));
-                        self.overlays.borrow_mut().push(m);
+                        self.push_overlay(menu_popup_in(rect, None, rows, on_pick, dismiss.clone(), f32::from(self.viewport.width), f32::from(self.viewport.height)), dismiss);
                     }
                     trigger.into_any_element()
                 };
@@ -4639,8 +5215,7 @@ impl WindowState {
                         *at3.borrow_mut() = None;
                         wake3.wake();
                     });
-                    let m = menu_popup_in(rect, None, rows, on_pick, dismiss, f32::from(self.viewport.width), f32::from(self.viewport.height));
-                    self.overlays.borrow_mut().push(m);
+                    self.push_overlay(menu_popup_in(rect, None, rows, on_pick, dismiss.clone(), f32::from(self.viewport.width), f32::from(self.viewport.height)), dismiss);
                 }
                 Some(crate::widgets::panel_section::field_row_full_trailing(dd, vec![eye, minus]).into_any_element())
             }
@@ -4729,8 +5304,7 @@ impl WindowState {
                         *at3.borrow_mut() = None;
                         wake3.wake();
                     });
-                    let m = menu_popup_in(rect, None, rows, on_pick, dismiss, f32::from(self.viewport.width), f32::from(self.viewport.height));
-                    self.overlays.borrow_mut().push(m);
+                    self.push_overlay(menu_popup_in(rect, None, rows, on_pick, dismiss.clone(), f32::from(self.viewport.width), f32::from(self.viewport.height)), dismiss);
                 }
                 Some(crate::widgets::panel_section::field_row_full_trailing(dd, vec![eye, minus]).into_any_element())
             }
@@ -4861,6 +5435,7 @@ impl WindowState {
         self.origin = probe.origin(viewport);
         // 浮层内通用下拉的菜单每帧重建：先清空上一帧，body_element 里的 Dropdown 会重新登记。
         self.overlays.borrow_mut().clear();
+        self.overlay_dismiss.borrow_mut().clear();
         *self.dismiss.borrow_mut() = Some(dismiss.clone());
         // 用户：变量窗口不要外层通用 header。内层 VariablesEditor::header 自己画了完整的
         // "Variables" 标题 + 计数 + 侧栏开关 + Import/Export + 搜索/过滤 + Full 按钮，外层
@@ -4897,7 +5472,23 @@ impl WindowState {
         // 只有拿真实高度定位过，才算「定位完成」可以钉住；首帧用估算高度的位置不能钉。
         self.placed_once = height_measured;
         // 菜单卡片与浮层卡片同挂窗口根（els），所以菜单用窗口坐标，不被浮层的滚动裁剪。
-        let mut els = vec![card];
+        // 只要有菜单打开，就在最底层垫一层覆盖整窗的透明 backdrop：点击菜单以外的任何位置
+        // 都会关闭菜单（弹窗窗口里没有主窗口那套 root popup backdrop，之前只能靠菜单逐项
+        // 自己判断，点别处不失焦）。这是浮层内菜单的统一行为。
+        let mut els = Vec::new();
+        {
+            let dismissers: Vec<Rc<dyn Fn(&mut Window, &mut App)>> = self.overlay_dismiss.borrow().clone();
+            if !dismissers.is_empty() {
+                els.push(crate::widgets::popup_backdrop(Rc::new(move |window: &mut Window, cx: &mut App| {
+                    for dismiss in &dismissers {
+                        dismiss(window, cx);
+                    }
+                    // 独立弹窗不会像主窗口那样自动重绘，锚点清空后必须自己请求一帧。
+                    window.refresh();
+                })));
+            }
+        }
+        els.push(card);
         els.extend(self.overlays.borrow_mut().drain(..));
         // 子浮层：属性行点开的取色器（或排版设置）。它是**本窗口自己**的一层，排在卡片左侧，
         // 不占 root 的 `popup` 单槽，所以样式面板不会被替换掉。渲染期间先把它从 `RefCell`
@@ -4943,6 +5534,42 @@ impl WindowState {
             // 子浮层的锚点是**本卡片左缘再往左 8**：`anchored_open` 会把锚点当成卡片的右缘，
             // 于是取色器整张排在样式面板左边、两张卡并排。直接传父窗口的 `right_edge` 会让它
             // 右缘对齐同一个位置，正好压在样式面板上。
+            let child_edge = px(f32::from(self.origin.x) - 8.0);
+            els.extend(child.render(cx, window, viewport, closer, sub_press, sub_move, child_edge));
+            *slot.borrow_mut() = Some(child);
+        }
+        // 取色器自己的子浮层（断点颜色窗口 / 头部「+」的样式面板）：同样画在本卡片左侧。
+        let color_sub = self.color.as_ref().map(|c| c.sub.clone()).and_then(|slot| {
+            let taken = slot.borrow_mut().take();
+            taken.map(|c| (slot, c))
+        });
+        if let Some((slot, mut child)) = color_sub {
+            let closer: Rc<dyn Fn(&mut Window, &mut App)> = {
+                let slot = slot.clone();
+                let wake = self.cmds.clone();
+                Rc::new(move |_w: &mut Window, _cx: &mut App| {
+                    *slot.borrow_mut() = None;
+                    wake.wake();
+                })
+            };
+            let sub_press: Rc<dyn Fn(&MouseDownEvent, &mut Window, &mut App)> = {
+                let slot = slot.clone();
+                Rc::new(move |e: &MouseDownEvent, _w: &mut Window, _cx: &mut App| {
+                    if let Some(c) = slot.borrow_mut().as_mut() {
+                        c.press(e.position);
+                    }
+                })
+            };
+            let sub_move: Rc<dyn Fn(&MouseMoveEvent, &mut Window, &mut App)> = {
+                let slot = slot.clone();
+                let wake = self.cmds.clone();
+                Rc::new(move |e: &MouseMoveEvent, _w: &mut Window, _cx: &mut App| {
+                    let moved = slot.borrow_mut().as_mut().map(|c| c.move_drag(e.position)).unwrap_or(false);
+                    if moved {
+                        wake.wake();
+                    }
+                })
+            };
             let child_edge = px(f32::from(self.origin.x) - 8.0);
             els.extend(child.render(cx, window, viewport, closer, sub_press, sub_move, child_edge));
             *slot.borrow_mut() = Some(child);
@@ -5161,9 +5788,105 @@ fn hsb_color(h: f32, s: f32, b: f32) -> Color32 {
     crate::widgets::swatch::color32(figcraft_color::Hsb { h, s, b }.to_color())
 }
 
+/// 断点行的通用输入控件：位置百分比（`number_field`）+ 颜色行（`ColorField` 的两个裸编辑器，
+/// Hex 与透明度都走 `color_row_editors`，数值行为 / 范围 / 拖「%」全在通用控件里）。
+fn stop_fields(
+    cx: &mut App,
+    state: &Rc<RefCell<figcraft_color::Paint>>,
+    write: &Rc<dyn Fn(figcraft_color::Paint, &mut Window, &mut App)>,
+    index: usize,
+    shown: &(String, String, String),
+) -> StopFields {
+    let pct = number_field_ranged(cx, 39.0, shown.0.parse().ok(), "%", 1.0, Slot::None, Some(0.0), Some(100.0));
+    pct.update(cx, |tf, _| {
+        let state = state.clone();
+        let write = write.clone();
+        tf.set_on_commit(move |text, window, cx| {
+            let Ok(v) = text.trim().parse::<f64>() else { return };
+            let mut np = state.borrow().clone();
+            if let figcraft_color::PaintKind::Gradient(g) = &mut np.kind
+                && let Some(s) = g.stops.get_mut(index)
+            {
+                s.position = (v / 100.0).clamp(0.0, 1.0) as f32;
+            }
+            write(np, window, cx);
+        });
+    });
+
+    let (hex, opacity) = crate::widgets::ColorField::color_row_editors(
+        cx,
+        &shown.1,
+        shown.2.parse().unwrap_or(100.0_f64).round() as i64,
+        {
+            let state = state.clone();
+            let write = write.clone();
+            move |text: &str, window, cx| {
+                let Some(c) = figcraft_color::Color::from_hex(text.trim()) else { return };
+                let mut np = state.borrow().clone();
+                if let figcraft_color::PaintKind::Gradient(g) = &mut np.kind
+                    && let Some(s) = g.stops.get_mut(index)
+                {
+                    // Hex 只管 RGB，透明度交给同一行的透明度单元格。
+                    s.color = figcraft_color::Color::new(c.r, c.g, c.b, s.color.a);
+                }
+                write(np, window, cx);
+            }
+        },
+        {
+            let state = state.clone();
+            let write = write.clone();
+            move |v: f64, window, cx| {
+                let mut np = state.borrow().clone();
+                if let figcraft_color::PaintKind::Gradient(g) = &mut np.kind
+                    && let Some(s) = g.stops.get_mut(index)
+                {
+                    s.color = s.color.with_alpha((v / 100.0).clamp(0.0, 1.0) as f32);
+                }
+                write(np, window, cx);
+            }
+        },
+    );
+
+    StopFields { pct, hex, opacity }
+}
+
+/// 在父取色器**左侧**弹出某个渐变断点的颜色窗口（隐藏顶部切换条），并把选色写回断点。
+#[allow(clippy::too_many_arguments)]
+fn open_stop_color(
+    sub: Rc<RefCell<Option<Box<WindowState>>>>,
+    state: Rc<RefCell<figcraft_color::Paint>>,
+    write: Rc<dyn Fn(figcraft_color::Paint, &mut Window, &mut App)>,
+    index: usize,
+    color: figcraft_color::Color,
+    at: Point<Pixels>,
+    cmds: Cmds,
+    _window: &mut Window,
+    cx: &mut App,
+) {
+    let write_back: Rc<dyn Fn(figcraft_color::Paint, &mut Window, &mut App)> = {
+        let state = state.clone();
+        let write = write.clone();
+        Rc::new(move |np: figcraft_color::Paint, window: &mut Window, cx: &mut App| {
+            let sc = np.solid_color().unwrap_or(color);
+            let mut full = state.borrow().clone();
+            if let figcraft_color::PaintKind::Gradient(g) = &mut full.kind
+                && let Some(s) = g.stops.get_mut(index)
+            {
+                s.color = sc;
+            }
+            write(full, window, cx);
+        })
+    };
+    let picker = PaintPicker { paint: figcraft_color::Paint::solid(color), on_write: write_back, styles: Vec::new() };
+    let on_pick: Rc<dyn Fn(Color32, &mut Window, &mut App)> = Rc::new(|_, _, _| {});
+    let mut child = WindowState::color_nested(cx, at, picker_c32(color), Some(picker), on_pick, cmds.clone());
+    child.anchor_to_button_top(at.y);
+    *sub.borrow_mut() = Some(Box::new(child));
+    cmds.wake();
+}
+
 /// 面板内容宽（= 240）。所有行的宽度都用它，行内再自己给 8 / 16 的内缩。
-const PANEL_W: f32 = 240.0;
-/// 色域方块边长（208 = 240 − 16×2）。
+const PANEL_W: f32 = 240.0;/// 色域方块边长（208 = 240 − 16×2）。
 const SPECTRUM: f32 = 208.0;
 /// 色块边长与节奏（16 + 8）。
 const CHIT: f32 = 16.0;

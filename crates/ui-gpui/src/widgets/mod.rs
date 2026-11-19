@@ -61,7 +61,7 @@ pub use variable::{Bound, bound_field, variable_button};
 pub use icon::Icon;
 pub use icon_button::IconButton;
 pub use input::field::{combo_field, search_field, text_field};
-pub use input::number_field::number_field;
+pub use input::number_field::{number_field, number_field_ranged};
 pub use input::text_edit::NumberConfig;
 pub use input::{EditBuffer, EditOutcome, Slot, TextInput, char_to_utf16_str, utf16_to_char_str};
 pub use input::{TextEdit, TextField};

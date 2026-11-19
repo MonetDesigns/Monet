@@ -5462,7 +5462,7 @@ impl Render for CanvasView {
                         base,
                     ));
                 }
-                let picker = popovers::PaintPicker { paint, on_write: std::rc::Rc::new(|_, _, _| {}) };
+                let picker = popovers::PaintPicker { paint, on_write: std::rc::Rc::new(|_, _, _| {}), styles: Vec::new() };
                 let w = popovers::WindowState::color(
                     cx,
                     gpui::point(px(160.0), px(60.0)),

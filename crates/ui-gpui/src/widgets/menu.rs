@@ -167,7 +167,7 @@ pub fn menu_popup_in(
             .flex_row()
             .items_center()
             .rounded(pt(5.0))
-            .text_color(crate::menu_metrics::ink())
+            // 墨色由通用 menu_surface() 统一注入；调用处只改快捷键的 trail_ink。
             .text_size(pt(crate::widgets::TEXT_PT))
             .hover(|s| s.bg(rgba(t.menu_hover)))
             .on_mouse_down(MouseButton::Left, move |_: &MouseDownEvent, window, cx| {
