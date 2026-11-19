@@ -13,6 +13,10 @@ reviews:
   auto_review:
     enabled: true
     drafts: false
+    # 默认只在 base=main 时自动审查；本项目很多 PR 挂在 feature 分支上，
+    # 显式允许所有 base（否则会显示 "Review skipped"）。
+    base_branches:
+      - ".*"
     # Dependabot bumps are checked by CI; skip CodeRabbit reviews on them.
     ignore_usernames:
       - "dependabot[bot]"
