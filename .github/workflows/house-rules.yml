@@ -1,5 +1,8 @@
 name: House rules
 
+# Local house-rules check: keeps AGENTS.md (the agent instruction file) present, structured and
+# referenced by CLAUDE.md. Unlike the upstream shared check, this one is self-contained: Monet is
+# an independent repository and its rules are its own, not a copy of an organisation-wide standard.
 on:
   push:
     branches: [main]
@@ -23,6 +26,36 @@ concurrency:
 
 jobs:
   house-rules:
-    uses: storytold/craft-common-actions/.github/workflows/house-rules.yml@main
-    with:
-      rust: true
+    name: House rules are intact
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check the agent rule files
+        shell: bash
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          [ -f AGENTS.md ] || fail "AGENTS.md is missing"
+          [ -s AGENTS.md ] || fail "AGENTS.md is empty"
+
+          # CLAUDE.md must defer to AGENTS.md so the two never drift apart.
+          [ -f CLAUDE.md ] || fail "CLAUDE.md is missing"
+          grep -qxF '@AGENTS.md' CLAUDE.md || fail "CLAUDE.md must contain exactly '@AGENTS.md'"
+
+          # AGENTS.md must keep the sections agents rely on (headings, not prose mentions).
+          for section in "Non-negotiables" "Quality gates" "Architecture" "Clean-room"; do
+            grep -qi "^#.*${section}" AGENTS.md || fail "AGENTS.md is missing the '${section}' section"
+          done
+
+          # The house rules must not silently disappear behind a different filename.
+          [ "$(wc -l < AGENTS.md)" -ge 100 ] || fail "AGENTS.md looks truncated"
+
+          echo "House rules are intact."
