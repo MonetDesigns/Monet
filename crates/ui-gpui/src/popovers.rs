@@ -3325,8 +3325,11 @@ impl WindowState {
                 MenuRow { label: row_aa, trail: None, key: None, checked: Some(sel_lvl == figcraft_color::ContrastLevel::AA), separator_before: true },
                 MenuRow { label: row_aaa, trail: None, key: None, checked: Some(sel_lvl == figcraft_color::ContrastLevel::AAA), separator_before: false },
             ];
-            let menu = menu_popup_in(rect, Some(180.0), rows, on_pick_menu, dismiss, 0.0, 0.0);
-            self.overlays.borrow_mut().push(menu);
+            // 必须走 push_overlay 把 dismiss 一起登记，否则独立弹窗里点空白关不掉菜单。
+            self.push_overlay(
+                menu_popup_in(rect, Some(180.0), rows, on_pick_menu, dismiss.clone(), 0.0, 0.0),
+                dismiss,
+            );
         }
 
         // ── 组装（顺序与 Figma 一致：类型条 → 渐变编辑 / 或纯色编辑）
@@ -3457,9 +3460,9 @@ impl WindowState {
                 }
             });
             let dismiss: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(move |_w, _cx| close.set(None));
-            // 宽度按内容自适应：混合模式按钮在卡片最右侧（x=208），固定 208 宽会被
-            // 视口水平贴边夹到最左边（跑离按钮）。自适应后菜单紧贴按钮下方。
-            self.push_overlay(menu_popup_in(
+            // 混色按钮在类型条最右侧：菜单必须**右对齐**到按钮右缘、下方 4pt（通用 Menu
+            // 默认的 BottomStart 会左对齐，菜单整体跑离按钮）。宽度跟随按钮自身。
+            self.push_overlay(crate::widgets::menu::menu_popup_in_aligned(
                 anchor,
                 None,
                 rows,
@@ -3467,6 +3470,7 @@ impl WindowState {
                 dismiss.clone(),
                 f32::from(self.viewport.width),
                 f32::from(self.viewport.height),
+                crate::widgets::RectAlign::BottomEnd,
             ), dismiss);
         }
         // The swatch-set menu (在此页面 / 最近使用), same parking rule.
@@ -3532,9 +3536,10 @@ impl WindowState {
                 }
             });
             let dismiss: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(move |_w, _cx| close.set(None));
+            // 与上面的通用 dropdown 同宽（跟随按钮矩形），不再硬编码 120。
             self.push_overlay(menu_popup_in(
                 anchor,
-                Some(120.0),
+                None,
                 rows,
                 on_pick,
                 dismiss.clone(),
@@ -5604,6 +5609,10 @@ impl WindowState {
         // 都会关闭菜单（弹窗窗口里没有主窗口那套 root popup backdrop，之前只能靠菜单逐项
         // 自己判断，点别处不失焦）。这是浮层内菜单的统一行为。
         let mut els = Vec::new();
+        // ⚠️ backdrop 必须在 card **之后** push：GPUI 按数组顺序定 z-order，先前把 backdrop
+        // 放在 card 前面，结果 card 盖在遮罩上，点卡片内任意空白都被 card 吃掉、永远关不掉
+        // 菜单（用户实测）。菜单 overlays 最后 push，保持在遮罩之上仍可点选。
+        els.push(card);
         {
             let dismissers: Vec<Rc<dyn Fn(&mut Window, &mut App)>> = self.overlay_dismiss.borrow().clone();
             if !dismissers.is_empty() {
@@ -5616,7 +5625,6 @@ impl WindowState {
                 })));
             }
         }
-        els.push(card);
         els.extend(self.overlays.borrow_mut().drain(..));
         // 子浮层：属性行点开的取色器（或排版设置）。它是**本窗口自己**的一层，排在卡片左侧，
         // 不占 root 的 `popup` 单槽，所以样式面板不会被替换掉。渲染期间先把它从 `RefCell`
@@ -6136,6 +6144,28 @@ fn contrast_ratio(a: Color32, b: Color32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 浮层内菜单的三个定位/关闭不变量：混色下拉右对齐、渐变类型下拉跟随按钮宽、
+    /// 遮罩在卡片之上（否则点卡片内空白关不掉菜单）。契约测试锁住源码，防回归。
+    #[test]
+    fn picker_menus_align_close_and_width_invariants() {
+        let src = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/popovers.rs"));
+        let blend = src.find("// 混色按钮在类型条最右侧").expect("blend menu comment");
+        let blend_menu = src[blend..].find("menu_popup_in_aligned").expect("blend must use aligned menu");
+        assert!(blend_menu < 600, "blend menu must switch to BottomEnd right next to its comment");
+        assert!(
+            src.contains("crate::widgets::RectAlign::BottomEnd"),
+            "blend menu must be right-aligned to the button"
+        );
+        // grad_kind 菜单宽度跟随按钮（None），不再硬编码 120。
+        let grad = src.find("// 渐变类型下拉（线性 / 径向").expect("grad menu block");
+        let grad_tail = &src[grad..grad + 1400];
+        assert!(!grad_tail.contains("Some(120.0)"), "gradient-kind menu must not hardcode 120 width");
+        // backdrop 必须排在 card 之后。
+        let push_backdrop = src.find("els.push(crate::widgets::popup_backdrop").expect("backdrop push");
+        let push_card = src.find("els.push(card)").expect("card push");
+        assert!(push_card < push_backdrop, "backdrop must be pushed AFTER card so it sits above and catches clicks");
+    }
 
     #[test]
     fn the_five_kinds_are_distinct() {
