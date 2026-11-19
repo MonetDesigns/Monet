@@ -2345,6 +2345,25 @@ impl WindowState {
         self.color.as_ref().map(|c| c.on_pick.clone())
     }
 
+    /// 删除当前选中的渐变断点（Delete / Backspace）。至少保留 2 个，删后选中相邻一个。
+    /// 返回是否消费了这次按键（非渐变 / 无可删则 false，让按键继续冒泡）。
+    pub(crate) fn delete_selected_stop(&mut self, window: &mut Window, cx: &mut App) -> bool {
+        let Some(c) = &self.color else { return false };
+        let Some(state) = &c.paint_state else { return false };
+        let Some(p) = &c.paint else { return false };
+        let mut np = state.borrow().clone();
+        let figcraft_color::PaintKind::Gradient(g) = &mut np.kind else { return false };
+        if g.stops.len() <= 2 {
+            return false;
+        }
+        let idx = c.grad_sel.get().min(g.stops.len() - 1);
+        g.stops.remove(idx);
+        c.grad_sel.set(idx.min(g.stops.len() - 1));
+        let write = p.on_write.clone();
+        write(np, window, cx);
+        true
+    }
+
     /// 登记当帧的内部菜单与其关闭回调。`render()` 据此在窗口根垫一层透明 backdrop：
     /// 点击菜单以外的任何位置都会关闭菜单（通用行为）。
     fn push_overlay(&self, el: AnyElement, dismiss: Rc<dyn Fn(&mut Window, &mut App)>) {
@@ -3258,21 +3277,22 @@ impl WindowState {
             });
         }
 
-        // 设置图标：点开 AA 分类/等级下拉（走本浮层自己的 overlays 通道）。
+        // 设置图标：**通用 24×24 图标按钮**（IconButton），点开 AA 分类/等级下拉。
+        // 锚点用按钮真实矩形（探针），不是鼠标点位置，菜单才能准确对齐按钮。
+        let aa_hit: Rc<Cell<Option<Bounds<Pixels>>>> = Rc::new(Cell::new(None));
+        let aa_hit_click = aa_hit.clone();
         let aa_anchor = c.aa_anchor.clone();
+        let aa_anchor_store = aa_anchor.clone();
         let aa_wake = self.cmds.clone();
-        let settings_trigger = div()
-            .size(pt(20.0)).rounded(pt(4.0)).flex().items_center().justify_center()
-            .cursor_pointer().hover(|s| s.bg(rgba(t.hover)))
-            .child(crate::widgets::icon::paint(Icon::Settings, rgba(t.text), 12.0))
-            .on_mouse_down(MouseButton::Left, {
-                let store = aa_anchor.clone();
-                let wake = aa_wake.clone();
-                move |e, _, _| {
-                    *store.borrow_mut() = Some(Bounds { origin: e.position, size: size(px(20.0), px(20.0)) });
-                    wake.wake();
+        let settings_trigger = with_button_bounds(
+            IconButton::new(Icon::Settings).size(24.0).on_click(move |_e, _, _| {
+                if let Some(b) = aa_hit_click.get() {
+                    *aa_anchor_store.borrow_mut() = Some(b);
                 }
-            });
+                aa_wake.wake();
+            }),
+            aa_hit,
+        );
 
         let contrast_row = div()
             .w(pt(PANEL_W))
@@ -3325,9 +3345,19 @@ impl WindowState {
                 MenuRow { label: row_aa, trail: None, key: None, checked: Some(sel_lvl == figcraft_color::ContrastLevel::AA), separator_before: true },
                 MenuRow { label: row_aaa, trail: None, key: None, checked: Some(sel_lvl == figcraft_color::ContrastLevel::AAA), separator_before: false },
             ];
-            // 必须走 push_overlay 把 dismiss 一起登记，否则独立弹窗里点空白关不掉菜单。
+            // 通用菜单 + **宽度自适应**（None，不再硬编码 180）；与按钮**中心对齐**、
+            // 顶部在按钮底部下方 4pt（BottomCenter 的默认 gap 就是 4）。
             self.push_overlay(
-                menu_popup_in(rect, Some(180.0), rows, on_pick_menu, dismiss.clone(), 0.0, 0.0),
+                crate::widgets::menu::menu_popup_in_aligned(
+                    rect,
+                    None,
+                    rows,
+                    on_pick_menu,
+                    dismiss.clone(),
+                    f32::from(self.viewport.width),
+                    f32::from(self.viewport.height),
+                    crate::widgets::RectAlign::BottomCenter,
+                ),
                 dismiss,
             );
         }
@@ -3460,9 +3490,9 @@ impl WindowState {
                 }
             });
             let dismiss: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(move |_w, _cx| close.set(None));
-            // 混色按钮在类型条最右侧：菜单必须**右对齐**到按钮右缘、下方 4pt（通用 Menu
-            // 默认的 BottomStart 会左对齐，菜单整体跑离按钮）。宽度跟随按钮自身。
-            self.push_overlay(crate::widgets::menu::menu_popup_in_aligned(
+            // 混色（水滴）菜单：**左边缘对齐按钮左缘**、顶部在按钮底部下方 4pt
+            // （通用 Menu 默认 BottomStart + gap 4），宽度跟随按钮。
+            self.push_overlay(menu_popup_in(
                 anchor,
                 None,
                 rows,
@@ -3470,7 +3500,6 @@ impl WindowState {
                 dismiss.clone(),
                 f32::from(self.viewport.width),
                 f32::from(self.viewport.height),
-                crate::widgets::RectAlign::BottomEnd,
             ), dismiss);
         }
         // The swatch-set menu (在此页面 / 最近使用), same parking rule.
@@ -3536,10 +3565,11 @@ impl WindowState {
                 }
             });
             let dismiss: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(move |_w, _cx| close.set(None));
-            // 与上面的通用 dropdown 同宽（跟随按钮矩形），不再硬编码 120。
+            // 与上面的通用 dropdown 按钮（96）保持同一视觉尺度，略放宽到 104 让长项
+            // （Angular / Diamond）不贴边。
             self.push_overlay(menu_popup_in(
                 anchor,
-                None,
+                Some(104.0),
                 rows,
                 on_pick,
                 dismiss.clone(),
@@ -3762,6 +3792,8 @@ impl WindowState {
         // ① 预览条 208×32：底板棋盘格 + 断点之间真正的两色线性渐变（不是 24 段近似色带）。
         let ramp_g = g.clone();
         let ramp_bounds = bounds.clone();
+        // canvas 直绘不受父级圆角裁剪，圆角靠绘制末尾用面板底色补四角（见下）。
+        let ramp_panel_bg = rgba(t.panel);
         let ramp = div()
             .absolute()
             .left(px(0.0))
@@ -3840,6 +3872,29 @@ impl WindowState {
                                 stop_hsla(last.color),
                             ));
                         }
+                        // 四角 rx5 圆角：canvas 直绘不被父级 overflow 圆角裁剪，用面板底色
+                        // 盖掉四个直角三角（弧形斜边近似 1/4 圆）。
+                        let bx = f32::from(b.origin.x);
+                        let by = f32::from(b.origin.y);
+                        let bw = f32::from(b.size.width);
+                        let bh = f32::from(b.size.height);
+                        let rr = 5.0_f32;
+                        let corners = [
+                            [(bx, by), (bx + rr, by), (bx, by + rr)],
+                            [(bx + bw, by), (bx + bw - rr, by), (bx + bw, by + rr)],
+                            [(bx + bw, by + bh), (bx + bw - rr, by + bh), (bx + bw, by + bh - rr)],
+                            [(bx, by + bh), (bx + rr, by + bh), (bx, by + bh - rr)],
+                        ];
+                        for c in corners {
+                            let mut pb = gpui::PathBuilder::fill();
+                            pb.move_to(point(px(c[0].0), px(c[0].1)));
+                            pb.line_to(point(px(c[1].0), px(c[1].1)));
+                            pb.curve_to(point(px(c[2].0), px(c[2].1)), point(px(c[0].0), px(c[0].1)));
+                            pb.close();
+                            if let Ok(path) = pb.build() {
+                                window.paint_path(path, ramp_panel_bg);
+                            }
+                        }
                     },
                 )
                 .size_full(),
@@ -3853,9 +3908,15 @@ impl WindowState {
             let cur = current.clone();
             ramp.on_mouse_down(MouseButton::Left, move |e: &gpui::MouseDownEvent, window, cx| {
                 let Some(b) = bounds.get() else { return };
-                let pos = ((f32::from(e.position.x) - f32::from(b.origin.x)) / f32::from(b.size.width).max(1.0)).clamp(0.0, 1.0);
+                let local_x = f32::from(e.position.x) - f32::from(b.origin.x);
+                let pos = (local_x / f32::from(b.size.width).max(1.0)).clamp(0.0, 1.0);
                 let mut np = state.borrow().clone();
                 if let figcraft_color::PaintKind::Gradient(gg) = &mut np.kind {
+                    // 兜底：点在已有断点手柄的热区（±16pt）内就不新建——否则拖手柄时
+                    // 事件漏到滑条上会多插一个点（用户实测）。拖动交给手柄自己的逻辑。
+                    if gg.stops.iter().any(|s| (s.position as f32 * f32::from(b.size.width) - local_x).abs() <= 16.0) {
+                        return;
+                    }
                     let color = gg.sample(pos);
                     gg.stops.push(figcraft_color::ColorStop { position: pos, color });
                     sel.set(gg.stops.len() - 1);
@@ -3872,7 +3933,7 @@ impl WindowState {
         let mut area = div().relative().w(pt(208.0)).h(pt(48.0)).child(ramp);
         for &i in &order {
             let s = &g.stops[i];
-            let x = (s.position as f32 * 208.0 - 12.0).clamp(-12.0, 196.0);
+            let x = (s.position as f32 * 208.0 - 16.0).clamp(-16.0, 192.0);
             let sel_c = sel.clone();
             let drag_c = drag.clone();
             let press_c = press.clone();
@@ -3880,47 +3941,71 @@ impl WindowState {
             let cur_c = current.clone();
             let stop_color = s.color;
             let on = i == sel.get();
-            let hsla = rgba(picker_c32(stop_color));
-            // Figma `_1t0vmmd5/7`：24×30 手柄盒，盒子中央 14×14 圆点，盒内 y=24 处是
-            // 24×6、与断点同色的向下三角箭头（指向色条）。未选中圆点描 1 px 10% 黑边。
-            let arrow = gpui::canvas(
+            // 手柄 = Figma 的「水滴 tag」：**一条连续 path**（顶部四角 rx5 圆角矩形 +
+            // 底部收成三角尖，尖端正对 32pt 渐变条中心线）。选中时**整个手柄**填充主题色，
+            // 未选中填充白色；中心叠一枚通用方形颜色按钮。早先拆成「圆角矩形 + 三角」两块，
+            // 接缝处不连续、也不像箭头（用户指出）。
+            let tag_color = if on { rgba(t.accent) } else { rgba(Color32::WHITE) };
+            // 手柄按用户给的 32×38 SVG 精确画：主体是 24×24 圆角矩形（x=4..28, y=0..24,
+            // rx5），底部 12 宽三角（x=10..22）收到尖 (16,30)。整个 32×38 就是热区，
+            // 拖手柄不会漏到滑条上误插断点。
+            let tag = gpui::canvas(
                 |_, _, _| {},
                 move |b, _, window, _| {
+                    let x0 = f32::from(b.origin.x);
+                    let y0 = f32::from(b.origin.y);
+                    let build = |pb: &mut gpui::PathBuilder, dy: f32| {
+                        let at = |x: f32, y: f32| point(px(x0 + x), px(y0 + y + dy));
+                        pb.move_to(at(23.0, 0.0));
+                        pb.line_to(at(9.0, 0.0));
+                        pb.cubic_bezier_to(at(4.0, 5.0), at(6.23858, 0.0), at(4.0, 2.23858));
+                        pb.line_to(at(4.0, 19.0));
+                        pb.cubic_bezier_to(at(9.0, 24.0), at(4.0, 21.7614), at(6.23858, 24.0));
+                        pb.line_to(at(10.0, 24.0));
+                        pb.line_to(at(16.0, 30.0));
+                        pb.line_to(at(22.0, 24.0));
+                        pb.line_to(at(23.0, 24.0));
+                        pb.cubic_bezier_to(at(28.0, 19.0), at(25.7614, 24.0), at(28.0, 21.7614));
+                        pb.line_to(at(28.0, 5.0));
+                        pb.cubic_bezier_to(at(23.0, 0.0), at(28.0, 2.23858), at(25.7614, 0.0));
+                        pb.close();
+                    };
+                    // SVG filter0_d：dy=4、25% 黑投影，先阴影再本体。
+                    let mut sp = gpui::PathBuilder::fill();
+                    build(&mut sp, 4.0);
+                    if let Ok(path) = sp.build() {
+                        window.paint_path(path, rgba(Color32::from_black_alpha(64)));
+                    }
                     let mut pb = gpui::PathBuilder::fill();
-                    pb.move_to(point(b.origin.x, b.origin.y));
-                    pb.line_to(point(b.origin.x + b.size.width, b.origin.y));
-                    pb.line_to(point(b.origin.x + b.size.width / 2.0, b.origin.y + b.size.height));
-                    pb.close();
+                    build(&mut pb, 0.0);
                     if let Ok(path) = pb.build() {
-                        window.paint_path(path, hsla);
+                        window.paint_path(path, tag_color);
                     }
                 },
             )
             .absolute()
             .left(px(0.0))
-            .top(pt(24.0))
-            .w(pt(24.0))
-            .h(pt(6.0));
+            .top(px(0.0))
+            .w(pt(32.0))
+            .h(pt(38.0));
             let mut handle = div()
                 .absolute()
                 .left(px(x))
-                .top(px(0.0))
-                .w(pt(24.0))
-                .h(pt(30.0))
+                .top(pt(2.0))
+                .w(pt(32.0))
+                .h(pt(38.0))
                 .cursor_pointer()
+                .child(tag)
+                // 中心：通用方形颜色按钮（14×14，位于 tag 主体中心）。
                 .child(
                     div()
                         .absolute()
-                        .left(pt(5.0))
+                        .left(pt(9.0))
                         .top(pt(5.0))
                         .w(pt(14.0))
                         .h(pt(14.0))
-                        .rounded(pt(2.0))
-                        .bg(hsla)
-                        .border_1()
-                        .border_color(rgba(if on { t.accent } else { Color32::from_black_alpha(26) })),
+                        .child(crate::widgets::swatch(figcraft_color::Paint::solid(stop_color), 14.0)),
                 )
-                .child(arrow)
                 .on_mouse_down(MouseButton::Left, move |e: &gpui::MouseDownEvent, _, _| {
                     sel_c.set(i);
                     drag_c.set(Some(i));
@@ -6145,22 +6230,31 @@ fn contrast_ratio(a: Color32, b: Color32) -> f32 {
 mod tests {
     use super::*;
 
-    /// 浮层内菜单的三个定位/关闭不变量：混色下拉右对齐、渐变类型下拉跟随按钮宽、
-    /// 遮罩在卡片之上（否则点卡片内空白关不掉菜单）。契约测试锁住源码，防回归。
+    /// 浮层内菜单的定位/关闭不变量（用户 2026-11-19 逐条指定）：
+    /// - AA 设置菜单：通用控件 + 宽度自适应(None) + 与按钮**中心对齐**(BottomCenter)；
+    /// - 混色(水滴)菜单：**左边缘对齐按钮左缘**（默认 BottomStart）+ 下方 4pt；
+    /// - 渐变类型菜单：宽度 104（不硬编码 120）；
+    /// - 遮罩在卡片**之后**（否则点卡片内空白关不掉菜单）。
     #[test]
     fn picker_menus_align_close_and_width_invariants() {
         let src = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/popovers.rs"));
-        let blend = src.find("// 混色按钮在类型条最右侧").expect("blend menu comment");
-        let blend_menu = src[blend..].find("menu_popup_in_aligned").expect("blend must use aligned menu");
-        assert!(blend_menu < 600, "blend menu must switch to BottomEnd right next to its comment");
-        assert!(
-            src.contains("crate::widgets::RectAlign::BottomEnd"),
-            "blend menu must be right-aligned to the button"
-        );
-        // grad_kind 菜单宽度跟随按钮（None），不再硬编码 120。
-        let grad = src.find("// 渐变类型下拉（线性 / 径向").expect("grad menu block");
-        let grad_tail = &src[grad..grad + 1400];
-        assert!(!grad_tail.contains("Some(120.0)"), "gradient-kind menu must not hardcode 120 width");
+        // AA 菜单块：从注释到 push_overlay 结束。
+        let aa = src.find("// AA 设置下拉：若本帧锚点为 Some").expect("aa menu block");
+        let aa_end = src[aa..].find("// ── 组装").map(|d| aa + d).expect("aa menu end");
+        let aa_block = &src[aa..aa_end];
+        assert!(aa_block.contains("menu_popup_in_aligned"), "AA menu must use the aligned generic menu");
+        assert!(aa_block.contains("RectAlign::BottomCenter"), "AA menu must be centre-aligned to its button");
+        assert!(!aa_block.contains("Some(180.0)"), "AA menu must not hardcode 180 width (auto-size instead)");
+        // 混色菜单：左对齐 = 直接用默认 menu_popup_in（BottomStart）。
+        let blend = src.find("// 混色（水滴）菜单").expect("blend comment");
+        let blend_block = &src[blend..blend + 500];
+        assert!(blend_block.contains("menu_popup_in("), "blend menu must use default BottomStart (left-aligned)");
+        assert!(!blend_block.contains("BottomEnd"), "blend menu must NOT be right-aligned");
+        // 渐变类型菜单宽度 104，不硬编码 120。
+        let grad = src.find("// 与上面的通用 dropdown 按钮（96）").expect("grad comment");
+        let grad_block = &src[grad..grad + 500];
+        assert!(grad_block.contains("Some(104.0)"), "gradient-kind menu width should be 104");
+        assert!(!grad_block.contains("Some(120.0)"), "gradient-kind menu must not hardcode 120");
         // backdrop 必须排在 card 之后。
         let push_backdrop = src.find("els.push(crate::widgets::popup_backdrop").expect("backdrop push");
         let push_card = src.find("els.push(card)").expect("card push");

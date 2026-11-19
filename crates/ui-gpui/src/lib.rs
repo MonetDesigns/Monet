@@ -6465,6 +6465,16 @@ impl Render for CanvasView {
                 this.bind_window_document(window, true, cx);
                 this.mods = e.keystroke.modifiers;
 
+                // 取色器渐变：选中某个断点时 Delete / Backspace 删除它（至少保留 2 个）。
+                if matches!(e.keystroke.key.as_str(), "delete" | "backspace")
+                    && let Some(Popup::Window(w)) = this.popup.as_mut()
+                    && w.kind() == popovers::WindowKind::Color
+                    && w.delete_selected_stop(window, cx)
+                {
+                    cx.notify();
+                    return;
+                }
+
                 // R4/R5: Escape cancels an inline rename (egui `Rename` keeps the old name);
 
                 // it must not reach the engine or leave a late focus-out commit behind.
