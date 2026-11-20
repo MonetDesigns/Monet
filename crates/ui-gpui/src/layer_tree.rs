@@ -727,7 +727,7 @@ impl CanvasView {
                     cx.stop_propagation();
                 }
             })
-            .child(paint_icon(if visible { Icon::Eye } else { Icon::EyeOff }, ink(), ICON_GLYPH));
+            .child(paint_icon(if visible { Icon::Eye } else { Icon::EyeOff }, rgba(tokens().icon), ICON_GLYPH));
 
         let lock = div()
             .w(px(ICON_GLYPH))
@@ -746,7 +746,7 @@ impl CanvasView {
                     cx.stop_propagation();
                 }
             })
-            .child(paint_icon(if locked { Icon::Lock } else { Icon::Unlock }, ink(), ICON_GLYPH));
+            .child(paint_icon(if locked { Icon::Lock } else { Icon::Unlock }, rgba(tokens().icon), ICON_GLYPH));
 
         // Drag start: set the state immediately and remember the group and its label.
         let me_start = me.clone();
@@ -882,16 +882,13 @@ impl CanvasView {
             .child(chevron)
             .child(div().w(px(ICON_BOX)).h(px(ICON_BOX)).flex().items_center().justify_start().child(Self::layer_glyph_element(r)))
             .child(name_cell)
-            // Eye then lock, both absolutely placed inside the highlight block's right edge:
-            // 16 pt glyphs back to back (zero gap), lock flush with the highlight's right edge.
+            // Eye (left) and lock (right) in one horizontal box: both 16 pt glyphs, zero gap,
+            // sitting at the row's right edge inside the flex flow.
             .child(
                 div()
-                    .absolute()
-                    .top_0()
-                    .right(px(ROW_INSET))
-                    .h(row_h)
                     .flex()
                     .items_center()
+                    .flex_none()
                     .child(eye)
                     .child(lock),
             )
