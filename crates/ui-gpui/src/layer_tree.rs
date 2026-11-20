@@ -95,6 +95,13 @@ pub struct LayerRow {
     pub selected: bool,
     /// 0 plain / 1 component family / 2 icon (drives the row's colour).
     pub mark_kind: u8,
+    /// The node itself is a component / instance (as opposed to a child inside one).
+    /// Figma paints such a parent's type icon in the full component purple, its children in
+    /// the tertiary purple (`object_row--symbol.topLevel` vs `object_row--layerIcon.symbolChild`).
+    pub component_root: bool,
+    /// A selected row with no selected ancestor. Figma gives it `--color-bg-selected`,
+    /// while selected descendants get `--color-bg-selected-secondary`.
+    pub selected_root: bool,
     pub visible: bool,
     pub locked: bool,
 }
@@ -155,20 +162,48 @@ fn selection_runs(m: &[Mark]) -> (Vec<usize>, Vec<usize>) {
     (first, last)
 }
 
-/// An all-icon band takes `icon_layer_row`, an all-component band `component_row`, else
-/// `selected_row`. The range is this band (`start..=end`), not the whole run, so in a
-/// "selected parent + plain children" run the parent's band keeps the ordinary selected colour.
-fn run_color(rows: &[LayerRow], from: usize, to: usize) -> gpui::Rgba {
-    let t = tokens();
-    let all_icon = rows[from..=to].iter().all(|r| r.mark_kind == 2);
-    let all_comp = rows[from..=to].iter().all(|r| r.mark_kind == 1);
-    if all_icon {
-        rgba(t.icon_layer_row)
-    } else if all_comp {
-        rgba(t.component_row)
+/// The row's two inks, straight from the Figma layer-row CSS matrix:
+/// `--fpl-icon-color` (glyph) and `color` (name). The user-visible axes are
+/// visible / invisible, selected parent / descendant, component / slot, and glyph / text.
+/// `component_root` distinguishes `object_row--symbol.topLevel` (full purple icon) from a
+/// component child (`--color-icon-component-tertiary`); a selected or hidden row is tertiary.
+/// Slots use the template (pink) ramp: full pink name, pale pink glyph when nested/selected.
+fn row_ink(t: &crate::theme::Tokens, r: &LayerRow, mark: Mark) -> (gpui::Rgba, gpui::Rgba) {
+    let slot = r.icon == Icon::Slot;
+    let component = r.mark_kind == 1;
+    let icon_layer = r.mark_kind == 2;
+    let selected = mark == Mark::Selected;
+    let child = mark == Mark::Child;
+
+    let name = if slot {
+        // Saved Figma DOM: the selected Slot2 keeps `color: var(--color-text-template)`.
+        if r.visible { t.slot } else { t.slot_secondary }
+    } else if component {
+        if r.visible && !selected && !child { t.component } else { t.component_secondary }
+    } else if icon_layer {
+        if r.visible && !selected && !child { t.icon_layer } else { t.layer_muted }
+    } else if selected {
+        t.layer_text_selected
+    } else if r.visible && !child {
+        t.text
     } else {
-        rgba(t.selected_row)
-    }
+        t.layer_muted
+    };
+
+    let icon = if slot {
+        if r.visible && !selected && !child { t.slot } else { t.slot_secondary }
+    } else if component {
+        if r.visible && r.component_root && !selected && !child { t.component } else { t.component_secondary }
+    } else if icon_layer {
+        if r.visible && !selected && !child { t.icon_layer } else { t.layer_muted }
+    } else if selected {
+        t.layer_icon_selected
+    } else {
+        // Both a visible frame's type glyph (`--color-icon-tertiary`) and a hidden row's
+        // (`--color-icon-disabled`) resolve to the same 30% black in the light Figma theme.
+        t.layer_muted
+    };
+    (rgba(name), rgba(icon))
 }
 
 /// Drag and expansion state for the tree, kept on `CanvasView` across frames.
@@ -554,9 +589,9 @@ impl CanvasView {
                 k += 1;
             }
             let end = k - 1;
-            let color = run_color(&rows, start, end);
+            let t = tokens();
             for j in start..=end {
-                band[j] = Some(color);
+                band[j] = Some(rgba(if rows[j].selected_root { t.layer_selected_root } else { t.layer_selected_child }));
             }
         }
         // The per-row render snapshot (`'static` closures only get `&mut App`).
@@ -611,14 +646,14 @@ impl CanvasView {
     /// One 16 pt glyph: 参考实现's original SVG when there is a LayerIcon, otherwise the
     /// generic Icon painter. An absolutely-positioned child in an auto-layout parent gets
     /// the Absolute glyph layered underneath, exactly as `layers()` does.
-    fn layer_glyph_element(r: &LayerRow) -> gpui::AnyElement {
+    fn layer_glyph_element(r: &LayerRow, icon_color: gpui::Rgba) -> gpui::AnyElement {
         use crate::widgets::layer_icons::{self, LayerIcon};
         let main = if let Some(s) = &r.shape {
-            shape_glyph::paint(s, ink(), ICON_GLYPH)
+            shape_glyph::paint(s, icon_color, ICON_GLYPH)
         } else {
             match r.glyph {
-                Some(g) => layer_icons::paint(g, ink()).into_any_element(),
-                None => paint_icon(r.icon, ink(), ICON_GLYPH).into_any_element(),
+                Some(g) => layer_icons::paint(g, icon_color).into_any_element(),
+                None => paint_icon(r.icon, icon_color, ICON_GLYPH).into_any_element(),
             }
         };
         if !r.absolute {
@@ -628,7 +663,7 @@ impl CanvasView {
             .relative()
             .w(px(ICON_GLYPH))
             .h(px(ICON_GLYPH))
-            .child(div().absolute().top_0().left_0().size_full().child(layer_icons::paint(LayerIcon::Absolute, ink())))
+            .child(div().absolute().top_0().left_0().size_full().child(layer_icons::paint(LayerIcon::Absolute, icon_color)))
             .child(div().absolute().top_0().left_0().size_full().child(main))
             .into_any_element()
     }
@@ -655,26 +690,10 @@ impl CanvasView {
         // Hover comes from the whole row's hitbox, so it is bound to the group.
         let group: SharedString = format!("layer-row-{}", r.id.0).into();
 
-        // Row colours: component members and slots use the component colour, selected rows use
-        // `text`, ordinary rows the theme's 90% black, hidden rows `text_tertiary`.
-        // The theme's 90% black is `t.icon`; hidden rows fall back to `text_tertiary`.
-        let component_member = r.mark_kind != 0;
-        let mark_col = if r.mark_kind == 2 { t.icon_layer } else { t.component };
-        let layer_secondary = ink();
-        let name_color = if component_member {
-            rgba(mark_col)
-        } else if r.visible {
-            rgba(t.text)
-        } else {
-            rgba(t.text_tertiary)
-        };
-        let icon_color = if component_member || r.icon == Icon::Slot {
-            rgba(mark_col)
-        } else if r.visible {
-            layer_secondary
-        } else {
-            rgba(t.text_tertiary)
-        };
+        // Row colours follow the saved Figma shell exactly: the name uses `color`, the type
+        // glyph uses `--fpl-icon-color`. They are different tokens (the frame glyph is 30% black
+        // while its name is 90%), and a component/slot switches to the purple/pink ramp.
+        let (name_color, icon_color) = row_ink(&t, r, mark);
         let id = r.id;
         let name = r.name.clone();
         let has_children = r.has_children;
@@ -883,7 +902,7 @@ impl CanvasView {
             })
             .child(div().w(px(indent)))
             .child(chevron)
-            .child(div().w(px(ICON_BOX)).h(px(ICON_BOX)).flex().items_center().justify_start().child(Self::layer_glyph_element(r)))
+            .child(div().w(px(ICON_BOX)).h(px(ICON_BOX)).flex().items_center().justify_start().child(Self::layer_glyph_element(r, icon_color)))
             .child(name_cell)
             // Eye (left) and lock (right) in one horizontal box: both 16 pt glyphs, zero gap,
             // sitting at the row's right edge inside the flex flow.
@@ -933,6 +952,11 @@ impl CanvasView {
                 0
             };
             let icon = Self::node_icon(doc, id);
+            let selected = ds.selection.contains(&id);
+            // Figma's `data-fpl-selected-root`: a selected row whose ancestors are not selected.
+            // It gets the deeper `--color-bg-selected`; descendants get `-secondary`.
+            let selected_root = selected && !doc.ancestors(id).iter().any(|a| ds.selection.contains(a));
+            let component_root = matches!(n.kind, NodeKind::Component { .. } | NodeKind::ComponentSet { .. } | NodeKind::Instance { .. });
             visual.push(LayerRow {
                 id,
                 depth,
@@ -945,8 +969,10 @@ impl CanvasView {
                 has_children,
                 can_into,
                 expanded,
-                selected: ds.selection.contains(&id),
+                selected,
                 mark_kind,
+                component_root,
+                selected_root,
                 visible: n.visible,
                 locked: n.locked,
             });
@@ -1669,5 +1695,84 @@ mod shape_glyph {
             assert_eq!(next, ids(&[3]));
             assert!(anchor);
         }
+    }
+}
+
+/// The colour matrix is a direct transcription of the Figma shell's `--fpl-icon-color` / `color`
+/// inline styles, so it is worth locking against a future "simplification" back to one ink.
+#[cfg(test)]
+mod color_tests {
+    use super::*;
+    use crate::canvas::geom::Color32;
+    use crate::theme::{Accent, Tokens};
+
+    fn row(icon: Icon, mark_kind: u8, component_root: bool, visible: bool) -> LayerRow {
+        LayerRow {
+            id: NodeId(1),
+            depth: 0,
+            name: "row".into(),
+            icon,
+            glyph: None,
+            absolute: false,
+            shape: None,
+            has_children: false,
+            can_into: false,
+            expanded: false,
+            selected: false,
+            mark_kind,
+            component_root,
+            selected_root: false,
+            visible,
+            locked: false,
+        }
+    }
+
+    #[test]
+    fn figma_light_tokens_are_the_values_parsed_from_the_saved_html() {
+        let t = Tokens::new(false, Accent::Green);
+        assert_eq!(t.slot, Color32::from_rgb(0xEA, 0x10, 0xAC)); // --ramp-pink-600
+        assert_eq!(t.slot_secondary, Color32::from_rgb(0xDA, 0xAA, 0xCE)); // --ramp-pale-pink-400
+        assert_eq!(t.component, Color32::from_rgb(0x86, 0x38, 0xE5)); // --ramp-purple-600
+        assert_eq!(t.component_secondary, Color32::from_rgb(0xC5, 0xB2, 0xDC)); // --ramp-pale-purple-400
+        assert_eq!(t.layer_selected_root, Color32::from_rgb(0xE5, 0xF4, 0xFF)); // --color-bg-selected
+        assert_eq!(t.layer_selected_child, Color32::from_rgb(0xF2, 0xF9, 0xFF)); // --color-bg-selected-secondary
+    }
+
+    #[test]
+    fn slot_is_pink_and_component_is_purple_with_separate_glyph_ink() {
+        let t = Tokens::new(false, Accent::Green);
+        let (name, glyph) = row_ink(&t, &row(Icon::Slot, 0, false, true), Mark::Selected);
+        assert_eq!(name, rgba(t.slot), "Slot2's name keeps the full template pink");
+        assert_eq!(glyph, rgba(t.slot_secondary), "a nested slot's glyph is the pale pink");
+
+        let (name, glyph) = row_ink(&t, &row(Icon::Component, 1, true, true), Mark::None);
+        assert_eq!(name, rgba(t.component), "a visible component parent is full purple");
+        assert_eq!(glyph, rgba(t.component));
+
+        let (_, glyph) = row_ink(&t, &row(Icon::Component, 1, false, true), Mark::None);
+        assert_eq!(glyph, rgba(t.component_secondary), "a component child's glyph is tertiary purple");
+    }
+
+    #[test]
+    fn visibility_and_parent_child_change_the_ink() {
+        let t = Tokens::new(false, Accent::Green);
+        let plain = row(Icon::Frame, 0, false, true);
+        let (name, glyph) = row_ink(&t, &plain, Mark::None);
+        assert_eq!(name, rgba(t.text));
+        assert_eq!(glyph, rgba(t.layer_muted), "a frame's glyph is 30% black, not its text colour");
+        let (name, _) = row_ink(&t, &plain, Mark::Selected);
+        assert_eq!(name, rgba(t.layer_text_selected));
+        let (name, _) = row_ink(&t, &plain, Mark::Child);
+        assert_eq!(name, rgba(t.layer_muted));
+
+        let hidden = row(Icon::Frame, 0, false, false);
+        let (name, glyph) = row_ink(&t, &hidden, Mark::None);
+        assert_eq!(name, rgba(t.layer_muted), "an invisible layer uses --color-text-disabled");
+        assert_eq!(glyph, rgba(t.layer_muted));
+
+        let hidden_comp = row(Icon::Component, 1, true, false);
+        let (name, glyph) = row_ink(&t, &hidden_comp, Mark::Selected);
+        assert_eq!(name, rgba(t.component_secondary), "a hidden selected component is tertiary");
+        assert_eq!(glyph, rgba(t.component_secondary));
     }
 }

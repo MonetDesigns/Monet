@@ -166,6 +166,24 @@ pub struct Tokens {
     pub component: Color32,
     /// 图标层前景橙色（egui `icon_layer`：图标类 row 的 icon 与 name 画成它）。
     pub icon_layer: Color32,
+    /// Figma `--color-text-component-tertiary` / `--color-icon-component-tertiary`：
+    /// 不可见、选中或作为组件子项的组件行所用的浅紫。
+    pub component_secondary: Color32,
+    /// Figma `--color-text-template` / `--color-icon-template`：插槽的粉红。
+    pub slot: Color32,
+    /// Figma `--color-text-template-secondary` / `--color-icon-template-secondary`：
+    /// 插槽子项 / 不可见插槽的淡粉。
+    pub slot_secondary: Color32,
+    /// Figma `--color-text-disabled` / `--color-icon-tertiary`：不可见层的文字与类型图标。
+    pub layer_muted: Color32,
+    /// Figma `--color-text-onselected` / `--color-icon-onselected`：选中普通层的文字。
+    pub layer_text_selected: Color32,
+    /// Figma `--color-icon-onselected`：选中普通层的类型图标。
+    pub layer_icon_selected: Color32,
+    /// Figma `--color-bg-selected`：选中行（根项）的底色。
+    pub layer_selected_root: Color32,
+    /// Figma `--color-bg-selected-secondary`：选中行的后代的底色。
+    pub layer_selected_child: Color32,
     pub guide: Color32,
     pub danger: Color32,
     pub success: Color32,
@@ -233,9 +251,19 @@ impl Tokens {
             selected_row_child: if dark { toward(color, Color32::BLACK, 0.90) } else { toward(color, Color32::WHITE, 0.93) },
             component_row: if dark { c(0x3E, 0x30, 0x52) } else { c(0xF1, 0xE9, 0xFF) },
             icon_layer_row: if dark { c(0x4A, 0x38, 0x1C) } else { c(0xFD, 0xF0, 0xDD) },
-            // 前景紫 / 橙：亮主题与 egui 的 `COMPONENT` / `ICON` 一致；暗主题取 egui 的减淡版。
-            component: if dark { c(0xD2, 0x7C, 0xFF) } else { c(0x97, 0x47, 0xFF) },
+            // 前景紫 / 橙：Figma `--color-(text|icon)-component` = --ramp-purple-600/400。
+            component: if dark { c(0xD1, 0xA8, 0xFF) } else { c(0x86, 0x38, 0xE5) },
             icon_layer: if dark { c(0xFF, 0xB3, 0x4D) } else { c(0xD9, 0x7A, 0x06) },
+            // 以下图层行专用色取自保存的 Figma 外壳 HTML 的 [data-preferred-theme] 主题块，
+            // 不是从坐标量出来的近似值。明暗两套各自对应 --ramp-* 的解析结果。
+            component_secondary: if dark { c(0x7F, 0x69, 0x9B) } else { c(0xC5, 0xB2, 0xDC) },
+            slot: if dark { c(0xFC, 0x9C, 0xE0) } else { c(0xEA, 0x10, 0xAC) },
+            slot_secondary: if dark { c(0xAB, 0x59, 0x98) } else { c(0xDA, 0xAA, 0xCE) },
+            layer_muted: if dark { Color32::from_white_alpha(0x66) } else { Color32::from_black_alpha(0x4D) },
+            layer_text_selected: if dark { Color32::from_white_alpha(0xE5) } else { Color32::from_black_alpha(0xE5) },
+            layer_icon_selected: if dark { Color32::WHITE } else { Color32::from_black_alpha(0xE5) },
+            layer_selected_root: if dark { c(0x39, 0x43, 0x60) } else { c(0xE5, 0xF4, 0xFF) },
+            layer_selected_child: if dark { c(0x32, 0x39, 0x4D) } else { c(0xF2, 0xF9, 0xFF) },
             guide: c(0xF2, 0x48, 0x22),
             danger: c(0xF2, 0x48, 0x22),
             success: DEV_READY,
