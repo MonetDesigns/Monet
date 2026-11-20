@@ -276,7 +276,10 @@ impl CanvasView {
             .child(SectionHeader::new(tr("Layers")).variant(SectionHeaderVariant::Normal))
             .child({
                 let me_layers = cx.entity();
-                div().flex_1().min_h(px(LAYERS_MIN_H)).relative()
+                div()
+                    .flex_1()
+                    .min_h(px(LAYERS_MIN_H))
+                    .relative()
                     // 图层列表的空白处（行下面那一层）点一下取消选中。
                     .child(div().absolute().size_full().on_mouse_down(MouseButton::Left, move |_e, _, cx| {
                         me_layers.update(cx, |cv, cx| cv.run_command("select.none", serde_json::json!({}), cx));
@@ -418,12 +421,19 @@ impl CanvasView {
         let renaming_page = self.inline_rename.as_ref().filter(|r| r.target == crate::InlineRenameTarget::Page).and_then(|r| r.ids.first().copied());
         let rename_editor = self.inline_rename_field.clone();
         // Figma: 列表高度 = 页数 * 32 + 8，夹到 40..232；空表用 104 的默认高度。
-        let pages_h = if pages.is_empty() {
-            PAGES_DEFAULT_H
-        } else {
-            (pages.len() as f32 * ROW_H + 8.0).clamp(PAGES_MIN_H, PAGES_MAX_H)
-        };
-        let mut list = div().id("pages-list").relative().w_full().flex().flex_col().gap(pt(8.0)).pb(pt(8.0)).h(px(pages_h)).min_h(px(PAGES_MIN_H)).max_h(px(PAGES_MAX_H)).overflow_y_scroll();
+        let pages_h = if pages.is_empty() { PAGES_DEFAULT_H } else { (pages.len() as f32 * ROW_H + 8.0).clamp(PAGES_MIN_H, PAGES_MAX_H) };
+        let mut list = div()
+            .id("pages-list")
+            .relative()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(pt(8.0))
+            .pb(pt(8.0))
+            .h(px(pages_h))
+            .min_h(px(PAGES_MIN_H))
+            .max_h(px(PAGES_MAX_H))
+            .overflow_y_scroll();
         // 列表空白处（含行间 8 pt 缝）点一下取消选中；行在它上面，点行不会落到底层。
         {
             let me_blank = me.clone();

@@ -169,11 +169,7 @@ pub fn flow_children(doc: &Document, frame: NodeId) -> Vec<NodeId> {
     // 有自动布局的父节点里，absolute 子级不参与流；grid 子级无论有没有显式坐标都要留在
     // 流里，没坐标的交给 `grid_place` 自动摆放（CodeRabbit PR#32）。原先把无坐标子级
     // 过滤掉，会让它们拿不到任何几何，撤销拖入 grid 后也恢复不出来。
-    f.children
-        .iter()
-        .copied()
-        .filter(|c| doc.node(*c).is_some_and(|n| n.visible && !n.child_layout.absolute))
-        .collect()
+    f.children.iter().copied().filter(|c| doc.node(*c).is_some_and(|n| n.visible && !n.child_layout.absolute)).collect()
 }
 
 /// Make a layer's sizing coherent with where it sits (after an edit). Fill needs room to fill: a
@@ -478,12 +474,8 @@ pub fn layout_frame(doc: &mut Document, frame: NodeId, m: &dyn Measure) {
         // without a text baseline (icons, rects, frames without text) uses its bottom edge as
         // its baseline, so bottoms line up (Figma/CSS behaviour, #1825).
         if baseline {
-            let line_base = line
-                .iter()
-                .filter_map(|i| items.get(*i))
-                .filter(|it| !it.fill_cross)
-                .map(|it| it.baseline.unwrap_or(it.cross))
-                .fold(0.0, f64::max);
+            let line_base =
+                line.iter().filter_map(|i| items.get(*i)).filter(|it| !it.fill_cross).map(|it| it.baseline.unwrap_or(it.cross)).fold(0.0, f64::max);
             for i in line {
                 if let Some(it) = items.get_mut(*i) {
                     it.base_off = if it.fill_cross { 0.0 } else { line_base - it.baseline.unwrap_or(it.cross) };

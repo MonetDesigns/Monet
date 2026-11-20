@@ -1,10 +1,10 @@
 //! 摆放：被演示的画框 / 设备机身 / 覆盖层在舞台里的位置 —— `ui-egui/src/present/layout.rs`
 //! 的 GPUI 移植。纯函数，不改状态；输入与渲染共用同一份几何。
 
-use figcraft_doc::proto::{Device, DeviceColor, OverlayAnchor, OverlayPosition};
 use figcraft_doc::Document;
-use figcraft_geom::Rect;
 use figcraft_doc::NodeId;
+use figcraft_doc::proto::{Device, DeviceColor, OverlayAnchor, OverlayPosition};
+use figcraft_geom::Rect;
 
 use super::scroll::{clamp_scroll, page_settings};
 use super::{OverlayState, PresentState, ScaleMode};
@@ -34,10 +34,7 @@ pub struct Place {
 
 impl Place {
     pub fn pt(&self, x: f64, y: f64) -> (f32, f32) {
-        (
-            (self.origin.0 + (x - self.page_min.0) * self.scale) as f32,
-            (self.origin.1 + (y - self.page_min.1) * self.scale) as f32,
-        )
+        ((self.origin.0 + (x - self.page_min.0) * self.scale) as f32, (self.origin.1 + (y - self.page_min.1) * self.scale) as f32)
     }
 
     pub fn rect(&self, r: Rect) -> RectPx {
@@ -48,10 +45,7 @@ impl Place {
 
     /// 屏幕点 `q` 下的页坐标。
     pub fn page(&self, q: (f64, f64)) -> (f64, f64) {
-        (
-            self.page_min.0 + (q.0 - self.origin.0) / self.scale.max(1e-9),
-            self.page_min.1 + (q.1 - self.origin.1) / self.scale.max(1e-9),
-        )
+        (self.page_min.0 + (q.0 - self.origin.0) / self.scale.max(1e-9), self.page_min.1 + (q.1 - self.origin.1) / self.scale.max(1e-9))
     }
 }
 
@@ -117,13 +111,7 @@ pub fn body_outset(device: &str, w: f32, h: f32, landscape: bool) -> (f32, f32, 
 }
 
 /// 覆盖层相对屏幕的矩形（eGUI `transition::overlay_rect`）。
-fn overlay_rect(
-    pos: OverlayPosition,
-    base: RectPx,
-    size: (f32, f32),
-    anchor: Option<RectPx>,
-    offset: Option<(f32, f32)>,
-) -> RectPx {
+fn overlay_rect(pos: OverlayPosition, base: RectPx, size: (f32, f32), anchor: Option<RectPx>, offset: Option<(f32, f32)>) -> RectPx {
     let (w, h) = size;
     let (bx, by) = (base.x, base.y);
     let (cx, cy) = (bx + (base.w - w) / 2.0, by + (base.h - h) / 2.0);
@@ -155,9 +143,7 @@ fn anchored_overlay_rect(
     offset: Option<(f32, f32)>,
 ) -> RectPx {
     let on_trigger = anchor.and_then(|a| {
-        anchor_to
-            .offset(pos, [f64::from(a.w), f64::from(a.h)], [f64::from(size.0), f64::from(size.1)])
-            .map(|[x, y]| (x as f32, y as f32))
+        anchor_to.offset(pos, [f64::from(a.w), f64::from(a.h)], [f64::from(size.0), f64::from(size.1)]).map(|[x, y]| (x as f32, y as f32))
     });
     match on_trigger {
         Some(o) => overlay_rect(OverlayPosition::Manual, base, size, anchor, Some(o)),
@@ -210,16 +196,10 @@ pub fn compute(st: &PresentState, disp: &Document, area: RectPx, pane: bool, ppp
     let pan_range = (f64::from(excess.0), f64::from(excess.1));
     // 拖拽 / 惯性进行中允许越界拉伸；其它时候夹在范围内（eGUI layout()）。
     let live = matches!(st.drag_scroll, Some((super::Scroller::View, _))) || st.fling.is_some_and(|f| f.target == super::Scroller::View);
-    let pan = if live {
-        st.offset(super::Scroller::View)
-    } else {
-        clamp_scroll(st.offset(super::Scroller::View), pan_range)
-    };
+    let pan = if live { st.offset(super::Scroller::View) } else { clamp_scroll(st.offset(super::Scroller::View), pan_range) };
     let along = |excess: f32, min: f32, centre: f32, len: f32, pan: f64| if excess > 0.0 { min - pan as f32 } else { centre - len / 2.0 };
-    let (ax, ay) = (
-        along(excess.0, area.x + pad, area.x + area.w / 2.0, whole_w, pan.0),
-        along(excess.1, area.y + pad, area.y + area.h / 2.0, whole_h, pan.1),
-    );
+    let (ax, ay) =
+        (along(excess.0, area.x + pad, area.x + area.w / 2.0, whole_w, pan.0), along(excess.1, area.y + pad, area.y + area.h / 2.0, whole_h, pan.1));
     // 对齐到设备像素：否则机身 / 玻璃 / 位图落在半像素上，缩放的每一帧都会在边缘抖一下。
     let ppp = ppp.max(0.25);
     let snap = |v: f32| (v * ppp).round() / ppp;
@@ -231,7 +211,10 @@ pub fn compute(st: &PresentState, disp: &Document, area: RectPx, pane: bool, ppp
     };
     let place = Place {
         page_min: (fb.x0, fb.y0),
-        origin: (f64::from(screen.x + (screen.w - (fb.width() as f32 * scale as f32)) / 2.0), f64::from(screen.y + (screen.h - (fb.height() as f32 * scale as f32)) / 2.0)),
+        origin: (
+            f64::from(screen.x + (screen.w - (fb.width() as f32 * scale as f32)) / 2.0),
+            f64::from(screen.y + (screen.h - (fb.height() as f32 * scale as f32)) / 2.0),
+        ),
         scale,
     };
     let place_overlay = |o: &OverlayState| -> Option<(NodeId, Place, RectPx)> {

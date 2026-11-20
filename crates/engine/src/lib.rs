@@ -410,10 +410,6 @@ mod jpg_export_tests;
 #[cfg(test)]
 mod keymap_tests;
 #[cfg(test)]
-mod page_opening_tests;
-#[cfg(test)]
-mod page_view_tests;
-#[cfg(test)]
 mod layout_suggest_tests;
 #[cfg(test)]
 mod library_beacon_tests;
@@ -470,7 +466,11 @@ mod page_clipboard_tests;
 #[cfg(test)]
 mod page_copy_navigation_tests;
 #[cfg(test)]
+mod page_opening_tests;
+#[cfg(test)]
 mod page_target_tests;
+#[cfg(test)]
+mod page_view_tests;
 #[cfg(test)]
 mod paint_index_tests;
 #[cfg(test)]

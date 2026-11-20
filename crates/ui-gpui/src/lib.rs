@@ -93,7 +93,6 @@ pub mod wgsl_runner;
 /// 逐层外置材质的 GPU 后端（`--features gpu`）：一层底图进、一层像素出，配合
 /// `figcraft_render::shade` 把材质从「整页合成」搬进 `draw_layer` 的 backdrop 槽。
 #[cfg(feature = "gpu")]
-
 mod shade_gpu;
 
 mod main_menu;
@@ -798,13 +797,9 @@ impl CanvasView {
                 // 「借用这份文档且不拥有它」的判定，避免 target 因首帧/登记时序漏写。
                 let take = {
                     let w = self.windows.borrow();
-                    w.pending_present.as_ref().is_some_and(|(u, target, _)| {
-                        *target == Some(wid) || (w.shows_uid(wid, *u) && w.of(*u) != wid)
-                    })
+                    w.pending_present.as_ref().is_some_and(|(u, target, _)| *target == Some(wid) || (w.shows_uid(wid, *u) && w.of(*u) != wid))
                 };
-                if take
-                    && let Some((_, _, tab)) = self.windows.borrow_mut().pending_present.take()
-                {
+                if take && let Some((_, _, tab)) = self.windows.borrow_mut().pending_present.take() {
                     p.tabs.home = false;
                     p.present_active = Some(tab.id);
                     p.present = tab.pres.clone();
@@ -849,11 +844,7 @@ impl CanvasView {
         // display_doc 是跨窗口共享的，只在渲染时由 sync_motion 写。换入新 pane 后必须
         // 按这份 pane 的 motion 状态刷新，否则一个窗口的运动预览会被另一个窗口的
         // 命中几何使用（点击落空 / 选错对象，CodeRabbit PR#28）。
-        self.app.session.display_doc = if self.pane.motion && !self.pane.motion_ui.playing {
-            self.pane.motion_ui.preview_doc.clone()
-        } else {
-            None
-        };
+        self.app.session.display_doc = if self.pane.motion && !self.pane.motion_ui.playing { self.pane.motion_ui.preview_doc.clone() } else { None };
         self.app.display_doc = self.pane.motion_ui.preview_doc.clone();
     }
 
@@ -941,11 +932,8 @@ impl CanvasView {
         let doc_uids: Vec<u64> = self.app.session.docs.iter().map(|d| d.uid).collect();
         // 演示正在显示时它借用的源文档 uid：即使设计标签已经关掉（藏起来了），也要允许绑定，
         // 否则预览一打开就会被下面的回落逻辑切走文档（用户 2026-11-17）。
-        let presenting_uid = if self.present.is_some() {
-            self.present_tabs.iter().find(|t| Some(t.id) == self.present_active).map(|t| t.uid)
-        } else {
-            None
-        };
+        let presenting_uid =
+            if self.present.is_some() { self.present_tabs.iter().find(|t| Some(t.id) == self.present_active).map(|t| t.uid) } else { None };
         // 显式切到一份「设计标签已关」的文档（例如从最近文件重新打开）：恢复它的设计标签。
         // ⛔ 首页 / 「+」临时页时不能恢复：这两处只是临时视图，文档仍是全局 active，
         // 无条件恢复会让设计标签立刻弹回来（用户 2026-11-17：设计页关不掉 / 点加号冒出原标签）。
@@ -976,23 +964,15 @@ impl CanvasView {
         // 原窗口）：所以「可绑定」= 拥有它，或作为预览窗口借用了它（用户 2026-11-17）。
         // 借用只影响绑定，不影响归属：`Windows::of` 里它仍属于原窗口，因此预览窗口的
         // 标签栏不会冒出设计页。
-        let owned = |uid: u64| {
-            wins.shows_uid(wid, uid)
-                && doc_uids.contains(&uid)
-                && (!hidden.contains(&uid) || Some(uid) == presenting_uid)
-        };
-        let show = want
-            .filter(|uid| owned(*uid))
-            .or_else(|| cur.filter(|uid| owned(*uid)))
-            .or_else(|| {
-                if wid == 0 {
-                    // 主窗口的文档 = 不属于任何额外窗口的那些（按 session 的打开顺序）。
-                    doc_uids.iter().copied().find(|uid| wins.of(*uid) == 0 && !hidden.contains(uid))
-                } else {
-                    wins.entry(wid)
-                        .and_then(|w| w.docs.iter().copied().find(|uid| doc_uids.contains(uid) && !hidden.contains(uid)))
-                }
-            });
+        let owned = |uid: u64| wins.shows_uid(wid, uid) && doc_uids.contains(&uid) && (!hidden.contains(&uid) || Some(uid) == presenting_uid);
+        let show = want.filter(|uid| owned(*uid)).or_else(|| cur.filter(|uid| owned(*uid))).or_else(|| {
+            if wid == 0 {
+                // 主窗口的文档 = 不属于任何额外窗口的那些（按 session 的打开顺序）。
+                doc_uids.iter().copied().find(|uid| wins.of(*uid) == 0 && !hidden.contains(uid))
+            } else {
+                wins.entry(wid).and_then(|w| w.docs.iter().copied().find(|uid| doc_uids.contains(uid) && !hidden.contains(uid)))
+            }
+        });
         // 只能绑定**本窗口拥有**的文档：否则主窗口会把「已经被拖到别的窗口」的文档设成
         // 全局 active，画布显示一份它没有标签的文档（用户 2026-11-16：切不过去）。
         if let Some(uid) = show
@@ -1393,7 +1373,15 @@ impl CanvasView {
                 "color" => {
                     let on_pick = Rc::new(|_c: Color32, _w: &mut Window, _cx: &mut App| {});
 
-                    Some(popovers::WindowState::color(cx, anchor, Color32::from_rgb(0x2D, 0x9C, 0xDB), None, on_pick, view.fields.queue()))
+                    Some(popovers::WindowState::color(
+                        cx,
+                        anchor,
+                        Color32::from_rgb(0x2D, 0x9C, 0xDB),
+                        None,
+                        Default::default(),
+                        on_pick,
+                        view.fields.queue(),
+                    ))
                 }
 
                 _ => None,
@@ -1825,7 +1813,8 @@ impl CanvasView {
 
     /// 才真正有 UI 反应（以前 GPUI 完全不消费这些请求，我只能用右栏状态硬同步）。
 
-    fn sync_ui_requests(&mut self, cx: &mut Context<Self>) {        if *self.extra_state.dismiss.borrow() {
+    fn sync_ui_requests(&mut self, cx: &mut Context<Self>) {
+        if *self.extra_state.dismiss.borrow() {
             *self.extra_state.dismiss.borrow_mut() = false;
 
             // 「+」临时页里点了动作（新建 / 打开 / 最近文件）或者按了 X：临时页要让位，
@@ -1848,9 +1837,8 @@ impl CanvasView {
         // 的窗口（通常是主窗口）会把别的窗口的请求（典型：`proto.present`）抢进自己的
         // pane，表现是「在某个窗口演示，标签却跑到首页/别的窗口」（用户 2026-11-17）。
         let wid = crate::windows::current();
-        let (reqs, others): (Vec<_>, Vec<_>) = reqs
-            .into_iter()
-            .partition(|r| r.data.get("__window").and_then(serde_json::Value::as_u64).map_or(true, |w| w == wid));
+        let (reqs, others): (Vec<_>, Vec<_>) =
+            reqs.into_iter().partition(|r| r.data.get("__window").and_then(serde_json::Value::as_u64).map_or(true, |w| w == wid));
         // 别的窗口的请求先放回去，等它自己的渲染帧消费。
         self.app.session.ui_requests = others;
 
@@ -1877,7 +1865,6 @@ impl CanvasView {
                     continue;
                 }
                 // A21：区域导航由 UI 侧维护，引擎只发 step。
-
                 "focus.region" => {
                     self.a11y.step(r.data.get("step").and_then(serde_json::Value::as_i64).unwrap_or(1));
 
@@ -2100,11 +2087,8 @@ impl CanvasView {
                                 (ds.uid, ds.path.clone(), ds.doc.name.clone(), page, page_name)
                             })
                             .unwrap_or((0, None, String::new(), id, String::new()));
-                        let same = self
-                            .present_tabs
-                            .iter()
-                            .find(|t| t.page == page && (t.uid == uid || (path.is_some() && t.path == path)))
-                            .map(|t| t.id);
+                        let same =
+                            self.present_tabs.iter().find(|t| t.page == page && (t.uid == uid || (path.is_some() && t.path == path))).map(|t| t.id);
                         let tab_id = if let Some(tid) = same {
                             tid
                         } else {
@@ -2122,8 +2106,7 @@ impl CanvasView {
                             Some(present::PresentState::new(id, preview))
                         };
                         // 预览自带一份文档快照：源设计稿关掉之后预览标签仍可打开（用户 2026-11-17）。
-                        let snapshot =
-                            self.app.session.ds().ok().filter(|ds| ds.uid == uid).map(|ds| ds.doc.clone());
+                        let snapshot = self.app.session.ds().ok().filter(|ds| ds.uid == uid).map(|ds| ds.doc.clone());
                         if let (Some(p), Some(d)) = (self.present.as_mut(), snapshot) {
                             p.doc = Some(d);
                         }
@@ -2241,10 +2224,8 @@ impl CanvasView {
                     .map(|a| a.iter().filter_map(|v| v.as_u64().map(figcraft_doc::NodeId)).collect())
                     .unwrap_or_else(|| self.app.session.selection());
                 let sorted = doc.as_ref().map(|d| figcraft_engine::cmd::edit::z_sorted(d, &ids)).unwrap_or(ids);
-                let names: Vec<String> = doc
-                    .as_ref()
-                    .map(|d| sorted.iter().filter_map(|i| d.node(*i).map(|n| n.name.clone())).collect())
-                    .unwrap_or_default();
+                let names: Vec<String> =
+                    doc.as_ref().map(|d| sorted.iter().filter_map(|i| d.node(*i).map(|n| n.name.clone())).collect()).unwrap_or_default();
                 std::borrow::Cow::Owned(serde_json::json!({ "ids": sorted, "names": names }))
             }
             dialogs::Kind::MoveToPage => {
@@ -2340,8 +2321,7 @@ impl CanvasView {
             self.present = tab.pres.take();
         }
         // 源文档还开着就刷新快照（预览显示最新设计）；关掉了就继续用旧快照。
-        let snapshot = owner
-            .and_then(|uid| self.app.session.ds().ok().filter(|ds| ds.uid == uid).map(|ds| ds.doc.clone()));
+        let snapshot = owner.and_then(|uid| self.app.session.ds().ok().filter(|ds| ds.uid == uid).map(|ds| ds.doc.clone()));
         if let (Some(p), Some(d)) = (self.present.as_mut(), snapshot) {
             p.doc = Some(d);
         }
@@ -2567,11 +2547,7 @@ impl CanvasView {
         let wid = crate::windows::current();
         let has_doc = {
             let wins = self.windows.borrow();
-            self.app
-                .session
-                .docs
-                .iter()
-                .any(|d| wins.of(d.uid) == wid || wins.entry(wid).is_some_and(|e| e.docs.contains(&d.uid)))
+            self.app.session.docs.iter().any(|d| wins.of(d.uid) == wid || wins.entry(wid).is_some_and(|e| e.docs.contains(&d.uid)))
         };
         self.tabs.home = !has_doc;
     }
@@ -2621,16 +2597,12 @@ impl CanvasView {
         // eGUI `present_owner_active`：演示只在其源文档是本窗口前台时才读改它。
         // 源文档被切走时，先把播放器收进 tab，不推进 / 不消费点击。
         if let (Some(tid), Some(_)) = (self.present_active, self.present.as_ref()) {
-            let owner_ok = self
-                .present_tabs
-                .iter()
-                .find(|t| t.id == tid)
-                .is_some_and(|t| match self.present_owner_index(t.uid) {
-                    Some(i) => i == self.app.session.active,
-                    // 源设计稿已被关掉：播放器里有文档快照就继续放着，
-                    // 否则一开预览就会被这里 pause 掉（用户 2026-11-17「预览标签点不开」）。
-                    None => self.present.as_ref().is_some_and(|p| p.doc.is_some()),
-                });
+            let owner_ok = self.present_tabs.iter().find(|t| t.id == tid).is_some_and(|t| match self.present_owner_index(t.uid) {
+                Some(i) => i == self.app.session.active,
+                // 源设计稿已被关掉：播放器里有文档快照就继续放着，
+                // 否则一开预览就会被这里 pause 掉（用户 2026-11-17「预览标签点不开」）。
+                None => self.present.as_ref().is_some_and(|p| p.doc.is_some()),
+            });
             if !owner_ok {
                 present::ACTION.with(|a| a.replace(0));
                 self.pause_present();
@@ -2672,11 +2644,7 @@ impl CanvasView {
 
         // P6：源设计稿在屏时跟随文档变化（布局 / 删帧 / 改交互）。源文件关掉后只用快照。
         let live_arc = if self.present_active.is_some_and(|tid| {
-            self.present_tabs
-                .iter()
-                .find(|t| t.id == tid)
-                .and_then(|t| self.present_owner_index(t.uid))
-                .is_some_and(|i| i == self.app.session.active)
+            self.present_tabs.iter().find(|t| t.id == tid).and_then(|t| self.present_owner_index(t.uid)).is_some_and(|i| i == self.app.session.active)
         }) {
             self.app.session.ds().ok().map(|ds| ds.doc.clone())
         } else {
@@ -2894,13 +2862,7 @@ impl CanvasView {
         let style_targets: Vec<String> = cmds
             .iter()
             .filter(|c| c.id.starts_with("style."))
-            .filter_map(|c| {
-                c.params
-                    .as_ref()
-                    .and_then(|p| p.get("style"))
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-            })
+            .filter_map(|c| c.params.as_ref().and_then(|p| p.get("style")).and_then(|v| v.as_str()).map(|s| s.to_string()))
             .collect();
 
         if !cmds.is_empty() {
@@ -2974,9 +2936,7 @@ impl CanvasView {
             // `popup` 走 Deref 会把 self 整体借走；用 pane 路径才能与 `self.app` 共存。
 
             if let Some(Popup::Window(w)) = &mut self.pane.popup {
-                if w.kind() == popovers::WindowKind::StyleEditor
-                    && w.style_id().as_deref().is_some_and(|id| style_targets.iter().any(|t| t == id))
-                {
+                if w.kind() == popovers::WindowKind::StyleEditor && w.style_id().as_deref().is_some_and(|id| style_targets.iter().any(|t| t == id)) {
                     if let Ok(doc) = self.app.session.ds() {
                         deleted = !w.refresh_style(cx, &doc.doc);
                     }
@@ -4746,7 +4706,7 @@ impl CanvasView {
 
         cx: &mut Context<Self>,
     ) {
-        let w = popovers::WindowState::color(cx, origin, current, None, on_pick, self.fields.queue());
+        let w = popovers::WindowState::color(cx, origin, current, None, self.fields.contrast(), on_pick, self.fields.queue());
 
         self.open_window(w, cx);
     }
@@ -5524,7 +5484,6 @@ impl Render for CanvasView {
             let _ = self.app.session.execute(&command, &serde_json::json!({}));
         }
 
-
         // DEBUG-PICKER: `FIGCRAFT_DEBUG_PICKER=1`（或 `=grad`）在启动首帧自动打开取色器面板，
         // 供截图核对 1:1 版式；不含任何运行时逻辑，核完即删。
         if let Ok(mode) = std::env::var("FIGCRAFT_DEBUG_PICKER") {
@@ -5535,10 +5494,8 @@ impl Render for CanvasView {
                 let base = figcraft_color::Color::from_rgba8(0x2D, 0x9C, 0xDB, 255);
                 let mut paint = figcraft_color::Paint::solid(base);
                 if mode == "grad" {
-                    paint.kind = figcraft_color::PaintKind::Gradient(figcraft_color::Gradient::default_for(
-                        figcraft_color::GradientKind::Linear,
-                        base,
-                    ));
+                    paint.kind =
+                        figcraft_color::PaintKind::Gradient(figcraft_color::Gradient::default_for(figcraft_color::GradientKind::Linear, base));
                 }
                 let picker = popovers::PaintPicker { paint, on_write: std::rc::Rc::new(|_, _, _| {}), styles: Vec::new() };
                 let w = popovers::WindowState::color(
@@ -5546,6 +5503,7 @@ impl Render for CanvasView {
                     gpui::point(px(160.0), px(60.0)),
                     Color32::from_rgb(0x2D, 0x9C, 0xDB),
                     Some(picker),
+                    Default::default(),
                     std::rc::Rc::new(|_, _, _| {}),
                     self.fields.queue(),
                 );
@@ -5652,10 +5610,7 @@ impl Render for CanvasView {
                     // `Keystroke::parse` 只解析键名，不带 `key_char`；平台真实按键的可打印
                     // 字符由 `WM_CHAR` 补上。这里照同一规则补：单字符、无修饰键 → 就是字符本身，
                     // 否则输入框永远收不到文字（只能测快捷键）。
-                    if ks.key_char.is_none()
-                        && ks.key.chars().count() == 1
-                        && ks.modifiers.number_of_modifiers() == 0
-                    {
+                    if ks.key_char.is_none() && ks.key.chars().count() == 1 && ks.modifiers.number_of_modifiers() == 0 {
                         ks.key_char = Some(ks.key.clone().into());
                     }
                     window.dispatch_keystroke(ks, cx);
@@ -5856,7 +5811,8 @@ impl Render for CanvasView {
         // 正在改名的画布标签：这一帧不要再画旧名字。输入框是透明的，旧字会从底下透出来，
         // 名字变短时还会露出旧后缀。几何（`label_rename_rect`）不受影响。
         let renaming_label = self.inline_rename.as_ref().filter(|r| r.target == InlineRenameTarget::Label).and_then(|r| r.ids.first().copied());
-        let CanvasOutput { image, overview, live, painter, bg, in_flight, retired } = canvas::show(&mut self.app, &mut self.worker, ppp, &t, renaming_label);
+        let CanvasOutput { image, overview, live, painter, bg, in_flight, retired } =
+            canvas::show(&mut self.app, &mut self.worker, ppp, &t, renaming_label);
 
         if let Some(real) = saved_doc
             && let Ok(ds) = self.app.session.ds_mut()
@@ -6542,6 +6498,16 @@ impl Render for CanvasView {
                 this.bind_window_document(window, true, cx);
                 this.mods = e.keystroke.modifiers;
 
+                // 取色器渐变：选中某个断点时 Delete / Backspace 删除它（至少保留 2 个）。
+                if matches!(e.keystroke.key.as_str(), "delete" | "backspace")
+                    && let Some(Popup::Window(w)) = this.popup.as_mut()
+                    && w.kind() == popovers::WindowKind::Color
+                    && w.delete_selected_stop(window, cx)
+                {
+                    cx.notify();
+                    return;
+                }
+
                 // R4/R5: Escape cancels an inline rename (egui `Rename` keeps the old name);
 
                 // it must not reach the engine or leave a late focus-out commit behind.
@@ -6849,9 +6815,12 @@ impl Render for CanvasView {
                     if m.platform || m.control || m.alt {
                         let held = figcraft_engine::keymap::Mods { shift: m.shift, alt: m.alt, cmd: m.platform, ctrl: m.control };
                         let key = canonical_key(&e.keystroke.key);
-                        if let Some(binding) =
-                            figcraft_engine::keymap::lookup(figcraft_engine::keymap::Platform::current(), figcraft_engine::keymap::Context::Text, &key, held)
-                        {
+                        if let Some(binding) = figcraft_engine::keymap::lookup(
+                            figcraft_engine::keymap::Platform::current(),
+                            figcraft_engine::keymap::Context::Text,
+                            &key,
+                            held,
+                        ) {
                             run_binding(&mut this.app, binding.id);
                             cx.notify();
                             return;
@@ -7061,7 +7030,8 @@ impl Render for CanvasView {
 
                 let data = cv.panel_data();
 
-                let win = popovers::WindowState::variables_table(cv.fields.queue(), Point { x: px(0.0), y }, data.variables, Some(cv.fields.popups()));
+                let win =
+                    popovers::WindowState::variables_table(cv.fields.queue(), Point { x: px(0.0), y }, data.variables, Some(cv.fields.popups()));
 
                 // 不再强制 `variables_full = false`：会话记住上次是 Full 还是 Floating。
 
@@ -7125,18 +7095,11 @@ impl Render for CanvasView {
         let nib_inks = {
             let ts = &self.app.session.tool;
             let rgb = |tool: figcraft_engine::ToolId| {
-                let c = ts
-                    .draw_style(tool)
-                    .map(|s| s.color())
-                    .unwrap_or_else(|| figcraft_engine::tools::DrawStyle::default().color());
+                let c = ts.draw_style(tool).map(|s| s.color()).unwrap_or_else(|| figcraft_engine::tools::DrawStyle::default().color());
                 let q = crate::widgets::swatch::color32(c);
                 [q.0[0], q.0[1], q.0[2]]
             };
-            [
-                rgb(figcraft_engine::ToolId::Pen),
-                rgb(figcraft_engine::ToolId::Brush),
-                rgb(figcraft_engine::ToolId::Pencil),
-            ]
+            [rgb(figcraft_engine::ToolId::Pen), rgb(figcraft_engine::ToolId::Brush), rgb(figcraft_engine::ToolId::Pencil)]
         };
 
         let bar = toolbar::bar(
@@ -7180,9 +7143,11 @@ impl Render for CanvasView {
                     // next-stroke preset is shown. Before this the bar only read the tool slot, so
                     // selecting a brush stroke still showed the tool's brush (user 2026-11-18).
                     let selected = self.app.session.doc().ok().and_then(|doc| {
-                        self.app.session.selection().iter().find_map(|id| {
-                            doc.node(*id).and_then(|n| n.stroke.brush.as_ref()).map(|b| b.preset.clone())
-                        })
+                        self.app
+                            .session
+                            .selection()
+                            .iter()
+                            .find_map(|id| doc.node(*id).and_then(|n| n.stroke.brush.as_ref()).map(|b| b.preset.clone()))
                     });
                     let brush = selected.or_else(|| self.app.session.tool.brush_style.preset.as_ref().map(|b| b.preset.to_string()));
                     toolbar::drawing_bar(t, style, brush.as_deref(), canvas_x, canvas_w, on_intent.clone())
@@ -7256,11 +7221,8 @@ impl Render for CanvasView {
         let tabs_dark = self.app.theme.dark;
         let tabs_reduce_motion = self.app.session.prefs.reduce_motion;
         // 演示 tab（eGUI `app.ui.presents`）：`(id, file - page, 是否在屏)`。
-        let present_tabs: Vec<(u64, String, bool, u64)> = self
-            .present_tabs
-            .iter()
-            .map(|t| (t.id, t.name(), Some(t.id) == self.present_active && self.present.is_some(), t.uid))
-            .collect();
+        let present_tabs: Vec<(u64, String, bool, u64)> =
+            self.present_tabs.iter().map(|t| (t.id, t.name(), Some(t.id) == self.present_active && self.present.is_some(), t.uid)).collect();
         let viewport_w = f32::from(vp.width);
         let content_w = title_bar::content_width(viewport_w);
         let tabs_cmds = self.fields.queue();
@@ -7324,8 +7286,12 @@ impl Render for CanvasView {
             .when(show_right, |d| d.child(dbg_tint(right_el, dbg, 0x0091FF)))
             .when(!ui_hidden, |d| {
                 let mut d = d.child(bar);
-                if let Some(vb) = vector_bar { d = d.child(vb); }
-                if let Some(db) = draw_bar { d = d.child(db); }
+                if let Some(vb) = vector_bar {
+                    d = d.child(vb);
+                }
+                if let Some(db) = draw_bar {
+                    d = d.child(db);
+                }
                 d
             })
             // 4px 命中覆盖条必须最后绘制：后绘制的 hitbox 先命中，才压得住画布 / 面板。
@@ -8058,12 +8024,7 @@ impl Render for CanvasView {
                 let dock = self.dock();
                 let vw = f32::from(vp.width);
                 let vh = f32::from(vp.height);
-                let canvas = (
-                    dock.center_x(),
-                    dock.titlebar_h,
-                    dock.center_w(vw),
-                    (vh - dock.titlebar_h - dock.bottom_h).max(1.0),
-                );
+                let canvas = (dock.center_x(), dock.titlebar_h, dock.center_w(vw), (vh - dock.titlebar_h - dock.bottom_h).max(1.0));
                 present::render(&self.app, st, (vw, vh), canvas).into_any_element()
             })
             .into_iter()
@@ -8084,9 +8045,7 @@ impl Render for CanvasView {
             let vh = f32::from(vp.height);
             let center_h = (vh - dock.titlebar_h - dock.bottom_h).max(1.0);
             let (x, y, w, h) = match region {
-                a11y::Region::Toolbar => {
-                    (dock.center_x(), vh - toolbar::PILL_H - 16.0, dock.center_w(vw), toolbar::PILL_H + 16.0)
-                }
+                a11y::Region::Toolbar => (dock.center_x(), vh - toolbar::PILL_H - 16.0, dock.center_w(vw), toolbar::PILL_H + 16.0),
                 a11y::Region::Layers => (dock.rail_w, dock.titlebar_h, dock.left_w, center_h),
                 a11y::Region::Canvas => (dock.center_x(), dock.titlebar_h, dock.center_w(vw), center_h),
                 a11y::Region::Properties => {
@@ -8278,10 +8237,7 @@ impl Render for CanvasView {
                     let mods = figcraft_doc::proto::KeyMods { ctrl: m.control, alt: m.alt, shift: m.shift, cmd: m.platform };
                     let pane = st.preview;
                     let root = st.overlays.last().map_or(st.current, |o| o.id);
-                    let uses = st
-                        .display()
-                        .or(st.doc.as_deref())
-                        .is_some_and(|d| present::wants_key(d, root, &key, mods, pane));
+                    let uses = st.display().or(st.doc.as_deref()).is_some_and(|d| present::wants_key(d, root, &key, mods, pane));
                     if uses {
                         present::push_key(key, mods);
                         cx.stop_propagation();
@@ -8315,12 +8271,7 @@ impl Render for CanvasView {
                 let id = if key.eq_ignore_ascii_case("y") && !m.shift {
                     Some("edit.redo")
                 } else if matches!(key.as_str(), "z" | "Z") {
-                    let held = figcraft_engine::keymap::Mods {
-                        shift: m.shift,
-                        alt: m.alt,
-                        cmd: m.platform,
-                        ctrl: m.control,
-                    };
+                    let held = figcraft_engine::keymap::Mods { shift: m.shift, alt: m.alt, cmd: m.platform, ctrl: m.control };
                     figcraft_engine::keymap::lookup(
                         figcraft_engine::keymap::Platform::current(),
                         figcraft_engine::keymap::Context::Canvas,
@@ -8487,11 +8438,14 @@ impl Render for CanvasView {
                 let vh = f32::from(window.viewport_size().height);
                 crate::motion::timeline::set_pointer_in_bar(this.motion && f32::from(e.position.y) >= vh - this.motion_bar_h());
             }))
-            .on_mouse_up(MouseButton::Left, cx.listener(|this: &mut CanvasView, e: &MouseUpEvent, _window, _cx| {
-                if this.present.is_some() {
-                    present::push_up(f64::from(e.position.x), f64::from(e.position.y));
-                }
-            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this: &mut CanvasView, e: &MouseUpEvent, _window, _cx| {
+                    if this.present.is_some() {
+                        present::push_up(f64::from(e.position.x), f64::from(e.position.y));
+                    }
+                }),
+            )
             // 通用窗口级拖拽层：paint 阶段每帧注册 move / up / down 监听并转给
             // `WindowDragTarget`。所有拖拽统一从这里按窗口坐标推进，不再依赖任何
             // 元素级 `on_mouse_move`（指针移出最初的元素就停发）。

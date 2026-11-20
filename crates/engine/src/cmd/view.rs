@@ -290,23 +290,24 @@ pub fn specs() -> Vec<CommandSpec> {
             "{zoom?, cx?, cy? (page coordinate at the centre), vw?, vh? (viewport size), bottomInset? (height of the strip the bottom toolbar covers)}",
             false,
             |s, p| {
-            let v = view(s)?;
-            if let Some(z) = num(p, "zoom") {
-                v.zoom = z.clamp(ViewState::MIN_ZOOM, ViewState::MAX_ZOOM);
+                let v = view(s)?;
+                if let Some(z) = num(p, "zoom") {
+                    v.zoom = z.clamp(ViewState::MIN_ZOOM, ViewState::MAX_ZOOM);
+                }
+                v.cx = num_or(p, "cx", v.cx);
+                v.cy = num_or(p, "cy", v.cy);
+                if let Some(w) = num(p, "vw") {
+                    v.vw = w.clamp(10.0, 20000.0);
+                }
+                if let Some(h) = num(p, "vh") {
+                    v.vh = h.clamp(10.0, 20000.0);
+                }
+                if let Some(i) = num(p, "bottomInset") {
+                    v.bottom_inset = i.clamp(0.0, 20000.0);
+                }
+                Ok(serde_json::to_value(&*v).unwrap_or(Value::Null))
             }
-            v.cx = num_or(p, "cx", v.cx);
-            v.cy = num_or(p, "cy", v.cy);
-            if let Some(w) = num(p, "vw") {
-                v.vw = w.clamp(10.0, 20000.0);
-            }
-            if let Some(h) = num(p, "vh") {
-                v.vh = h.clamp(10.0, 20000.0);
-            }
-            if let Some(i) = num(p, "bottomInset") {
-                v.bottom_inset = i.clamp(0.0, 20000.0);
-            }
-            Ok(serde_json::to_value(&*v).unwrap_or(Value::Null))
-        }),
+        ),
         spec!(
             "view.zoomAt",
             "Zoom tool",
@@ -552,20 +553,14 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(json!({"language": s.prefs.language}))
             }
         ),
-        spec!(
-            "pref.accent",
-            "Theme colour",
-            "{accent: blue|green|yellow|pink}",
-            false,
-            |s, p| {
-                let accent = req_string("pref.accent", p, "accent")?.trim().to_ascii_lowercase();
-                if !matches!(accent.as_str(), "blue" | "green" | "yellow" | "pink") {
-                    return Err(bad("pref.accent", format!("`{accent}` is not an accent colour")));
-                }
-                s.prefs.accent = accent;
-                Ok(json!({"accent": s.prefs.accent}))
+        spec!("pref.accent", "Theme colour", "{accent: blue|green|yellow|pink}", false, |s, p| {
+            let accent = req_string("pref.accent", p, "accent")?.trim().to_ascii_lowercase();
+            if !matches!(accent.as_str(), "blue" | "green" | "yellow" | "pink") {
+                return Err(bad("pref.accent", format!("`{accent}` is not an accent colour")));
             }
-        ),
+            s.prefs.accent = accent;
+            Ok(json!({"accent": s.prefs.accent}))
+        }),
         spec!("app.preferences", "Preferences", "{}", false, |s, _| ui(s, "dialog.preferences")),
         spec!("app.actions", "Actions", "{}", false, |s, _| ui(s, "palette.actions")),
         spec!("help.shortcuts", "Keyboard shortcuts", "{}", false, |s, _| ui(s, "panel.shortcuts")),
@@ -794,8 +789,8 @@ pub fn specs() -> Vec<CommandSpec> {
             false,
             |s, p| {
                 if let Some(k) = string(p, "kind") {
-                    s.tool.pencil_kind = crate::tools::PenKind::from_id(&k)
-                        .ok_or_else(|| bad("tool.pencil", format!("unknown pen style `{k}` (ink|highlighter)")))?;
+                    s.tool.pencil_kind =
+                        crate::tools::PenKind::from_id(&k).ok_or_else(|| bad("tool.pencil", format!("unknown pen style `{k}` (ink|highlighter)")))?;
                 }
                 if let Some(c) = crate::params::color_of(&p["color"]) {
                     s.tool.pencil_style.color = Some(c);

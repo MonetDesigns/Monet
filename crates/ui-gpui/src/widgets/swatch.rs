@@ -219,10 +219,7 @@ impl IntoElement for Swatch {
         let radius = if circle { size / 2.0 } else { 2.0 };
         let angle = if circle { 45.0 } else { 90.0 };
         let (from, to) = match &self.paint.kind {
-            PaintKind::Solid { color } => (
-                rgba(color32(color.with_alpha(1.0))),
-                rgba(color32(color.with_alpha(color.a * self.paint.opacity))),
-            ),
+            PaintKind::Solid { color } => (rgba(color32(color.with_alpha(1.0))), rgba(color32(color.with_alpha(color.a * self.paint.opacity)))),
             PaintKind::Gradient(g) => (rgba(color32(g.sample(0.0))), rgba(color32(g.sample(1.0)))),
             _ => {
                 let grey = rgba(crate::canvas::geom::Color32::from_gray(0xB3));
@@ -233,14 +230,7 @@ impl IntoElement for Swatch {
         // 容器：一个矩形 / 圆，带描边和圆角，点击也挂在它身上。
         let mut el = div().relative().size(pt(size)).rounded(pt(radius)).border_1().border_color(rgba(t.border));
         // 棋盘位图铺满容器（`img` 的 shader 按元素自身圆角裁剪）。
-        el = el.child(
-            gpui::img(gpui::ImageSource::Render(checker_texture()))
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full()
-                .rounded(pt(radius)),
-        );
+        el = el.child(gpui::img(gpui::ImageSource::Render(checker_texture())).absolute().top_0().left_0().size_full().rounded(pt(radius)));
         // 两半颜色：0.499/0.501 硬色标，等于左右两个矩形各分一半（圆是 45° 斜线）。
         el = el.child(div().absolute().top_0().left_0().size_full().rounded(pt(radius)).bg(gpui::linear_gradient(
             angle,
@@ -249,9 +239,11 @@ impl IntoElement for Swatch {
         )));
         if matches!(self.paint.kind, PaintKind::Image(_) | PaintKind::Pattern(_)) {
             let icon = if matches!(self.paint.kind, PaintKind::Image(_)) { Icon::Image } else { Icon::ViewGrid };
-            el = el.child(div().absolute().size_full().flex().items_center().justify_center().child(
-                crate::widgets::icon::paint(icon, rgba(crate::canvas::geom::Color32::WHITE), size * 0.7),
-            ));
+            el = el.child(div().absolute().size_full().flex().items_center().justify_center().child(crate::widgets::icon::paint(
+                icon,
+                rgba(crate::canvas::geom::Color32::WHITE),
+                size * 0.7,
+            )));
         }
         if let Some(f) = on_click {
             el = el.on_mouse_down(gpui::MouseButton::Left, move |_: &gpui::MouseDownEvent, window, cx| f(window, cx));

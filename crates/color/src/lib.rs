@@ -9,12 +9,17 @@
 use serde::{Deserialize, Serialize};
 
 mod blend;
+mod contrast;
 mod hsx;
 mod icc;
 mod lch;
 mod named;
 mod profile;
 pub use blend::BlendMode;
+pub use contrast::{
+    ContrastCategory, ContrastLevel, ContrastResult, TextRun, autocorrect_candidate, boundary_line, boundary_luminance, classify, composite,
+    contrast_ratio, delta_e, lab, measure, minimum, perceptual_delta, resolve,
+};
 pub use hsx::*;
 pub use lch::{Lch, Oklch};
 pub use profile::{ColorProfile, ProfileConversion};

@@ -52,11 +52,7 @@ pub fn title_bar_options() -> TitlebarOptions {
 fn bar_gray() -> crate::canvas::geom::Color32 {
     let t = tokens();
     // 浅色标题栏固定 #E9E9E9（用户 2026-11-16 指定）；深色沿用面板灰。
-    if t.dark {
-        t.panel
-    } else {
-        crate::canvas::geom::Color32::from_rgb(0xE9, 0xE9, 0xE9)
-    }
+    if t.dark { t.panel } else { crate::canvas::geom::Color32::from_rgb(0xE9, 0xE9, 0xE9) }
 }
 
 /// 标题栏里留给 TabBar 内容的宽度：窗口宽 − 左留白 − 三个窗口控制按钮。
@@ -97,22 +93,9 @@ fn control_button(id: &'static str, icon: Icon, close: bool, area: WindowControl
             WindowControlArea::Drag => {}
         })
         // svg 的显式色不继承父 text_color：叠一层白图标，hover 时显隐。
-        .child(
-            div()
-                .relative()
-                .flex_none()
-                .child(icon::paint(icon, ink, 20.0))
-                .when(close, |d| {
-                    d.child(
-                        div()
-                            .absolute()
-                            .inset_0()
-                            .opacity(0.0)
-                            .group_hover(group.clone(), |s| s.opacity(1.0))
-                            .child(icon::paint(icon, white, 20.0)),
-                    )
-                }),
-        )
+        .child(div().relative().flex_none().child(icon::paint(icon, ink, 20.0)).when(close, |d| {
+            d.child(div().absolute().inset_0().opacity(0.0).group_hover(group.clone(), |s| s.opacity(1.0)).child(icon::paint(icon, white, 20.0)))
+        }))
 }
 
 /// kit `TitleBar::new().child(content)`：整条注册成系统标题栏拖拽区，

@@ -160,17 +160,6 @@ impl Menu {
         if aw <= 0.0 && ah <= 0.0 {
             return None;
         }
-        let (left, top) = match self.align {
-            RectAlign::BottomStart => (ax, ay + ah + self.gap),
-            RectAlign::BottomCenter => (ax + aw / 2.0, ay + ah + self.gap),
-            RectAlign::BottomEnd => (ax + aw, ay + ah + self.gap),
-            RectAlign::TopStart => (ax, ay - self.gap),
-            RectAlign::TopCenter => (ax + aw / 2.0, ay - self.gap),
-            RectAlign::TopEnd => (ax + aw, ay - self.gap),
-            RectAlign::LeftStart => (ax - self.gap, ay),
-            RectAlign::RightStart => (ax + aw + self.gap, ay),
-            RectAlign::Center => (ax + aw / 2.0, ay + ah / 2.0),
-        };
         // 确定宽：内容宽 + 外框左右各 8。旧调用没给测量值时保持原来的不定宽 / min_w 行为。
         let width = if self.measured {
             let natural = self.content_w + 2.0 * PAD;
@@ -181,6 +170,26 @@ impl Menu {
             })
         } else {
             None
+        };
+        // 对齐用的宽/高：Center / End 系列必须**减去菜单自身尺寸**再回退，否则只是把菜单的
+        // 左边缘放到锚点中心/右边缘，看起来完全没对齐（用户反复反馈的锚点 bug 就在这）。
+        let natural = self.content_w + 2.0 * PAD;
+        let align_w = width.unwrap_or_else(|| match self.width {
+            Width::Fit => natural,
+            Width::Min(w) => natural.max(w),
+            Width::Anchor => natural.max(aw.max(48.0)),
+        });
+        let align_h = self.rows_h;
+        let (left, top) = match self.align {
+            RectAlign::BottomStart => (ax, ay + ah + self.gap),
+            RectAlign::BottomCenter => (ax + aw / 2.0 - align_w / 2.0, ay + ah + self.gap),
+            RectAlign::BottomEnd => (ax + aw - align_w, ay + ah + self.gap),
+            RectAlign::TopStart => (ax, ay - self.gap - align_h),
+            RectAlign::TopCenter => (ax + aw / 2.0 - align_w / 2.0, ay - self.gap - align_h),
+            RectAlign::TopEnd => (ax + aw - align_w, ay - self.gap - align_h),
+            RectAlign::LeftStart => (ax - self.gap - align_w, ay),
+            RectAlign::RightStart => (ax + aw + self.gap, ay),
+            RectAlign::Center => (ax + aw / 2.0 - align_w / 2.0, ay + ah / 2.0 - align_h / 2.0),
         };
         let left = match (self.vw > 0.0, width) {
             (true, Some(w)) => left.min((self.vw - w - PAD).max(PAD)).max(PAD),

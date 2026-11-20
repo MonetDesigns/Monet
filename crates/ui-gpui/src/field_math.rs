@@ -308,7 +308,8 @@ mod tests {
             assert_eq!(eval(text, cur, true), want, "eval({text:?}, {cur:?})");
         }
         // 乱七八糟的输入不 panic：超长、过深、怪字符。
-        for junk in ["(".repeat(5000), "1+".repeat(5000), format!("{}1{}", "(".repeat(40), ")".repeat(40)), "−1".into(), "1\u{0}2".into(), "é%".into()]
+        for junk in
+            ["(".repeat(5000), "1+".repeat(5000), format!("{}1{}", "(".repeat(40), ")".repeat(40)), "−1".into(), "1\u{0}2".into(), "é%".into()]
         {
             let _ = parse(&junk, false);
             let _ = parse(&junk, true);

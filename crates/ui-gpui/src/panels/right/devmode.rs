@@ -381,7 +381,13 @@ fn resource_line(f: &RightFields, r: &DevResourceRow, node: figcraft_doc::NodeId
                 cx.open_url(&url_open);
             }
         })
-        .child(div().text_size(pt(11.0)).font_weight(crate::panels::UI_FONT_REGULAR).text_color(rgba(t.accent)).child(SharedString::from(r.name.clone())))
+        .child(
+            div()
+                .text_size(pt(11.0))
+                .font_weight(crate::panels::UI_FONT_REGULAR)
+                .text_color(rgba(t.accent))
+                .child(SharedString::from(r.name.clone())),
+        )
         .child(div().text_size(pt(10.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(below)));
     let mut row = div().flex().flex_row().items_center().gap(pt(6.0)).w_full().child(link);
     if let Some(i) = r.index {

@@ -199,17 +199,11 @@ pub(crate) fn drag_end(app: &mut CanvasApp) -> bool {
     }
     match object_under(app, d.from, d.pos) {
         Some(to) => {
-            let _ = app.session.execute(
-                "board.connector",
-                &json!({ "from": d.from, "to": to, "fromSide": connector_side(d.side) }),
-            );
+            let _ = app.session.execute("board.connector", &json!({ "from": d.from, "to": to, "fromSide": connector_side(d.side) }));
         }
         None => {
             let q = app.to_page(d.pos);
-            let _ = app.session.execute(
-                "board.addConnected",
-                &json!({ "id": d.from, "side": d.side, "at": [q.x, q.y], "edit": true }),
-            );
+            let _ = app.session.execute("board.addConnected", &json!({ "id": d.from, "side": d.side, "at": [q.x, q.y], "edit": true }));
         }
     }
     true
@@ -255,11 +249,7 @@ fn drag_preview(
     };
     let d = to_box.center() - from.center();
     let z = if d.x.abs() >= d.y.abs() {
-        if d.x >= 0.0 {
-            pos2(to_box.min.x, to_box.center().y)
-        } else {
-            pos2(to_box.max.x, to_box.center().y)
-        }
+        if d.x >= 0.0 { pos2(to_box.min.x, to_box.center().y) } else { pos2(to_box.max.x, to_box.center().y) }
     } else if d.y >= 0.0 {
         pos2(to_box.center().x, to_box.min.y)
     } else {
@@ -360,16 +350,14 @@ mod tests {
         assert!(drag_end(&mut app));
         let doc = app.session.doc().unwrap();
         let made: Vec<NodeId> = doc.ids().filter(|i| doc.node(*i).is_some_and(|n| n.board.is_some())).collect();
-        let next = made.iter().copied().find(|i| *i != a && matches!(doc.node(*i).unwrap().board, Some(BoardItem::Shape { .. }))).expect("a new shape");
+        let next =
+            made.iter().copied().find(|i| *i != a && matches!(doc.node(*i).unwrap().board, Some(BoardItem::Shape { .. }))).expect("a new shape");
         let line = made.iter().copied().find(|i| matches!(doc.node(*i).unwrap().board, Some(BoardItem::Connector(_)))).expect("a connector");
         assert!(screen_box(&app, next).min.y > screen_box(&app, a).max.y, "below it");
         assert!(matches!(&doc.node(line).unwrap().board, Some(BoardItem::Connector(c)) if c.from.node() == Some(a) && c.to.node() == Some(next)));
         drop(doc);
         // GPUI 侧文本编辑是异步的：引擎先 request_ui，视图下一帧再开输入框。
-        assert!(
-            app.session.ui_requests.iter().any(|q| q.kind == "board.editText" && q.data["id"] == json!(next)),
-            "typing in the new shape"
-        );
+        assert!(app.session.ui_requests.iter().any(|q| q.kind == "board.editText" && q.data["id"] == json!(next)), "typing in the new shape");
         figcraft_engine::textedit::end(&mut app.session).unwrap();
         app.session.execute("edit.undo", &json!({})).unwrap();
         assert_eq!(app.session.doc().unwrap().ids().count(), before, "undo takes the shape and its connector away");

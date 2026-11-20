@@ -370,12 +370,7 @@ fn run(job: &Job, view: &View, retained: &mut Retained, coarse: bool, reuse: Opt
     let big = if pad_px > 0 {
         let s = view.scale.max(1e-9);
         let d = f64::from(pad_px) / s;
-        View {
-            origin: (view.origin.0 - d, view.origin.1 - d),
-            scale: view.scale,
-            width: view.width + pad_px * 2,
-            height: view.height + pad_px * 2,
-        }
+        View { origin: (view.origin.0 - d, view.origin.1 - d), scale: view.scale, width: view.width + pad_px * 2, height: view.height + pad_px * 2 }
     } else {
         view.clone()
     };
@@ -437,7 +432,21 @@ fn run(job: &Job, view: &View, retained: &mut Retained, coarse: bool, reuse: Opt
             grab.is_some(),
         );
     }
-    Some(Done { doc: job.doc.clone(), image, grab, view, visible, skip: job.skip.clone(), ms, work, uid: job.uid, page: job.page, coarse, at: job.at, seq: 0 })
+    Some(Done {
+        doc: job.doc.clone(),
+        image,
+        grab,
+        view,
+        visible,
+        skip: job.skip.clone(),
+        ms,
+        work,
+        uid: job.uid,
+        page: job.page,
+        coarse,
+        at: job.at,
+        seq: 0,
+    })
 }
 
 /// 材质透镜要的那圈 overscan，设备像素：lens 最多从 pane 边往 core 方向读 `reach_px`，
@@ -1177,7 +1186,8 @@ fn collect_ready(mats: &std::sync::Arc<std::sync::Mutex<Materials>>, pending: &m
         // 收齐的这张就是「这张底图 + 这组 passes」的合成结果：记下来，下一帧输入没变就直接用它。
         let base = pf.done.image.clone();
         pf.done.image = wrap_bgra(pf.w, pf.h, pixels);
-        guard.last_composite = Some(LastComposite { base, key: pf.key, image: pf.done.image.clone(), page: pf.done.page, view: pf.done.view.clone() });
+        guard.last_composite =
+            Some(LastComposite { base, key: pf.key, image: pf.done.image.clone(), page: pf.done.page, view: pf.done.view.clone() });
         ready.push(pf.done);
     }
 }
@@ -1354,7 +1364,9 @@ impl Renders {
         let shaded = layered().then(|| {
             let board = self.mats.lock().unwrap_or_else(|e| e.into_inner()).shade.clone();
             board.set_specs(crate::shade_gpu::specs(&job.doc, job.page));
-            if render_log() { eprintln!("[shade] attached specs={}", board.specs_len()); }
+            if render_log() {
+                eprintln!("[shade] attached specs={}", board.specs_len());
+            }
             Job { shade: Some(board), ..job.clone() }
         });
         #[cfg(feature = "gpu")]
@@ -1622,7 +1634,24 @@ fn build_overview(job: &Job, retained: &mut Retained, mats: &mut Materials) -> O
 #[cfg(not(feature = "gpu"))]
 fn build_overview(job: &Job, retained: &mut Retained) -> Option<Overview> {
     let view = overview_view(&job.doc, job.page)?;
-    let sub = Job { doc: job.doc.clone(), page: job.page, view, outline: false, outline_extras: figcraft_render::Outline::default(), outlined: Vec::new(), skip: Vec::new(), solo: None, proof: false, dots: None, grab: None, bands: Vec::new(), shade: None, uid: job.uid, zoom_preview: false, at: std::time::Instant::now() };
+    let sub = Job {
+        doc: job.doc.clone(),
+        page: job.page,
+        view,
+        outline: false,
+        outline_extras: figcraft_render::Outline::default(),
+        outlined: Vec::new(),
+        skip: Vec::new(),
+        solo: None,
+        proof: false,
+        dots: None,
+        grab: None,
+        bands: Vec::new(),
+        shade: None,
+        uid: job.uid,
+        zoom_preview: false,
+        at: std::time::Instant::now(),
+    };
     let done = run(&sub, &sub.view, retained, false, None)?;
     Some(Overview { image: done.image, view: done.view, key: (Arc::as_ptr(&sub.doc) as usize, sub.page, figcraft_text::layout_generation()) })
 }
@@ -2694,7 +2723,6 @@ mod material_apply_tests {
         );
         assert!(u64::from(v.width) * u64::from(v.height) <= OVERVIEW_PIXELS as u64 * 2, "within the pixel budget: {v:?}");
     }
-
 }
 
 #[cfg(test)]

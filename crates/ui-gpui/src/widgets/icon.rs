@@ -502,19 +502,14 @@ fn view_box_size(bytes: &[u8]) -> f32 {
 }
 
 pub fn natural_size(icon: Icon) -> f32 {
-    tool_stem(icon)
-        .and_then(tool_bytes)
-        .map(view_box_size)
-        .unwrap_or_else(|| view_box_size(&table()[icon as usize].svg))
+    tool_stem(icon).and_then(tool_bytes).map(view_box_size).unwrap_or_else(|| view_box_size(&table()[icon as usize].svg))
 }
 
 /// Draw a shape-tool mark at `size` pt. Geometry scales with the box; the stroke is
 /// compensated at load time so its visual width stays exactly [`ICON_STROKE`].
 pub fn paint_tool_at(icon: Icon, color: impl Into<gpui::Rgba>, size: f32) -> impl IntoElement {
     let rgba: gpui::Rgba = color.into();
-    let path = tool_stem(icon)
-        .map(|stem| SharedString::from(format!("tools/{stem}@{size}.svg")))
-        .unwrap_or_else(|| sized_icon_path(icon, size));
+    let path = tool_stem(icon).map(|stem| SharedString::from(format!("tools/{stem}@{size}.svg"))).unwrap_or_else(|| sized_icon_path(icon, size));
     svg().path(path).w(px(size)).h(px(size)).flex_none().text_color(Hsla::from(rgba))
 }
 
@@ -562,11 +557,23 @@ const FIGMA_UI_ICONS: [(Icon, &str); 28] = [
     (Icon::LayoutV, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><g transform="rotate(90 12 12)"><path d="M9 16H15C17.2091 16 19 14.2091 19 12C19 9.79086 17.2091 8 15 8H9C6.79086 8 5 9.79086 5 12C5 14.2091 6.79086 16 9 16Z" stroke="black" stroke-width="__STROKE__"/><circle cx="9.5" cy="12" r="2" stroke="black" stroke-width="__STROKE__"/></g></svg>"#),
     (Icon::LayoutGrid, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M6 8H18M6 16H18M8 6V18M16 18V6" stroke-linecap="round" stroke="black" stroke-width="__STROKE__"/></svg>"#),
     // Move = 主菜单用的商标（monet-mono）纯线框版，几何不动，线宽走 ICON_STROKE。
-    (Icon::Move, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M6.58595 6.58595C7.14047 6.03143 7.96787 5.8517 8.70216 6.12697L16.7022 9.12697C17.5218 9.43433 18.0467 10.2394 17.9971 11.1133C17.9473 11.9873 17.3346 12.728 16.4854 12.9404L13.6494 13.6494L12.9404 16.4854C12.728 17.3346 11.9873 17.9473 11.1133 17.9971C10.2394 18.0467 9.43433 17.5218 9.12697 16.7022L6.12697 8.70216C5.8517 7.96787 6.03143 7.14047 6.58595 6.58595Z" stroke="black" stroke-width="__STROKE__" stroke-linejoin="round"/></svg>"#),
+    (
+        Icon::Move,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M6.58595 6.58595C7.14047 6.03143 7.96787 5.8517 8.70216 6.12697L16.7022 9.12697C17.5218 9.43433 18.0467 10.2394 17.9971 11.1133C17.9473 11.9873 17.3346 12.728 16.4854 12.9404L13.6494 13.6494L12.9404 16.4854C12.728 17.3346 11.9873 17.9473 11.1133 17.9971C10.2394 18.0467 9.43433 17.5218 9.12697 16.7022L6.12697 8.70216C5.8517 7.96787 6.03143 7.14047 6.58595 6.58595Z" stroke="black" stroke-width="__STROKE__" stroke-linejoin="round"/></svg>"#,
+    ),
     // 标题栏用产品自带的减号 / 方框，不另造 Win* 图标。
-    (Icon::Play, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><g transform="rotate(90 12 12)"><path d="M10.9173 6.87673L5.58153 16.1253C5.10076 16.9586 5.70219 17.9999 6.66427 17.9999H17.3357C18.2978 17.9999 18.8992 16.9586 18.4185 16.1253L13.0827 6.87672C12.6017 6.04293 11.3983 6.04293 10.9173 6.87673Z" stroke="black" stroke-width="__STROKE__" stroke-linejoin="round"/></g></svg>"#),
-    (Icon::Rectangle, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="6.5" y="6.5" width="11" height="11" rx="1" stroke="black" stroke-width="__STROKE__"/></svg>"#),
-    (Icon::WinRestore, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="8.5" y="5.5" width="9" height="9" fill="none" stroke="black" stroke-width="__STROKE__"/><path d="M15.5 15.5V18.5H6.5V9.5H9.5" fill="none" stroke="black" stroke-width="__STROKE__" stroke-linejoin="round"/></svg>"#),
+    (
+        Icon::Play,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><g transform="rotate(90 12 12)"><path d="M10.9173 6.87673L5.58153 16.1253C5.10076 16.9586 5.70219 17.9999 6.66427 17.9999H17.3357C18.2978 17.9999 18.8992 16.9586 18.4185 16.1253L13.0827 6.87672C12.6017 6.04293 11.3983 6.04293 10.9173 6.87673Z" stroke="black" stroke-width="__STROKE__" stroke-linejoin="round"/></g></svg>"#,
+    ),
+    (
+        Icon::Rectangle,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="6.5" y="6.5" width="11" height="11" rx="1" stroke="black" stroke-width="__STROKE__"/></svg>"#,
+    ),
+    (
+        Icon::WinRestore,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="8.5" y="5.5" width="9" height="9" fill="none" stroke="black" stroke-width="__STROKE__"/><path d="M15.5 15.5V18.5H6.5V9.5H9.5" fill="none" stroke="black" stroke-width="__STROKE__" stroke-linejoin="round"/></svg>"#,
+    ),
 ];
 
 /// `size` 是最终显示的点数：24 网格等比缩到 `size` 时把描边反向放大 `24/size`，

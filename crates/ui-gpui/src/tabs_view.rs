@@ -28,8 +28,7 @@ use serde_json::json;
 use crate::panels::{Cmd, Cmds};
 use crate::tabs::{
     BAR_BUTTON, BAR_GLYPH, BAR_ICON, CLOSE_ICON, HEIGHT, LIVE_MARK_WIDTH, LiveBadge, NEW_TAB_MARGIN_X, OVERFLOW_WIDTH, TAB_BUTTON, TAB_BUTTON_RADIUS,
-    TAB_CLOSE_RIGHT, TAB_FONT, TAB_GAP, TAB_LABEL_MAX, TAB_PAD_X, TabMotion, VisibleTab, live_badge, preferred_width, tab_drop_position,
-    tab_layout,
+    TAB_CLOSE_RIGHT, TAB_FONT, TAB_GAP, TAB_LABEL_MAX, TAB_PAD_X, TabMotion, VisibleTab, live_badge, preferred_width, tab_drop_position, tab_layout,
 };
 use crate::title_bar;
 use crate::widgets::icon::{self, Icon};
@@ -54,12 +53,7 @@ pub(crate) struct TabDoc {
 /// 每个 OS 窗口挂同一个 `CanvasView`，所以「有哪些文档」是共享的，但「这个窗口显示哪几个」
 /// 由 `windows.of(uid)` 决定：主窗口显示不属于任何额外窗口的文档，额外窗口只显示自己 `docs`
 /// 里的。拖出标签后归属立刻变化，于是**原窗口的标签消失、新窗口只有那一个**。
-pub(crate) fn read_docs(
-    session: &figcraft_engine::Session,
-    windows: &crate::windows::Windows,
-    current: u64,
-    hidden: &[u64],
-) -> Vec<TabDoc> {
+pub(crate) fn read_docs(session: &figcraft_engine::Session, windows: &crate::windows::Windows, current: u64, hidden: &[u64]) -> Vec<TabDoc> {
     session
         .docs
         .iter()
@@ -87,10 +81,16 @@ pub(crate) fn read_docs(
 /// 不再给演示标签单开一套几何 / 行为（用户 2026-11-17：演示标签必须进原来的标签系统）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TabKey {
-    Doc { index: usize },
-    Present { id: u64 },
+    Doc {
+        index: usize,
+    },
+    Present {
+        id: u64,
+    },
     /// 「+」打开的空白标签页（内容 = 首页那套创建/导入入口 + 当前文件），窗口私有。
-    New { id: u64 },
+    New {
+        id: u64,
+    },
 }
 
 /// 标签条的**稳定身份**：`TabKey::Doc` 里的 `Session.docs` 下标会随增删漂移，
@@ -582,14 +582,11 @@ pub(crate) fn tab_strip(
                 .h(pt(32.0))
                 .child(icon::paint(Icon::Home, rgba(if home_active { home_hot } else { home_normal }), 32.0))
                 .when(!home_active, |d| {
-                    d.child(
-                        div()
-                            .absolute()
-                            .inset_0()
-                            .opacity(0.0)
-                            .group_hover("tab-home-grp", |s| s.opacity(1.0))
-                            .child(icon::paint(Icon::Home, rgba(home_hot), 32.0)),
-                    )
+                    d.child(div().absolute().inset_0().opacity(0.0).group_hover("tab-home-grp", |s| s.opacity(1.0)).child(icon::paint(
+                        Icon::Home,
+                        rgba(home_hot),
+                        32.0,
+                    )))
                 }),
         )
         .into_any_element();
@@ -632,11 +629,8 @@ pub(crate) fn tab_strip(
             let drag_w = natural.iter().find(|(k, _, _)| *k == from).map_or(0.0, |(_, _, w)| *w);
             let natural_x = natural.iter().find(|(k, _, _)| *k == from).map_or(tabs_x0, |(_, x0, _)| *x0);
             // 空白页是临时入口，不参与让位，永远留在末尾。
-            let others: Vec<(TabKey, f32, f32)> = natural
-                .iter()
-                .copied()
-                .filter(|(k, _, _)| *k != from && !matches!(k, TabKey::New { .. }))
-                .collect();
+            let others: Vec<(TabKey, f32, f32)> =
+                natural.iter().copied().filter(|(k, _, _)| *k != from && !matches!(k, TabKey::New { .. })).collect();
             // 不再把幽灵夹在标签条内：夹住会让第一/最后一项在两端「拖不动」。
             let ghost = natural_x + dx;
             let edge = if dx >= 0.0 { ghost + drag_w } else { ghost };
@@ -797,14 +791,11 @@ pub(crate) fn tab_strip(
                     .h(pt(BAR_ICON))
                     .child(icon::paint(glyph, rgba(if is_active { ink.brand } else { ink.secondary }), BAR_GLYPH))
                     .when(!is_active, |d| {
-                        d.child(
-                            div()
-                                .absolute()
-                                .inset_0()
-                                .opacity(0.0)
-                                .group_hover(tab_group.clone(), |s| s.opacity(1.0))
-                                .child(icon::paint(glyph, rgba(ink.brand), BAR_GLYPH)),
-                        )
+                        d.child(div().absolute().inset_0().opacity(0.0).group_hover(tab_group.clone(), |s| s.opacity(1.0)).child(icon::paint(
+                            glyph,
+                            rgba(ink.brand),
+                            BAR_GLYPH,
+                        )))
                     }),
             )
             .child(

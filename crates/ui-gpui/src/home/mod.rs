@@ -180,7 +180,12 @@ pub(crate) fn body(app: &CanvasApp, cmds: &Cmds, state: &ExtraState, root: Optio
                     .items_center()
                     .gap(pt(8.0))
                     .child(
-                        div().flex_1().text_size(pt(13.0)).font_weight(crate::panels::UI_FONT_REGULAR).text_color(rgba(t.text)).child(tr("Recent files")),
+                        div()
+                            .flex_1()
+                            .text_size(pt(13.0))
+                            .font_weight(crate::panels::UI_FONT_REGULAR)
+                            .text_color(rgba(t.text))
+                            .child(tr("Recent files")),
                     )
                     .child(cycle_bool(if grid { tr("Grid") } else { tr("List") }, state.home_view_grid.clone(), cmds))
                     .child(cycle_u8(if *state.home_sort.borrow() == 0 { tr("Name") } else { tr("Edited") }, state.home_sort.clone(), 2, cmds)),
@@ -256,25 +261,11 @@ fn new_page_body(app: &CanvasApp, cmds: &Cmds, state: &ExtraState, root: Option<
     }
     col = col.child(actions).child(state.home_search.clone());
 
-    col = col.child(
-        div()
-            .w_full()
-            .pt(pt(6.0))
-            .text_size(pt(11.0))
-            .font_weight(gpui::FontWeight::SEMIBOLD)
-            .text_color(rgba(t.text))
-            .child(tr("Recents")),
-    );
+    col = col
+        .child(div().w_full().pt(pt(6.0)).text_size(pt(11.0)).font_weight(gpui::FontWeight::SEMIBOLD).text_color(rgba(t.text)).child(tr("Recents")));
 
     // 最近文件：按修改时间从新到旧，缩略图来自文件自带的 thumbnail.png（EGUI 首页的行为）。
-    let mut files: Vec<String> = app
-        .session
-        .prefs
-        .recent_files
-        .iter()
-        .filter(|p| q.is_empty() || p.to_lowercase().contains(&q))
-        .cloned()
-        .collect();
+    let mut files: Vec<String> = app.session.prefs.recent_files.iter().filter(|p| q.is_empty() || p.to_lowercase().contains(&q)).cloned().collect();
     files.sort_by_key(|p| std::cmp::Reverse(std::fs::metadata(p).and_then(|m| m.modified()).ok()));
     if files.is_empty() {
         col = col.child(note(tr("No recent files yet. Open or save a file to see it here.")));
@@ -345,15 +336,7 @@ fn new_page_row(state: &ExtraState, path: &str, cmds: &Cmds, root: Option<Entity
         .hover(|s| s.bg(rgba(t.hover)))
         .cursor_pointer()
         .child(pic)
-        .child(
-            div()
-                .flex_1()
-                .min_w(px(0.0))
-                .overflow_hidden()
-                .text_size(pt(11.0))
-                .text_color(rgba(t.text))
-                .child(SharedString::from(name)),
-        )
+        .child(div().flex_1().min_w(px(0.0)).overflow_hidden().text_size(pt(11.0)).text_color(rgba(t.text)).child(SharedString::from(name)))
         .child(div().text_size(pt(11.0)).text_color(rgba(t.text_tertiary)).child(SharedString::from(edited)))
         .on_mouse_down(MouseButton::Left, move |_e, _, _| {
             c.push(Cmd { id: "file.openRecent", params: Some(json!({ "path": p.clone() })) });
@@ -442,9 +425,7 @@ fn recent_preview(state: &ExtraState, path: &str) -> (Option<std::sync::Arc<gpui
     }
     let p = figcraft_format::thumbnail::file_preview(std::path::Path::new(path), 640);
     let is_board = p.kind == figcraft_doc::FileKind::Board;
-    let drawn = p
-        .picture
-        .map(|thumb| crate::canvas::render_worker::wrap_rgba(thumb.width, thumb.height, thumb.rgba));
+    let drawn = p.picture.map(|thumb| crate::canvas::render_worker::wrap_rgba(thumb.width, thumb.height, thumb.rgba));
     let hit = (drawn, is_board);
     state.recent_thumbs.borrow_mut().insert(path.to_string(), hit.clone());
     hit
@@ -737,7 +718,9 @@ fn action_card(icon: Icon, title: &'static str, sub: &'static str, id: &'static 
                 .flex()
                 .flex_col()
                 .gap(pt(4.0))
-                .child(div().text_size(pt(12.0)).font_weight(crate::panels::UI_FONT_REGULAR).text_color(rgba(t.text)).child(SharedString::from(title)))
+                .child(
+                    div().text_size(pt(12.0)).font_weight(crate::panels::UI_FONT_REGULAR).text_color(rgba(t.text)).child(SharedString::from(title)),
+                )
                 .child(div().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(sub))),
         )
         .on_mouse_down(MouseButton::Left, move |_e, _, _| c.push(Cmd { id, params: None }))

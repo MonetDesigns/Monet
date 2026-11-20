@@ -230,8 +230,7 @@ impl Retained {
                 // Bands at least twice what they overlap (each draws its overlap again both ways),
                 // so a background blur — or a material's lens — reaching past `band_h` makes the
                 // bands taller.
-                let overlap =
-                    crate::band_overlap(doc, &snapped, u32::MAX, opts.shade_reach).map(|o| o.min(snapped.height));
+                let overlap = crate::band_overlap(doc, &snapped, u32::MAX, opts.shade_reach).map(|o| o.min(snapped.height));
                 let band_h = band_h.max(1).max(overlap.unwrap_or(0).saturating_mul(2));
                 // A blur that can't be measured: one piece.
                 let Some(overlap) = overlap else {
@@ -407,9 +406,7 @@ fn patch(last: Frame, doc: &Arc<Document>, page: NodeId, view: &View, px: (i64, 
     // beside a changed layer, and at the old view's edge (where the backdrop used to end).
     // CodeRabbit PR#10: a material samples beyond the backdrop-blur reach; omitting shade_reach
     // leaves stale refracted pixels just outside the damage strips.
-    let reach = crate::backdrop_reach(s.backdrop_blur.max(last.sensitive.backdrop_blur), view.scale)
-        .max(opts.shade_reach)
-        .ceil();
+    let reach = crate::backdrop_reach(s.backdrop_blur.max(last.sensitive.backdrop_blur), view.scale).max(opts.shade_reach).ceil();
     if !reach.is_finite() || reach > MAX_MARGIN_PX {
         return None;
     }

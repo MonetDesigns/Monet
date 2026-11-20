@@ -10,7 +10,7 @@
 use figcraft_color::{Color, Paint};
 use figcraft_doc::{Document, NodeKind};
 use figcraft_render::View;
-use figcraft_ui_gpui::wgsl_runner::{passes_for, WgslRunner};
+use figcraft_ui_gpui::wgsl_runner::{WgslRunner, passes_for};
 
 const CW: u32 = 1157;
 const CH: u32 = 1666;
@@ -26,25 +26,17 @@ fn doc_with(frost: f64, scale: f64) -> Document {
     let inks = ["000000", "FFFFFF"];
     for i in 0..80 {
         let x0 = (i as f64) * step;
-        let r = doc
-            .create(page, NodeKind::Rectangle, "stripe", x0, 0.0, x0 + step, 4000.0)
-            .expect("stripe");
-        doc.get_mut(r).expect("stripe node").fills =
-            vec![Paint::solid(Color::from_hex(inks[i % 2]).unwrap())];
+        let r = doc.create(page, NodeKind::Rectangle, "stripe", x0, 0.0, x0 + step, 4000.0).expect("stripe");
+        doc.get_mut(r).expect("stripe node").fills = vec![Paint::solid(Color::from_hex(inks[i % 2]).unwrap())];
     }
 
     // The pane is far larger than the viewport at every scale: the whole view is interior, so only
     // the frost can make the stripes fade.
-    let pane = doc
-        .create(page, NodeKind::Rectangle, "Pane", 0.0, 0.0, 20000.0, 20_000.0)
-        .expect("pane");
+    let pane = doc.create(page, NodeKind::Rectangle, "Pane", 0.0, 0.0, 20000.0, 20_000.0).expect("pane");
     {
         let n = doc.get_mut(pane).expect("pane node");
         n.fills = vec![Paint::solid(Color::from_hex("00FF00").unwrap())];
-        let binding = format!(
-            "{{\"path\":\"{}\",\"params\":{{\"u.frost\":{frost}}}}}",
-            glass.replace('\\', "\\\\")
-        );
+        let binding = format!("{{\"path\":\"{}\",\"params\":{{\"u.frost\":{frost}}}}}", glass.replace('\\', "\\\\"));
         n.plugin_data.insert("figcraft.wgslMaterial".to_string(), binding);
     }
     doc

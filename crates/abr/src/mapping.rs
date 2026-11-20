@@ -43,7 +43,13 @@ impl GrayTip {
                 let nx = (f64::from(x) + 0.5) / f64::from(d) * 2.0 - 1.0;
                 let (rx, ry) = (nx * ca + ny * sa, -nx * sa + ny * ca);
                 let r = (rx * rx + (ry / round).powi(2)).sqrt();
-                let ink = if r >= 1.0 { 0.0 } else if r <= hard { 1.0 } else { ((1.0 - r) / (1.0 - hard).max(1e-4)).clamp(0.0, 1.0) };
+                let ink = if r >= 1.0 {
+                    0.0
+                } else if r <= hard {
+                    1.0
+                } else {
+                    ((1.0 - r) / (1.0 - hard).max(1e-4)).clamp(0.0, 1.0)
+                };
                 alpha[(y * d + x) as usize] = (ink * 255.0 + 0.5) as u8;
             }
         }
@@ -70,7 +76,8 @@ impl GrayTip {
             }
             f32::from(self.alpha.get((yi as u32 * self.width + xi as u32) as usize).copied().unwrap_or(0)) / 255.0
         };
-        let (a, b, c, d) = (get(x0 as i64, y0 as i64), get(x0 as i64 + 1, y0 as i64), get(x0 as i64, y0 as i64 + 1), get(x0 as i64 + 1, y0 as i64 + 1));
+        let (a, b, c, d) =
+            (get(x0 as i64, y0 as i64), get(x0 as i64 + 1, y0 as i64), get(x0 as i64, y0 as i64 + 1), get(x0 as i64 + 1, y0 as i64 + 1));
         let (fx, fy) = (fx as f32, fy as f32);
         (a * (1.0 - fx) + b * fx) * (1.0 - fy) + (c * (1.0 - fx) + d * fx) * fy
     }
@@ -169,7 +176,8 @@ fn preset_brush(d: &crate::descriptor::Descriptor, file: &AbrFile, group: &str, 
     let shape = d.obj("Brsh")?;
     let sampled = shape.class_is("sampledBrush") || shape.get("sampledData").is_some();
     let tip_id = shape.text("sampledData").unwrap_or_default();
-    let sample = file.samples.iter().find(|s| !tip_id.is_empty() && s.id == tip_id).or_else(|| file.samples.first().filter(|_| file.samples.len() == 1));
+    let sample =
+        file.samples.iter().find(|s| !tip_id.is_empty() && s.id == tip_id).or_else(|| file.samples.first().filter(|_| file.samples.len() == 1));
     let tip = if sampled {
         GrayTip::from_sample(sample?)
     } else {
