@@ -43,7 +43,7 @@ const ROW_INSET: f32 = 8.0;
 /// Row pitch 32 = a 24 pt block plus 8 pt of gap. A row's block is 24 pt tall and the gap
 /// between two separate blocks is 8 pt; blocks never merge into one strip.
 const ROW_H: f32 = 32.0;
-/// Pages/Layers 区块的竖向尺寸，来自 Figma 参考快照（内联 `style="height: …px"`）
+/// Pages/Layers 区块的竖向尺寸，来自 参考快照（内联 `style="height: …px"`）
 /// 与其脚本里的 `Math.min(页数 * 32 + 8, 视口 25%)`：
 /// 3 页 = 104（通常），7 页 = 232（上限），1 页 = 40（下限）。
 const PAGES_MIN_H: f32 = 40.0;
@@ -319,13 +319,13 @@ impl CanvasView {
             .h(pt(64.0))
             .flex()
             .flex_col()
-            // Figma 参考 Frame 182 AutoLayout：padding=[T8,R12,B8,L12] gap=0。
+            // 参考 Frame 182 AutoLayout：padding=[T8,R12,B8,L12] gap=0。
             .px(pt(crate::panels::LEFT_HEADER_PAD_H))
             .pt(pt(crate::panels::HEADER_PAD_V))
             .pb(pt(crate::panels::HEADER_PAD_V))
             .border_b_1()
             .border_color(rgba(t.border))
-            // 头部相邻控件间距统一 4 pt（Figma 参考 Frame 182：文件名 → chevron = 4 pt）。
+            // 头部相邻控件间距统一 4 pt（参考 Frame 182：文件名 → chevron = 4 pt）。
             .child(div().flex().flex_row().items_center().gap(pt(crate::panels::HEADER_GAP)).child(div().flex_1().min_w(px(0.0)).child(field)).child(
                 IconButton::new(Icon::Panels).size(24.0).on_click(move |_e, _w, cx| {
                     me.update(cx, |cv, cx| {
@@ -334,7 +334,7 @@ impl CanvasView {
                     });
                 }),
             ))
-            // 行2 紧贴行1（Figma 参考 Frame 182：行1 y2287 h32 → 行2 y2319，间距 0）。
+            // 行2 紧贴行1（参考 Frame 182：行1 y2287 h32 → 行2 y2319，间距 0）。
             .child(div().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(tr("Drafts")))
     }
 
@@ -414,10 +414,10 @@ impl CanvasView {
             // box is as tall as its content and the glyphs drift to the bottom.
             sec = sec.child(div().px(pt(8.0)).pb(pt(4.0)).h(pt(24.0)).child(field));
         }
-        // lizard `pages()`: `resp.double_clicked()` starts an inline rename of that page row.
+        // 参考实现 `pages()`: `resp.double_clicked()` starts an inline rename of that page row.
         let renaming_page = self.inline_rename.as_ref().filter(|r| r.target == crate::InlineRenameTarget::Page).and_then(|r| r.ids.first().copied());
         let rename_editor = self.inline_rename_field.clone();
-        // Figma: 列表高度 = 页数 * 32 + 8，夹到 40..232；空表用 104 的默认高度。
+        // 参考编辑器: 列表高度 = 页数 * 32 + 8，夹到 40..232；空表用 104 的默认高度。
         let pages_h = if pages.is_empty() {
             PAGES_DEFAULT_H
         } else {
@@ -585,7 +585,7 @@ impl CanvasView {
         .w_full()
     }
 
-    /// One 16 pt glyph: lizard's original SVG when there is a LayerIcon, otherwise the
+    /// One 16 pt glyph: 参考实现's original SVG when there is a LayerIcon, otherwise the
     /// generic Icon painter. An absolutely-positioned child in an auto-layout parent gets
     /// the Absolute glyph layered underneath, exactly as `layers()` does.
     fn layer_glyph_element(r: &LayerRow) -> gpui::AnyElement {
@@ -693,7 +693,7 @@ impl CanvasView {
             .flex()
             .items_center()
             .justify_center()
-            // lizard `show_eye = over || hidden`: a visible layer's eye appears on hover only.
+            // 参考实现 `show_eye = over || hidden`: a visible layer's eye appears on hover only.
             .when(visible, |d| d.opacity(0.0).group_hover(group.clone(), |s| s.opacity(1.0)))
             .on_mouse_down(MouseButton::Left, {
                 let me = me.clone();
@@ -712,7 +712,7 @@ impl CanvasView {
             .flex()
             .items_center()
             .justify_center()
-            // lizard `show_lock = over || locked`: an unlocked layer's padlock appears on hover only.
+            // 参考实现 `show_lock = over || locked`: an unlocked layer's padlock appears on hover only.
             .when(!locked, |d| d.opacity(0.0).group_hover(group.clone(), |s| s.opacity(1.0)))
             .on_mouse_down(MouseButton::Left, {
                 let me = me.clone();
@@ -781,7 +781,7 @@ impl CanvasView {
                     let me = me.clone();
                     move |e: &MouseDownEvent, _w: &mut Window, app: &mut App| {
                         me.update(app, |this: &mut CanvasView, cx: &mut Context<CanvasView>| {
-                            // lizard `layers.rs:1142`: a double click starts an inline rename
+                            // 参考实现 `layers.rs:1142`: a double click starts an inline rename
                             // of this row; a single click still goes through the selection logic.
                             if e.click_count >= 2 {
                                 this.begin_inline_rename(vec![id], crate::InlineRenameTarget::Layer, cx);

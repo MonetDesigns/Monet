@@ -28,7 +28,7 @@ use gpui::{
 use serde_json::{Value, json};
 use std::rc::Rc;
 
-/// 顶栏高度（Figma 参考 Frame 38：行1 内容 y8 h32 + 下边距 8 = 40；行2 从 y40 起）。
+/// 顶栏高度（参考 Frame 38：行1 内容 y8 h32 + 下边距 8 = 40；行2 从 y40 起）。
 pub(crate) const TOP_H: f32 = 40.0;
 /// 头像半径（egui `const R: f32 = 12.0`）。
 const R: f32 = 12.0;
@@ -46,14 +46,14 @@ pub(crate) fn top_bar(f: &RightFields, d: &PanelData) -> Div {
         .h(pt(TOP_H))
         .flex()
         .flex_row()
-        // Figma 参考 Frame 38 AutoLayout：外层 Vertical padding=[T8,R8,B8,L8]，
+        // 参考 Frame 38 AutoLayout：外层 Vertical padding=[T8,R8,B8,L8]，
         // 行1(Frame82) cross=Center。这里 top_bar 是行1 容器，内容(h32)垂直居中。
         .items_center()
         .pl(pt(crate::panels::HEADER_PAD_H))
         .pr(pt(crate::panels::HEADER_PAD_H))
         // 左：people（你 + 别人 + 人数菜单）。
         .child(people(f, &d.live))
-        // 右：Present + Share。相邻控件间距统一 4 pt（Figma 参考 Frame 38）。
+        // 右：Present + Share。相邻控件间距统一 4 pt（参考 Frame 38）。
         .child(div().flex_1())
         .child(present(f))
         .child(div().w(pt(crate::panels::HEADER_GAP)))

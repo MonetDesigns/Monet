@@ -54,13 +54,13 @@ pub(crate) fn status_badge(painter: &mut Painter, n: &Node, at: Pos2) -> Option<
     Some(r)
 }
 
-/// 侧标尺上的一个数字（lizard `vertical_ruler_label`）。
+/// 侧标尺上的一个数字（参考实现 `vertical_ruler_label`）。
 ///
-/// lizard 用 `TextShape::with_angle_and_anchor(-π/2, CENTER_CENTER)`：先把**整段**文字按水平
+/// 参考实现 用 `TextShape::with_angle_and_anchor(-π/2, CENTER_CENTER)`：先把**整段**文字按水平
 /// 排版放在中心点四周，再绕中心转 -90°。GPUI 0.2.2 的文字管线把变换矩阵写死成 unit，
 /// 但 `Svg::with_transformation` 可以旋转 SVG 绘图（kit 的 `Icon::rotate` 同一条路），
 /// 所以这里记录**一个**带 `angle=-π/2` 的 Label，由 `lib.rs` 换成内联 SVG 文字后旋转。
-/// 碰撞盒按「旋转后」计算：宽 = 行高，高 = 原文本宽，与 lizard 一致。
+/// 碰撞盒按「旋转后」计算：宽 = 行高，高 = 原文本宽，与 参考实现 一致。
 #[derive(Clone)]
 struct VLabel {
     center: Pos2,
@@ -98,7 +98,7 @@ impl VLabel {
     }
 }
 
-/// 让带 4~5 位数字的刻度标签之间留够距离（lizard `ruler_major_step`）。
+/// 让带 4~5 位数字的刻度标签之间留够距离（参考实现 `ruler_major_step`）。
 fn ruler_major_step(zoom: f64) -> f64 {
     let mut step = figcraft_engine::guides::ruler_step(zoom);
     while step * zoom < 85.0 {
@@ -115,7 +115,7 @@ fn ruler_major_step(zoom: f64) -> f64 {
     step
 }
 
-/// 标尺（lizard `canvas.rs::rulers` 1:1）：主/次刻度、自适应标签间距、选区跨度两端坐标、
+/// 标尺（参考实现 `canvas.rs::rulers` 1:1）：主/次刻度、自适应标签间距、选区跨度两端坐标、
 /// 标签避让。egui 用 `with_clip_rect` 把上/左标尺各自裁开；GPUI 的记录式画笔没有子画笔，
 /// 改为在写 op / label 之前做同样的边界判断（视觉等价，也不会污染全局 clip）。
 pub(super) fn rulers(app: &CanvasApp, painter: &mut Painter, t: &Tokens, doc: &Document, sel: &[NodeId]) {
@@ -251,7 +251,7 @@ pub(super) fn rulers(app: &CanvasApp, painter: &mut Painter, t: &Tokens, doc: &D
 mod tests {
     use super::*;
 
-    /// lizard `ruler_major_step`：标签间距至少 85 pt，5 的倍数是主刻度。
+    /// 参考实现 `ruler_major_step`：标签间距至少 85 pt，5 的倍数是主刻度。
     #[test]
     fn major_step_keeps_labels_at_least_85_points_apart() {
         for zoom in [0.1_f64, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0] {

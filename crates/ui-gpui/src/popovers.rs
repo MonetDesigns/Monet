@@ -162,7 +162,7 @@ impl Opt {
             None => self.params.clone(),
         }
     }
-    /// 把这一格改成 lizard 的排版字形（U̲ / AG / 项目符号…），label 仍保留作语义标注。
+    /// 把这一格改成 参考实现 的排版字形（U̲ / AG / 项目符号…），label 仍保留作语义标注。
     pub fn with_glyph(mut self, g: crate::widgets::typ_icons::TypIcon) -> Self {
         self.glyph = Some(g);
         self
@@ -191,7 +191,7 @@ pub(crate) enum Setting {
         options: Vec<Opt>,
     },
     /// 定宽的图标分段行（Type settings Basics 页）：左标签 + 右侧 SVG 字形条，整条 `bar_w` 宽、
-    /// 格子均分；`options` 带 `glyph` 时画 lizard 的 `typ-*.svg`。`drill_in` 是行尾的 `>` 按钮
+    /// 格子均分；`options` 带 `glyph` 时画 参考实现 的 `typ-*.svg`。`drill_in` 是行尾的 `>` 按钮
     /// （文本修饰用），点击把 `active tab` 切到目标页签。
     IconOptions {
         tab: u8,
@@ -221,7 +221,7 @@ pub(crate) enum Setting {
         #[allow(clippy::type_complexity)]
         on_change: Rc<dyn Fn(f32, &mut gpui::Window, &mut gpui::App)>,
     },
-    /// 颜色属性行（Figma `styles_properties_form`）：16×16 色板 + 名称。空 label 时就是
+    /// 颜色属性行（参考编辑器 `styles_properties_form`）：16×16 色板 + 名称。空 label 时就是
     /// 那个独立预览块。
     Swatch {
         tab: u8,
@@ -231,7 +231,7 @@ pub(crate) enum Setting {
         /// `None` = 顶部那个纯预览块，不可点。
         index: Option<usize>,
     },
-    /// 颜色样式的 paint 行（lizard `color_style_editor`）：行 304×32，
+    /// 颜色样式的 paint 行（参考实现 `color_style_editor`）：行 304×32，
     /// `ColorControl` 220×24 @ `x+16`（色块 + hex），眼睛 24×24 @ `x+244`，
     /// 减号 24×24 @ `x+272`。
     PaintRow {
@@ -244,30 +244,30 @@ pub(crate) enum Setting {
         hex_ed: Entity<TextEdit>,
         op_ed: Entity<TextEdit>,
     },
-    /// 颜色样式的预览区（lizard `color_style_editor`：`304×120` 区，内缩 16 后
+    /// 颜色样式的预览区（参考实现 `color_style_editor`：`304×120` 区，内缩 16 后
     /// `272×104` 的色块，`style_paint_preview`）。
     PaintPreview {
         paint: figcraft_color::Paint,
     },
-    /// 文本样式的预览框（lizard `text_style_editor`：304×120 灰底，渲染 "Rag 123" 采样字）。
+    /// 文本样式的预览框（参考实现 `text_style_editor`：304×120 灰底，渲染 "Rag 123" 采样字）。
     TextPreview {
         text: serde_json::Value,
     },
-    /// 效果样式的渲染预览（lizard `effect_style_preview`：304×152 棋盘底 + 渲染后的椭圆样本）。
+    /// 效果样式的渲染预览（参考实现 `effect_style_preview`：304×152 棋盘底 + 渲染后的椭圆样本）。
     EffectPreview {
         effects: serde_json::Value,
     },
-    /// 网格样式的示意图（lizard `grid_style_preview`：棋盘底 + 居中网格/行列样本）。
+    /// 网格样式的示意图（参考实现 `grid_style_preview`：棋盘底 + 居中网格/行列样本）。
     GridPreview {
         grids: serde_json::Value,
     },
-    /// 精确留白（lizard 的 `ui.add_space(x)`）。StyleEditor 的正文容器 gap=0，间距全靠它控制，
+    /// 精确留白（参考实现 的 `ui.add_space(x)`）。StyleEditor 的正文容器 gap=0，间距全靠它控制，
     /// 不能再用通用 `popover_body()` 的 8pt gap（会和各行自带 margin 叠加成 16）。
     Spacer {
         tab: u8,
         h: f32,
     },
-    /// Properties 分节标题行（lizard 4 个编辑器共用）：304×32，标题在 `x+16`、
+    /// Properties 分节标题行（参考实现 4 个编辑器共用）：304×32，标题在 `x+16`、
     /// `semibold(11.0)` / `t.text`，行尾 24×24 的「+」按钮在 `x+284`（`right()-20`）。
     /// text 编辑器是 304×24 且没有「+」。`menu` 为空 = 不画按钮；「Add fill」等文字只是
     /// 按钮的 tooltip，**不是可见标签**。点击把候选项追加进 `array` 后整体写回 `style.update`。
@@ -281,7 +281,7 @@ pub(crate) enum Setting {
         /// 菜单锚点（点「+」时回填按钮矩形）。
         anchor: Rc<RefCell<Option<Bounds<Pixels>>>>,
     },
-    /// 文本样式 Properties 下的三行紧凑控件（lizard `text_style_editor` 的 `ui.scope`，
+    /// 文本样式 Properties 下的三行紧凑控件（参考实现 `text_style_editor` 的 `ui.scope`，
     /// `item_spacing = (8,8)`，每行先 `add_space(16)`）：
     ///   行1：字体族下拉 248×24
     ///   行2：字重下拉 120 + 字号 120
@@ -301,7 +301,7 @@ pub(crate) enum Setting {
         family_anchor: Rc<RefCell<Option<Bounds<Pixels>>>>,
         style_anchor: Rc<RefCell<Option<Bounds<Pixels>>>>,
     },
-    /// 效果样式的属性行（lizard `effect_style_editor`）：行 304×32，类型下拉 + 眼睛 + 减号。
+    /// 效果样式的属性行（参考实现 `effect_style_editor`）：行 304×32，类型下拉 + 眼睛 + 减号。
     ///
     /// 行本身走右栏的**统一网格**（`field_row_full_trailing`）：左缩进 `PAD` 16、右缩进
     /// `PAD_RIGHT` 8、尾部两颗 24 pt `IconButton` 各占一个 `SLOT`；标签是 `Dropdown::fill()`
@@ -319,7 +319,7 @@ pub(crate) enum Setting {
         /// 类型下拉的菜单锚点（点按钮时回填按钮矩形）。
         anchor: Rc<RefCell<Option<Bounds<Pixels>>>>,
     },
-    /// 网格样式的属性行（lizard `grid_style_editor`）：行 304×32，类型下拉 + 眼睛 + 减号。
+    /// 网格样式的属性行（参考实现 `grid_style_editor`）：行 304×32，类型下拉 + 眼睛 + 减号。
     /// 与 `EffectRow` 同构（同一套统一网格 + `Dropdown` + `IconButton`）。
     GridRow {
         tab: u8,
@@ -330,7 +330,7 @@ pub(crate) enum Setting {
         grids: serde_json::Value,
         anchor: Rc<RefCell<Option<Bounds<Pixels>>>>,
     },
-    /// 多行输入（lizard `TextEdit::multiline(...).desired_rows(2)`）：caption 紧贴、
+    /// 多行输入（参考实现 `TextEdit::multiline(...).desired_rows(2)`）：caption 紧贴、
     /// 输入框高度 `rows × 24`。
     Multiline {
         tab: u8,
@@ -338,7 +338,7 @@ pub(crate) enum Setting {
         field: Entity<TextField>,
         rows: f32,
     },
-    /// 垂直表单行（Figma `styles_properties_form`）：10 pt 标签在上、整宽输入框在下。
+    /// 垂直表单行（参考编辑器 `styles_properties_form`）：10 pt 标签在上、整宽输入框在下。
     /// `Number` 是横排（76 pt 标签 + 控件），样式编辑器的 Name / Description 要的是这种。
     /// 只加布局能力，不指定任何颜色——墨色与字段底色仍由通用 `TextField` 自己决定。
     Field {
@@ -346,12 +346,12 @@ pub(crate) enum Setting {
         label: SharedString,
         field: Entity<TextField>,
     },
-    /// Type settings 顶部的「预览」大框（lizard `type_settings_basics` 的 `previewBox`）。
+    /// Type settings 顶部的「预览」大框（参考实现 `type_settings_basics` 的 `previewBox`）。
     /// 所有页签共用、只画一次；内容是选中文本的字面，灰底、11 pt、次要色。
     Preview {
         text: SharedString,
     },
-    /// Details 页的粗体分组标题（lizard `details_section`：10.5 pt semibold + 下方一条分隔线）。
+    /// Details 页的粗体分组标题（参考实现 `details_section`：10.5 pt semibold + 下方一条分隔线）。
     GroupTitle {
         tab: u8,
         text: SharedString,
@@ -591,7 +591,7 @@ struct ColorState {
     paint_state: Option<Rc<RefCell<figcraft_color::Paint>>>,
     /// Selected gradient stop (ui-egui's `stop_id`).
     grad_sel: Rc<Cell<usize>>,
-    /// Figma 只保留一个「渐变」类型格，用它记住下次切回渐变时用哪种（`paintPickerFilter`）。
+    /// 参考编辑器 只保留一个「渐变」类型格，用它记住下次切回渐变时用哪种（`paintPickerFilter`）。
     grad_kind: Rc<Cell<usize>>,
     /// 色板集：0 = 在此页面，1 = 最近使用。
     swatch_set: Rc<Cell<u8>>,
@@ -718,7 +718,7 @@ pub(crate) struct WindowState {
 
 /// 文本样式的 `text` 对象 → `Type settings` 用的 `TextData` 快照。
 ///
-/// 文本样式的编辑器与「选中文本节点」的 Type settings 是**同一个面板**（Figma 里也是同一张
+/// 文本样式的编辑器与「选中文本节点」的 Type settings 是**同一个面板**（参考编辑器 里也是同一张
 /// 面板，只是写入目标不同）。面板正文只读 `TextData`，所以这里把样式里的那几个键读成快照；
 /// 样式没写的键留空（面板就显示「未选」），与 Mixed 的显示一致。
 fn style_text_data(v: &Value) -> TextData {
@@ -1369,7 +1369,7 @@ impl WindowState {
             ],
         });
 
-        // 「文本修饰 >」展开：装饰线样式 / 粗细 / 跳过下伸部（lizard `decoration_details`）。
+        // 「文本修饰 >」展开：装饰线样式 / 粗细 / 跳过下伸部（参考实现 `decoration_details`）。
         let thickness = number_field(cx, 72.0, t.decoration_thickness, "", 0.5, Slot::None);
         wire_set(&thickness, cx, &w.cmds, "textDecorationThickness", 0.0, 1_000.0);
         settings.push(Setting::ExpandedRows {
@@ -1404,7 +1404,7 @@ impl WindowState {
             ],
         });
 
-        // ── Details：lizard `type_settings_details` 的六个分组 ────────────────────────
+        // ── Details：参考实现 `type_settings_details` 的六个分组 ────────────────────────
         settings.push(Setting::GroupTitle { tab: 1, text: tr("Indentation").into() });
         settings.push(Setting::Toggle {
             tab: 1,
@@ -1489,7 +1489,7 @@ impl WindowState {
 
     // OpenType feature 面板是**数据驱动**的：显示哪些行完全由字体的扫描结果
     // `features_supported`（`face.feature_tags()`）决定，字体没有的 feature 根本不出现。
-    // 本地只持有一份「分组依据」表：把扫描到的 tag 归到 lizard 的分组、给显示名和默认开关。
+    // 本地只持有一份「分组依据」表：把扫描到的 tag 归到 参考实现 的分组、给显示名和默认开关。
     // 这些 tag -> 组 / 显示名 / 默认值是**本地知识**（分组依据），不是显示清单。
     //
     // 命令增量写 `text.setFeatures {features:{tag:bool}}`，不会互相覆盖整张 features 表
@@ -1514,7 +1514,7 @@ impl WindowState {
         ("ss05", "Stylistic set 5", "Stylistic sets", false),
         ("kern", "Kerning pairs", "Horizontal spacing", true),
     ];
-    /// 分组的显示顺序（与 lizard `type_settings_details` 一致）；空组不显示。
+    /// 分组的显示顺序（与 参考实现 `type_settings_details` 一致）；空组不显示。
     const FEATURE_GROUP_ORDER: &'static [&'static str] =
         &["Letter case|dialog", "Numbers", "Letter forms", "Stylistic sets", "Horizontal spacing", "Other features"];
 
@@ -1702,7 +1702,7 @@ impl WindowState {
     /// 字体选择窗：列表每项显示字体名，并用该字体自身渲染（名字即预览）。
     pub(crate) fn font_picker(cmds: Cmds, cx: &mut App, current: Option<&str>, anchor: Point<Pixels>) -> Self {
         let mut w = Self::base(WindowKind::FontPicker, tr("Font family"), cmds, Open::Anchor(anchor));
-        // Figma `typePanel.fontFamily.fontPickerWindow`：宽 `15rem`(=240)，窗口背景是
+        // 参考编辑器 `typePanel.fontFamily.fontPickerWindow`：宽 `15rem`(=240)，窗口背景是
         // `var(--color-bg)`（**面板色**，不是菜单色），body 内联高度 429px、内边距 0。
         w.surface = Surface::Panel;
         w.width = 240.0;
@@ -1817,11 +1817,11 @@ impl WindowState {
         w
     }
 
-    // ── ⑦ 本地样式编辑器（lizard `style_picker` 的 4 个全尺寸编辑器）──────────────────────
-    /// 不另写窗口：复用 `WindowState` 通用弹窗卡（标题栏 / 拖动 / clamp）。正文按 lizard
+    // ── ⑦ 本地样式编辑器（参考实现 `style_picker` 的 4 个全尺寸编辑器）──────────────────────
+    /// 不另写窗口：复用 `WindowState` 通用弹窗卡（标题栏 / 拖动 / clamp）。正文按 参考实现
     /// `style_metadata` + Properties + 属性行的精确 add_space 排布，用 `Setting` 行实现。
     /// 写回走引擎 `style.update`；删除不在弹窗里（右栏样式行右键菜单 / Del 键），与
-    /// lizard 4 个全尺寸编辑器一致。
+    /// 参考实现 4 个全尺寸编辑器一致。
     pub(crate) fn style_editor(
         cmds: Cmds,
         cx: &mut App,
@@ -1838,14 +1838,14 @@ impl WindowState {
         grids: Option<Vec<GridRow>>,
         popups: crate::panels::PopupReqs,
     ) -> Self {
-        // lizard `FloatingPanelWidth::Regular` = 304 且 `inner_margin(Margin::ZERO)`：
+        // 参考实现 `FloatingPanelWidth::Regular` = 304 且 `inner_margin(Margin::ZERO)`：
         // 面板本身没有内边距，源码里所有 `x + 16` 都是每一行自己加的左缩进。以前设成
         // width 336 / pad 16，外层 16 与行内 pl(16) 叠加成 32，整张卡片左右都虚胖一圈。
         let mut w = Self::base(WindowKind::StyleEditor, title, cmds.clone(), Open::Anchor(anchor));
         w.width = 304.0;
         w.pad = 0.0;
         // 卡片高度由内容撑开，这里的值只参与锚点抬升 / 边界 clamp 的估算，必须贴近真实高度，
-        // 写死 640 会把弹窗整体顶到画布上方。按 lizard 各段精确高度累计（含 40 头部）：
+        // 写死 640 会把弹窗整体顶到画布上方。按 参考实现 各段精确高度累计（含 40 头部）：
         //   preview 120/152 + 16 + Name 24 + 8 + Desc 24 + 20|24 + 标题 24|32 + 10|8
         //   + 属性区（行 ×32，text 是 3×24 + 2×8）+ 8 + Delete 24
         let rows = match ty {
@@ -1860,7 +1860,7 @@ impl WindowState {
         let after_title = if ty == "text" { 10.0 } else { 8.0 };
         // 末尾两段：属性行后的 add_space(8)（text 是 16）+ 卡片底部留白 8；再 +56 让
         // `open_pos` 的抬升把卡片整体提到浮动工具栏之上（工具栏浮在画布底部约 56pt）。
-        // 底部 Delete 按钮已按 lizard 去掉，所以这里不再有 +24 的按钮行。
+        // 底部 Delete 按钮已按 参考实现 去掉，所以这里不再有 +24 的按钮行。
         let tail = if ty == "text" { 16.0 } else { 8.0 };
         w.height = 40.0 + preview_h + 16.0 + 24.0 + 8.0 + 24.0 + meta_gap + title_h + after_title + rows + tail + 8.0 + 56.0;
         // 表面色不指定：`Setting` 行 / `TextField` 的墨色与字段底色都按默认 `Surface::Panel`
@@ -1965,7 +1965,7 @@ impl WindowState {
                 let paints_json = serde_json::to_value(&paints).unwrap_or(Value::Array(vec![]));
                 if let Setting::SectionTitle { array, menu, .. } = &mut section {
                     *array = paints_json.clone();
-                    // lizard：Add fill 点击直接追加一个默认灰填充，没有类型菜单。
+                    // 参考实现：Add fill 点击直接追加一个默认灰填充，没有类型菜单。
                     *menu = vec![(
                         SharedString::default(),
                         serde_json::to_value(figcraft_color::Paint::solid(figcraft_color::Color::from_rgba8(0xD9, 0xD9, 0xD9, 255)))
@@ -2018,7 +2018,7 @@ impl WindowState {
             "text" => {
                 settings.push(section);
                 settings.push(Setting::Spacer { tab: 0, h: 10.0 });
-                // lizard `text_style_editor`：Properties 下三行紧凑控件，无左侧标签。
+                // 参考实现 `text_style_editor`：Properties 下三行紧凑控件，无左侧标签。
                 let tid = id.clone();
                 let text_state = Rc::new(RefCell::new(text.clone().unwrap_or(Value::Object(Default::default()))));
                 let tf = text.clone().unwrap_or(Value::Null);
@@ -2107,7 +2107,7 @@ impl WindowState {
         }
         // ④ 底部：4 个全尺寸编辑器在属性之后只有一段 add_space，**没有**底部 Delete 按钮
         // （删除走右栏样式行的右键菜单 / Del 键；text 编辑器的删除在标题栏）。
-        // lizard：color/effect/grid 是 `add_space(8)`，text 的 `ui.scope` 之后是 `add_space(16)`。
+        // 参考实现：color/effect/grid 是 `add_space(8)`，text 的 `ui.scope` 之后是 `add_space(16)`。
         settings.push(Setting::Spacer { tab: 0, h: if ty == "text" { 16.0 } else { 8.0 } });
         settings
     }
@@ -2265,7 +2265,7 @@ impl WindowState {
 
     /// 行高 / 字距的空字段：`line_height` 空 → `"auto"`（引擎 `props::line_height` 认），
     /// `letter_spacing` 空 → `0`（字距没有 auto；写 "auto" 会让 `props::letter_spacing` 解析失败，
-    /// 进而 `style.update` 报错——lizard `parse_letter_spacing` 空串同样得 0）。
+    /// 进而 `style.update` 报错——参考实现 `parse_letter_spacing` 空串同样得 0）。
     fn text_number_auto(
         cx: &mut App,
         value: Option<f64>,
@@ -2275,7 +2275,7 @@ impl WindowState {
         cmds: Cmds,
     ) -> Entity<TextField> {
         // 与 `text_number` 同逻辑，只是初始值可能是 None。number_field 对 None 默认给 "Mixed"
-        // 占位，但 lizard 的 `LineHeight::label()` / `LetterSpacing::label()` 分别是 "Auto" / "0%"，
+        // 占位，但 参考实现 的 `LineHeight::label()` / `LetterSpacing::label()` 分别是 "Auto" / "0%"，
         // 覆盖占位符以对齐；真正的写回值仍由 on_commit 决定。
         let field = crate::widgets::number_field(cx, 120.0, value, "", 1.0, Slot::None);
         if value.is_none() {
@@ -2354,7 +2354,7 @@ impl WindowState {
         cmds: Cmds,
     ) -> Self {
         let mut w = Self::base(WindowKind::Color, tr("Custom"), cmds, Open::Anchor(origin));
-        // Figma 的 paint 面板是 240 宽、上下 8 内边距、左右 0（`raw_components--modalPanel`），
+        // 参考编辑器 的 paint 面板是 240 宽、上下 8 内边距、左右 0（`raw_components--modalPanel`），
         // 每一行自己给 8 / 16 的内缩。卡片内边距因此归零，宽度就是面板本身的 240。
         w.width = 240.0;
         w.pad = 0.0;
@@ -2542,7 +2542,7 @@ impl WindowState {
 
     fn add_search(&mut self, cx: &mut App, hint: &str) {
         let query = self.query.clone();
-        // 字体窗的搜索行自带 16/12 的左右内缩（Figma `fontPickerSearchRow`），字段要减掉，
+        // 字体窗的搜索行自带 16/12 的左右内缩（参考编辑器 `fontPickerSearchRow`），字段要减掉，
         // 否则固定宽度会把搜索框顶出卡片。
         let inset = if self.kind == WindowKind::FontPicker { 16.0 + 12.0 } else { 2.0 * self.pad };
         let field = search_field(cx, self.width - inset, "", hint);
@@ -2758,7 +2758,7 @@ impl WindowState {
                 title_text(self.title.clone()).into_any_element()
             }
             // Type settings 的标题栏就是三页签（截图顶部没有单独的 "Type settings" 标题文字），
-            // 与 lizard `type_settings_panel` 把 Tabs 放进 header 一致。
+            // 与 参考实现 `type_settings_panel` 把 Tabs 放进 header 一致。
             WindowKind::TypeSettings => {
                 if let Some((names, active)) = &self.tabs {
                     let tab = *active.borrow();
@@ -2798,7 +2798,7 @@ impl WindowState {
     }
 
     // ── body slot ───────────────────────────────────────────────────────────────────────────
-    /// 取色器卡片的当前高度：Figma 面板是「内容自然高度」，所以这里按行累加，而不是写死。
+    /// 取色器卡片的当前高度：参考编辑器 面板是「内容自然高度」，所以这里按行累加，而不是写死。
     /// 渐变模式会多出「渐变类型 + 停靠点条」两段，色板行数随当前色板集变化。
     fn color_card_height(&self) -> f32 {
         let Some(c) = self.color.as_ref() else { return HEADER_H + 500.0 };
@@ -2873,8 +2873,8 @@ impl WindowState {
         }
     }
 
-    // ── 取色器（Figma UI3 paint 面板 1:1 还原）────────────────────────────────────────────
-    // 全部数值取自 `Figma – Figma.html` 快照里的 DOM 与 `figma_app-*.css`，不是从截图量的：
+    // ── 取色器（参考编辑器 UI3 paint 面板 1:1 还原）────────────────────────────────────────────
+    // 全部数值取自 `参考编辑器 – 参考编辑器.html` 快照里的 DOM 与 `参考编辑器_app-*.css`，不是从截图量的：
     //   面板 240 宽、上下 8          `raw_components--modalPanel--CWaX0{width:240px;padding:8px 0}`
     //   类型条 40 高、padding 8、底边 1  `color_picker_v2--typeAndBlendMode--VVL-m`
     //   类型按钮 24×24、圆角 5          `paint_type_group_tabs--fillTypeButton--9gjgS`
@@ -3000,7 +3000,7 @@ impl WindowState {
                         .size_full(),
                     ),
             )
-            // 拾色点：Figma `_1t0vmmd5/7` 是 16 pt 白环 + 4 pt 白边 + 中间填当前色，
+            // 拾色点：参考编辑器 `_1t0vmmd5/7` 是 16 pt 白环 + 4 pt 白边 + 中间填当前色，
             // 环外还有一圈 1 px `controlknoboffoutline`（这里用 18 pt 半透明底托出来）。
             .child(picker_knob(hsb.s * SPECTRUM, (1.0 - hsb.b) * SPECTRUM, current.with_alpha(255)))
             // 事件挂在**外层**：手柄绝对定位盖在色板上，若只挂在色板 div 上，
@@ -3116,7 +3116,7 @@ impl WindowState {
                 .child(c.alpha.clone()),
         );
 
-        // ⑤ 色板：色板集下拉 + 16 pt 色块（节奏 24，一行 9 个，与 Figma 的 216 内容宽一致）。
+        // ⑤ 色板：色板集下拉 + 16 pt 色块（节奏 24，一行 9 个，与 参考编辑器 的 216 内容宽一致）。
         let set = c.swatch_set.get();
         let (set_label, set_colors) = if set == 0 { (tr("On this page"), page_colors()) } else { (tr("Recent"), recent_colors()) };
         let set_trigger = c.swatch_anchor.clone();
@@ -3165,7 +3165,7 @@ impl WindowState {
             .child(grid)
             .child(div().h(pt(12.0)));
 
-        // ⑥ 对比度行：Figma `color_contrast_info` 的圆片 + 比值（比的是当前色对本页画布底色）。
+        // ⑥ 对比度行：参考编辑器 `color_contrast_info` 的圆片 + 比值（比的是当前色对本页画布底色）。
         let ratio = contrast_ratio(current.with_alpha(255), t.canvas);
         let contrast_row = div()
             .w(pt(PANEL_W))
@@ -3201,12 +3201,12 @@ impl WindowState {
                     ),
             );
 
-        // ── 组装（顺序与 Figma 一致：类型条 → 渐变编辑 / 或纯色编辑）
+        // ── 组装（顺序与 参考编辑器 一致：类型条 → 渐变编辑 / 或纯色编辑）
         // 渐变页只保留「类型行 + 预览条 + 断点列表」，不再带色域/色相/透明度/色板，
         // 否则切换后旧内容全留在上面（用户 2026-11-19）。
         let kind_now = c.paint_state.as_ref().map(|s| s.borrow().kind.clone());
         let is_grad = matches!(kind_now, Some(figcraft_color::PaintKind::Gradient(_)));
-        // 顶部不额外留白：类型条紧贴标题栏下方（Figma 取色器内容 257 = 类型条 41 + 渐变编辑 216）。
+        // 顶部不额外留白：类型条紧贴标题栏下方（参考编辑器 取色器内容 257 = 类型条 41 + 渐变编辑 216）。
         let mut col = div().w(pt(PANEL_W)).flex().flex_col();
         if c.paint.is_some() && !c.nested {
             col = col.child(self.picker_toolbar(c));
@@ -3508,7 +3508,7 @@ impl WindowState {
             .child(div().flex().items_center().gap(pt(4.0)).child(blend_btn))
     }
 
-    /// 渐变类型：线性 / 径向 / 角度 / 菱形。Figma 的渐变面板用**下拉菜单**切类型，
+    /// 渐变类型：线性 / 径向 / 角度 / 菱形。参考编辑器 的渐变面板用**下拉菜单**切类型，
     /// 右侧两枚 24 pt 按钮分别是「交换」和「旋转 90°」。
     fn gradient_kind_row(&self, c: &ColorState, p: &PaintPicker, state: &Rc<RefCell<figcraft_color::Paint>>) -> gpui::Div {
         let labels = ["Linear", "Radial", "Angular", "Diamond"];
@@ -3527,7 +3527,7 @@ impl WindowState {
             window.refresh();
         });
         let write = p.on_write.clone();
-        // 交换：两端 stop 互换（位置镜像），与 Figma 的「翻转渐变」一致。
+        // 交换：两端 stop 互换（位置镜像），与 参考编辑器 的「翻转渐变」一致。
         let swap = IconButton::new(Icon::FlipH).size(24.0).on_click({
             let write = write.clone();
             let st = state.clone();
@@ -3732,7 +3732,7 @@ impl WindowState {
             })
         };
 
-        // 显示顺序按位置升序（与 Figma 一致）；存储顺序保持稳定，闭包仍用原索引。
+        // 显示顺序按位置升序（与 参考编辑器 一致）；存储顺序保持稳定，闭包仍用原索引。
         let mut order: Vec<usize> = (0..g.stops.len()).collect();
         order.sort_by(|&a, &b| g.stops[a].position.partial_cmp(&g.stops[b].position).unwrap_or(std::cmp::Ordering::Equal));
 
@@ -3748,7 +3748,7 @@ impl WindowState {
             let stop_color = s.color;
             let on = i == sel.get();
             let hsla = rgba(picker_c32(stop_color));
-            // Figma `_1t0vmmd5/7`：24×30 手柄盒，盒子中央 14×14 圆点，盒内 y=24 处是
+            // 参考编辑器 `_1t0vmmd5/7`：24×30 手柄盒，盒子中央 14×14 圆点，盒内 y=24 处是
             // 24×6、与断点同色的向下三角箭头（指向色条）。未选中圆点描 1 px 10% 黑边。
             let arrow = gpui::canvas(
                 |_, _, _| {},
@@ -4011,13 +4011,13 @@ impl WindowState {
 
     fn list_element(&self, cx: &mut App, body_h: f32) -> AnyElement {
         let t = tokens();
-        // 字体窗按 Figma `fontPicker*`：卡片内边距 0，搜索行 40（左 16 / 右 12 / 底 1px 线），
+        // 字体窗按 参考编辑器 `fontPicker*`：卡片内边距 0，搜索行 40（左 16 / 右 12 / 底 1px 线），
         // 行高 28、左 12 / 右 18，**列表自身滚动**（`overflow-y:scroll`，`flex-grow:1`）。
         // 其它列表窗（变量 / 样式）沿用原来的 8pt 内缩与 24pt 行，只加一个高度上限 + 滚动。
         let fonts = self.kind == WindowKind::FontPicker;
         let mut col = div().w_full().flex().flex_col();
         if fonts {
-            // Figma 的 body 是固定 429px：搜索行与列表一起撑满，列表吃剩余高度。
+            // 参考编辑器 的 body 是固定 429px：搜索行与列表一起撑满，列表吃剩余高度。
             col = col.h(pt(body_h));
         }
         if let Some(search) = &self.search {
@@ -4059,7 +4059,7 @@ impl WindowState {
             let trail = row.trail.clone();
             let font_family = row.font_family.clone();
             // A font-picker row renders its own name in that family — the item is its own preview.
-            // Figma `fontPickerItemRow` 的正文是 11px。
+            // 参考编辑器 `fontPickerItemRow` 的正文是 11px。
             let label_el = if let Some(fam) = font_family {
                 div().flex_1().min_w(pt(0.0)).overflow_hidden().text_size(pt(11.0)).font_family(SharedString::from(fam)).child(row.label.clone())
             } else {
@@ -4106,7 +4106,7 @@ impl WindowState {
         let mut col = if self.kind == WindowKind::TypeSettings {
             crate::widgets::popover::popover_body().px(pt(4.0))
         } else if self.kind == WindowKind::StyleEditor {
-            // lizard 4 个样式编辑器用 `ui.spacing_mut().item_spacing.y = 0`，各段之间是精确的
+            // 参考实现 4 个样式编辑器用 `ui.spacing_mut().item_spacing.y = 0`，各段之间是精确的
             // add_space(16/8/24/8/10/20)，属性行之间更是 0 间距。通用 popover_body 的 8pt gap
             // 会和每行自带的 margin 叠加，必须换成 gap=0 的容器，由 `Setting::Spacer` 逐段控制。
             div().w_full().flex().flex_col()
@@ -4164,7 +4164,7 @@ impl WindowState {
                 if *st != tab {
                     return None;
                 }
-                // 精确留白（lizard `ui.add_space(x)`）：gap=0 容器里唯一的行距来源。
+                // 精确留白（参考实现 `ui.add_space(x)`）：gap=0 容器里唯一的行距来源。
                 Some(div().w_full().h(pt(*h)).flex_none().into_any_element())
             }
             Setting::Caption { tab: st, text } => {
@@ -4219,7 +4219,7 @@ impl WindowState {
                 if *st != tab {
                     return None;
                 }
-                // lizard `property_row`：行高 `ROW_H = 32`，色板 14×14 居中在 `x + 12`，
+                // 参考实现 `property_row`：行高 `ROW_H = 32`，色板 14×14 居中在 `x + 12`，
                 // 文字从 `x + 26` 起、11 pt。
                 let mut row = div()
                     .w_full()
@@ -4375,7 +4375,7 @@ impl WindowState {
                 Some(crate::widgets::panel_section::field_row_full_trailing(cf, vec![eye, minus]).into_any_element())
             }
             Setting::PaintPreview { paint } => {
-                // lizard `style_paint_preview`：304×120 区，内缩 16 后的 272×104 **整块**铺色；
+                // 参考实现 `style_paint_preview`：304×120 区，内缩 16 后的 272×104 **整块**铺色；
                 // 底是棋盘格，颜色带 alpha 时透出来。之前用 `swatch(paint, 104.0)` 只画了
                 // 104×104 的方形，右边一大片空白——这是最明显的布局偏差。
                 let solid = paint.solid_color().map(|c| crate::widgets::swatch::color32(c.with_alpha(c.a * paint.opacity)));
@@ -4415,7 +4415,7 @@ impl WindowState {
                 if *st != tab {
                     return None;
                 }
-                // lizard `editor`：caption 与输入框紧贴（`item_spacing.y = 0`），
+                // 参考实现 `editor`：caption 与输入框紧贴（`item_spacing.y = 0`），
                 // 输入框高度 = `desired_rows × 24`；之后 `add_space(8.0)`。
                 Some(
                     div()
@@ -4432,7 +4432,7 @@ impl WindowState {
                 if *st != tab {
                     return None;
                 }
-                // lizard `style_metadata`（4 个样式编辑器共用）：行宽 304、行高 24；
+                // 参考实现 `style_metadata`（4 个样式编辑器共用）：行宽 304、行高 24；
                 // 标签在 `x + 16`（11 pt `t.text_secondary`），输入框在 `x + 112`（宽 176）。
                 // 两行之间的 add_space(8) 由 `Setting::Spacer` 给，这里不能再带 mb（否则叠加成 16）。
                 Some(
@@ -4641,11 +4641,11 @@ impl WindowState {
                 }
                 Some(body.into_any_element())
             }
-            // ── 本地样式 4 编辑器的新增渲染分支（对齐 lizard `style_picker`）──────────
+            // ── 本地样式 4 编辑器的新增渲染分支（对齐 参考实现 `style_picker`）──────────
             // ⚠️ 这里不能再放 `_ => None` 兜底：它会排在下面所有分支之前，把预览、Spacer、
             //    SectionTitle、属性行全部吞掉（曾导致 4 个弹窗只剩 Name/Description/Delete）。
             Setting::TextPreview { text } => {
-                // lizard `text_style_editor`：304×120 灰底，渲染 "Rag 123" 采样字（按 `font_size` 缩放）。
+                // 参考实现 `text_style_editor`：304×120 灰底，渲染 "Rag 123" 采样字（按 `font_size` 缩放）。
                 let size = Self::json_num(text, &["fontSize", "font_size"]).unwrap_or(24.0).clamp(6.0, 60.0);
                 Some(
                     div()
@@ -4870,7 +4870,7 @@ impl WindowState {
                 )
             }
             Setting::GridPreview { grids } => {
-                // 图标按 Figma 导出的 6 个 SVG（`Frame 204`–`209`）1:1 绘制：
+                // 图标按 参考编辑器 导出的 6 个 SVG（`Frame 204`–`209`）1:1 绘制：
                 //   204 / 205 / 206 = 46×46（2 pt 黑框）+ 内部 9 点阵 / 三竖条 / 三横条；
                 //   207 / 208 / 209 = 同一块放在 50×50 里，**再多画右下角那条 L 形折线** ——
                 //   即「这个样式里有多条网格」的标记。所以「有多个才带折线」是直接读设计稿的。
@@ -4945,7 +4945,7 @@ impl WindowState {
                 if *st != tab {
                     return None;
                 }
-                // lizard：Properties 标题（x+16、semibold 11pt）与「+」按钮在**同一行** 304×32；
+                // 参考实现：Properties 标题（x+16、semibold 11pt）与「+」按钮在**同一行** 304×32；
                 // 「Add fill」等只是按钮 tooltip，不是可见文字。
                 let mut row = div()
                     .w_full()
@@ -5033,7 +5033,7 @@ impl WindowState {
                 if *st != tab {
                     return None;
                 }
-                // lizard `text_style_editor` 的 `ui.scope(item_spacing = (8,8))`：每行先
+                // 参考实现 `text_style_editor` 的 `ui.scope(item_spacing = (8,8))`：每行先
                 // add_space(16)，行距 8；三行分别是 248 / 120+120 / 120+120+Dots。
                 // 「>」/Dots 打开的 Type settings 面板 Monet 还没搬，这里只留 24 宽的占位。
                 let make_select = |key: &str,
@@ -5085,7 +5085,7 @@ impl WindowState {
                 let family_select = make_select("style-family", family, 248.0, "font_family", families, family_anchor);
                 let style_select = make_select("style-weight", font_style, 120.0, "font_style", font_styles, style_anchor);
                 // 数字框必须在 120 宽的 flex_none 容器里：直接作为 flex_row 子项会被交叉轴/剩余
-                // 空间拉宽，第二行「字号」会一路撑到卡片右边（lizard 是固定 ControlWidth::Fixed(120)）。
+                // 空间拉宽，第二行「字号」会一路撑到卡片右边（参考实现 是固定 ControlWidth::Fixed(120)）。
                 let fixed = |w: f32, el: AnyElement| div().w(pt(w)).h(pt(24.0)).flex_none().child(el).into_any_element();
                 let row = |el: AnyElement| div().w_full().h(pt(24.0)).flex().flex_row().items_center().pl(pt(16.0)).gap(pt(8.0)).child(el).into_any_element();
                 let mut r2 = div().w_full().h(pt(24.0)).flex().flex_row().items_center().pl(pt(16.0)).gap(pt(8.0)).child(style_select);
@@ -5894,7 +5894,7 @@ const CHIT_PITCH: f32 = 24.0;
 /// 一行放几个色块（216 / 24）。
 const CHITS_PER_ROW: usize = 9;
 
-/// 四种渐变类型，按 Figma 分段控件的顺序排（线性 / 径向 / 角度 / 菱形）。
+/// 四种渐变类型，按 参考编辑器 分段控件的顺序排（线性 / 径向 / 角度 / 菱形）。
 const GRADIENT_KINDS: [figcraft_color::GradientKind; 4] = [
     figcraft_color::GradientKind::Linear,
     figcraft_color::GradientKind::Radial,
@@ -5902,7 +5902,7 @@ const GRADIENT_KINDS: [figcraft_color::GradientKind; 4] = [
     figcraft_color::GradientKind::Diamond,
 ];
 
-/// Figma 的拾色点 / 滑块（`_1q2ok2r5/6` + `_1t0vmmd5/7`）：16 pt 白环、中间填实色，
+/// 参考编辑器 的拾色点 / 滑块（`_1q2ok2r5/6` + `_1t0vmmd5/7`）：16 pt 白环、中间填实色，
 /// 环外一圈 1 px 半透明描边（用 18 pt 的半透明底托出 `controlknoboffoutline`）。
 /// `x`/`y` 是环心的位置（相对父容器的 `relative` 原点）。
 fn picker_knob(x: f32, y: f32, fill: Color32) -> gpui::Div {
@@ -6138,7 +6138,7 @@ mod tests {
         assert_eq!(toggles, 3, "只有扫描到的 3 个 tag 生成开关，其余一律不出现");
         assert_eq!(titles.len(), 3, "只显示有行的组");
         assert_eq!(dividers, 3, "每组收尾一条分隔线");
-        // 组序与 lizard 一致：Letter case → Numbers → Letter forms → …；这里只出现
+        // 组序与 参考实现 一致：Letter case → Numbers → Letter forms → …；这里只出现
         // Numbers / Letter forms / Stylistic sets 三组，跳过空组（Letter case / Horizontal / Other）。
         assert!(titles.iter().any(|t| t.contains("Number") || t.contains("数字")), "missing Numbers: {:?}", titles);
         assert!(titles.iter().any(|t| t.contains("Letter forms") || t.contains("字母形式")), "missing Letter forms: {:?}", titles);

@@ -492,7 +492,7 @@ pub fn move_key(app: &mut CanvasApp, key: SelectedKey, time: u32) -> Option<u32>
 }
 
 /// Writes a typed value into `property` at the playhead (the inspector's number fields).
-/// Goes through `motion.autoKey` (Figma/desigma semantics): if the property already has a track,
+/// Goes through `motion.autoKey` (参考编辑器/参考实现 semantics): if the property already has a track,
 /// a key is set at the playhead; otherwise the node's static property changes and no animation is
 /// invented. The current value (key at playhead, else the static base) seeds `next` so a static
 /// edit is an absolute value, not relative to zero. `value` shape is validated by the command.
@@ -1268,7 +1268,7 @@ mod tests {
         assert!(!has_key(app.session.doc().unwrap(), node, AnimProperty::Opacity, 0), "toggle removes when present");
     }
 
-    /// Figma/desigma auto-key semantics: editing a property that has NO track changes its static
+    /// 参考编辑器/参考实现 auto-key semantics: editing a property that has NO track changes its static
     /// value and must NOT invent an animation.
     #[test]
     fn commit_value_edits_static_value_when_no_track() {

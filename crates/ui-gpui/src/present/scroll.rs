@@ -102,7 +102,7 @@ impl PresentState {
 }
 
 /// `frame` 内容在视口 `viewport`（页单位，自画框左上）下的滚动范围。设了视口时画框自身
-/// 也算内容：画框比屏幕大就按整框滚，与它的 overflow 设置无关（Figma 顶层画框同款）。
+/// 也算内容：画框比屏幕大就按整框滚，与它的 overflow 设置无关（参考编辑器 顶层画框同款）。
 pub fn scroll_range_in(doc: &Document, frame: NodeId, viewport: Option<(f64, f64)>) -> (f64, f64) {
     let Some(n) = doc.node(frame) else { return (0.0, 0.0) };
     if n.overflow == Overflow::None && viewport.is_none() {

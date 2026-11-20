@@ -350,7 +350,7 @@ pub(crate) fn view_bar(f: &RightFields, d: &PanelData, motion: bool) -> gpui::Di
             .text_color(rgba(t.text))
             .child(s)
     };
-    // 相邻控件间距统一 4 pt（Figma 参考 Frame 38：Design → Prototype = 4 pt）。
+    // 相邻控件间距统一 4 pt（参考 Frame 38：Design → Prototype = 4 pt）。
     let tabs = if motion {
         div().flex().flex_row().items_center().gap(pt(crate::panels::HEADER_GAP)).child(mode_label("动画"))
     } else if f.right_tab() == 2 {
@@ -1536,7 +1536,7 @@ pub(crate) fn effects(
 // Selection colors —— `selection_colors.rs::section`
 // ───────────────────────────────────────────────────────────────────────────────────────────────
 
-/// lizard `selection_colors.rs::header`：折叠时最多显示 3 个色块，多的收进 `+N`。
+/// 参考实现 `selection_colors.rs::header`：折叠时最多显示 3 个色块，多的收进 `+N`。
 fn collapsed_swatch_count(n: usize) -> usize {
     n.min(3)
 }
@@ -1544,7 +1544,7 @@ fn collapsed_extra(n: usize) -> usize {
     n.saturating_sub(3)
 }
 
-/// lizard `Id::new(("selection_colors_open", ds.uid))` 的 GPUI 等价物：
+/// 参考实现 `Id::new(("selection_colors_open", ds.uid))` 的 GPUI 等价物：
 /// 状态按文档 uid 存，缺省折叠，点一次只翻转当前文档那一档。
 type OpenByDoc = std::collections::HashMap<u64, bool>;
 fn open_for_doc(map: &OpenByDoc, uid: u64) -> bool {
@@ -1555,10 +1555,10 @@ fn toggle_doc(map: &mut OpenByDoc, uid: u64) {
     map.insert(uid, next);
 }
 
-/// 折叠头部的 16 pt 色块（lizard `widgets::paint_swatch` 的纯色分支）。
+/// 折叠头部的 16 pt 色块（参考实现 `widgets::paint_swatch` 的纯色分支）。
 ///
 /// 冻结的 `widgets::paint_swatch` **无条件**先画 `checker_rounded`，四角会露出白色/浅色
-/// 像素，看上去像「四个圆角溢出色块」（用户 2026-11-11 指出）。lizard 对
+/// 像素，看上去像「四个圆角溢出色块」（用户 2026-11-11 指出）。参考实现 对
 /// `opaque_solid`（`opacity>=1 && color.a>=1`）**根本不画棋盘**，只画一块圆角 3 的色，
 /// 最后 `rect_stroke(rect, same(3), 1pt border, Inside)`。这里在业务侧照该规则重画，
 /// 不改冻结组件；渐变/图片/图案仍回退到原组件，外层圆角+裁剪兜住溢出。
@@ -1577,14 +1577,14 @@ fn collapsed_swatch(paint: figcraft_color::Paint, side: f32) -> gpui::AnyElement
     let is_opaque = paint.opacity >= 0.999 && color.a >= 0.999;
     // 用 GPUI 原生 `div` 背景，而不是 canvas 里自绘 `paint_quad`：quad 的圆角抗锯齿会在
     // 四角留下彩色半透明像素，正是「四个圆角溢出色块」。半透明时直接把带 alpha 的色
-    // 叠在面板白底上（lizard 左不透明/右带 alpha 的 Figma 分半在 16pt 上无差别）。
+    // 叠在面板白底上（参考实现 左不透明/右带 alpha 的 参考编辑器 分半在 16pt 上无差别）。
     // ⚠️ 不画 `border_1()`：1pt 浅灰描边压在圆角填充的抗锯齿上，四角会出现一圈
-    // 「浅色虚线尖角」（用户 2026-11-11 指出的「四个圆角溢出色块」）。lizard 的
+    // 「浅色虚线尖角」（用户 2026-11-11 指出的「四个圆角溢出色块」）。参考实现 的
     // 1pt Inside 描边在 16pt 色块上肉眼几乎不可见，去掉后与原文观感一致且四角干净。
     div().flex_none().w(pt(side)).h(pt(side)).rounded(px(3.0)).bg(if is_opaque { opaque } else { tinted }).into_any_element()
 }
 
-/// Selection colors 节（`lizard selection_colors.rs::section`）的折叠样式 1:1：
+/// Selection colors 节（`参考实现 selection_colors.rs::section`）的折叠样式 1:1：
 ///
 /// * 默认**折叠**：40 pt 可点头部，标题 `text_secondary`；悬停时提亮并显示左侧 chevron；
 /// * 折叠态右侧并排最多 3 个 16 pt 色块（间距 8），再多一个 `+N`；
@@ -1601,19 +1601,19 @@ pub(crate) fn selection_colors(
     _window: &mut Window,
     cx: &mut App,
 ) -> Option<gpui::AnyElement> {
-    // 上游 `selection_colors.rs::section`（Figma 实测）：两种不同颜色显示这一节；
+    // 上游 `selection_colors.rs::section`（参考编辑器 实测）：两种不同颜色显示这一节；
     // 只有一种颜色时，**选中的图层带子级**（frame / group / component / instance）也要显示。
     // 之前只判 `len() < 2`，于是「画框里只有一个组件、一个颜色」整节消失。
     if d.selection_colors.len() < 2 && !(d.selection_colors.len() == 1 && d.selection_has_children) {
         return None;
     }
     let t = tokens();
-    // lizard `Id::new(("selection_colors_open", ds.uid))`：开合状态**按文档 uid 分档**，
+    // 参考实现 `Id::new(("selection_colors_open", ds.uid))`：开合状态**按文档 uid 分档**，
     // 切到另一个文档时各自保留自己的状态，缺省折叠。
     let uid = d.doc_uid;
     let open = open_for_doc(&f.selection_colors_open.borrow(), uid);
     let hovered = *f.selection_colors_hover.borrow();
-    // lizard：`hovered && dark` → 白；`hovered` → text；否则 text_secondary。
+    // 参考实现：`hovered && dark` → 白；`hovered` → text；否则 text_secondary。
     let ink = if hovered && t.dark {
         Color32::WHITE
     } else if hovered {
@@ -1623,7 +1623,7 @@ pub(crate) fn selection_colors(
     };
 
     // ── 头部 ────────────────────────────────────────────────────────────────
-    // lizard `theme::property_section_title()` = medium(ui_font_size(10.5))；GPUI 的
+    // 参考实现 `theme::property_section_title()` = medium(ui_font_size(10.5))；GPUI 的
     // `SectionHeader` 把这一档固化成 TITLE_PT=13 / MEDIUM / 1.25 行高。折叠节标题必须
     // 与上面的「填充 / 效果 / 描边」用同一套排版，不能自己写一个 10.5 pt 的小字。
     let title = div()
@@ -1633,7 +1633,7 @@ pub(crate) fn selection_colors(
         .font_weight(crate::panels::UI_FONT_REGULAR)
         .text_color(rgba(ink))
         .child(tr("Selection colors"));
-    // lizard 从 `rect.right() - PAD` 起从右往左摆：`+N` 最右，色块在其左，间隔 8 pt。
+    // 参考实现 从 `rect.right() - PAD` 起从右往左摆：`+N` 最右，色块在其左，间隔 8 pt。
     let mut right = div().flex_none().flex().flex_row().items_center().gap(pt(8.0));
     if !open {
         for row in d.selection_colors.iter().take(collapsed_swatch_count(d.selection_colors.len())) {
@@ -1643,7 +1643,7 @@ pub(crate) fn selection_colors(
         }
         let extra = collapsed_extra(d.selection_colors.len());
         if extra > 0 {
-            // lizard `regular(11.0)` → ui_font_size(11)=12.94，GPUI 对应 TITLE_PT 这一档
+            // 参考实现 `regular(11.0)` → ui_font_size(11)=12.94，GPUI 对应 TITLE_PT 这一档
             // （字重是 regular，不是标题的 medium），颜色仍是 text_secondary。
             right = right
                 .child(div().flex_none().text_size(pt(TITLE_PT)).text_color(rgba(t.text_secondary)).child(SharedString::from(format!("+{extra}"))));
@@ -1663,7 +1663,7 @@ pub(crate) fn selection_colors(
         .items_center()
         .justify_between()
         .pl(pt(PAD))
-        // lizard header 右侧也从 `rect.right() - PAD` 起算，左右都是 16 pt。
+        // 参考实现 header 右侧也从 `rect.right() - PAD` 起算，左右都是 16 pt。
         .pr(pt(PAD))
         .cursor_pointer()
         .child(title)
@@ -1694,7 +1694,7 @@ pub(crate) fn selection_colors(
         return Some(sec.into_any_element());
     }
 
-    // ── 展开态：原来的颜色行（lizard 在 `add_enabled_ui(!interacting, …)` 里画）──
+    // ── 展开态：原来的颜色行（参考实现 在 `add_enabled_ui(!interacting, …)` 里画）──
     let mut body = div().flex().flex_col().w_full().pb(pt(SECTION_BOTTOM));
     for row in d.selection_colors.iter() {
         let targets = row.targets.clone();
@@ -1788,7 +1788,7 @@ pub(crate) fn selection_colors(
 mod selection_colors_tests {
     use super::{OpenByDoc, collapsed_extra, collapsed_swatch_count, open_for_doc, toggle_doc};
 
-    /// lizard `header`：折叠时 3 个色块，多出来的收进 `+N`。
+    /// 参考实现 `header`：折叠时 3 个色块，多出来的收进 `+N`。
     #[test]
     fn collapsed_header_shows_three_swatches_and_the_rest_as_a_count() {
         // 少于两组根本不画这一节，但纯函数仍给出安全值。
@@ -1803,7 +1803,7 @@ mod selection_colors_tests {
         assert_eq!(collapsed_extra(4), 1);
     }
 
-    /// lizard `Id::new(("selection_colors_open", ds.uid))`：两个文档各自记住开合状态。
+    /// 参考实现 `Id::new(("selection_colors_open", ds.uid))`：两个文档各自记住开合状态。
     #[test]
     fn open_state_is_keyed_by_document_uid() {
         let mut map = OpenByDoc::new();
@@ -2005,7 +2005,7 @@ pub(crate) fn export(f: &RightFields, d: &PanelData, col: f32, n: &mut usize, cx
 // Variable modes / Section / Header / Page
 // ───────────────────────────────────────────────────────────────────────────────────────────────
 
-/// Frame-like 的「Clip content」勾选行（Figma 的 Frame 设置区）。
+/// Frame-like 的「Clip content」勾选行（参考编辑器 的 Frame 设置区）。
 ///
 /// 多选时值不一致按**未勾选**显示（`Option::unwrap_or(false)`，与 egui `common` 的语义一致）；
 /// 切换推 `node.set {"props":{"clipsContent":!current}}`，引擎按当前选区执行。
@@ -2724,10 +2724,10 @@ pub(crate) fn section(f: &RightFields, d: &PanelData, row_w: f32) -> Option<Pane
 }
 
 // ───────────────────────────────────────────────────────────────────────────────────────────────
-// Selection header —— `lizard right.rs::header` 的判断规则 1:1
+// Selection header —— `参考实现 right.rs::header` 的判断规则 1:1
 // ───────────────────────────────────────────────────────────────────────────────────────────────
 
-/// 标题行菜单里的一个行模型：lizard `menu_item` / `menu_check` / `Menu::separator`。
+/// 标题行菜单里的一个行模型：参考实现 `menu_item` / `menu_check` / `Menu::separator`。
 /// `cmd` 为空 = 当前已选中的勾选项，点了不推命令（egui `if to_frame != frame`）。
 #[derive(Clone)]
 struct HeadRow {
@@ -2771,7 +2771,7 @@ fn head_menu(rows: &[HeadRow]) -> Vec<MenuRow> {
         .collect()
 }
 
-/// 选中一行就推它的命令（lizard `menu_popup(&resp).show(...)`）。
+/// 选中一行就推它的命令（参考实现 `menu_popup(&resp).show(...)`）。
 fn head_pick(rows: Vec<HeadRow>, cmds: crate::panels::Cmds) -> Rc<dyn Fn(&str, &mut Window, &mut App)> {
     Rc::new(move |label, _w, _cx| {
         if let Some(r) = rows.iter().find(|r| r.label == label) {
@@ -2782,7 +2782,7 @@ fn head_pick(rows: Vec<HeadRow>, cmds: crate::panels::Cmds) -> Rc<dyn Fn(&str, &
     })
 }
 
-/// 类型名的文字下拉（lizard `header` 的 `lr`：86×32）。Frame / Group 才有；Frame 的菜单
+/// 类型名的文字下拉（参考实现 `header` 的 `lr`：86×32）。Frame / Group 才有；Frame 的菜单
 /// 还接着 `FRAME_PRESETS`，每个分类前一条分隔线（`kind_items` + preset 列表）。
 fn head_dropdown(f: &RightFields, label: String, rows: Vec<HeadRow>) -> Dropdown {
     let menu = head_menu(&rows);
@@ -2797,7 +2797,7 @@ fn head_dropdown(f: &RightFields, label: String, rows: Vec<HeadRow>) -> Dropdown
     d
 }
 
-/// 一个图标按钮，点开标题行的菜单（lizard `menu_popup(&resp)`）。
+/// 一个图标按钮，点开标题行的菜单（参考实现 `menu_popup(&resp)`）。
 fn head_menu_button(f: &RightFields, icon: Icon, side: f32, width: f32, rows: Vec<HeadRow>) -> IconButton {
     let menu = head_menu(&rows);
     let cmds = f.cmds.clone();
@@ -2810,7 +2810,7 @@ fn head_menu_button(f: &RightFields, icon: Icon, side: f32, width: f32, rows: Ve
     })
 }
 
-/// 「Create link」：lizard `menus::invoke("text.link")` 先弹输入框拿 URL，再执行 `text.link`。
+/// 「Create link」：参考实现 `menus::invoke("text.link")` 先弹输入框拿 URL，再执行 `text.link`。
 /// GPUI 的通用单值对话框（A8/A17 同款）就是那个输入框。
 fn link_button(f: &RightFields) -> IconButton {
     let root = f.root.clone();
@@ -2820,11 +2820,11 @@ fn link_button(f: &RightFields) -> IconButton {
     })
 }
 
-/// 选区标题行（lizard `right.rs::header`）。
+/// 选区标题行（参考实现 `right.rs::header`）。
 ///
 /// ⛔ **一行 40 pt、没有区块标题**：左边 86 pt 的类型名（Frame / Group 可下拉互转），
 /// 右边按选中类型整套换按钮。所有显隐都走 [`crate::panels::visibility::header_actions`]，
-/// 规则逐条对应 lizard 的 `is_frame / is_group / is_text / edit_id / points_selected`：
+/// 规则逐条对应 参考实现 的 `is_frame / is_group / is_text / edit_id / points_selected`：
 ///
 /// * 单选 Frame → 类型下拉里还有 `FRAME_PRESETS`（分类分隔）+ 右侧「交换方向」；
 /// * 选区全是 Text → 四个专属按钮（Select matching / Create link / Create component / More），
@@ -2832,7 +2832,7 @@ fn link_button(f: &RightFields) -> IconButton {
 /// * 单选 Component / ComponentSet，或矢量编辑已选点 → 右侧动作一个都不画；
 /// * 其余 → Select matching / Create component / Mask / 布尔按钮 + 布尔菜单 / Edit object（单选形状）。
 ///
-/// 与 `view_bar` 一样是**独立自由行**：lizard 用 `allocate_exact_size(w, 40)` 后绝对定位左右
+/// 与 `view_bar` 一样是**独立自由行**：参考实现 用 `allocate_exact_size(w, 40)` 后绝对定位左右
 /// 两块，冻结的统一网格（`field_row_h` 的 2×1fr + 24pt 列）放不下 6 个动作格 + 86 pt 标签。
 pub(crate) fn header(f: &RightFields, d: &PanelData, col: f32) -> Option<gpui::Div> {
     let h = d.header.as_ref()?;
@@ -2884,12 +2884,12 @@ pub(crate) fn header(f: &RightFields, d: &PanelData, col: f32) -> Option<gpui::D
 
     // ── 右：按选中类型整套换按钮 ───────────────────────────────────────────────
     let mut actions: Vec<gpui::AnyElement> = Vec::new();
-    // 「交换方向」在 Frame 上挂到动作列最左（lizard 把它对齐到 4 个动作格 + chevron 的左边）。
+    // 「交换方向」在 Frame 上挂到动作列最左（参考实现 把它对齐到 4 个动作格 + chevron 的左边）。
     if a.swap_orientation {
         actions.push(icon_cmd(Icon::Rotate, "frame.swapOrientation", json!({}), f, false).into_any_element());
     }
     if a.text {
-        // lizard `is_text` 分支的四个按钮，左→右顺序照抄。
+        // 参考实现 `is_text` 分支的四个按钮，左→右顺序照抄。
         actions.push(icon_cmd(Icon::Search, "select.matching", json!({}), f, false).into_any_element());
         actions.push(link_button(f).into_any_element());
         actions.push(icon_cmd(Icon::Component, "component.create", json!({}), f, false).into_any_element());
@@ -2903,7 +2903,7 @@ pub(crate) fn header(f: &RightFields, d: &PanelData, col: f32) -> Option<gpui::D
             .collect();
         actions.push(head_menu_button(f, Icon::Menu, 24.0, 240.0, more).into_any_element());
     } else if a.quick {
-        // lizard：从右往左布局，所以这里左→右是
+        // 参考实现：从右往左布局，所以这里左→右是
         // Select matching / Create component / Mask / Union / 布尔 chevron / Edit object。
         actions.push(icon_cmd(Icon::Search, "select.matching", json!({}), f, false).into_any_element());
         actions.push(icon_cmd(Icon::Component, "component.create", json!({}), f, false).into_any_element());
@@ -2917,7 +2917,7 @@ pub(crate) fn header(f: &RightFields, d: &PanelData, col: f32) -> Option<gpui::D
         let bool_button = if visibility::bool_union_enabled(h.count) {
             icon_cmd(bool_icon, "bool.union", json!({}), f, false)
         } else {
-            // lizard：少于两个图层时点了也不执行，按钮只是当前运算的状态图标。
+            // 参考实现：少于两个图层时点了也不执行，按钮只是当前运算的状态图标。
             IconButton::new(bool_icon)
         };
         let cur = h.bool_op.map(|o| o.label());
@@ -2983,7 +2983,7 @@ const LS_INSET: f32 = 8.0;
 const LS_PAD: f32 = 16.0;
 /// Height of a group's caption row ("Text styles").
 const LS_CAPTION_H: f32 = 32.0;
-/// Height of a folder row (lizard `local_styles`: `allocate_exact_size(vec2(w, 24.0))`).
+/// Height of a folder row (参考实现 `local_styles`: `allocate_exact_size(vec2(w, 24.0))`).
 const LS_FOLDER_H: f32 = 24.0;
 /// Height of a style row (用户 2026-11-15：24 pt，与左栏 Pages 行块一致)。
 const LS_ROW_H: f32 = 24.0;
@@ -3769,7 +3769,7 @@ fn local_style_folder(
             )
     };
 
-    // lizard `local_styles`：文件夹行 `allocate_exact_size(vec2(w, 24.0))`，
+    // 参考实现 `local_styles`：文件夹行 `allocate_exact_size(vec2(w, 24.0))`，
     // 左右各内缩 8 pt，hover band 圆角 5。
     div()
         .relative()
@@ -3978,7 +3978,7 @@ fn local_style_row(
     };
     // 左侧徽标（egui `paint_dot` / "Ag" / `slot.icon()`）。
     let badge: gpui::AnyElement = match &s.paint {
-        // Figma `swatch--swatch`：通用色块的**圆形**类型，45° 斜线分半
+        // 参考编辑器 `swatch--swatch`：通用色块的**圆形**类型，45° 斜线分半
         // （左下不透明、右上随 alpha），边框由控件自己画，不再手搓 div 裁圆。
         Some(p) => swatch(p.clone(), LS_ICON).shape(crate::widgets::swatch::SwatchShape::Circle).into_any_element(),
         None if ty == "text" => div()

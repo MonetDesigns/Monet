@@ -1,8 +1,8 @@
 //! 画布用到的主题令牌，取值与 `ui-egui/src/theme.rs` 的**四主题系统完全一致**：
 //! 一条中性轴（亮/暗）加一条品牌轴（蓝/绿/黄/粉，来自 `Monet.variables.json`）。
 //!
-//! 品牌轴是 Figma `them` 集合；每个强调色给出 `Color`（主色）与 `Color1`（暗一档，用于
-//! hover/pressed），`Color2`/`Color3`（主色 10%/5% 透明，用作选中行底色）。中性轴是 Figma
+//! 品牌轴是 参考编辑器 `them` 集合；每个强调色给出 `Color`（主色）与 `Color1`（暗一档，用于
+//! hover/pressed），`Color2`/`Color3`（主色 10%/5% 透明，用作选中行底色）。中性轴是 参考编辑器
 //! `Variable collection`：`Back 1/2`（面板/画布）、`Border Line`（描边），以及 `Black 1/2/3`——
 //! 后三者就是带透明度的黑或白，按导出的原值直接存进令牌，由画布每帧叠在面板上。
 
@@ -11,7 +11,7 @@
 use crate::canvas::geom::Color32;
 use figcraft_i18n::tr;
 
-/// Monet 的品牌强调色。Figma `them` 集合给出蓝/绿/黄/粉；绿沿用现有 Monet 身份，故为默认。
+/// Monet 的品牌强调色。参考编辑器 `them` 集合给出蓝/绿/黄/粉；绿沿用现有 Monet 身份，故为默认。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Accent {
     Blue,
@@ -54,7 +54,7 @@ impl Accent {
     /// 四个强调色，按设置/菜单顺序。
     pub const ALL: [Accent; 4] = [Accent::Blue, Accent::Green, Accent::Yellow, Accent::Pink];
 
-    /// `(light Color, light Color1, dark Color, dark Color1)`，直接取自 Figma 导出。
+    /// `(light Color, light Color1, dark Color, dark Color1)`，直接取自 参考编辑器 导出。
     fn palette(self) -> (Color32, Color32, Color32, Color32) {
         match self {
             Accent::Green => (c(0x34, 0xC7, 0x59), c(0x2E, 0xB2, 0x50), c(0x30, 0xD1, 0x58), c(0x2A, 0xBC, 0x4E)),
@@ -70,7 +70,7 @@ fn c(r: u8, g: u8, b: u8) -> Color32 {
     Color32::from_rgb(r, g, b)
 }
 
-/// `rgba(0,0,0,a)` / `rgba(255,255,255,a)` —— 直连（未预乘）的透明度，与 Figma 存储一致。
+/// `rgba(0,0,0,a)` / `rgba(255,255,255,a)` —— 直连（未预乘）的透明度，与 参考编辑器 存储一致。
 fn rgba(r: u8, g: u8, b: u8, a: f32) -> Color32 {
     Color32::from_rgba_unmultiplied(r, g, b, (a.clamp(0.0, 1.0) * 255.0).round() as u8)
 }
