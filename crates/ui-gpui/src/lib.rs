@@ -4307,8 +4307,10 @@ impl CanvasView {
         let duplicate = tr("Duplicate page");
         let opening = tr("Set as opening page");
         let delete = tr("Delete page");
-        let mut rows = vec![MenuRow::new(rename), MenuRow::new(duplicate)];
+        // A divider has no inline rename editor, so offering Rename would open nothing.
+        let mut rows = vec![MenuRow::new(duplicate)];
         if !divider {
+            rows.insert(0, MenuRow::new(rename));
             rows.push(MenuRow::new(opening));
         }
         rows.push(MenuRow::new(delete));

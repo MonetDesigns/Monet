@@ -19,8 +19,8 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("align.top", "Align top", "{ids?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)", true, |s, p| align(s, p, Al::Top)),
         spec!("align.vcenter", "Align vertical centers", "{ids?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)", true, |s, p| align(s, p, Al::VCenter)),
         spec!("align.bottom", "Align bottom", "{ids?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)", true, |s, p| align(s, p, Al::Bottom)),
-        spec!("distribute.horizontal", "Distribute horizontal spacing", "{ids?, spacing?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)", true, |s, p| distribute(s, p, true)),
-        spec!("distribute.vertical", "Distribute vertical spacing", "{ids?, spacing?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)", true, |s, p| distribute(s, p, false)),
+        spec!("distribute.horizontal", "Distribute horizontal spacing", "{ids?, spacing?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)", true, |s, p| distribute(s, p, true, true)),
+        spec!("distribute.vertical", "Distribute vertical spacing", "{ids?, spacing?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)", true, |s, p| distribute(s, p, false, true)),
         spec!(
             "arrange.spacing",
             "Spacing",
@@ -225,9 +225,13 @@ fn align(s: &mut Session, p: &Value, a: Al) -> Result<Value> {
     ok()
 }
 
-fn distribute(s: &mut Session, p: &Value, horizontal: bool) -> Result<Value> {
-    if let Some(r) = crate::vectoredit::transform::distribute_points_in_edit_mode(s, p, horizontal) {
-        return r;
+fn distribute(s: &mut Session, p: &Value, horizontal: bool, points: bool) -> Result<Value> {
+    // Only the two distribution commands delegate to point distribution; packH/packV
+    // call this with spacing=0 to pack layers and must stay on the layer path.
+    if points {
+        if let Some(r) = crate::vectoredit::transform::distribute_points_in_edit_mode(s, p, horizontal) {
+            return r;
+        }
     }
     let ids = req_targets("distribute", s, p)?;
     let doc = s.doc_mut()?;
@@ -282,7 +286,7 @@ fn pack(s: &mut Session, p: &Value, horizontal: bool) -> Result<Value> {
     if let Some(o) = q.as_object_mut() {
         o.insert("spacing".into(), json!(0.0));
     }
-    distribute(s, &q, horizontal)
+    distribute(s, &q, horizontal, false)
 }
 
 fn round_px(s: &mut Session, p: &Value) -> Result<Value> {

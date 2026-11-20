@@ -2038,7 +2038,8 @@ pub(crate) fn export(f: &RightFields, d: &PanelData, col: f32, n: &mut usize, cx
     // ④ 底部导出按钮（egui `wide_button` + `export_layers`）：推 `file.exportLayers`，路径选择
     // 交给通用的下载投递（单文件保存框 / 多文件选文件夹，见 `lib.rs::deliver_download`）。
     let ids = d.ids.clone();
-    let name = d.header.as_ref().map(|h| h.label.clone()).unwrap_or_default();
+    // The export button uses the layer's own name, not its node type.
+    let name = d.header.as_ref().map(|h| h.layer_name.clone()).unwrap_or_default();
     let label: SharedString = if ids.len() == 1 && !name.is_empty() {
         trf("Export {name}", &[("name", &name)]).into()
     } else {

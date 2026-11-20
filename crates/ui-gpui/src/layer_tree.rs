@@ -830,8 +830,10 @@ impl CanvasView {
             // / `menu_card`, so the Copy-as submenu and menu aim behave identically.
             .on_mouse_down(MouseButton::Right, {
                 let me_menu = me.clone();
-                move |e, _, cx| {
+                move |e, window, cx| {
                     me_menu.update(cx, |this: &mut CanvasView, cx: &mut Context<CanvasView>| {
+                        // Commit a pending numeric edit before right-click changes selection.
+                        this.commit_edits(window, cx);
                         this.open_layer_context_menu(id, e.position, cx);
                     });
                     cx.stop_propagation();

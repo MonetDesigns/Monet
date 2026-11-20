@@ -493,7 +493,7 @@ fn header(app: &mut FigApp, ui: &mut Ui, doc: &Document, sel: &[NodeId]) {
     let fx = |x: f32| widgets::flip_x(rtl, lr, x);
     let text_x = match named {
         Some((_, icon)) => {
-            icons::paint(ui.painter(), Rect::from_center_size(pos2(fx(lr.min.x + 14.0), lr.center().y), vec2(14.0, 14.0)), icon, COMPONENT);
+            icons::paint(ui.painter(), Rect::from_center_size(pos2(fx(lr.min.x + 14.0), lr.center().y), vec2(14.0, 14.0)), icon, t.component);
             lr.min.x + 26.0
         }
         None => lr.min.x + 8.0,
