@@ -919,9 +919,15 @@ impl CanvasView {
             let expanded = self.layer_tree.expanded.contains(&id);
             let path = if parent_path.is_empty() { id.0.to_string() } else { format!("{parent_path}/{}", id.0) };
             let can_into = n.kind.is_container() && !matches!(n.kind, NodeKind::Instance { .. });
+            // Component members keep the component colour all the way down the tree: a child
+            // of a component (or a variant inside a component set) is tinted with the component
+            // colour, not the brand/icon colour. Mirrors `is_comp || has_component_ancestor`.
+            let in_component = doc.ancestors(id).iter().any(|a| {
+                doc.node(*a).is_some_and(|p| matches!(p.kind, NodeKind::Component { .. } | NodeKind::ComponentSet { .. }))
+            });
             let mark_kind = if matches!(n.kind, NodeKind::Icon { .. }) {
                 2
-            } else if matches!(n.kind, NodeKind::Component { .. } | NodeKind::ComponentSet { .. } | NodeKind::Instance { .. }) {
+            } else if matches!(n.kind, NodeKind::Component { .. } | NodeKind::ComponentSet { .. } | NodeKind::Instance { .. }) || in_component {
                 1
             } else {
                 0
