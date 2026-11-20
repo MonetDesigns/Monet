@@ -12,7 +12,7 @@
 
 use gpui::{Hsla, IntoElement, SharedString, prelude::*, svg};
 
-/// 取色器图标。每个对应一个 `assets/picker/*.svg`。
+/// 取色器图标。每个对应一个 `assets/icons/picker-*.svg`。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PickerIcon {
     /// 纯色填充：外框 + 实心小方块（`paint_type_group_tabs--SOLID`）。
@@ -37,16 +37,16 @@ struct Entry {
 
 /// 唯一资源表。`include_str!` 编译期内联，运行时零 I/O。
 static ENTRIES: &[Entry] = &[
-    Entry { icon: PickerIcon::Solid, name: "picker-solid", svg: include_str!("../assets/icons/picker/picker-solid.svg") },
-    Entry { icon: PickerIcon::Gradient, name: "picker-gradient", svg: include_str!("../assets/icons/picker/picker-gradient.svg") },
-    Entry { icon: PickerIcon::Blend, name: "picker-blend", svg: include_str!("../assets/icons/picker/picker-blend.svg") },
-    Entry { icon: PickerIcon::Dropper, name: "picker-dropper", svg: include_str!("../assets/icons/picker/picker-dropper.svg") },
-    Entry { icon: PickerIcon::Sliders, name: "picker-sliders", svg: include_str!("../assets/icons/picker/picker-sliders.svg") },
-    Entry { icon: PickerIcon::Chevron, name: "picker-chevron", svg: include_str!("../assets/icons/picker/picker-chevron.svg") },
+    Entry { icon: PickerIcon::Solid, name: "picker-solid", svg: include_str!("../assets/icons/picker-solid.svg") },
+    Entry { icon: PickerIcon::Gradient, name: "picker-gradient", svg: include_str!("../assets/icons/picker-gradient.svg") },
+    Entry { icon: PickerIcon::Blend, name: "picker-blend", svg: include_str!("../assets/icons/picker-blend.svg") },
+    Entry { icon: PickerIcon::Dropper, name: "picker-dropper", svg: include_str!("../assets/icons/picker-dropper.svg") },
+    Entry { icon: PickerIcon::Sliders, name: "picker-sliders", svg: include_str!("../assets/icons/picker-sliders.svg") },
+    Entry { icon: PickerIcon::Chevron, name: "picker-chevron", svg: include_str!("../assets/icons/ui-chevron-down.svg") },
 ];
 
 /// 资源前缀。完整格式：`picker:<name>.svg`。
-pub const ASSET_PREFIX: &str = "icons/picker/";
+pub const ASSET_PREFIX: &str = "icons/";
 
 impl PickerIcon {
     fn entry(self) -> &'static Entry {
@@ -84,7 +84,10 @@ mod tests {
         assert_eq!(ENTRIES.len(), PickerIcon::Chevron as usize + 1);
         for e in ENTRIES {
             assert!(e.svg.contains(r#"viewBox="0 0 24 24""#), "{} 不是 24 网格", e.name);
-            assert!(e.svg.contains(r##"fill="#000""##), "{} 必须是单色（靠 text_color 注入）", e.name);
+            // Sliders/Chevron 为描边式（chevron 复用主图标的 chevron-down），其余为 fill 式；
+            // 两者都是纯黑单色，着色交给 text_color。
+            let mono = e.svg.contains(r##"fill="#000""##) || e.svg.contains(r##"stroke="black""##);
+            assert!(mono, "{} 必须是黑色单色（靠 text_color 注入）", e.name);
         }
     }
 

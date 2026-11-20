@@ -1,4 +1,4 @@
-//! 排版对话框专用的矢量字形（照 参考实现 `ui-egui/assets/typ-*.svg` 1:1 移植）。
+//! 排版对话框专用的矢量字形（`assets/icons/` 下的外置 SVG）。
 //!
 //! 为什么不放进冻结的 [`super::icon::Icon`] 枚举：那张表是 79/91 个「工具 / 面板」图标，
 //! 判别值、`asset_name`、`ALL`、单测断言全部锁死；而这一组 22 个只服务 Type settings 的
@@ -54,32 +54,32 @@ struct Entry {
 
 /// 唯一资源表。SVG 来自 参考实现，用 `include_str!` 编译期内联，运行时零 I/O。
 static ENTRIES: &[Entry] = &[
-    Entry { icon: TypIcon::AlignLeft, name: "typ-align-left", svg: include_str!("../../assets/icons/typ/typ-align-left.svg") },
-    Entry { icon: TypIcon::AlignCenter, name: "typ-align-center", svg: include_str!("../../assets/icons/typ/typ-align-center.svg") },
-    Entry { icon: TypIcon::AlignRight, name: "typ-align-right", svg: include_str!("../../assets/icons/typ/typ-align-right.svg") },
-    Entry { icon: TypIcon::Justify, name: "typ-dialog-justify", svg: include_str!("../../assets/icons/typ/typ-dialog-justify.svg") },
-    Entry { icon: TypIcon::None, name: "typ-dialog-none", svg: include_str!("../../assets/icons/typ/typ-dialog-none.svg") },
-    Entry { icon: TypIcon::Underline, name: "typ-dialog-underline", svg: include_str!("../../assets/icons/typ/typ-dialog-underline.svg") },
-    Entry { icon: TypIcon::Strike, name: "typ-dialog-strike", svg: include_str!("../../assets/icons/typ/typ-dialog-strike.svg") },
-    Entry { icon: TypIcon::Upper, name: "typ-dialog-upper", svg: include_str!("../../assets/icons/typ/typ-dialog-upper.svg") },
-    Entry { icon: TypIcon::Lower, name: "typ-dialog-lower", svg: include_str!("../../assets/icons/typ/typ-dialog-lower.svg") },
-    Entry { icon: TypIcon::Title, name: "typ-dialog-title", svg: include_str!("../../assets/icons/typ/typ-dialog-title.svg") },
-    Entry { icon: TypIcon::SmallCaps, name: "typ-dialog-small-caps", svg: include_str!("../../assets/icons/typ/typ-dialog-small-caps.svg") },
-    Entry { icon: TypIcon::TrimStandard, name: "typ-dialog-trim-standard", svg: include_str!("../../assets/icons/typ/typ-dialog-trim-standard.svg") },
-    Entry { icon: TypIcon::TrimCap, name: "typ-dialog-trim-cap", svg: include_str!("../../assets/icons/typ/typ-dialog-trim-cap.svg") },
-    Entry { icon: TypIcon::ListBullets, name: "typ-dialog-list-bullets", svg: include_str!("../../assets/icons/typ/typ-dialog-list-bullets.svg") },
-    Entry { icon: TypIcon::ListNumbered, name: "typ-dialog-list-numbered", svg: include_str!("../../assets/icons/typ/typ-dialog-list-numbered.svg") },
-    Entry { icon: TypIcon::Truncate, name: "typ-dialog-truncate", svg: include_str!("../../assets/icons/typ/typ-dialog-truncate.svg") },
-    Entry { icon: TypIcon::LineHeight, name: "typ-line-height", svg: include_str!("../../assets/icons/typ/typ-line-height.svg") },
-    Entry { icon: TypIcon::LetterSpacing, name: "typ-letter-spacing", svg: include_str!("../../assets/icons/typ/typ-letter-spacing.svg") },
-    Entry { icon: TypIcon::Settings, name: "typ-settings", svg: include_str!("../../assets/icons/typ/typ-settings.svg") },
-    Entry { icon: TypIcon::VTop, name: "typ-align-top", svg: include_str!("../../assets/icons/typ/typ-align-top.svg") },
-    Entry { icon: TypIcon::VMiddle, name: "typ-align-middle", svg: include_str!("../../assets/icons/typ/typ-align-middle.svg") },
-    Entry { icon: TypIcon::VBottom, name: "typ-align-bottom", svg: include_str!("../../assets/icons/typ/typ-align-bottom.svg") },
+    Entry { icon: TypIcon::AlignLeft, name: "typ-align-left", svg: include_str!("../../assets/icons/typ-align-left.svg") },
+    Entry { icon: TypIcon::AlignCenter, name: "typ-align-center", svg: include_str!("../../assets/icons/typ-align-center.svg") },
+    Entry { icon: TypIcon::AlignRight, name: "typ-align-right", svg: include_str!("../../assets/icons/typ-align-right.svg") },
+    Entry { icon: TypIcon::Justify, name: "typ-dialog-justify", svg: include_str!("../../assets/icons/typ-dialog-justify.svg") },
+    Entry { icon: TypIcon::None, name: "typ-dialog-none", svg: include_str!("../../assets/icons/typ-dialog-none.svg") },
+    Entry { icon: TypIcon::Underline, name: "typ-dialog-underline", svg: include_str!("../../assets/icons/typ-dialog-underline.svg") },
+    Entry { icon: TypIcon::Strike, name: "typ-dialog-strike", svg: include_str!("../../assets/icons/typ-dialog-strike.svg") },
+    Entry { icon: TypIcon::Upper, name: "typ-dialog-upper", svg: include_str!("../../assets/icons/typ-dialog-upper.svg") },
+    Entry { icon: TypIcon::Lower, name: "typ-dialog-lower", svg: include_str!("../../assets/icons/typ-dialog-lower.svg") },
+    Entry { icon: TypIcon::Title, name: "typ-dialog-title", svg: include_str!("../../assets/icons/typ-dialog-title.svg") },
+    Entry { icon: TypIcon::SmallCaps, name: "typ-dialog-small-caps", svg: include_str!("../../assets/icons/typ-dialog-small-caps.svg") },
+    Entry { icon: TypIcon::TrimStandard, name: "typ-dialog-trim-standard", svg: include_str!("../../assets/icons/typ-dialog-trim-standard.svg") },
+    Entry { icon: TypIcon::TrimCap, name: "typ-dialog-trim-cap", svg: include_str!("../../assets/icons/typ-dialog-trim-cap.svg") },
+    Entry { icon: TypIcon::ListBullets, name: "typ-dialog-list-bullets", svg: include_str!("../../assets/icons/typ-dialog-list-bullets.svg") },
+    Entry { icon: TypIcon::ListNumbered, name: "typ-dialog-list-numbered", svg: include_str!("../../assets/icons/typ-dialog-list-numbered.svg") },
+    Entry { icon: TypIcon::Truncate, name: "typ-dialog-truncate", svg: include_str!("../../assets/icons/typ-dialog-truncate.svg") },
+    Entry { icon: TypIcon::LineHeight, name: "typ-line-height", svg: include_str!("../../assets/icons/typ-line-height.svg") },
+    Entry { icon: TypIcon::LetterSpacing, name: "typ-letter-spacing", svg: include_str!("../../assets/icons/typ-letter-spacing.svg") },
+    Entry { icon: TypIcon::Settings, name: "typ-settings", svg: include_str!("../../assets/icons/typ-settings.svg") },
+    Entry { icon: TypIcon::VTop, name: "typ-align-top", svg: include_str!("../../assets/icons/typ-align-top.svg") },
+    Entry { icon: TypIcon::VMiddle, name: "typ-align-middle", svg: include_str!("../../assets/icons/typ-align-middle.svg") },
+    Entry { icon: TypIcon::VBottom, name: "typ-align-bottom", svg: include_str!("../../assets/icons/typ-align-bottom.svg") },
 ];
 
 /// `AssetSource` 前缀：与 `canvas/svg_text.rs` 的 `PREFIX = "text:"` 平级。
-pub const ASSET_PREFIX: &str = "icons/typ/";
+pub const ASSET_PREFIX: &str = "icons/";
 
 impl TypIcon {
     /// 生成 `svg().path()` 用的资源路径。

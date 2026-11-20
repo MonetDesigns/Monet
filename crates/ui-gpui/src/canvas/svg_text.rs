@@ -30,12 +30,18 @@ impl AssetSource for AppAssets {
             return Ok(svg_bytes(spec).map(|svg| Cow::Owned(svg.into_bytes())));
         }
         // 排版对话框字形（照 参考实现 typ-*.svg 1:1 移植），编译期内联、不碰冻结的 Icon 枚举。
+        // 前缀共享扁平的 `icons/`，所以查不到时必须继续往下走，不能直接返回 None——
+        // 否则所有主图标都会被这里拦掉、整片消失。
         if let Some(name) = path.strip_prefix(crate::widgets::typ_icons::ASSET_PREFIX).and_then(|s| s.strip_suffix(".svg")) {
-            return Ok(crate::widgets::typ_icons::TypIcon::load(name).map(|s| Cow::Borrowed(s.as_bytes())));
+            if let Some(svg) = crate::widgets::typ_icons::TypIcon::load(name) {
+                return Ok(Some(Cow::Borrowed(svg.as_bytes())));
+            }
         }
         // 取色器四条工具栏的 24 pt 图标（参考编辑器 DOM 原始 SVG，见 `crate::picker_icons`）。
         if let Some(name) = path.strip_prefix(crate::picker_icons::ASSET_PREFIX).and_then(|s| s.strip_suffix(".svg")) {
-            return Ok(crate::picker_icons::PickerIcon::load(name).map(|s| Cow::Borrowed(s.as_bytes())));
+            if let Some(svg) = crate::picker_icons::PickerIcon::load(name) {
+                return Ok(Some(Cow::Borrowed(svg.as_bytes())));
+            }
         }
         crate::widgets::icon::IconAssets.load(path)
     }
@@ -95,6 +101,17 @@ fn svg_bytes(spec: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{svg_bytes, text_key};
+
+    /// 主图标、typ、picker 共用扁平的 `icons/` 前缀：typ/picker 查不到时必须继续下沉到
+    /// `IconAssets`，否则主图标会被前缀分支吞掉、整片消失（2026-11-20 回归）。
+    #[test]
+    fn every_icon_family_resolves_through_the_shared_prefix() {
+        use gpui::AssetSource;
+        let assets = super::AppAssets;
+        for path in ["icons/ui-plus.svg", "icons/shape-rectangle.svg", "icons/typ-align-left.svg", "icons/picker-solid.svg"] {
+            assert!(assets.load(path).unwrap().is_some(), "{path} 加载失败");
+        }
+    }
 
     #[test]
     fn a_key_round_trips_into_an_svg_with_the_same_text() {

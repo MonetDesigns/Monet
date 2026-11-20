@@ -975,16 +975,11 @@ impl CanvasView {
                 Icon::LayoutV => Some(L::LayoutV),
                 Icon::LayoutGrid => Some(L::LayoutGrid),
                 Icon::Text => Some(L::Text),
-                Icon::Ellipse => Some(L::Ellipse),
+                // 具体形状（矩形/椭圆/多边形/星形/线条/箭头/图片/矢量）不在这里给固定字形：
+                // `layer_glyph_element` 优先画 `r.shape` 里的真实轮廓，只有轮廓缺失时才
+                // 落到 `None` 分支，用主图标（`paint_icon`）兜底。
                 Icon::Component => Some(L::Component),
                 Icon::Instance => Some(L::Instance),
-                Icon::Vector => Some(L::Vector),
-                Icon::Image => Some(L::Image),
-                Icon::Star => Some(L::Star),
-                Icon::Polygon => Some(L::Polygon),
-                Icon::Arrow => Some(L::Arrow),
-                Icon::Line => Some(L::Line),
-                Icon::Rectangle => Some(L::Rectangle),
                 Icon::Group => Some(L::Group),
                 _ => None,
             }
