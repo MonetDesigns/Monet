@@ -30,10 +30,16 @@ use crate::panels::right::virtual_list::{VirtualList, VirtualListScrollHandle, v
 use crate::widgets::icon::paint as paint_icon;
 use crate::widgets::{Icon, IconButton, SectionHeader, SectionHeaderVariant, pt, rgba, tokens};
 
-/// Ordinary ink: a theme token (the light theme's `icon` is 90% black), not a hand-made rgba.
+/// Ordinary ink for the layer tree's disclosure arrow and type glyph: 50% black in the light
+/// theme and 50% white in the dark theme (the reference uses a secondary icon token).
 /// Component purple, icon amber, selection and the hidden grey keep their own colours.
 fn ink() -> gpui::Rgba {
-    rgba(tokens().icon)
+    let t = tokens();
+    if t.dark {
+        gpui::Rgba { r: 1.0, g: 1.0, b: 1.0, a: 0.5 }
+    } else {
+        gpui::Rgba { r: 0.0, g: 0.0, b: 0.0, a: 0.5 }
+    }
 }
 
 /// Each nesting level indents by 24 pt (the agreed spec; the reference used 16).
@@ -456,7 +462,7 @@ impl CanvasView {
             let editing = renaming_page == Some(id) && !divider;
             let name_cell = if editing {
                 // 共用的无边框输入框自带与静态名字同高的盒子；外层结构与静态那一支**逐项一致**
-                // （`h_full + flex + items_center + px(8)`），这样文字顶由同一棵布局树算出，
+                // （`h_full + flex + items_center + pl(0)`），这样文字顶由同一棵布局树算出，
                 // 不会出现「进入编辑时文字上下跳」（用户 2026-11-16）。
                 div()
                     .flex_1()
@@ -705,7 +711,7 @@ impl CanvasView {
         };
 
         let eye = div()
-            .w(px(ICON_BOX))
+            .w(px(ICON_GLYPH))
             .h(px(ICON_BOX))
             .flex()
             .items_center()
@@ -724,7 +730,7 @@ impl CanvasView {
             .child(paint_icon(if visible { Icon::Eye } else { Icon::EyeOff }, ink(), ICON_GLYPH));
 
         let lock = div()
-            .w(px(ICON_BOX))
+            .w(px(ICON_GLYPH))
             .h(px(ICON_BOX))
             .flex()
             .items_center()
@@ -774,7 +780,7 @@ impl CanvasView {
         // input field itself. No hit handler while editing, so clicking the field does not
         // re-select the layer underneath it.
         let name_cell = if let Some(field) = rename_field {
-            // 与静态那一支**同一棵树**：`flex_1 + min_w(0) + h_full + flex + items_center + pl(8)`。
+            // 与静态那一支**同一棵树**：`flex_1 + min_w(0) + h_full + flex + items_center + pl(0)`。
             // 盒子高度由 InlineInput 自己给（= 静态名字的行盒高），外层不再是「多套一层」，
             // 而是逐项对齐 —— 文字顶因此和静态名字同一个算法（用户 2026-11-16）。
             div()
@@ -783,7 +789,8 @@ impl CanvasView {
                 .h_full()
                 .flex()
                 .items_center()
-                .pl(px(8.0))
+                .pl(px(0.0))
+                .pr(px(40.0))
                 .on_mouse_down(MouseButton::Left, |_e, _w, cx| cx.stop_propagation())
                 .child(field)
         } else {
@@ -793,7 +800,8 @@ impl CanvasView {
                 .h_full()
                 .flex()
                 .items_center()
-                .pl(px(8.0))
+                .pl(px(0.0))
+                .pr(px(40.0))
                 .on_mouse_down(MouseButton::Left, {
                     let me = me.clone();
                     move |e: &MouseDownEvent, _w: &mut Window, app: &mut App| {
@@ -874,8 +882,19 @@ impl CanvasView {
             .child(chevron)
             .child(div().w(px(ICON_BOX)).h(px(ICON_BOX)).flex().items_center().justify_start().child(Self::layer_glyph_element(r)))
             .child(name_cell)
-            .child(eye)
-            .child(lock)
+            // Eye then lock, both absolutely placed inside the highlight block's right edge:
+            // 16 pt glyphs back to back (zero gap), lock flush with the highlight's right edge.
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .right(px(ROW_INSET))
+                    .h(row_h)
+                    .flex()
+                    .items_center()
+                    .child(eye)
+                    .child(lock),
+            )
     }
 
     /// Flatten the current page into visible rows (DFS, **topmost in z first**).
