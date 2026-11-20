@@ -245,6 +245,8 @@ pub struct LayerTreeState {
     pub scroll: VirtualListScrollHandle,
     /// Selection seen on the previous frame; a change reveals the selected row.
     pub last_selection: Vec<NodeId>,
+    /// A row press in the list owns its own viewport position; skip the reveal on that change.
+    pub suppress_reveal: bool,
     clock: Instant,
 }
 
@@ -261,6 +263,7 @@ impl Default for LayerTreeState {
             pointer: Point::new(px(0.0), px(0.0)),
             scroll: VirtualListScrollHandle::new(),
             last_selection: Vec::new(),
+            suppress_reveal: false,
             clock: Instant::now(),
         }
     }
@@ -947,6 +950,7 @@ impl CanvasView {
     /// insertion line and the dropped node ended up at opposite ends.
     /// The same pass produces the kit's `drag::Row`s, keyed by the ancestor-id path.
     fn collect_layer_rows(&mut self) -> (Vec<LayerRow>, Vec<drag::Row>) {
+        let suppress_reveal = std::mem::take(&mut self.layer_tree.suppress_reveal);
         let Ok(ds) = self.app.session.ds() else { return (Vec::new(), Vec::new()) };
         let doc = &ds.doc;
         let page = ds.page;
@@ -955,8 +959,9 @@ impl CanvasView {
         // defer a scroll to the first selected row once the virtual list has been laid out.
         let selection: Vec<NodeId> = ds.selection.iter().copied().collect();
         let selection_changed = selection != self.layer_tree.last_selection;
+        let reveal = selection_changed && !suppress_reveal;
         let mut reveal_ancestors = Vec::new();
-        if selection_changed {
+        if reveal {
             for id in &selection {
                 reveal_ancestors.extend(doc.ancestors(*id));
             }
@@ -1029,10 +1034,12 @@ impl CanvasView {
             drag::calibrate(&mut drag_rows, hit, b);
         }
         if selection_changed {
-            self.layer_tree.expanded = expanded_set;
             self.layer_tree.last_selection = selection;
-            if let Some(ix) = visual.iter().position(|r| r.selected) {
-                self.layer_tree.scroll.scroll_to_item(ix, ScrollStrategy::Center);
+            if reveal {
+                self.layer_tree.expanded = expanded_set;
+                if let Some(ix) = visual.iter().position(|r| r.selected) {
+                    self.layer_tree.scroll.scroll_to_item(ix, ScrollStrategy::Center);
+                }
             }
         }
         (visual, drag_rows)
@@ -1290,6 +1297,8 @@ impl CanvasView {
         if new_sel == sel {
             return;
         }
+        // A click inside the list already has the row under the pointer: don't recenter it.
+        self.layer_tree.suppress_reveal = true;
         let _ = self.app.session.execute("select.set", &json!({ "ids": new_sel }));
         cx.notify();
     }
