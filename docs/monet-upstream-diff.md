@@ -39,7 +39,7 @@
 | **text wrap style（三段级别）** | `654eb205` | `doc/text.rs`（`set_wrap_style` 等 14 符号） | 中 | 中 |
 | **library 二级跳转保持绑定 / asset 计数** | `0e5070d6`/`e4bc5678` | `assets/library.rs`、`doc/library.rs` | 中 | 中 |
 | **paste 到选中 frame / 副本在选中层上方** | M1 系列 | `design_paste_tests`、`cmd/edit/clipboard.rs` | 中 | 低 |
-| **Shift+Pencil 画 45° 直线** | M1 系列 | `canvas/tools/pen.rs` | 低 | 低：与我们的 `step`（笔刷取样）不是同一逻辑，不冲突 |
+| **Shift+Pencil 画 45° 直线** | M1 系列 | `canvas/tools/pen.rs` | 低 | ⚠️ **有冲突，见第三节**：我们用 `pencil_add` 接管了同一个接入点 |
 
 ---
 
@@ -70,11 +70,24 @@
 | **共享 craft-libs rev** | 全部 bump 到 `ea9407b3` | 停在旧 rev（`453b0da7` 等） | **非冲突，是版本差**：我们已在用同样 crate | 可带入，但需 `cargo update` + 适配新 API |
 | **layout hug 行为** | 上游改 Fill across hugging | 本地 mindmap 几何测试依赖旧 hug 行为（3 个测试未平） | **真实重叠**：带入上游规则可能改变 mindmap 节点尺寸 | 带入时同步修 mindmap 布局，不可直接丢弃上游改进 |
 | **100% 上游命令覆盖** | 657 命令 | 696 命令（多 42 本地独有） | 无冲突 | 保持 |
+| **Shift+Pencil 45° 直线** | `pen.rs` 的 `pencil_add` 在 Shift 时直接返回，画图走 `draw_pencil_line` | 我们为笔刷系统把 `pencil_add` 改成带笔刷取样（`pencil_color_at`/stabilizer），Shift 分支是笔刷逻辑 | **真实冲突**：同一个 `pencil_add` 接入点，双方语义互斥（上游要几何直线，我们要笔刷压力线） | **不丢弃**：保留本地笔刷，但要重新设计——把 Shift 直线提到笔刷盖章之前（先算 45° 约束路径，再按笔刷 stamp），两边都保住 |
+| **共享 craft-libs 切到单一 rev** | 最近 8 提交把 10+ 个 craft-* 依赖统一 bump 到 `ea9407b3` | 我们停在多个旧 rev | 非语义冲突，是版本差 | 带入时统一 bump + 适配新 API；不可当作"丢弃" |
+
+### 冲突项的处理原则
+
+用户要求：**不要随意丢弃上游改进；只有严重冲突、与我们修复重叠才考虑丢弃，并汇报。**
+
+本次审计中没有任何一项属于"必须丢弃"：
+- **Shift+Pencil** 不是互斥——是可分层共存的（几何约束 → 笔刷盖章），需要一次小重构，已列为待办。
+- **Fill across hugging** 与 mindmap 尺寸测试是耦合，带入时同步修测试即可。
+- 其余 90 个未包含文件都是同文件不同区域的三向合并，互不覆盖。
 
 ---
 
 ## 四、结论
 
-- **不应丢弃任何上游改进**。审计未发现"上游改进与我们修复在同一逻辑上互斥"的情况。
-- 唯一需要谨慎的是 **Fill across hugging** 与本地 mindmap 尺寸测试的耦合——应带入并同步调整测试，而不是丢弃。
-- 上游最近 8 个提交（SVG/thumbnail/raster）是依赖版本升级 + 保真修复，可随 craft-libs rev 一起带。
+- **没有任何上游改进需要丢弃**。3 个上游独有命令、13 个路径加固函数、design context、code blocks、
+  Fill-across-hugging、autopan、Shift+Pencil 等全部应带入。
+- 两处需要设计而非丢弃：**Shift+Pencil**（分层：45° 约束 + 笔刷盖章）和 **Fill-across-hugging**（同步修 mindmap 测试）。
+- 上游最近 8 个提交（SVG/thumbnail/raster）随 craft-libs rev 一起带。
+- 完整待办按"可带入"表从高到低执行。
