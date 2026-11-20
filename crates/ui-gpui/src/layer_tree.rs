@@ -835,7 +835,10 @@ impl CanvasView {
             .w_full()
             .flex()
             .items_center()
-            .px(px(4.0))
+            .pl(px(4.0))
+            // Eye/lock sit *inside* the highlight block, with a small gap to its right edge:
+            // highlight is inset 8, plus 5 more so the lock glyph never hugs the rounded edge.
+            .pr(px(13.0))
             // The inset layer: an overlay the size of the row whose padding squeezes the highlight into an 8/4 inset block.
             .child(div().absolute().top_0().left_0().size_full().px(pt(ROW_INSET)).pt(pt(inset_top)).pb(pt(inset_bottom)).child(highlight))
             .when(is_dragging, |d| d.opacity(0.5))
