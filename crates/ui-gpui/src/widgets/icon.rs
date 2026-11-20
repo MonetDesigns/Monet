@@ -765,6 +765,30 @@ mod tests {
         assert_eq!(assets.list("icons").unwrap().len(), Icon::ALL.len());
     }
 
+    /// 右栏圆角 / 间距 / sides 下拉引用的 16 网格图标虽无 `Icon` 枚举变体（冻结文件不能加），
+    /// 但都已注册进 `ICON_FILES`，必须能从 `icons/<name>.svg` 解析出来 —— 否则字段 lead /
+    /// 菜单行画出的是空白方块。
+    #[test]
+    fn layout_glyphs_resolve_through_the_shared_prefix() {
+        let assets = IconAssets;
+        for name in [
+            "layout-corner-individual",
+            "layout-corner-tl",
+            "layout-corner-tr",
+            "layout-corner-bl",
+            "layout-corner-br",
+            "layout-padding-individual",
+            "layout-padding-top",
+            "layout-padding-right",
+            "layout-padding-bottom",
+            "layout-padding-left",
+        ] {
+            assert!(file_bytes(name).is_some(), "{name} 没进 ICON_FILES");
+            let path = format!("icons/{name}.svg");
+            assert!(assets.load(&path).unwrap().is_some(), "{path} 无法解析");
+        }
+    }
+
     #[test]
     fn every_icon_svg_parses_with_the_shared_renderer() {
         for &icon in Icon::ALL {

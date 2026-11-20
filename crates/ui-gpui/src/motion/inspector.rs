@@ -79,7 +79,7 @@ pub fn panel(
     let plus_root = root.clone();
     let plus = IconButton::new(Icon::Plus).on_click(move |_e, window, cx| {
         let anchor = gpui::Bounds { origin: window.mouse_position(), size: gpui::size(px(1.0), px(1.0)) };
-        let rows: Vec<MenuRow> = ClipKind::ALL.iter().map(|k| MenuRow::new(k.name())).collect();
+        let rows: Vec<MenuRow> = ClipKind::ALL.iter().map(|k| MenuRow::row(k.name())).collect();
         let q = plus_q.clone();
         let on_pick = std::rc::Rc::new(move |label: &str, _w: &mut Window, _cx: &mut App| {
             if let Some(kind) = ClipKind::ALL.iter().find(|k| k.name() == label) {

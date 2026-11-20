@@ -322,7 +322,7 @@ fn open_overflow_menu(
                 Some(_) => !home && docs.iter().any(|d| d.index == active && Some(d.uid) == *uid),
                 None => present.iter().any(|(id, _, on, _)| *on && id == pid),
             };
-            MenuRow::new(label.clone()).checked(Some(checked))
+            MenuRow::row(label.clone()).checked(Some(checked))
         })
         .collect();
     let me_pick = me.clone();
@@ -761,9 +761,9 @@ pub(crate) fn tab_strip(
                     // 额外窗口里多一条「塞回主窗口」：拖出去之后没有办法拖回来（GPUI 没有跨窗口
                     // 拖拽），所以给一个显式入口。
                     let extra = crate::windows::current() != 0;
-                    let mut rows = vec![MenuRow::new("Open in new window")];
+                    let mut rows = vec![MenuRow::row("Open in new window")];
                     if extra {
-                        rows.push(MenuRow::new("Move to main window"));
+                        rows.push(MenuRow::row("Move to main window"));
                     }
                     let cmds_pick = cmds_menu.clone();
                     let on_pick: Rc<dyn Fn(&str, &mut Window, &mut App)> = Rc::new(move |label: &str, _window, _cx| {

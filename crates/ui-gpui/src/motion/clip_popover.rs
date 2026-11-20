@@ -278,7 +278,7 @@ pub fn panel(
         move |anchor, _window, cx: &mut App| {
             let d = d.clone();
             let q = q.clone();
-            let menu: Vec<MenuRow> = ClipKind::ALL.iter().map(|k| MenuRow::new(k.name())).collect();
+            let menu: Vec<MenuRow> = ClipKind::ALL.iter().map(|k| MenuRow::row(k.name())).collect();
             let on_pick = std::rc::Rc::new(move |label: &str, _w: &mut Window, _cx: &mut App| {
                 if let Some(c) = d.borrow().as_ref() {
                     if let Some(k) = ClipKind::ALL.iter().find(|k| k.name() == label) {
@@ -301,7 +301,7 @@ pub fn panel(
             let d = d.clone();
             let q = q.clone();
             let modes = [ClipMode::In, ClipMode::Out, ClipMode::Custom];
-            let menu: Vec<MenuRow> = modes.iter().map(|m| MenuRow::new(m.label(kind))).collect();
+            let menu: Vec<MenuRow> = modes.iter().map(|m| MenuRow::row(m.label(kind))).collect();
             let on_pick = std::rc::Rc::new(move |label: &str, _w: &mut Window, _cx: &mut App| {
                 if let Some(c) = d.borrow().as_ref() {
                     if let Some(m) = modes.iter().find(|m| m.label(kind).as_str() == label) {
@@ -324,7 +324,7 @@ pub fn panel(
             let d = d.clone();
             let q = q.clone();
             let dirs = dirs.clone();
-            let menu: Vec<MenuRow> = dirs.iter().map(|dd| MenuRow::new(dd.label(mode))).collect();
+            let menu: Vec<MenuRow> = dirs.iter().map(|dd| MenuRow::row(dd.label(mode))).collect();
             let on_pick = std::rc::Rc::new(move |label: &str, _w: &mut Window, _cx: &mut App| {
                 if let Some(c) = d.borrow().as_ref() {
                     if let Some(dd) = dirs.iter().find(|dd| dd.label(mode).as_str() == label) {
@@ -344,7 +344,7 @@ pub fn panel(
         move |anchor, _window, cx: &mut App| {
             let d = d.clone();
             let q = q.clone();
-            let menu: Vec<MenuRow> = Ease::PRESETS.iter().map(|(name, _)| MenuRow::new(*name)).collect();
+            let menu: Vec<MenuRow> = Ease::PRESETS.iter().map(|(name, _)| MenuRow::row(*name)).collect();
             let on_pick = std::rc::Rc::new(move |label: &str, _w: &mut Window, _cx: &mut App| {
                 if let Some(c) = d.borrow().as_ref() {
                     if let Some((_, e)) = Ease::PRESETS.iter().find(|(name, _)| *name == label) {

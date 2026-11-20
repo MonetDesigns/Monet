@@ -23,8 +23,8 @@ use figcraft_color::PaintKind;
 use figcraft_doc::NodeId;
 use figcraft_doc::anim::motion::AnimProperty;
 use gpui::{
-    App, Bounds, Div, ImageSource, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, SharedString, Window, canvas, div, img,
-    prelude::*, px, size,
+    App, Bounds, Div, Hsla, ImageSource, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, SharedString, Window, canvas, div,
+    img, prelude::*, px, size, svg,
 };
 use serde_json::{Value, json};
 use std::cell::{Cell, RefCell};
@@ -39,12 +39,44 @@ fn push(f: &RightFields, id: &'static str, params: Value) {
     f.cmds.push(Cmd { id, params: Some(params) });
 }
 
+/// 一个 `assets/icons/<name>.svg` 的资源路径。`layout-corner-*` / `layout-padding-*`
+/// 已注册进 `ICON_FILES`（2026-11-20 图标整理），但主 `Icon` 枚举冻结、没有对应变体；
+/// 直接按名字走 `svg().path()` 就能让 `IconAssets::load` 命中，不必改冻结文件。
+pub(crate) fn named_icon(name: &'static str) -> SharedString {
+    SharedString::from(format!("icons/{name}.svg"))
+}
+
+/// 一个 16 网格字形，画成字段 lead / 菜单图标。`color` 由调用处按所在表面注入。
+pub(crate) fn named_icon_glyph(name: &'static str, color: gpui::Rgba, size: f32) -> gpui::AnyElement {
+    svg().path(named_icon(name)).w(pt(size)).h(pt(size)).flex_none().text_color(Hsla::from(color)).into_any_element()
+}
+
+/// 24 pt 切换按钮，字形走 `assets/icons/<name>.svg`（`layout-corner-individual` /
+/// `layout-padding-individual` 这些没有 `Icon` 枚举变体的图标）。外观与通用 `IconButton`
+/// 完全一致：hover / active 换底、16 网格原生尺寸、accent 着色。
+pub(crate) fn named_icon_toggle(name: &'static str, active: bool, on_click: impl Fn() + 'static) -> gpui::AnyElement {
+    let t = tokens();
+    let ink = if active { rgba(t.accent) } else { rgba(t.icon) };
+    div()
+        .size(pt(24.0))
+        .rounded(pt(5.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .when(active, |d| d.bg(rgba(t.selected_row)))
+        .when(!active, |d| d.hover(|s| s.bg(rgba(t.hover))))
+        .child(named_icon_glyph(name, ink, 16.0))
+        .on_mouse_down(MouseButton::Left, move |_e, _w, _cx| on_click())
+        .into_any_element()
+}
+
 /// 右键菜单入口：与 `pick_dropdown` 共用 `MenuRow` + 根视图 `open_menu` 这套通用控件，
 /// 只是锚点取当前指针而不是触发按钮（`ui-egui/right/menu.rs::context_popup`）。
 /// `entries` 是 (显示名, 命令, 参数)；`extra` 由调用方先把「剪贴板里有没有可粘贴项」算进去。
 fn context_menu_at(f: &RightFields, at: Point<Pixels>, width: f32, entries: Vec<(String, &'static str, Value)>, cx: &mut App) {
     let Some(root) = f.root.clone() else { return };
-    let rows: Vec<MenuRow> = entries.iter().map(|(label, _, _)| MenuRow::new(label.clone())).collect();
+    let rows: Vec<MenuRow> = entries.iter().map(|(label, _, _)| MenuRow::row(label.clone())).collect();
     let cmds = f.cmds.clone();
     let on_pick = Rc::new(move |label: &str, _w: &mut Window, _cx: &mut App| {
         if let Some((_, cmd, params)) = entries.iter().find(|(l, _, _)| l == label) {
@@ -125,7 +157,7 @@ pub(crate) fn slot(n: &mut usize) -> usize {
 /// 一个「点开菜单选中即推命令」的下拉（egui `menu_popup` + `menu_item`）。
 /// `rows`: (显示名, 选中后推的命令 id, 命令额外参数)。`cmds` 句柄 clone 进 `on_pick`。
 pub(crate) fn pick_dropdown(f: &RightFields, label: impl Into<SharedString>, width: f32, rows: Vec<(String, &'static str, Value)>) -> Dropdown {
-    let menu: Vec<MenuRow> = rows.iter().map(|(l, _, _)| MenuRow::new(l.clone())).collect();
+    let menu: Vec<MenuRow> = rows.iter().map(|(l, _, _)| MenuRow::row(l.clone())).collect();
     let mut d = Dropdown::new(label, width, None).fill();
     if let Some(root) = f.root.clone() {
         let cmds = f.cmds.clone();
@@ -186,7 +218,7 @@ fn zoom_button(f: &RightFields, label: String, rows: Vec<ViewMenuRow>) -> gpui::
     let menu: Vec<MenuRow> = rows
         .iter()
         .map(|r| {
-            let mut m = MenuRow::new(r.label.clone());
+            let mut m = MenuRow::row(r.label.clone());
             if r.separator {
                 m = m.separator();
             }
@@ -232,7 +264,7 @@ fn checked_dropdown(f: &RightFields, label: impl Into<SharedString>, width: f32,
     let menu: Vec<MenuRow> = rows
         .iter()
         .map(|r| {
-            let mut m = MenuRow::new(r.label.clone());
+            let mut m = MenuRow::row(r.label.clone());
             if r.separator {
                 m = m.separator();
             }
@@ -602,25 +634,25 @@ pub(crate) fn dim_trail_menu(
         tf.set_on_trail(move |pos: Point<Pixels>, _w, cx: &mut App| {
             let Some(root) = root.clone() else { return };
             // 菜单项照 egui `dimensions`：自己能不能 Hug / Fill / 加限值决定列哪些。
-            let mut rows: Vec<MenuRow> = vec![MenuRow::new(tr("Fixed"))];
+            let mut rows: Vec<MenuRow> = vec![MenuRow::row(tr("Fixed"))];
             if can_hug {
-                rows.push(MenuRow::new(tr("Hug contents")));
+                rows.push(MenuRow::row(tr("Hug contents")));
             }
             if can_fill {
-                rows.push(MenuRow::new(tr("Fill container")));
+                rows.push(MenuRow::row(tr("Fill container")));
             }
             if can_limit {
                 let mut grouped = false;
                 if !has_min {
-                    rows.push(MenuRow::new(tr("Add min")).separator());
+                    rows.push(MenuRow::row(tr("Add min")).separator());
                     grouped = true;
                 }
                 if !has_max {
-                    let row = MenuRow::new(tr("Add max"));
+                    let row = MenuRow::row(tr("Add max"));
                     rows.push(if grouped { row } else { row.separator() });
                 }
                 if any_limit {
-                    rows.push(MenuRow::new(tr("Remove min and max")).separator());
+                    rows.push(MenuRow::row(tr("Remove min and max")).separator());
                 }
             }
             let cmds = cmds.clone();
@@ -678,7 +710,7 @@ pub(crate) fn dim_trail_off(cx: &mut App, field: &gpui::Entity<crate::widgets::T
 
 /// 一个图标按钮，点击打开菜单，选中项推对应命令（egui `icons::button` + `menu_popup`）。
 fn menu_icon(f: &RightFields, icon: Icon, width: f32, rows: Vec<(String, &'static str, Value)>, active: bool) -> IconButton {
-    let menu: Vec<MenuRow> = rows.iter().map(|(l, _, _)| MenuRow::new(l.clone())).collect();
+    let menu: Vec<MenuRow> = rows.iter().map(|(l, _, _)| MenuRow::row(l.clone())).collect();
     let cmds = f.cmds.clone();
     let root = f.root.clone();
     IconButton::new(icon).size(24.0).active(active).on_click(move |_e, window, cx: &mut App| {
@@ -696,6 +728,49 @@ fn menu_icon(f: &RightFields, icon: Icon, width: f32, rows: Vec<(String, &'stati
     })
 }
 
+/// 一颗「常驻图标 + 点开通用悬浮菜单」的按钮。触发字形走资源名（`typ-settings` 这类没有
+/// `Icon` 枚举变体的字形也能用），菜单行的 icon / checked / separator 全部由统一的
+/// [`MenuRow`]（= [`crate::menu_card::Item`]) 配置 —— 与右键菜单、工具栏飞出、主菜单同一套项模型。
+///
+/// `on_pick` 收到的是行的 key（调用方用 `.key()` 指定稳定键），不依赖显示文案，翻译后仍准。
+///
+/// 锚点：`key` 要跨帧稳定，`MenuAnchor` 持一个跨帧 cell，按钮每帧把真实矩形写进去。点击时
+/// 用同一个 cell 播种 `open_menu_fit`，于是菜单左缘对齐按钮左缘、顶边在按钮底 + 4pt、
+/// 宽度按最宽行（用户 2026-11-20）。不再用 `mouse_position()` —— 那是点击点，不是按钮框。
+fn named_icon_menu(
+    f: &RightFields,
+    key: &'static str,
+    trigger: &'static str,
+    trigger_size: f32,
+    menu: Vec<MenuRow>,
+    active: bool,
+    on_pick: Rc<dyn Fn(&str, &mut Window, &mut App)>,
+) -> gpui::AnyElement {
+    let root = f.root.clone();
+    let t = tokens();
+    let ink = if active { rgba(t.accent) } else { rgba(t.icon) };
+    let anchor = crate::widgets::dropdown::menu_anchor(key);
+    let cell = anchor.cell();
+    let click_anchor = anchor.clone(); // 闭包要拥有，探针用另一个 clone
+    let btn = div()
+        .size(pt(24.0))
+        .rounded(pt(5.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .when(active, |d| d.bg(rgba(t.selected_row)))
+        .when(!active, |d| d.hover(|s| s.bg(rgba(t.hover))))
+        .child(named_icon_glyph(trigger, ink, trigger_size))
+        .on_mouse_down(MouseButton::Left, move |_e, _window, cx: &mut App| {
+            let Some(root) = root.clone() else { return };
+            // 探针 cell 已被按钮每帧写入真实矩形；首帧还没量到才回落到空，由 open 端播种。
+            let rect = cell.get().unwrap_or_else(|| Bounds { origin: Point::new(px(0.0), px(0.0)), size: size(px(24.0), px(24.0)) });
+            root.update(cx, |cv, cx| cv.open_menu_fit(click_anchor.clone(), rect, menu.clone(), on_pick.clone(), cx));
+        });
+    crate::popovers::with_button_bounds(btn, anchor.cell())
+}
+
 /// 带勾选 / 单选列的菜单按钮：`MenuRow::checked` 是通用的「勾选列」（egui `ui.selectable_label`）。
 /// `rows` = (标签, 勾选态, 命令, 参数, 是否在此行前画分隔线)。行用下标当 key，保证同一命令的
 /// 多行（size / 单选组）不会互相串参数。
@@ -710,7 +785,7 @@ fn checked_menu_icon(
         .iter()
         .enumerate()
         .map(|(i, (label, on, _, _, sep))| {
-            let row = MenuRow::new(label.clone()).key(i.to_string()).checked(*on);
+            let row = MenuRow::row(label.clone()).key(i.to_string()).checked(*on);
             if *sep { row.separator() } else { row }
         })
         .collect();
@@ -1338,24 +1413,60 @@ pub(crate) fn paints(
             .into_iter()
             .map(|(l, c, p)| (l.to_string(), c, p))
             .collect();
-            // `IndependentCorners`（独立边宽，`strokeSides`）+ `Dots`（高级描边样式）。
-            // egui `paints.rs`: `let w = weight.unwrap_or(1.0)` —— 每条边的权重来自当前
-            // 描边宽度，硬编码 1.0 会把一条 8pt 的描边点一下就变成 1pt。
+            // 独立边宽（`strokeSides`）+ 高级描边。egui `paints.rs`: `let w = weight.unwrap_or(1.0)`
+            // —— 每条边的权重来自当前描边宽度，硬编码 1.0 会把一条 8pt 描边点一下变成 1pt。
+            //
+            // 当前模式从文档 `stroke.sides` 反推（不是本地标记）：None = All；单条边非零 =
+            // 对应方位；其它（含 [w,w,w,w]）= Custom。菜单项据此带勾选态，只有 Custom 才展开
+            // 四边输入框 —— 用户 2026-11-20：选 Top/Left 等只是把一条边设宽，不该展开四个框。
             let w = d.stroke_weight.unwrap_or(1.0);
-            let sides = menu_icon(
-                f,
-                Icon::AbsolutePosition,
-                200.0,
-                vec![
-                    (tr("All").into(), "node.set", json!({ "props": { "strokeSides": Value::Null } })),
-                    (tr("Top").into(), "node.set", json!({ "props": { "strokeSides": [w, 0.0, 0.0, 0.0] } })),
-                    (tr("Right").into(), "node.set", json!({ "props": { "strokeSides": [0.0, w, 0.0, 0.0] } })),
-                    (tr("Bottom").into(), "node.set", json!({ "props": { "strokeSides": [0.0, 0.0, w, 0.0] } })),
-                    (tr("Left").into(), "node.set", json!({ "props": { "strokeSides": [0.0, 0.0, 0.0, w] } })),
-                    (tr("Custom").into(), "node.set", json!({ "props": { "strokeSides": [w, w, w, w] } })),
-                ],
-                false,
-            );
+            let sides_mode = stroke_sides_mode(d.stroke_sides);
+            let row = |key: &'static str, label: SharedString, glyph: &'static str, sel: bool, sep: bool| {
+                let mut r = MenuRow::row(label).key(key).glyph(named_icon(glyph)).checked(Some(sel));
+                if sep { r = r.separator(); }
+                r
+            };
+            let menu = vec![
+                row("all", tr("All").into(), "layout-padding-individual", sides_mode == "all", false),
+                row("top", tr("Top").into(), "layout-padding-top", sides_mode == "top", false),
+                row("right", tr("Right").into(), "layout-padding-right", sides_mode == "right", false),
+                row("bottom", tr("Bottom").into(), "layout-padding-bottom", sides_mode == "bottom", false),
+                row("left", tr("Left").into(), "layout-padding-left", sides_mode == "left", false),
+                // 用户：Custom 放在分隔线下面，跟上面 5 个方位分开。
+                row("custom", tr("Custom").into(), "typ-settings", sides_mode == "custom", true),
+            ];
+            // 触发按钮图标随当前模式变：与菜单里那一项用同一个字形（用户 2026-11-20：
+            // 「按钮图标按我实际选的来」）。typ-settings 是 24 网格画 24pt，其余 16 网格画 16pt。
+            let (trigger_icon, trigger_size): (&'static str, f32) = match sides_mode {
+                "top" => ("layout-padding-top", 16.0),
+                "right" => ("layout-padding-right", 16.0),
+                "bottom" => ("layout-padding-bottom", 16.0),
+                "left" => ("layout-padding-left", 16.0),
+                "all" => ("layout-padding-individual", 16.0),
+                _ => ("typ-settings", 24.0), // custom
+            };
+            let sides = {
+                let cmds = f.cmds.clone();
+                named_icon_menu(
+                    f,
+                    "stroke-sides",
+                    trigger_icon,
+                    trigger_size,
+                    menu,
+                    false,
+                    Rc::new(move |key: &str, _w, _cx| {
+                        let sides_value = match key {
+                            "top" => json!([w, 0.0, 0.0, 0.0]),
+                            "right" => json!([0.0, w, 0.0, 0.0]),
+                            "bottom" => json!([0.0, 0.0, w, 0.0]),
+                            "left" => json!([0.0, 0.0, 0.0, w]),
+                            "custom" => json!([w, w, w, w]),
+                            _ => Value::Null, // all
+                        };
+                        cmds.push(Cmd { id: "node.set", params: Some(json!({ "props": { "strokeSides": sides_value } })) });
+                    }),
+                )
+            };
             // Advanced stroke (egui `right/stroke.rs::show_stroke_settings`)：线宽线形、
             // dash/gap、端帽、连接、宽度配置与 Brush，恢复成带标题栏的「Stroke」通用窗口。
             let popups = f.popups();
@@ -1383,6 +1494,16 @@ pub(crate) fn paints(
                 ],
                 vec![sides.into_any_element(), dots],
             ));
+            // Custom 展开：egui `paints.rs::stroke` 的
+            // `if let Some(sides) = common(doc, sel, |n| n.stroke.sides).flatten()` ——
+            // 文档有逐边权重就画两行 T/R、B/L 输入框（顺序 [top,right,bottom,left]）。
+            // 选 Custom 写入 `[w,w,w,w]` → 下帧 `d.stroke_sides` 命中 → 这里出现四个字段，
+            // 原有的 bug 正是漏了这一块（只写了菜单命令，面板从不响应）。
+            if sides_mode == "custom" && d.stroke_sides.is_some() {
+                sec = sec
+                    .child(field_row(vec![f.stroke_side_t.clone(), f.stroke_side_r.clone()], Vec::<IconButton>::new()))
+                    .child(field_row(vec![f.stroke_side_b.clone(), f.stroke_side_l.clone()], Vec::<IconButton>::new()));
+            }
         }
     }
     Section::Full(sec)
@@ -1476,7 +1597,7 @@ fn add_effect_menu(f: &RightFields) -> IconButton {
                 .iter()
                 .enumerate()
                 .map(|(i, (l, _, _))| {
-                    let r = MenuRow::new(l.clone());
+                    let r = MenuRow::row(l.clone());
                     if i == types_len { r.separator() } else { r }
                 })
                 .collect();
@@ -2225,6 +2346,21 @@ pub(crate) fn clip_content(f: &RightFields, d: &PanelData) -> crate::widgets::pa
     field_row_full(cb)
 }
 
+/// 从文档的逐边描边权重反推当前选中的模式，用来给 sides 菜单打勾选、并决定展开区显隐。
+/// `[top, right, bottom, left]`；`None` = All。单条边非零 = 那个方位；其余 = Custom。
+/// 这样模式随文档走（切选择、撤销、命令回推都自动同步），不需要额外的本地状态。
+pub(crate) fn stroke_sides_mode(sides: Option<[f64; 4]>) -> &'static str {
+    let Some([t, r, b, l]) = sides else { return "all" };
+    let nz = |v: f64| v > 0.0;
+    match (nz(t), nz(r), nz(b), nz(l)) {
+        (true, false, false, false) => "top",
+        (false, true, false, false) => "right",
+        (false, false, true, false) => "bottom",
+        (false, false, false, true) => "left",
+        _ => "custom",
+    }
+}
+
 /// 圆角展开区的显隐规则（egui `paints.rs::appearance`：`smooth_ok && indep_corners_open`）：
 /// 只看类型是否支持平滑圆角（`smooth_ok`），与半径数值无关 —— 半径为 0 也能先设平滑值。
 /// 注意**折叠态不显示展开区**——这正是「圆角折叠时不该显示平滑按钮」的修复点。
@@ -2300,7 +2436,7 @@ pub(crate) fn appearance(
     let indep_toggle = if smooth_ok {
         let flag = f.corners_individual.clone();
         let cmds = f.cmds.clone();
-        Some(IconButton::new(Icon::AbsolutePosition).size(24.0).active(indep_open).on_click(move |_e, _w, _cx| {
+        Some(named_icon_toggle("layout-corner-individual", indep_open, move || {
             // ⛔ 不能写成 `*flag.borrow_mut() = !*flag.borrow()`：同一表达式里先可变借用再借用，
             // RefCell 会直接 panic（点一下卡死）。与 padding 的 `pad_individual` 同样拆两句。
             let next = !*flag.borrow();
@@ -2311,7 +2447,7 @@ pub(crate) fn appearance(
         None
     };
     let mut sec = PanelSection::new(tr("Appearance")).header_trail(icon_row(vec![eye.into_any_element(), blend.into_any_element()]));
-    let corner_row_trail: Vec<gpui::AnyElement> = indep_toggle.map(|b| b.into_any_element()).into_iter().collect();
+    let corner_row_trail: Vec<gpui::AnyElement> = indep_toggle.into_iter().collect();
     sec = sec.child(sublabel_row2(tr("Opacity"), tr("Corner radius"))).child(field_row(
         vec![
             // Opacity / corner radius 都是原版白名单里可绑定的数值字段
@@ -2364,6 +2500,21 @@ mod corner_smoothing_tests {
         assert!(!shows_corner_smoothing(false, 8.0));
         assert!(shows_corner_smoothing(true, 0.0));
         assert!(shows_corner_smoothing(true, 8.0));
+    }
+
+    /// 用户 2026-11-20：只有选 Custom 才展开四边输入框。Top/Left 等单边也有 `sides`，
+    /// 但它们是单方位模式，不该展开；All（None）同理。
+    #[test]
+    fn only_custom_mode_expands_the_four_side_fields() {
+        use super::stroke_sides_mode;
+        assert_eq!(stroke_sides_mode(None), "all");
+        assert_eq!(stroke_sides_mode(Some([5.0, 0.0, 0.0, 0.0])), "top");
+        assert_eq!(stroke_sides_mode(Some([0.0, 5.0, 0.0, 0.0])), "right");
+        assert_eq!(stroke_sides_mode(Some([0.0, 0.0, 5.0, 0.0])), "bottom");
+        assert_eq!(stroke_sides_mode(Some([0.0, 0.0, 0.0, 5.0])), "left");
+        assert_eq!(stroke_sides_mode(Some([5.0, 5.0, 5.0, 5.0])), "custom");
+        // 用户手改过其中一边（不再清一色）也仍是 Custom。
+        assert_eq!(stroke_sides_mode(Some([2.0, 5.0, 3.0, 1.0])), "custom");
     }
 }
 
@@ -2962,7 +3113,7 @@ impl HeadRow {
 fn head_menu(rows: &[HeadRow]) -> Vec<MenuRow> {
     rows.iter()
         .map(|r| {
-            let mut m = MenuRow::new(r.label.clone());
+            let mut m = MenuRow::row(r.label.clone());
             if let Some(on) = r.checked {
                 m = m.checked(Some(on));
             }
@@ -3890,7 +4041,7 @@ fn local_style_folder(
                     let rename_style_slot = rename_style_slot.clone();
                     let cmds_r = cmds_r.clone();
                     let wake = wake.clone();
-                    let rows = vec![MenuRow::new("Rename folder")];
+                    let rows = vec![MenuRow::row("Rename folder")];
                     let Some(root) = root else { return };
                     let anchor = gpui::Bounds::new(e.position, gpui::size(px(0.0), px(0.0)));
                     root.update(cx, move |cv, cx| {
@@ -4042,7 +4193,7 @@ fn local_styles_add_button(f: &RightFields, d: &PanelData) -> IconButton {
     let root = f.root.clone();
     let cmds = f.cmds.clone();
     IconButton::new(Icon::Plus).size(24.0).on_click(move |_e, window, cx: &mut App| {
-        let rows: Vec<MenuRow> = ITEMS.iter().map(|r| MenuRow::new(r.0)).collect();
+        let rows: Vec<MenuRow> = ITEMS.iter().map(|r| MenuRow::row(r.0)).collect();
         let Some(root) = root.clone() else { return };
         let anchor = Bounds { origin: window.mouse_position(), size: size(px(0.0), px(0.0)) };
         // `on_click` 是 `Fn`，捕获的 `cmds` 不能直接 move 进内层回调，先克隆一份。
@@ -4321,7 +4472,7 @@ fn local_style_row(
         let dup = dup_label.clone();
         let del = del_label.clone();
         let dup_trail = if cfg!(target_os = "windows") { "Ctrl+D" } else { "⌘D" };
-        let rows = vec![MenuRow::new(edit.clone()), MenuRow::new(dup.clone()).trail(dup_trail), MenuRow::new(del.clone()).trail("Del")];
+        let rows = vec![MenuRow::row(edit.clone()), MenuRow::row(dup.clone()).trail(dup_trail), MenuRow::row(del.clone()).trail("Del")];
         let Some(root) = root.clone() else { return };
         let anchor = gpui::Bounds::new(e.position, gpui::size(px(0.0), px(0.0)));
         root.update(cx, move |cv, cx| {

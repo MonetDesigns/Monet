@@ -16,7 +16,7 @@ use crate::widgets::{
 use figcraft_color::BlendMode;
 use figcraft_i18n::tr;
 use figcraft_i18n::tr_noop;
-use gpui::{App, Div, Entity, SharedString, Stateful, Window, div, prelude::*, px};
+use gpui::{App, Div, Entity, Hsla, SharedString, Stateful, Window, div, prelude::*, px, svg};
 use serde_json::Value;
 use std::rc::Rc;
 
@@ -762,6 +762,12 @@ pub(crate) struct RightFields {
     corner_br: Entity<TextField>,
     /// 「独立圆角」展开开关（egui `right.rs` 的 `Id::new("indep_corners")` 临时标记）。
     corners_individual: std::rc::Rc<std::cell::RefCell<bool>>,
+    /// 描边逐边权重 T/R/B/L（`strokeTopWeight` … `strokeLeftWeight`）。选「Custom」后展开，
+    /// 对应 egui `paints.rs::stroke` 的 `common(doc, sel, |n| n.stroke.sides)` 那两行输入框。
+    stroke_side_t: Entity<TextField>,
+    stroke_side_r: Entity<TextField>,
+    stroke_side_b: Entity<TextField>,
+    stroke_side_l: Entity<TextField>,
     /// Alignment dropdown current labels (serde names) for the main and cross axes.
     align_main_label: std::cell::RefCell<SharedString>,
     align_cross_label: std::cell::RefCell<SharedString>,
@@ -1007,6 +1013,50 @@ fn nf_corner(cx: &mut App, lead: &'static str, key: &'static str, cmds: &Cmds) -
             }
         });
     })
+}
+
+/// One of the four per-side stroke weight fields. Commits `node.set {"props": {<key>: v}}`
+/// where `<key>` is `strokeTopWeight` / `strokeRightWeight` / …; the engine's `props.rs`
+/// turns a single side write into `stroke.sides = Some([t,r,b,l])` (filling the others from
+/// the current `weight`), which is exactly egui's `app.field(&ids, field, …)` behaviour.
+fn nf_stroke_side(cx: &mut App, icon: &'static str, key: &'static str, cmds: &Cmds, wake: &std::rc::Rc<dyn Fn()>) -> Entity<TextField> {
+    let cmds = cmds.clone();
+    let wake = wake.clone();
+    let field = TextField::build(cx, DEFAULT_COL, move |tf, _| {
+        tf.set_numeric("", 1.0);
+        let cmds = cmds.clone();
+        let wake = wake.clone();
+        tf.set_on_commit(move |text, _window, _cx| {
+            if let Ok(v) = text.trim().parse::<f64>() {
+                cmds.push(Cmd { id: "node.set", params: Some(serde_json::json!({ "props": { key: v.max(0.0) } })) });
+                wake();
+            }
+        });
+    });
+    set_icon_lead(&field, cx, icon);
+    field
+}
+
+/// Replace a field's text lead with a named SVG glyph from `assets/icons/`.
+///
+/// The corner / padding fields were built with a text lead (`C`, `TL`, `H`, `T`, …) before the
+/// matching 16-grid icons existed. The SVGs are registered in `ICON_FILES` but have no frozen
+/// `Icon` enum variant, so `Slot::Custom` + `svg().path()` is the only route that does not touch
+/// the frozen widget files. `Slot::Custom` is called again on every frame, so the icon inks from
+/// the current tokens just like the text lead did.
+fn set_icon_lead(tf: &Entity<TextField>, cx: &mut App, name: &'static str) {
+    let path = right::sections::named_icon(name);
+    tf.update(cx, |tf, _| {
+        tf.set_lead(Slot::custom(move || {
+            svg()
+                .path(path.clone())
+                .w(px(16.0))
+                .h(px(16.0))
+                .flex_none()
+                .text_color(Hsla::from(rgba(tokens().icon)))
+                .into_any_element()
+        }));
+    });
 }
 
 impl RightFields {
@@ -1331,6 +1381,11 @@ impl RightFields {
             corner_bl: nf_corner(cx, "BL", "bottomLeftRadius", &cmds),
             corner_br: nf_corner(cx, "BR", "bottomRightRadius", &cmds),
             corners_individual: std::rc::Rc::new(std::cell::RefCell::new(false)),
+            // 描边逐边权重：与菜单里 T/R/B/L 四项、展开后 lead 同一族图标。
+            stroke_side_t: nf_stroke_side(cx, "layout-padding-top", "strokeTopWeight", &cmds, wake),
+            stroke_side_r: nf_stroke_side(cx, "layout-padding-right", "strokeRightWeight", &cmds, wake),
+            stroke_side_b: nf_stroke_side(cx, "layout-padding-bottom", "strokeBottomWeight", &cmds, wake),
+            stroke_side_l: nf_stroke_side(cx, "layout-padding-left", "strokeLeftWeight", &cmds, wake),
             align_main_label: std::cell::RefCell::new(SharedString::from("min")),
             align_cross_label: std::cell::RefCell::new(SharedString::from("min")),
             // Blend-mode dropdown: a button that opens the blend menu on click (egui `dropdown`).
@@ -1353,6 +1408,21 @@ impl RightFields {
             cmds,
             editors: Vec::new(),
         };
+        // 圆角 / 间距字段接上 2026-11-20 新建的 layout-* 图标（外观 Corner radius、四个独立
+        // 圆角；布局 H/V 与四个独立内边距）。此前只注册了 SVG、没有 Icon 枚举变体，字段仍用
+        // 文本 lead（C / TL / H / T…）——用户指出「图标做了但外观和布局都没接入」。
+        // 这些 SVGs 是 16 网格，按原生 16pt 画（viewBox 原生尺寸规矩）。
+        set_icon_lead(&fields.corner, cx, "layout-corner-individual");
+        set_icon_lead(&fields.corner_tl, cx, "layout-corner-tl");
+        set_icon_lead(&fields.corner_tr, cx, "layout-corner-tr");
+        set_icon_lead(&fields.corner_bl, cx, "layout-corner-bl");
+        set_icon_lead(&fields.corner_br, cx, "layout-corner-br");
+        set_icon_lead(&fields.pad_h, cx, "layout-padding-individual");
+        set_icon_lead(&fields.pad_v, cx, "layout-padding-individual");
+        set_icon_lead(&fields.pad_t, cx, "layout-padding-top");
+        set_icon_lead(&fields.pad_r, cx, "layout-padding-right");
+        set_icon_lead(&fields.pad_b, cx, "layout-padding-bottom");
+        set_icon_lead(&fields.pad_l, cx, "layout-padding-left");
         // 点画布时统一失焦提交：收集所有缓存的编辑器实体（TextField 的内层 + 颜色行 + 行池）。
         let mut editors: Vec<Entity<TextEdit>> = [
             &fields.x,
@@ -1883,6 +1953,27 @@ impl RightFields {
         fmt(&self.corner_bl, radii.map(|r| r[3]));
     }
 
+    /// 描边逐边权重的回填（selection → panel）。`sides` 与 `StrokeProps::sides` 同序
+    /// `[top, right, bottom, left]`；`None` = All / 多选不一致 → Mixed（展开区不显示）。
+    pub(crate) fn set_stroke_side_values(&self, cx: &mut App, sides: Option<[f64; 4]>) {
+        let mut fmt = |e: &Entity<TextField>, v: Option<f64>| {
+            e.update(cx, |tf, _| match v {
+                Some(val) => {
+                    tf.set_placeholder("");
+                    tf.set_value(fmt_num(val));
+                }
+                None => {
+                    tf.set_value("");
+                    tf.set_placeholder(tr("Mixed"));
+                }
+            });
+        };
+        fmt(&self.stroke_side_t, sides.map(|s| s[0]));
+        fmt(&self.stroke_side_r, sides.map(|s| s[1]));
+        fmt(&self.stroke_side_b, sides.map(|s| s[2]));
+        fmt(&self.stroke_side_l, sides.map(|s| s[3]));
+    }
+
     /// Dimensions 的 min/max 字段（`layout_panel.rs::limit_row_v`）。
     pub(crate) fn set_dim_limits(&self, cx: &mut App, min_w: Option<f64>, max_w: Option<f64>, min_h: Option<f64>, max_h: Option<f64>) {
         let mut fmt = |e: &Entity<TextField>, v: Option<f64>| {
@@ -2001,7 +2092,7 @@ pub(crate) fn blend_rows() -> Vec<MenuRow> {
     let mut rows: Vec<MenuRow> = Vec::new();
     let mut divider = false;
     for b in BlendMode::ALL {
-        let mut row = MenuRow::new(b.label());
+        let mut row = MenuRow::row(b.label());
         if divider {
             row = row.separator();
         }
@@ -2015,7 +2106,7 @@ pub(crate) fn blend_rows() -> Vec<MenuRow> {
 /// selection (`distribute.horizontal` / `distribute.vertical` / `arrange.tidy`), each with
 /// `{"ids": ids}`. Shown only when 3+ layers are selected, like the egui original.
 fn distribute_rows() -> Vec<MenuRow> {
-    vec![MenuRow::new(tr("Distribute horizontal spacing")), MenuRow::new(tr("Distribute vertical spacing")), MenuRow::new(tr("Tidy up"))]
+    vec![MenuRow::row(tr("Distribute horizontal spacing")), MenuRow::row(tr("Distribute vertical spacing")), MenuRow::row(tr("Tidy up"))]
 }
 
 /// Main-axis alignment options: `MainAlign` serde names → labels. egui's 3×3 picker sets
@@ -2033,7 +2124,7 @@ const CROSS_ALIGN: &[(&str, &str)] = &[("Packed", "min"), (tr_noop("Center"), "c
 
 fn align_rows(kind: &'static str) -> Vec<MenuRow> {
     let opts = if kind == "mainAlign" { MAIN_ALIGN } else { CROSS_ALIGN };
-    opts.iter().map(|(label, _)| MenuRow::new(*label)).collect()
+    opts.iter().map(|(label, _)| MenuRow::row(*label)).collect()
 }
 
 /// Look up the serde value for a picked alignment label (used by `right_panel`'s on_pick).
@@ -2763,7 +2854,9 @@ pub(crate) fn auto_layout_section(
         let individual = *f.pad_individual.borrow();
         let toggle_cmds = f.cmds.clone();
         let pad_flag = f.pad_individual.clone();
-        let toggle = IconButton::new(Icon::AbsolutePosition).size(24.0).active(individual).on_click(move |_e, _w, _cx| {
+        // 独立内边距开关接上 layout-padding-individual 图标（田字格）。此前用的是
+        // Icon::AbsolutePosition 占位字形，与展开后的四边图标不是同一族。
+        let toggle = right::sections::named_icon_toggle("layout-padding-individual", individual, move || {
             let new_val = !*pad_flag.borrow();
             *pad_flag.borrow_mut() = new_val;
             // 翻转后必须唤醒视图重绘，否则右栏读到的还是旧 `pad_individual`，四个内边距字段不展开。

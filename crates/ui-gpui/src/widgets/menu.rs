@@ -27,58 +27,17 @@ use crate::canvas::geom::Color32;
 use crate::widgets::input::text_field::TextField;
 use crate::widgets::{pt, rgba, tokens};
 use figcraft_i18n::tr;
-use gpui::{AnyElement, App, Bounds, Entity, MouseButton, MouseDownEvent, Pixels, Point, SharedString, Window, div, prelude::*};
+use gpui::{AnyElement, App, Bounds, Entity, MouseButton, MouseDownEvent, Pixels, Point, SharedString, Window, div, prelude::*, svg};
 use std::rc::Rc;
 
-/// One row of a popover menu: a label, an optional right-aligned trailing text (shortcut), an
-/// optional check mark, and an optional divider above it (a menu group).
-#[derive(Clone)]
-pub struct MenuRow {
-    pub label: SharedString,
-    pub trail: Option<SharedString>,
-    /// `Some(true)` draws the design's check mark (`✓ `), `Some(false)` reserves its width so
-    /// plain rows line up with checked ones, `None` is a plain row. Mirrors egui's `menu_check` /
-    /// `menu_item_beside_checks`.
-    pub checked: Option<bool>,
-    /// Draw a 1 pt divider above this row — egui's `ui.separator()` between menu groups.
-    pub separator_before: bool,
-    /// The value handed to `on_pick`, when it must differ from the label. The brush-preset menu
-    /// needs this: its rows show "group / name" but the pick must carry the full ABR id, and
-    /// matching on the label string silently missed (the preset never changed, so a non-Plain
-    /// tip fell back to a plain outline). `None` keeps the old behaviour (pick the label).
-    pub key: Option<SharedString>,
-}
-
-impl MenuRow {
-    /// A plain row with just a label (no trailing shortcut text).
-    pub fn new(label: impl Into<SharedString>) -> Self {
-        Self { label: label.into(), trail: None, checked: None, separator_before: false, key: None }
-    }
-
-    /// Override the value handed to `on_pick` (defaults to the label).
-    pub fn key(mut self, k: impl Into<SharedString>) -> Self {
-        self.key = Some(k.into());
-        self
-    }
-
-    /// A check row, or (with `None`) a plain row that keeps the check column's width.
-    pub fn checked(mut self, on: Option<bool>) -> Self {
-        self.checked = on;
-        self
-    }
-
-    /// Start a new menu group: a divider above this row.
-    pub fn separator(mut self) -> Self {
-        self.separator_before = true;
-        self
-    }
-
-    /// The right-aligned trailing text (a shortcut).
-    pub fn trail(mut self, text: impl Into<SharedString>) -> Self {
-        self.trail = Some(text.into());
-        self
-    }
-}
+/// 菜单行的**唯一**模型在 [`crate::menu_card::Item`]：单选勾选、图标（`Icon` 枚举或资源路径
+/// `glyph`）、分隔线、快捷键、子菜单都是那一个结构的配置。本模块的下拉菜单、右键菜单、
+/// 工具栏飞出、主菜单都用它 —— 这里只是把同一个结构按别名导出，避免两套行模型各自漂移。
+///
+/// 旧 `MenuRow` 的 `new(label)` / `separator()` 由 `Item::row()` / `Item::separator()` 兼容，
+/// 调用点机械替换即可；字段 `label / checked / separator_before / trail` 同名，`key` 从
+/// `Option<SharedString>` 变成 `SharedString`（缺省 = 空，渲染时回落到 label）。
+pub use crate::menu_card::Item as MenuRow;
 
 /// Build a popover menu frame. `origin` is the popover's top-left in window coordinates; `min_w`
 /// is its minimum width (the trigger's width, so it lines up under the field). Rows highlight on
@@ -106,7 +65,9 @@ pub(crate) fn menu_metrics(rows: &[MenuRow]) -> (f32, f32) {
         .map(|r| {
             let label: f32 = r.label.chars().map(|c| if c.is_ascii() { 6.5 } else { 11.0 }).sum();
             let trail: f32 = r.trail.as_ref().map(|s| s.chars().count() as f32 * 6.5 + 12.0).unwrap_or(0.0);
-            label + trail + if r.checked.is_some() { 28.0 } else { 8.0 } + 10.0
+            // 前置图标占一列（与 menu_card 的 ICON_LABEL_X 一致：带图标时标签从 48 起）。
+            let icon: f32 = if r.icon.is_some() || r.glyph.is_some() { 20.0 } else { 0.0 };
+            label + trail + icon + if r.checked.is_some() { 28.0 } else { 8.0 } + 10.0
         })
         .fold(0.0f32, f32::max);
     (rows_h, content_w)
@@ -139,6 +100,36 @@ pub fn menu_popup_in_aligned(
     vh: f32,
     align: crate::widgets::RectAlign,
 ) -> AnyElement {
+    menu_popup_impl(anchor, width_override, false, rows, on_pick, dismiss, vw, vh, align)
+}
+
+/// 与 [`menu_popup_in`] 同款，但宽度走 `Width::Fit` —— 卡片宽度完全由最宽那一行决定，不设
+/// 「不小于按钮宽」的下限。锚点仍是按钮真实矩形（`BottomStart` = 左缘对齐按钮左缘、顶边在
+/// 按钮底 + 4pt）。右栏 sides 下拉用它（用户 2026-11-20：左对齐按钮 / 上距 4 / 宽度按最宽内容）。
+pub fn menu_popup_fit(
+    anchor: Bounds<Pixels>,
+    rows: Vec<MenuRow>,
+    on_pick: Rc<dyn Fn(&str, &mut Window, &mut App)>,
+    dismiss: Rc<dyn Fn(&mut Window, &mut App)>,
+    vw: f32,
+    vh: f32,
+) -> AnyElement {
+    menu_popup_impl(anchor, None, true, rows, on_pick, dismiss, vw, vh, crate::widgets::RectAlign::BottomStart)
+}
+
+/// 唯一的菜单渲染主体。`fit_width` 决定 `Width::Fit`（按最宽内容）还是 `Width::Min(width)`
+/// （有下限）；其余行为（勾选列、图标、分隔线、防溢出、对齐）两路完全一致。
+fn menu_popup_impl(
+    anchor: Bounds<Pixels>,
+    width_override: Option<f32>,
+    fit_width: bool,
+    rows: Vec<MenuRow>,
+    on_pick: Rc<dyn Fn(&str, &mut Window, &mut App)>,
+    dismiss: Rc<dyn Fn(&mut Window, &mut App)>,
+    vw: f32,
+    vh: f32,
+    align: crate::widgets::RectAlign,
+) -> AnyElement {
     let t = tokens();
     // Every menu uses the one shared 24 pt row (user 2026-11-14).
     let row_h = pt(crate::menu_metrics::MENU_ROW_H);
@@ -154,8 +145,10 @@ pub fn menu_popup_in_aligned(
     // 以前这里根本没传，`rows_h` 默认 0，`fit_vertical` 于是从不滚动、也不上移。
     let (rows_h, content_w) = menu_metrics(&rows);
     // `Width::Min(width)` over the natural width is the full card width (padding included):
-    // that is what a full-bleed divider has to cover.
-    let card_w = (content_w + 2.0 * crate::menu_metrics::MENU_PAD).max(width);
+    // that is what a full-bleed divider has to cover. Fit 时下限去掉，卡片就是内容宽度。
+    let natural_w = content_w + 2.0 * crate::menu_metrics::MENU_PAD;
+    let card_w = if fit_width { natural_w } else { natural_w.max(width) };
+    let width_spec = if fit_width { crate::widgets::Width::Fit } else { crate::widgets::Width::Min(width) };
 
     // 这个菜单里**有**可勾选的行才留 28pt 勾选列；一条都没有就不留（否则左边白空一条缩进）。
     let has_check = rows.iter().any(|r| r.checked.is_some());
@@ -168,10 +161,12 @@ pub fn menu_popup_in_aligned(
         // 之前用 `"✓ "` / `"    "` 前缀去顶，勾与不勾的字宽不同、缩进对不上，整列是歪的
         // （用户 2026-11-05 指出）。没有勾选态的行不占这一列。
         let check = if r.checked == Some(true) { "✓" } else { "" };
-        // Prefer an explicit key (rows whose pick value is not their visible label).
-        let pick_text = r.key.clone().unwrap_or_else(|| r.label.clone()).to_string();
+        // 统一到 Item 后 key 非 Option：空 key = 回落到 label（原 None 的语义）。
+        let pick_text = if r.key.is_empty() { r.label.clone() } else { r.key.clone() }.to_string();
         let label = r.label;
         let trail = r.trail;
+        let glyph = r.glyph;
+        let enum_icon = r.icon;
         let on_pick = on_pick.clone();
         let dismiss = dismiss.clone();
         let mut row = div()
@@ -195,6 +190,20 @@ pub fn menu_popup_in_aligned(
             // 没有勾选列时左边至少留 8pt —— 不能把文字顶到行首。
             row = row.pl(pt(8.0));
         }
+        // 前置图标：与 menu_card 同一套 Item 配置（resource glyph 或 Icon 枚举）。无图标的
+        // 行完全不变——只有带图标的项才多这一列，既有菜单零样式回退。
+        let icon_ink = crate::menu_metrics::ink();
+        if let Some(path) = glyph {
+            row = row.child(
+                div().w(pt(20.0)).flex_none().flex().items_center().justify_center().child(
+                    svg().path(path).w(pt(16.0)).h(pt(16.0)).flex_none().text_color(gpui::Hsla::from(icon_ink)),
+                ),
+            );
+        } else if let Some(icon) = enum_icon {
+            row = row.child(
+                div().w(pt(20.0)).flex_none().flex().items_center().justify_center().child(crate::widgets::icon::paint(icon, icon_ink, 16.0)),
+            );
+        }
         // 标签占满剩余宽度，超长裁掉（egui 把文字裁到 `r.max.x - 8.0`）。
         row = row.child(div().flex_1().min_w(pt(0.0)).overflow_hidden().whitespace_nowrap().child(label)).when_some(trail, |d, tr| {
             d.child(
@@ -208,7 +217,7 @@ pub fn menu_popup_in_aligned(
     // 内部滚动（`Menu::show` → `fit_vertical` / `fit_rows`）。
     crate::widgets::menu(anchor)
         .align(align)
-        .width(crate::widgets::Width::Min(width))
+        .width(width_spec)
         .viewport(vw, vh)
         .content(content_w, rows_h, crate::menu_metrics::MENU_ROW_H)
         .show(|| col.into_any_element())
@@ -458,7 +467,7 @@ mod tests {
 
     #[test]
     fn separators_count_toward_the_height_the_overflow_guard_uses() {
-        let rows = vec![MenuRow::new(tr("Fit")), MenuRow::new(tr("Fill")).separator(), MenuRow::new("100%").checked(Some(true))];
+        let rows = vec![MenuRow::row(tr("Fit")), MenuRow::row(tr("Fill")).separator(), MenuRow::row("100%").checked(Some(true))];
         let (rows_h, content_w) = menu_metrics(&rows);
         // 3×28 + 一条分隔行 9（my(4)+1+my(4)）。旧的手工估计只有 rows*28+16，
         // 既漏了分隔行、又把卡片 padding 当成了行数，靠近屏幕底部时最后几项会溢出。
@@ -468,12 +477,12 @@ mod tests {
 
     #[test]
     fn a_long_label_widens_the_content_estimate() {
-        let short = menu_metrics(&[MenuRow::new(tr("Fit"))]).1;
-        let long = menu_metrics(&[MenuRow::new("Zoom to selection 100%")]).1;
+        let short = menu_metrics(&[MenuRow::row(tr("Fit"))]).1;
+        let long = menu_metrics(&[MenuRow::row("Zoom to selection 100%")]).1;
         assert!(long > short, "长标签要能把卡片撑宽，不然会被 overflow_hidden 裁掉");
         // 中文按全角 11pt 估宽，不该被当成 6.5pt 的窄 ASCII。
-        let cn = menu_metrics(&[MenuRow::new("显示所有类型")]).1;
-        let en = menu_metrics(&[MenuRow::new("Show all")]).1;
+        let cn = menu_metrics(&[MenuRow::row("显示所有类型")]).1;
+        let en = menu_metrics(&[MenuRow::row("Show all")]).1;
         assert!(cn > en, "中文按全角估宽：{cn} 应大于 {en}");
     }
 

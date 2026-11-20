@@ -311,7 +311,7 @@ pub(crate) fn build_level(prefix: &str, checked: &dyn Fn(&str) -> Option<bool>) 
             // （见 `render` 里的 `has_check`）。
             // 命令文案走 `i18n::menu_item(id, english)`：先查 `[menu]` 再查 `[commands]`，
             // 与 egui `menus.rs` 同一句。直接用 `m.label` 会永远是英文。
-            let mut row = MenuRow::new(figcraft_i18n::menu_item(m.id, m.label)).checked(checked(m.id));
+            let mut row = MenuRow::row(figcraft_i18n::menu_item(m.id, m.label)).checked(checked(m.id));
             if pending_sep {
                 row = row.separator();
                 pending_sep = false;
@@ -329,7 +329,7 @@ pub(crate) fn build_level(prefix: &str, checked: &dyn Fn(&str) -> Option<bool>) 
             subs.push(sub.clone());
             last_sep = false;
             // 子菜单行永远没有勾选态 —— 不占勾选列（这一整级若全是子菜单，就完全不留缩进）。
-            let mut row = MenuRow::new(tr(&sub).to_string()).trail("▸");
+            let mut row = MenuRow::row(tr(&sub).to_string()).trail("▸");
             if pending_sep {
                 row = row.separator();
                 pending_sep = false;
@@ -346,7 +346,7 @@ pub(crate) fn top_level() -> Level {
     Level {
         // `TOP_MENUS` 是 `const`，只能放 `tr_noop`（英文）；**画的时候必须过 `tr`**，
         // 否则主菜单永远是英文（用户 2026-11-10：「主菜单的一些文本都还没有来得及本地化」）。
-        rows: TOP_MENUS.iter().map(|l| MenuRow::new(tr(l)).trail("▸")).collect(),
+        rows: TOP_MENUS.iter().map(|l| MenuRow::row(tr(l)).trail("▸")).collect(),
         items: TOP_MENUS.iter().map(|l| (l.to_string(), Act::Sub(l.to_string()))).collect(),
     }
 }

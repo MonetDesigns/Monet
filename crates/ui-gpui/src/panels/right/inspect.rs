@@ -348,7 +348,7 @@ fn local_dropdown_flag(f: &RightFields, label: SharedString, width: f32, rows: V
 }
 
 fn local_dropdown_impl(f: &RightFields, label: SharedString, width: f32, rows: Vec<(String, usize)>, set: impl Fn(usize) + 'static) -> Dropdown {
-    let menu: Vec<MenuRow> = rows.iter().map(|(l, _)| MenuRow::new(l.clone())).collect();
+    let menu: Vec<MenuRow> = rows.iter().map(|(l, _)| MenuRow::row(l.clone())).collect();
     let mut d = Dropdown::new(label, width, None).fill();
     if let Some(root) = f.root.clone() {
         let cmds = f.cmds.clone();
