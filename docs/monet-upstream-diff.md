@@ -1,19 +1,22 @@
-# Monet ↔ 上游 figcraft 差异审计（2026-11-20）
+# Monet ↔ 上游 figcraft 差异审计（2026-11-20，PR 全量合并后重做）
 
-- **本方**：`MonetDesigns/Monet` HEAD `76418e12`
-- **上游**：`storytold/figcraft` `e97b644a`（比上次审计的 `b45255bb` 又前进 8 个提交）
+- **本方**：`MonetDesigns/Monet` `main` = `78c356b3`（已合并 PR #5–#10 全部内容）
+- **上游**：`storytold/figcraft` `e97b644a`
 - **分叉点**：`a2e87433`
-- **审计基线**：全部基于已提交的 git blob。工作区有 99 个其他会话的未提交 UI 改动，**未计入**。
+- **审计基线**：全部基于已提交的 git blob，工作区干净（0 改动）。
 
 ## 总览
 
 | 维度 | 数据 |
 |---|---|
-| commit 数 | 本方领先 183，上游领先 993 |
-| 命令 | 本方 696，上游 657；**上游独有 3 个**（`board.codeBlock`、`board.setLanguage`、`inspect.designContext`） |
-| 差异文件 | 772 个（ui-gpui 206、engine 177、format 69、docs 53、ui-egui 31、i18n 30、doc 29、render 29…） |
-| 双方都改过的实现文件 | 149 个：上游改动**已包含 59**，**未包含 90** |
+| 命令 | 本方 691，上游 652；**上游独有仍是 3 个**（`board.codeBlock`、`board.setLanguage`、`inspect.designContext`） |
+| 差异文件 | 1014 个（ui-gpui 390、engine 175、format 69、docs 53、assets 42、ui-egui 34、i18n 30、doc 29、render 29…） |
+| 双方都改过的实现文件 | 157 个：上游改动**已包含 63**，**未包含 94** |
+| 图标 | 已按规范全部以 PR #9 为准（扁平 `assets/icons/*.svg` + 域前缀） |
 | 上游新增功能主题 | ~200 条 M1/M2/M3/M4/M5/M8/M9/M10/M12 改进 |
+
+> 与上次审计（HEAD `76418e12`）相比：本方命令 +5（691 vs 696→691，合并冲突解决后），
+> 已包含的上游改动 59→63。上游独有 3 条命令**仍未带入**。
 
 ---
 
