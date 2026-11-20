@@ -407,7 +407,7 @@ impl MenuItem {
 /// The context menu of a row that is part of a selection of several (egui `bulk_menu`):
 /// edit / delete / move to a group / scope all act on every selected variable in one undo step.
 fn bulk_menu_items(rows: &[(String, String, VarKind)], groups: &[String]) -> Vec<MenuItem> {
-    let mut items = vec![MenuItem::new(tr("Edit variables"), "ui.details", json!({ "variable": rows[0].0 }))];
+    let mut items = vec![MenuItem::new(tr("Edit variable"), "ui.details", json!({ "variable": rows[0].0 }))];
     let n = rows.len();
     let n_text = n.to_string();
     let delete_steps: Vec<Value> =
@@ -989,6 +989,16 @@ impl VariablesEditor {
 
     /// 重新打开时刷新文档变量快照（交互状态仍保留）。
     pub fn set_data(&mut self, data: VariablesData) {
+        // Drop selection ids that no longer exist (e.g. after a bulk delete) and clear
+        // the range anchor if its endpoints vanished, so copy never targets a deleted row.
+        {
+            let mut st = self.state.borrow_mut();
+            let live: std::collections::HashSet<String> = data.collections.iter()
+                .chain(data.libraries.iter().flat_map(|l| l.collections.iter()))
+                .flat_map(|c| c.rows.iter().map(|r| r.id.clone())).collect();
+            st.selected.retain(|id| live.contains(id));
+            if st.anchor.as_ref().is_some_and(|a| !live.contains(a)) { st.anchor = None; }
+        }
         self.data = data;
     }
 
@@ -1185,10 +1195,13 @@ impl VariablesEditor {
 
     /// 复制选中行：按 **mode 名** 存值，所以粘到 mode 名不同的集合也不会串列。
     fn copy_row(st: &State, data: &VariablesData) {
-        let sel = st.borrow().selected.first().cloned();
-        let Some(sel) = sel else { return };
+        // A bulk delete leaves stale ids in `selected`; resolve the first *live* selected
+        // row instead of blindly taking selected[0].
+        let selected = st.borrow().selected.clone();
         let list = Self::collections(st, data);
-        let Some((c, r)) = list.iter().find_map(|c| c.rows.iter().find(|r| r.id == sel).map(|r| (c, r))) else {
+        let Some((c, r)) = selected.iter().find_map(|sel| {
+            list.iter().find_map(|c| c.rows.iter().find(|r| r.id == *sel).map(|r| (c, r)))
+        }) else {
             return;
         };
         let values = c.modes.iter().zip(r.values.iter()).map(|(m, v)| (m.name.clone(), v.clone())).collect();
@@ -2699,6 +2712,9 @@ impl VariablesEditor {
             let caches2 = self.row_caches.clone();
             let c2 = c.clone();
             let ids2 = drag_ids.clone();
+            let bulk_rows = std::rc::Rc::new(c.rows.iter().filter(|x| !x.inherited)
+                .map(|x| (x.id.clone(), x.full_name.clone(), x.kind)).collect::<Vec<_>>());
+            let bulk_groups = std::rc::Rc::new(c.groups.clone());
             let list = v_virtual_list("vars-rows", &scroll, item_sizes, move |range, _window, cx| {
                 let mut out: Vec<AnyElement> = Vec::new();
                 for ix in range {
@@ -2707,7 +2723,7 @@ impl VariablesEditor {
                         RowItem::Gap => div().flex_none().w(px(table_w)).h(px(GROUP_GAP)).into_any_element(),
                         RowItem::GroupHeader { name, .. } => group_header_div(name).w(px(table_w)).into_any_element(),
                         RowItem::Row { index, row } => {
-                            VariablesEditor::var_row(&st2, &cmds2, &caches2, &c2, row, *index, &ids2, row_tops.clone(), name_eff, modes_room, sx, cx)
+                            VariablesEditor::var_row(&st2, &cmds2, &caches2, &c2, row, *index, &ids2, row_tops.clone(), name_eff, modes_room, sx, bulk_rows.clone(), bulk_groups.clone(), cx)
                                 .w(px(table_w))
                                 .into_any_element()
                         }
@@ -2775,6 +2791,8 @@ impl VariablesEditor {
         name_eff: f32,
         modes_room: f32,
         sx: f32,
+        bulk_rows: std::rc::Rc<Vec<(String, String, VarKind)>>,
+        bulk_groups: std::rc::Rc<Vec<String>>,
         cx: &mut App,
     ) -> Div {
         let t = tokens();
@@ -2791,15 +2809,8 @@ impl VariablesEditor {
         // 库变量 / 扩展集合里继承来的变量：不可拖拽、改名、删除。
         let movable = c.editable && !r.inherited;
         let has_override = r.overrides.iter().any(|&o| o);
-        // Bulk-menu snapshot: the rows this collection can act on (inherited ones are changed in
-        // their own collection, as in egui `bulk_ids`).
-        let bulk_rows: Vec<(String, String, VarKind)> = c
-            .rows
-            .iter()
-            .filter(|x| !x.inherited)
-            .map(|x| (x.id.clone(), x.full_name.clone(), x.kind))
-            .collect();
-        let bulk_groups = c.groups.clone();
+        // Bulk-menu snapshot is built once per table rebuild and shared by every row
+        // (see `table`); cloning it per row made large collections allocate quadratically.
         let single_items = if movable {
             let mut v = vec![
                 MenuItem::new(tr("Edit variable"), "ui.details", json!({ "variable": r.id })),

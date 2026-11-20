@@ -529,14 +529,15 @@ pub struct InspectData {
 }
 
 /// 缩略图缓存（egui `AssetUi::thumbs` 按 `ds.revision` 失效）。GPUI 的 `read_inspect` 每帧都跑，
-/// 不缓存就会把每个资产反复光栅化；这里按 `(revision, id, 目标边长)` 存 BGRA 字节。
+/// 不缓存就会把每个资产反复光栅化；这里按 `(文档, revision, id, 目标边长)` 存 BGRA 字节。
+/// 文档名进 key：两份文档都从 NodeId(1) 开始且各自维护 revision，不加边界会串图。
 thread_local! {
-    static ASSET_THUMBS: std::cell::RefCell<std::collections::HashMap<(u64, NodeId, u32), Option<(u32, u32, Vec<u8>)>>> =
+    static ASSET_THUMBS: std::cell::RefCell<std::collections::HashMap<(String, u64, NodeId, u32), Option<(u32, u32, Vec<u8>)>>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
 fn cached_asset_thumb(doc: &Document, id: NodeId, side_px: f32, revision: u64) -> Option<(u32, u32, Vec<u8>)> {
-    let key = (revision, id, side_px as u32);
+    let key = (doc.name.clone(), revision, id, side_px as u32);
     ASSET_THUMBS.with(|cache| {
         if let Some(v) = cache.borrow().get(&key) {
             return v.clone();
@@ -1141,7 +1142,10 @@ pub struct PageData {
 /// 纯函数决定显隐，面板自己不再散写条件。
 #[derive(Clone, Debug, PartialEq)]
 pub struct HeaderData {
+    /// Node type for the panel header (e.g. "Rectangle").
     pub label: String,
+    /// The layer's own name (e.g. "Logo"), used by the export button.
+    pub layer_name: String,
     /// 单选 Frame（lizard `is_frame`）。
     pub is_frame: bool,
     /// 选区全是 Group（lizard `is_group`）。
@@ -1617,6 +1621,7 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
             Some(l) => format!("{l}s"),
             None => tr("Mixed").into(),
         },
+        layer_name: if ids.len() == 1 { first.map(|n| n.name.clone()).unwrap_or_default() } else { String::new() },
         is_frame: ids.len() == 1 && first.is_some_and(|n| matches!(n.kind, figcraft_doc::NodeKind::Frame)),
         is_group: ids.iter().all(|i| doc.node(*i).is_some_and(|n| matches!(n.kind, figcraft_doc::NodeKind::Group))),
         is_text,
