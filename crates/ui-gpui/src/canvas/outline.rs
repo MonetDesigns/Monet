@@ -141,7 +141,7 @@ pub(super) fn draw_outline(app: &CanvasApp, painter: &mut Painter, doc: &Documen
             if let Some(q) = node_quad(app, doc, id) {
                 // 轴对齐的矩形：吸附到**设备像素**画四条填充带。描一条 1px 的路径时，边落在
                 // 分数坐标上会被抗锯齿摊成两条半透明的线——四条边各自落点不同，看起来就是
-                // "线粗细不均匀"。Figma 的选中框永远是一个设备像素、永远实心。
+                // "线粗细不均匀"。参考编辑器 的选中框永远是一个设备像素、永远实心。
                 if let Some(r) = axis_aligned(q)
                     && crisp_rect(painter, r, s.width, app.ppp, s.color)
                 {

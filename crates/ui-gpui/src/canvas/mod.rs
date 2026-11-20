@@ -18,7 +18,7 @@ pub mod handles;
 /// 其他人的文字光标与选区（共享文档，egui `canvas/live_text.rs`）。
 pub mod live_text;
 pub mod measure_overlay;
-/// Motion 模式的画布叠加层（运动路径 + 变换手柄，desigma `motion/inspector/overlay.rs`）。
+/// Motion 模式的画布叠加层（运动路径 + 变换手柄，参考实现 `motion/inspector/overlay.rs`）。
 pub mod motion_overlay;
 pub mod outline;
 pub mod overlays;

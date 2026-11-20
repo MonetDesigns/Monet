@@ -26,7 +26,7 @@ const HOME_TIPS: [(&str, &str); 6] = [
     (tr_noop("Export"), tr_noop("Export frames and layers as PNG, JPG, SVG or PDF")),
 ];
 
-/// The whole Home screen: sidebar + main. `new_page` is the「+」临时标签页：它画成 Figma 桌面
+/// The whole Home screen: sidebar + main. `new_page` is the「+」临时标签页：它画成 参考编辑器 桌面
 /// 首页的样子（居中分类胶囊、搜索框、最近文件带缩略图），没有左侧边栏。
 pub(crate) fn body(app: &CanvasApp, cmds: &Cmds, state: &ExtraState, root: Option<Entity<crate::CanvasView>>, new_page: bool) -> Div {
     if new_page {
@@ -431,7 +431,7 @@ fn recent_preview(state: &ExtraState, path: &str) -> (Option<std::sync::Arc<gpui
     hit
 }
 
-/// 「24 minutes ago」式的相对时间（用词条表里的复数形式，和 Figma 首页显示的一致）。
+/// 「24 minutes ago」式的相对时间（用词条表里的复数形式，和 参考编辑器 首页显示的一致）。
 fn long_ago(path: &str) -> String {
     let Ok(modified) = std::fs::metadata(path).and_then(|m| m.modified()) else { return String::new() };
     let Ok(since) = modified.elapsed() else { return String::new() };

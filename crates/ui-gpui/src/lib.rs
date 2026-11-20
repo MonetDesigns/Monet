@@ -140,7 +140,7 @@ mod layer_tree;
 /// 五个旧弹窗（自动布局 / 描边 / 取色器 / 变量 / 文本样式）在通用窗口上的装配层。
 mod popovers;
 
-/// 取色器专用的 24 pt 图标（Figma DOM 原始 SVG，走 `picker:` 资源前缀）。
+/// 取色器专用的 24 pt 图标（参考编辑器 DOM 原始 SVG，走 `picker:` 资源前缀）。
 mod picker_icons;
 
 /// Prototype 演示层（proto.present / proto.preview 的动画播放）。
@@ -231,7 +231,7 @@ const PALETTE_ROW_H: f32 = 32.0;
 
 /// 主菜单的目录、几何与外观都在 `main_menu` 模块里（照 `ui-egui/src/menus/tree.rs`）。
 
-/// 缩放档位（figma 的步进，与 `cmd/view.rs` 的 `STEPS` 一致）。
+/// 缩放档位（参考编辑器 的步进，与 `cmd/view.rs` 的 `STEPS` 一致）。
 
 const ZOOM_STEPS: &[f64] = &[0.02, 0.03, 0.06, 0.13, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0];
 
@@ -546,7 +546,7 @@ pub struct PaneState {
     /// 工具栏里打开着的飞出菜单（组的 key）；`None` 表示没开。
     tool_flyout: Option<&'static str>,
 
-    /// 矢量编辑工具栏的「更多」下拉是否展开（Figma `Vector editing` secondary toolbelt）。
+    /// 矢量编辑工具栏的「更多」下拉是否展开（参考编辑器 `Vector editing` secondary toolbelt）。
     vector_more: bool,
 
     /// 真正的 Draw 模式。模式是状态，不是「当前工具恰好是铅笔/钢笔」；Design 里点出钢笔
@@ -1604,7 +1604,7 @@ impl CanvasView {
 
         let mut d = panels::right::data::read(&ds.doc, &ds.selection, page, self.fields.dev_ready_filter());
 
-        // lizard `Id::new(("selection_colors_open", ds.uid))`：展开态按文档 uid 分档。
+        // 参考实现 `Id::new(("selection_colors_open", ds.uid))`：展开态按文档 uid 分档。
         d.doc_uid = ds.uid;
 
         // 右键 Paste 行的可见性：从会话剪贴板取快照，渲染期只读 PanelData，避免在非 renderer
@@ -2121,7 +2121,7 @@ impl CanvasView {
         }
     }
 
-    /// Text 选区标题行的「Create link」：`lizard menus::invoke("text.link")` 先弹 URL 输入框，
+    /// Text 选区标题行的「Create link」：`参考实现 menus::invoke("text.link")` 先弹 URL 输入框，
     /// 由对话框按钮把 `{"url": …}` 交给 `text.link`。右栏按钮直接调这个入口。
     pub(crate) fn open_link_dialog(&mut self, cx: &mut Context<Self>) {
         self.open_dialog(dialogs::Kind::Link, &serde_json::json!({}), cx);
@@ -3956,7 +3956,7 @@ impl CanvasView {
             }
 
             toolbar::Intent::VectorTool(id) => {
-                // Figma's secondary toolbelt: an icon+label button, or a row in "More".
+                // 参考编辑器's secondary toolbelt: an icon+label button, or a row in "More".
                 self.vector_more = false;
                 self.run_command("vector.edit.tool", serde_json::json!({ "tool": id }), cx);
                 cx.notify();
@@ -7120,7 +7120,7 @@ impl Render for CanvasView {
         );
 
         // Vector edit keeps the main pill and puts its own toolbar 8 pt above it, laid out like
-        // Figma's `Vector editing` secondary toolbelt. The engine owns the current VTool.
+        // 参考编辑器's `Vector editing` secondary toolbelt. The engine owns the current VTool.
         let vector_more = self.vector_more;
         let vector_bar = self
             .app
@@ -7130,7 +7130,7 @@ impl Render for CanvasView {
             .and_then(|ds| ds.vector_edit.as_ref().map(|ve| ve.tool))
             .map(|vtool| toolbar::vector_edit_bar(vtool, vector_more, canvas_x, canvas_w, on_intent.clone()));
 
-        // Draw mode (the segment before Design) owns a toolbar too (lizard `drawing_toolbar`).
+        // Draw mode (the segment before Design) owns a toolbar too (参考实现 `drawing_toolbar`).
         // It is gated on the **mode**, not on the tool: picking Pen/Pencil inside Design must not
         // reveal the stroke-width controls. Vector edit wins when both could apply.
         let draw_bar = if vector_bar.is_some() || !self.draw_mode {
@@ -7788,7 +7788,7 @@ impl Render for CanvasView {
                 }
 
                 Popup::Palette { .. } => {
-                    // 动作库（带搜索）面板：Figma 里它**与工具栏同宽**、紧贴工具栏上方并左右对齐
+                    // 动作库（带搜索）面板：参考编辑器 里它**与工具栏同宽**、紧贴工具栏上方并左右对齐
                     // （用户 2026-11-16 指的就是这个窗口）。宽度随当前工具栏变化，不写死 320。
                     let w = bar_w;
 

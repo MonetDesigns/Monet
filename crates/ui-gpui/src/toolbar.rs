@@ -190,14 +190,14 @@ pub(crate) enum Intent {
     DrawDone,
 }
 
-/// Draw mode replaces the Pen group with lizard's illustrated nib strip
+/// Draw mode replaces the Pen group with 参考实现's illustrated nib strip
 /// (`ui-egui/src/toolbar.rs::draw_brushes`): three 54 pt cells between two hairlines, 182 pt
 /// in total, inserted right after the Move group.
 const DRAW_NIB_CELL: f32 = 54.0;
 const DRAW_SECTION_W: f32 = 182.0;
 
 /// The three nib illustrations (Pen / Brush / Pencil), each split into a static base and a white
-/// "ink" mask. The accent colour in the Figma SVGs is **not** a fixed colour: it shows the current
+/// "ink" mask. The accent colour in the 参考编辑器 SVGs is **not** a fixed colour: it shows the current
 /// `tool.drawStyle.color`. At paint time the white ink mask is multiplied by that colour (its
 /// inner shadow and highlight survive as a brightness modulation) and composited over the base.
 /// Cached per colour, so changing the stroke colour only re-composites once.
@@ -515,7 +515,7 @@ pub(crate) fn bar(
 
     // ── the tool groups ─────────────────────────────────────────────────────────────────────
     for g in groups {
-        // Draw mode drops the Pen group entirely and puts lizard's illustrated nib strip right
+        // Draw mode drops the Pen group entirely and puts 参考实现's illustrated nib strip right
         // after Move (`ui-egui/src/toolbar.rs::main_toolbar` + `draw_brushes`).
         if draw_mode && !board && g.key == "pen" {
             continue;
@@ -686,7 +686,7 @@ fn extra_button(label: impl Into<SharedString>, active: bool, intent: Intent, on
 
 /// The Draw mode's own toolbar, 8 pt above the main pill.
 ///
-/// Ported from lizard `ui-egui/src/toolbar.rs::drawing_toolbar`: a stroke swatch and the weight for
+/// Ported from 参考实现 `ui-egui/src/toolbar.rs::drawing_toolbar`: a stroke swatch and the weight for
 /// all three freehand tools, the brush's tip, and the bezier pen's Done. Every control runs the real
 /// `tool.drawStyle` / `tool.brushPreset` command.
 pub(crate) fn drawing_bar(tool: ToolId, style: &DrawStyle, brush: Option<&str>, canvas_left: f32, canvas_w: f32, on: OnIntent) -> Div {
@@ -721,7 +721,7 @@ pub(crate) fn drawing_bar(tool: ToolId, style: &DrawStyle, brush: Option<&str>, 
             .on_mouse_down(MouseButton::Left, move |_: &MouseDownEvent, w, cx| on_color(Intent::DrawColor, w, cx)),
     );
 
-    // Weight: − / value / + (lizard uses a NumberField plus a Slider).
+    // Weight: − / value / + (参考实现 uses a NumberField plus a Slider).
     let weight = style.weight(tool);
     row = row
         .child(extra_button("−", false, Intent::DrawWeight((weight - 1.0).max(0.1)), on.clone()))
@@ -778,9 +778,9 @@ pub(crate) fn drawing_bar(tool: ToolId, style: &DrawStyle, brush: Option<&str>, 
     div().absolute().left(px(canvas_left)).w(px(canvas_w.max(0.0))).bottom(px(12.0 + PILL_H + 8.0)).flex().flex_row().justify_center().child(row)
 }
 
-/// The vector-edit row, transcribed from the saved Figma editor's `secondary_toolbelt`
-/// (`aria-label="Vector editing"` in `Figma – Figma.html`) and its plaintext
-/// `figma_app-*.min.css.br`. The saved DOM gives the exact order and grouping:
+/// The vector-edit row, transcribed from the saved 参考编辑器 editor's `secondary_toolbelt`
+/// (`aria-label="Vector editing"` in `参考编辑器 – 参考编辑器.html`) and its plaintext
+/// `参考编辑器_app-*.min.css.br`. The saved DOM gives the exact order and grouping:
 ///
 /// ```text
 /// [icon 移动] [icon 套索工具] │ [icon 油漆桶] [icon 弯曲工具] [icon 剪切] [icon Erase] │ [更多 ▾] │ [✕]
@@ -790,12 +790,12 @@ pub(crate) fn drawing_bar(tool: ToolId, style: &DrawStyle, brush: Option<&str>, 
 /// 8 pt padding, 8 pt gaps. Buttons (`.topLevelButtonSecondaryPadding`): no padding of their own,
 /// a 24 pt icon + a nowrap label with 8 pt trailing padding, 5 pt corners; the selected one keeps
 /// the hover fill lit (as the toolbar flyout does). The hairline dividers are 1 pt wide and
-/// stretch the full 40 pt height. The bar sits 8 pt above the 48 pt main pill — Figma's 96 pt
+/// stretch the full 40 pt height. The bar sits 8 pt above the 48 pt main pill — 参考编辑器's 96 pt
 /// root over a toolbelt pinned at `bottom:12px` with `height:48px` yields the same 8 pt gap.
 ///
-/// Figma's own Lasso / Paint bucket / Bend glyphs have no counterpart in the frozen icon set
+/// 参考编辑器's own Lasso / Paint bucket / Bend glyphs have no counterpart in the frozen icon set
 /// (`src/widgets/icon.rs`), so the nearest existing marks stand in; that file is untouched.
-/// Pen and Variable width — the two edit tools Figma hides behind "More" — live in that dropdown.
+/// Pen and Variable width — the two edit tools 参考编辑器 hides behind "More" — live in that dropdown.
 const VECTOR_MAIN: [(VTool, Icon, &'static str); 6] = [
     (VTool::Move, Icon::Move, "Move"),
     (VTool::Lasso, Icon::ShapeBuilder, "Lasso"),
@@ -805,10 +805,10 @@ const VECTOR_MAIN: [(VTool, Icon, &'static str); 6] = [
     (VTool::Eraser, Icon::Eraser, "Eraser"),
 ];
 
-/// "More" carries **Shape builder + Variable width**, not Pen. Figma's own bundle
+/// "More" carries **Shape builder + Variable width**, not Pen. 参考编辑器's own bundle
 /// (`81504-…min.js.br`) declares `J=[k.NLJ.SHAPE_BUILDER, k.NLJ.VECTOR_VAR_WIDTH_POINT]`
 /// and renders `g===SHAPE_BUILDER && H`, `g===VECTOR_VAR_WIDTH_POINT && N` next to the More menu;
-/// the saved DOM's six visible buttons contain no Pen at all. lizard's Pen+Width was the wrong
+/// the saved DOM's six visible buttons contain no Pen at all. 参考实现's Pen+Width was the wrong
 /// source — copying it put a pen in More and hid the shape builder.
 ///
 /// Shape builder is the engine's existing `ToolId::ShapeBuilder` (`tool.set shapeBuilder`,
@@ -821,7 +821,7 @@ fn vector_more_items() -> [(&'static str, Icon, &'static str, &'static str, Inte
 }
 
 /// A 1 pt hairline that reaches the container's outer edges (40 pt tall), cancelling its 8 pt
-/// padding — Figma uses `align-self:stretch` with `margin-top/-bottom:-8px`.
+/// padding — 参考编辑器 uses `align-self:stretch` with `margin-top/-bottom:-8px`.
 fn vector_divider() -> Div {
     let t = tokens();
     div().flex_none().w(pt(1.0)).h(pt(40.0)).bg(rgba(t.border))
@@ -853,7 +853,7 @@ fn vector_tool_button(i: usize, tool: VTool, icon: Icon, label: &'static str, cu
     if active { btn.bg(rgba(t.menu_hover)) } else { btn.hover(|s| s.bg(rgba(t.hover))) }
 }
 
-/// "More" — Figma's `aria-haspopup=menu` button: a text label plus a 16 pt chevron.
+/// "More" — 参考编辑器's `aria-haspopup=menu` button: a text label plus a 16 pt chevron.
 fn vector_more_button(open: bool, on: &OnIntent) -> Stateful<Div> {
     let t = tokens();
     let on_click = on.clone();
@@ -906,7 +906,7 @@ fn vector_more_card(current: VTool, on: &OnIntent) -> Div {
     card
 }
 
-/// A second toolbar **above** the main pill while a vector is being edited, laid out like Figma's
+/// A second toolbar **above** the main pill while a vector is being edited, laid out like 参考编辑器's
 /// `Vector editing` secondary toolbelt. Each tool button runs `vector.edit.tool`; the close
 /// button runs `vector.edit.end`; `more_open` shows the two hidden edit tools.
 pub(crate) fn vector_edit_bar(current: VTool, more_open: bool, canvas_left: f32, canvas_w: f32, on: OnIntent) -> Div {
@@ -1161,11 +1161,11 @@ mod tests {
         }
     }
 
-    /// The vector edit row follows the saved Figma `Vector editing` secondary toolbelt:
-    /// Move/Lasso │ Paint/Bend/Cut/Erase │ More │ Close. Figma's More is
+    /// The vector edit row follows the saved 参考编辑器 `Vector editing` secondary toolbelt:
+    /// Move/Lasso │ Paint/Bend/Cut/Erase │ More │ Close. 参考编辑器's More is
     /// Shape builder + Variable width — Pen is not in this toolbar at all.
     #[test]
-    fn vector_edit_row_uses_the_figma_groups() {
+    fn vector_edit_row_uses_the_reference_groups() {
         let main: Vec<&str> = VECTOR_MAIN.iter().map(|(t, _, _)| t.id()).collect();
         assert_eq!(main, ["move", "lasso", "paint", "bend", "cut", "eraser"]);
         let more: Vec<&str> = vector_more_items().iter().map(|(id, _, _, _, _)| *id).collect();

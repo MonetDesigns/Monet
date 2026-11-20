@@ -7,7 +7,7 @@
 //   - 小标题（sublabels / sublabels2）字形上方保留 pt(4.0) 留白，不得删除。
 //   - 统一网格（segmented、sublabels2 空列、field 行）一律 w_full + flex_1，禁止手算列宽。
 //
-// 2026-11-15 用户明确授权解冻：按 Figma 页面存档里的官方 CSS 重写本控件，
+// 2026-11-15 用户明确授权解冻：按 参考编辑器 页面存档里的官方 CSS 重写本控件，
 // 分方形 / 圆形两种色块（见 `SwatchShape`）。仅改本文件，不触碰其它冻结件。
 // ============================================================================
 //! Paint swatches — a direct port of `ui-egui`'s `checker`, `paint_swatch`, `swatch`,
@@ -17,7 +17,7 @@
 //! (`swatch(ui, paint, size)`), **not** a slot variant of a field: `color_field` uses it in its
 //! lead slot for any paint that is not a plain solid, and other panels place one directly.
 //!
-//! 两种形状（用户 2026-11-15，参考 Figma 存档 CSS）：方形 `chit` 左右分半、圆形 `swatch`
+//! 两种形状（用户 2026-11-15，参考 参考编辑器 存档 CSS）：方形 `chit` 左右分半、圆形 `swatch`
 //! 按 45° 斜线分半；不透明的那一半恒为纯色，另一半跟着选中的透明度变化。
 
 use crate::widgets::icon::{Icon, draw_centred};
@@ -89,7 +89,7 @@ pub fn paint_swatch(window: &mut Window, bounds: Bounds<Pixels>, paint: &Paint, 
 
     match &paint.kind {
         PaintKind::Solid { color } => {
-            // Left half opaque, right half with alpha (like Figma's swatches).
+            // Left half opaque, right half with alpha (like 参考编辑器's swatches).
             let c = rgba(color32(color.with_alpha(color.a * paint.opacity)));
             let opaque = rgba(color32(color.with_alpha(1.0)));
             let mid = x0 + w / 2.0;
@@ -156,7 +156,7 @@ pub fn paint_name(paint: &Paint) -> String {
     }
 }
 
-/// Figma 的两套色块形状（用户 2026-11-15）。
+/// 参考编辑器 的两套色块形状（用户 2026-11-15）。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SwatchShape {
     /// 方形 `chit`：垂直中线分左右两半，左半不透明、右半随 alpha。

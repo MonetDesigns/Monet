@@ -207,6 +207,14 @@ pub(crate) fn pack_uniforms(
     let reach = depth_field.as_ref().and_then(|f| local.param_value(eid, f)).unwrap_or(20.0);
     // Depth is a panel notch (1..100), not a pixel length. Figma turns it into a node-space
     // thickness upstream (see `figma_depth_coefficient.html` §1.5/§5); the CPU glass and this
+    let depth_field = local.params(eid).into_iter()
+        .find(|p| p.field == "depth" || p.field.ends_with(".depth"))
+        .map(|p| p.field.clone());
+    let reach = depth_field.as_ref()
+        .and_then(|f| local.param_value(eid, f))
+        .unwrap_or(20.0);
+    // Depth is a panel notch (1..100), not a pixel length. 参考编辑器 turns it into a node-space
+    // thickness upstream (see `参考编辑器_depth_coefficient.html` §1.5/§5); the CPU glass and this
     // external material must share that one conversion or the same document looks different
     // on the two paths. `node_w`/`node_h` are document-unit node bounds, the same domain as
     // `reach`, so write the converted **document-unit** thickness back into `u.depth`: the
@@ -537,7 +545,7 @@ fn compile(device: &wgpu::Device, info: &ShaderInfo, canvas: (u32, u32), format:
         mag_filter: wgpu::FilterMode::Linear,
         min_filter: wgpu::FilterMode::Linear,
         // Trilinear: a shader that samples the backdrop at a mip level gets the reduction *and* a
-        // linear upsample, which is Figma's frost chain (downsample → upsample) in one call.
+        // linear upsample, which is 参考编辑器's frost chain (downsample → upsample) in one call.
         mipmap_filter: wgpu::MipmapFilterMode::Linear,
         address_mode_u: wgpu::AddressMode::ClampToEdge,
         address_mode_v: wgpu::AddressMode::ClampToEdge,
@@ -609,7 +617,7 @@ const ASYNC_SLOTS: usize = 3;
 /// Level 0 is copied from *the composite so far* (not from the raw CPU scene) — that is what makes
 /// a material respect the layers underneath it, including another material's finished result. Every
 /// other level is a 2×2 box reduction **on the GPU**. Sampling level `L` with a linear filter is
-/// exactly Figma's frost chain (downsample → bilinear upsample); generating it on the GPU is also
+/// exactly 参考编辑器's frost chain (downsample → bilinear upsample); generating it on the GPU is also
 /// what removes the largest per-frame CPU cost of the earlier implementation, which rebuilt the
 /// whole chain in Rust for every pass, every frame.
 ///
@@ -1799,7 +1807,7 @@ mod tests {
     /// bindings. No shader-specific host code — only the declared names matter.
     #[test]
     fn original_glass_shader_parses_under_universal_contract() {
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/wgsl/glass.wgsl");
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/wgsl/glass.wgsl");
         assert!(path.exists(), "original glass.wgsl ships: {}", path.display());
         let eid = crate::wgsl_material::ensure_loaded(&path.to_string_lossy());
         // Keep the registry lock in its own scope: `shader_info` below re-locks fx::shared(), and a
@@ -1836,7 +1844,7 @@ mod tests {
         let mut doc = figcraft_doc::Document::default();
         let page = doc.pages[0];
         let f = doc.create(page, figcraft_doc::NodeKind::Frame, "F", 10.0, 20.0, 100.0, 80.0).expect("a frame");
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/wgsl/glass.wgsl");
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/wgsl/glass.wgsl");
         let binding = crate::wgsl_material::WgslMaterialBinding::new(path.to_string_lossy());
         doc.get_mut(f).expect("the frame").plugin_data.insert(crate::wgsl_material::BINDING_KEY.into(), binding.to_json());
 
@@ -1862,7 +1870,7 @@ mod tests {
         let mut doc = figcraft_doc::Document::default();
         let page = doc.pages[0];
         let f = doc.create(page, figcraft_doc::NodeKind::Frame, "F", 0.0, 0.0, 220.0, 140.0).expect("a frame");
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/wgsl/glass.wgsl");
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/wgsl/glass.wgsl");
         let binding = crate::wgsl_material::WgslMaterialBinding::new(path.to_string_lossy());
         doc.get_mut(f).expect("the frame").plugin_data.insert(crate::wgsl_material::BINDING_KEY.into(), binding.to_json());
 
@@ -1917,7 +1925,7 @@ mod tests {
             let mut doc = figcraft_doc::Document::default();
             let page = doc.pages[0];
             let f = doc.create(page, figcraft_doc::NodeKind::Frame, "F", 0.0, 0.0, node_w, node_h).expect("a frame");
-            let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/wgsl/glass.wgsl");
+            let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/wgsl/glass.wgsl");
             let params = [("u.depth".to_string(), notch)].into_iter().collect();
             let binding = crate::wgsl_material::WgslMaterialBinding::new(path.to_string_lossy()).with_params(params);
             doc.get_mut(f).expect("the frame").plugin_data.insert(crate::wgsl_material::BINDING_KEY.into(), binding.to_json());
@@ -2002,7 +2010,7 @@ mod tests {
         let page = doc.pages[0];
         // A 100×100 frame at (10,20) rendered into a 64×64 view hangs past both edges.
         let f = doc.create(page, figcraft_doc::NodeKind::Frame, "F", 10.0, 20.0, 100.0, 100.0).expect("a frame");
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/wgsl/glass.wgsl");
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/wgsl/glass.wgsl");
         let binding = crate::wgsl_material::WgslMaterialBinding::new(path.to_string_lossy());
         doc.get_mut(f).expect("the frame").plugin_data.insert(crate::wgsl_material::BINDING_KEY.into(), binding.to_json());
 
@@ -2045,7 +2053,7 @@ mod tests {
                 scene[i..i + 4].copy_from_slice(&c);
             }
         }
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/wgsl/glass.wgsl");
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/wgsl/glass.wgsl");
         let eid = crate::wgsl_material::ensure_loaded(&path.to_string_lossy());
         // Pack u with the universal exports (resolution = node device-pixel size) + declared params.
         let mut ex = fx::EngineExports::default();
@@ -2081,7 +2089,7 @@ mod tests {
         };
         let outside = px(&out, 4, 4);
         assert_eq!(outside, [200, 40, 40, 255], "outside the node rect is byte-identical: {outside:?}");
-        // The corrected glass (per lizard / Figma `gen_rect_glass`) has bend == 0 across the flat
+        // The corrected glass (per 参考实现 / 参考编辑器 `gen_rect_glass`) has bend == 0 across the flat
         // middle, so the exact centre over a uniform patch legitimately stays its backdrop colour.
         // Assert what must hold: the effect visibly changes a meaningful number of pixels inside
         // the node (frost + rim light + dispersion + edge refraction) and changes nothing outside.
@@ -2230,7 +2238,7 @@ mod tests {
                 }
             }
         }
-        let path_on_disk = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/wgsl/glass.wgsl");
+        let path_on_disk = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/wgsl/glass.wgsl");
         let eid = crate::wgsl_material::ensure_loaded(&path_on_disk.to_string_lossy());
         let u_bytes = {
             let reg = fx::shared();
@@ -2333,7 +2341,7 @@ mod tests {
         );
         eprintln!("  straight-edge band (corners excluded): mean {bmean:.2} max {bmax:.2} ({} px)", band.len());
         // The flat interior (past the curve) has to match: nothing there bends or lights, so the
-        // only content is the frosted backdrop. Both sides run Figma's downsample → upsample chain
+        // only content is the frosted backdrop. Both sides run 参考编辑器's downsample → upsample chain
         // (the shader through the backdrop's mip levels, the CPU through `frosted_backdrop`), and
         // both dither by 2/255 — but their dither hashes are indexed from different origins, so a
         // level or two of per-pixel difference is the dither, not the blur.
@@ -2348,14 +2356,14 @@ mod tests {
         let _ = mean;
     }
 
-    /// Frost is Figma's **downsample → upsample chain**, not a blur kernel: a radius of `2^L` px is
+    /// Frost is 参考编辑器's **downsample → upsample chain**, not a blur kernel: a radius of `2^L` px is
     /// level `L` of the reduction. Three things follow and are checked here — a radius of 0 leaves
     /// the backdrop untouched, a bigger radius spreads a 1 px feature monotonically wider (a
-    /// Gaussian would too, but it is not what Figma runs), and the composite dithers by `2/255`, so
+    /// Gaussian would too, but it is not what 参考编辑器 runs), and the composite dithers by `2/255`, so
     /// a flat backdrop picks up ±1 level instead of staying dead flat. That dither is the part the
     /// earlier stand-in was missing entirely.
     #[test]
-    fn frost_reduces_by_halving_and_dithers_like_figma() {
+    fn frost_reduces_by_halving_and_dithers_like_the_reference() {
         use figcraft_render::Pixmap;
         let (w, h) = (64u32, 64u32);
         // A white field with one 1 px black line: how far that line spreads *is* the blur radius.
@@ -2381,7 +2389,7 @@ mod tests {
         assert!(core(&small) > 40.0, "radius 4 spreads the line: {}", core(&small));
         assert!(core(&big) > core(&small) + 30.0, "radius 16 spreads it further: {} vs {}", core(&big), core(&small));
 
-        // The dither: a flat backdrop must not come out flat — Figma adds ±2/255 to break the
+        // The dither: a flat backdrop must not come out flat — 参考编辑器 adds ±2/255 to break the
         // banding the reduction leaves, and the amplitude must be that small, not visible noise.
         let mut flat = Pixmap::new(32, 32).expect("flat");
         flat.data_mut().fill(128);
@@ -2391,25 +2399,25 @@ mod tests {
         assert!(levels.iter().all(|v| v.abs_diff(128) <= 2), "and only by 2/255: {levels:?}");
     }
 
-    /// The seven controls must be **Figma's own Glass effect fields**, because that is the only
+    /// The seven controls must be **参考编辑器's own Glass effect fields**, because that is the only
     /// thing the two panes can legitimately share. The authority is the Plugin API
     /// (`Effect → GlassEffect`): `lightIntensity`, `refraction` and `dispersion` are ratios 0–1,
-    /// `depth` is "must be >= 1" (Figma's panel stops at 100), `lightAngle` is degrees, and frost is
-    /// a `radius`, not a 0–1 amount. Figma's own help example uses 66°, 60 %, Refraction 76,
+    /// `depth` is "must be >= 1" (参考编辑器's panel stops at 100), `lightAngle` is degrees, and frost is
+    /// a `radius`, not a 0–1 amount. 参考编辑器's own help example uses 66°, 60 %, Refraction 76,
     /// Depth 98, Dispersion 100, Frost 0, Splay 100 — which only type-checks under this contract.
     ///
     /// Getting it wrong is not cosmetic: it decides whether 20 means "20 px of lens" or "a 0–1
     /// slider's 20th step", and the two look nothing alike.
     #[test]
-    fn glass_panel_matches_the_figma_slider_table() {
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/wgsl/glass.wgsl");
+    fn glass_panel_matches_the_reference_slider_table() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/wgsl/glass.wgsl");
         let eid = crate::wgsl_material::ensure_loaded(&path.to_string_lossy());
         let reg = fx::shared();
         let reg = reg.lock().unwrap_or_else(|e| e.into_inner());
         let params = reg.params(&eid);
         assert_eq!(params.len(), 7, "the panel has seven sliders: {params:?}");
         let row = |field: &str| params.iter().find(|p| p.field == field).unwrap_or_else(|| panic!("missing {field}"));
-        // (field, min, max, step, default) — the engine's `Glass` model, which *is* Figma's API
+        // (field, min, max, step, default) — the engine's `Glass` model, which *is* 参考编辑器's API
         // shape (`Glass::BOUND_FIELDS` lists the API names: lightAngle, lightIntensity, refraction,
         // depth, dispersion, radius, splay). Depth and frost are lengths in document px.
         for (field, min, max, step, default) in [
@@ -2440,7 +2448,7 @@ mod tests {
         use figcraft_doc::VectorNetwork;
         let mut doc = figcraft_doc::Document::default();
         let page = doc.pages[0];
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/wgsl/glass.wgsl");
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/wgsl/glass.wgsl");
         let bind = |d: &mut figcraft_doc::Document, id| {
             let b = crate::wgsl_material::WgslMaterialBinding::new(path.to_string_lossy());
             d.get_mut(id).expect("node").plugin_data.insert(crate::wgsl_material::BINDING_KEY.into(), b.to_json());
@@ -2473,7 +2481,7 @@ mod tests {
         let mut doc = figcraft_doc::Document::default();
         let page = doc.pages[0];
         let _f = doc.create(page, figcraft_doc::NodeKind::Frame, "F", 10.0, 20.0, 100.0, 100.0).expect("a frame");
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/wgsl/glass.wgsl");
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/wgsl/glass.wgsl");
         let binding = crate::wgsl_material::WgslMaterialBinding::new(path.to_string_lossy());
         doc.get_mut(_f).expect("the frame").plugin_data.insert(crate::wgsl_material::BINDING_KEY.into(), binding.to_json());
 
@@ -2507,7 +2515,7 @@ mod tests {
         };
         let (w, h) = (32u32, 32u32);
         let canvas = vec![0u8; (w * h * 4) as usize];
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/wgsl/glass.wgsl");
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/wgsl/glass.wgsl");
         let eid = crate::wgsl_material::ensure_loaded(&path.to_string_lossy());
         let mut ex = fx::EngineExports::default();
         ex.set("resolution", vec![32.0, 32.0]);
@@ -2557,7 +2565,7 @@ mod tests {
         for (i, px) in scene.chunks_exact_mut(4).enumerate() {
             px.copy_from_slice(&[(i % 251) as u8, (i % 97) as u8, (i % 53) as u8, 255]);
         }
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/wgsl/glass.wgsl");
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/wgsl/glass.wgsl");
         let eid = crate::wgsl_material::ensure_loaded(&path.to_string_lossy());
         let mut ex = fx::EngineExports::default();
         ex.set("resolution", vec![f64::from(w), f64::from(h)]);
@@ -2692,7 +2700,7 @@ mod tests {
     /// `u` uniform the shipped `glass.wgsl` declares, so these tests exercise the actual material
     /// path (not just a bare copy).
     fn glass_pass(w: u32, h: u32) -> RunPass {
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/wgsl/glass.wgsl");
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/wgsl/glass.wgsl");
         let eid = crate::wgsl_material::ensure_loaded(&path.to_string_lossy());
         let u_bytes = {
             let reg = fx::shared();

@@ -1,6 +1,6 @@
 //! Motion 模式的画布叠加层：选中层的**运动路径**（轨迹曲线）与**变换手柄**（gizmo）。
 //!
-//! 移植自 desigma `crates/desigma-app/src/motion/inspector/overlay.rs`（`paint_overlay`），
+//! 移植自 参考实现 `crates/参考实现-app/src/motion/inspector/overlay.rs`（`paint_overlay`），
 //! 并按用户 2026-11-12 的规格补齐交互：
 //! - 路径：**只由空间信息**决定（关键帧位置 + 关键帧空间手柄），有手柄走三次贝塞尔、
 //!   没手柄走直线，采样用的是**几何参数**而不是时间——缓动/弹簧只决定物体沿这条线走多快，
@@ -27,12 +27,12 @@ use crate::app::CanvasApp;
 use crate::canvas::cursors::Shown;
 use crate::theme::{Tokens, stroke as s};
 
-/// gizmo 的 Y 轴（粉）与 X 轴（绿）——desigma `AXIS_Y` / `AXIS_X`。
+/// gizmo 的 Y 轴（粉）与 X 轴（绿）——参考实现 `AXIS_Y` / `AXIS_X`。
 const AXIS_Y: Color32 = Color32::from_rgb(0xF2, 0x4E, 0x7B);
 const AXIS_X: Color32 = Color32::from_rgb(0x3D, 0xD6, 0x8C);
-/// 旋转环的蓝色（desigma `theme::CANVAS_SELECTION = 0x0D99FF`，源码常量，非截图测绘）。
+/// 旋转环的蓝色（参考实现 `theme::CANVAS_SELECTION = 0x0D99FF`，源码常量，非截图测绘）。
 const RING_BLUE: Color32 = Color32::from_rgb(0x0D, 0x99, 0xFF);
-/// 手柄圆环半径（desigma `RING_R`）。
+/// 手柄圆环半径（参考实现 `RING_R`）。
 const RING_R: f32 = 33.0;
 /// 白色是蓝色环的**描边**：这一侧露出的白边宽度恒定，不随 hover 变化（用户 2026-11-12 定 1）。
 const RING_OUTLINE_W: f32 = 1.0;
@@ -135,7 +135,7 @@ pub struct State {
     pub fps: u32,
     /// 时间轴总时长（ms）：算 clip 的结束时间要用（`span_ms`）。
     pub duration_ms: u32,
-    /// 右栏准星按钮把手柄关掉了（desigma `motion_ins.gizmo_hidden`）。
+    /// 右栏准星按钮把手柄关掉了（参考实现 `motion_ins.gizmo_hidden`）。
     pub gizmo_hidden: bool,
     /// 播放头下评估过的文档：gizmo 中心按它算，所以手柄跟着当前帧的层走。
     /// **轨迹不用它**（轨迹必须钉死在静态坐标系）。
@@ -224,7 +224,7 @@ fn rot(v: Vec2, a_rad: f64) -> Vec2 {
 struct Geo {
     node: NodeId,
     center: Pos2,
-    /// 动画 Rotation 相对设计角的增量（度，Figma 逆时针为正）。设计 45°、动画 0 时为 0。
+    /// 动画 Rotation 相对设计角的增量（度，参考编辑器 逆时针为正）。设计 45°、动画 0 时为 0。
     delta_deg: f64,
     /// 屏幕单位轴：局部 +X 以「向左」为基准，局部 +Y 以「向上」为基准，再按增量旋转。
     axis_x: Vec2,
@@ -261,7 +261,7 @@ fn geos(app: &CanvasApp) -> Vec<Geo> {
         // base_rotation_deg，于是 delta=0 → 箭头是屏幕正方向（用户 2026-11-12）。
         let r = motion::value_at(node, AnimProperty::Rotation, t).and_then(|v| v.scalar()).unwrap_or(base_rot);
         let delta_deg = r - base_rot;
-        // Figma 逆时针为正；屏幕 y 向下，故施加 kurbo 的 -delta。
+        // 参考编辑器 逆时针为正；屏幕 y 向下，故施加 kurbo 的 -delta。
         let a = -delta_deg.to_radians();
         // 运动路径上的关键帧点（屏幕位置），供拖动改空间位置。
         let keys: Vec<(u32, Pos2)> = node
@@ -970,7 +970,7 @@ mod tests {
         {
             let ds = app.session.ds_mut().expect("ds");
             if let Some(n) = Arc::make_mut(&mut ds.doc).node_mut(dot) {
-                n.transform = Affine::rotate((-45.0_f64).to_radians()); // Figma +45°(逆时针)
+                n.transform = Affine::rotate((-45.0_f64).to_radians()); // 参考编辑器 +45°(逆时针)
             }
         }
         on(&mut app, 0.0);

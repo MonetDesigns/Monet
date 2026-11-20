@@ -344,7 +344,7 @@ fn open_overflow_menu(
     me.update(cx, |cv, cx| cv.open_menu(anchor, Some(200.0), rows, on_pick, cx));
 }
 
-/// Figma 桌面壳标签页的颜色语义 → 项目现有 theme token 的映射（1:1 语义，不写死色值）。
+/// 参考编辑器 桌面壳标签页的颜色语义 → 项目现有 theme token 的映射（1:1 语义，不写死色值）。
 ///
 /// `desktop_shell.css` 用的是 `--color-*` 语义变量，这里逐条对到 `theme::Tokens`：
 ///   `--color-text`            → t.text           （主文字）
@@ -385,7 +385,7 @@ fn bar_button(icon: Icon, t: crate::theme::Tokens, id: &'static str) -> Stateful
         .child(icon::paint(icon, rgba(t.icon), BAR_GLYPH))
 }
 
-/// Figma `.tab_bar--newTabButtonUI3`：24×24、圆角 5、左右外边距 7，
+/// 参考编辑器 `.tab_bar--newTabButtonUI3`：24×24、圆角 5、左右外边距 7，
 /// 图标 text-secondary、hover 变 text 并铺 hover 底、active 铺 pressed 底。
 /// 颜色全部走 tab_ink() 映射，不写死色值。
 fn new_tab_button(id: &'static str) -> Stateful<Div> {
@@ -428,7 +428,7 @@ pub(crate) fn tab_strip(
     // 根视图在后面还要借 `self.tabs` / `self.render_left_panel(...)`，会直接 E0502/E0499。
 ) -> Stateful<Div> {
     let t = tokens();
-    // Figma 标签页语义色 → 项目 token（见 tab_ink）。逐条映射，换主题自动跟随。
+    // 参考编辑器 标签页语义色 → 项目 token（见 tab_ink）。逐条映射，换主题自动跟随。
     let ink = tab_ink();
     let now = state.now();
     state.motion.begin_frame(crate::windows::current(), docs.iter().map(|d| d.uid), now, reduce_motion);
@@ -557,7 +557,7 @@ pub(crate) fn tab_strip(
         .pl(pt(content_x0))
         .pr(pt(content_x0))
         .group("tab-home-grp")
-        // Active is the Figma file-browser tab's own surface (white); hover only tints an
+        // Active is the 参考编辑器 file-browser tab's own surface (white); hover only tints an
         // inactive tab. A plain `when` loses to the `hover` pseudo-class whatever its order, so
         // the hover tint is gated on `!home_active` to keep the active tab white under the
         // pointer (user 2026-11-18).
@@ -572,7 +572,7 @@ pub(crate) fn tab_strip(
                 cx.notify();
             });
         })
-        // Figma `.tab--fileBrowserTab`：图标普通 text-secondary，hover/active 变 text。
+        // 参考编辑器 `.tab--fileBrowserTab`：图标普通 text-secondary，hover/active 变 text。
         // svg 的显式色不继承父 text_color，用双叠层 + group_hover 显隐。
         .child(
             div()
@@ -675,11 +675,11 @@ pub(crate) fn tab_strip(
         let e = entries[layout.first + slot].clone();
         let key = e.key;
         let is_active = e.active || e.on_screen;
-        // Figma 按钮态色（Copy 的 Color32），供下面的 hover/active 闭包 move。
+        // 参考编辑器 按钮态色（Copy 的 Color32），供下面的 hover/active 闭包 move。
         let ink_hover = ink.hover;
         let ink_panel = ink.panel;
         let ink_text = ink.text;
-        // Figma hover 联动：body 作为 group，图标与文字用 group_hover 变蓝/变深。
+        // 参考编辑器 hover 联动：body 作为 group，图标与文字用 group_hover 变蓝/变深。
         let tab_group = SharedString::from(format!("tabgrp-{key:?}"));
         let tab_x = if Some(key) == dragged { ghost_x } else { display_x.iter().find(|(k, _)| *k == key).map_or(tabs_x0, |(_, x)| *x) };
 
@@ -696,7 +696,7 @@ pub(crate) fn tab_strip(
             TabKey::Doc { index } => index,
             TabKey::Present { .. } | TabKey::New { .. } => 0,
         };
-        // `w` 含右侧 1pt 分隔线：body + close 只能占 `w - 1`（close 按 Figma 24pt）。
+        // `w` 含右侧 1pt 分隔线：body + close 只能占 `w - 1`（close 按 参考编辑器 24pt）。
         let body_w = (w - TAB_BUTTON - TAB_CLOSE_RIGHT - 1.0).max(0.0);
         // 上游 `bidi::paint_name` 的可用宽度也要扣掉 live 标记与未保存点，否则名字会压到徽标上。
         let name_w = (w - if e.live.visible() { LIVE_MARK_WIDTH } else { 0.0 } - if e.dirty { 12.0 } else { 0.0 }).max(0.0);
@@ -781,7 +781,7 @@ pub(crate) fn tab_strip(
             TabKey::New { .. } => Icon::Plus,
         };
         body = body
-            // Figma `.tab--tab`：图标普通 = text-secondary，active = icon-brand；
+            // 参考编辑器 `.tab--tab`：图标普通 = text-secondary，active = icon-brand；
             // 非 active 标签 hover 时图标也变品牌蓝（叠一层 group_hover 显隐）。
             .child(
                 div()
@@ -822,7 +822,7 @@ pub(crate) fn tab_strip(
                 d.child(icon::paint(glyph, rgba(color), BAR_GLYPH))
             });
 
-        // Figma `.tab--button`：24×24、圆角 5px、图标 text-secondary；hover 铺 hover 色，
+        // 参考编辑器 `.tab--button`：24×24、圆角 5px、图标 text-secondary；hover 铺 hover 色，
         // active 铺 pressed 色（映射到项目 token）。独占 24pt，不压在可拖拽的 body 上。
         let mut close = div()
             .flex_none()
@@ -887,12 +887,12 @@ pub(crate) fn tab_strip(
         }
         let close = close.child(icon::paint(Icon::Close, rgba(ink.secondary), CLOSE_ICON));
 
-        // Figma `.tab--tab` + `.tab--activeTab`（desktop_shell.css）语义 → 项目 token：
+        // 参考编辑器 `.tab--tab` + `.tab--activeTab`（desktop_shell.css）语义 → 项目 token：
         //   普通：透明底、右侧 1px `--color-bordertranslucent` → t.border；
         //   hover：底 `--color-bghovertransparent` → t.hover（文字/图标态已在 body 上）；
-        //   active：底 `--color-bg` → t.panel + 底部 1px 弱线（Figma 的
+        //   active：底 `--color-bg` → t.panel + 底部 1px 弱线（参考编辑器 的
         //     color-mix(opposite 10%, bg 90%) 亮=#E6E6E6/暗=#444，正好是 t.border）+ padding-top 1。
-        // active 标签 hover 不改底色（Figma `.activeTab:hover` 仍是 bg），故 hover 只挂非 active。
+        // active 标签 hover 不改底色（参考编辑器 `.activeTab:hover` 仍是 bg），故 hover 只挂非 active。
         let tab = div()
             .absolute()
             .left(px(tab_x - tabs_x0))

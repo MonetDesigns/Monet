@@ -404,7 +404,7 @@ pub fn color_picker(
     // The hex field, as before.
     col = col.child(div().w(pt(240.0)).h(pt(28.0)).flex().items_center().child(hex_field));
 
-    // Page colours: a small preset palette (Figma's "Document colors" row).
+    // Page colours: a small preset palette (参考编辑器's "Document colors" row).
     let palette: [Color32; 12] = [
         Color32::from_rgb(0x00, 0x00, 0x00),
         Color32::from_rgb(0xFF, 0xFF, 0xFF),

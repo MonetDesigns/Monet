@@ -67,7 +67,7 @@ fn vector_overlay(
         painter.circle_filled(b, r, if on { accent } else { Color32::WHITE });
         painter.circle_stroke(b, r, s(accent, 1.0));
     }
-    // 顶点：**真正的圆点**（hover 放大、选中 accent）。egui/lizard 用 7/9 pt 方块配
+    // 顶点：**真正的圆点**（hover 放大、选中 accent）。egui/参考实现 用 7/9 pt 方块配
     // `CornerRadius::same(5)`，egui 会把圆角截到半边长、看起来就是圆；但 GPUI 的
     // `rect_filled` 只把 radius 原样交给 `paint_quad`（`painter.rs::corners`），
     // 7 pt 方块配 5 pt 圆角仍然是圆角方块，不会变成圆——这就是上一版「照抄 egui 写法
@@ -366,7 +366,7 @@ pub(super) fn overlays(
         let pts: Vec<Pos2> = ov.pen.iter().map(|[x, y]| app.to_screen(*x, *y)).collect();
         if matches!(app.session.tool.tool, ToolId::Pencil | ToolId::Brush) {
             // 将要生成的笔画：用 `tool.drawStyle` 的颜色与粗细（缩到很小时至少 1px），
-            // 与 `pencil_finish` 真正写入文档的笔触一致（lizard `drawing_toolbar`）。
+            // 与 `pencil_finish` 真正写入文档的笔触一致（参考实现 `drawing_toolbar`）。
             // 笔刷的每一段还带自己的宽度系数（`pen_widths`，来自压力），逐段画才看得出压感——
             // 以前这里是一条等宽折线，压感只在抬手后才"跳"出来。
             let tool = app.session.tool.tool;
@@ -511,7 +511,7 @@ fn shape_overlay(app: &CanvasApp, painter: &mut Painter, col: Color32) {
     }
 }
 
-/// 贝塞尔控制点：半径 `size` 的**圆点**（egui/lizard 的 `bezier_handle` 都是
+/// 贝塞尔控制点：半径 `size` 的**圆点**（egui/参考实现 的 `bezier_handle` 都是
 /// `circle_filled` + `circle_stroke`，矢量编辑与钢笔绘制共用同一形状）。
 fn bezier_handle(painter: &mut Painter, a: Pos2, b: Pos2, size: f32, col: Color32) {
     painter.line_segment([a, b], stroke(col.gamma_multiply(0.6), 1.0));

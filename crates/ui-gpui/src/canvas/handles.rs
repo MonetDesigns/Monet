@@ -24,10 +24,10 @@ use super::rulers::fmt;
 use crate::app::CanvasApp;
 use crate::canvas::cursors::Shown;
 
-/// Figma 的 spacing 粉（数值标签底色）。
+/// 参考编辑器 的 spacing 粉（数值标签底色）。
 pub(crate) const PINK: Color32 = Color32::from_rgb(0xF2, 0x48, 0x8C);
 
-/// padding 带（自动布局内边距）的蓝：深色主题用 Figma 快照里的深色令牌。
+/// padding 带（自动布局内边距）的蓝：深色主题用 参考编辑器 快照里的深色令牌。
 fn pad_colour(dark: bool) -> Color32 {
     if dark { Color32::from_rgb(0x0c, 0x8c, 0xe9) } else { Color32::from_rgb(0x0d, 0x99, 0xff) }
 }
@@ -37,7 +37,7 @@ fn gap_colour(dark: bool) -> Color32 {
     if dark { Color32::from_rgb(0xf3, 0x16, 0xb0) } else { Color32::from_rgb(0xff, 0x24, 0xbd) }
 }
 
-/// 带子的 RGBA（未预乘）：底色 α=0.15、斜线 α=0.60（Figma 快照 CSS 的 `.xljh79v`）。
+/// 带子的 RGBA（未预乘）：底色 α=0.15、斜线 α=0.60（参考编辑器 快照 CSS 的 `.xljh79v`）。
 fn rgba(c: Color32, a: f32) -> [u8; 4] {
     [c.0[0], c.0[1], c.0[2], (a.clamp(0.0, 1.0) * 255.0).round() as u8]
 }

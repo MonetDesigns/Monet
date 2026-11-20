@@ -1,13 +1,13 @@
-//! 取色器 / 调色面板专用的 24 pt 图标（照 Figma 网页编辑器 DOM 里的原始 SVG 1:1 落地）。
+//! 取色器 / 调色面板专用的 24 pt 图标（照 参考编辑器 网页编辑器 DOM 里的原始 SVG 1:1 落地）。
 //!
 //! 为什么不塞进冻结的 [`crate::widgets::icon::Icon`]：那张表的判别值、`asset_name`、`ALL`
 //! 与单测断言全部锁死（2026-11-05 用户硬性要求），而这组图标只服务取色器的四条
 //! 工具栏（填充类型 / 混合模式 / 吸管 / 色板下拉箭头）。项目既有约定（见 `typ_icons`）：
 //! 冻结文件只加 `pub mod` / `pub use`，不改内容 —— 于是走 `canvas/svg_text.rs` 里
-//! `AppAssets` 的 `picker:` 前缀，把 Figma 的 `<path d>` 原样内联，用与 `icon::paint`
+//! `AppAssets` 的 `picker:` 前缀，把 参考编辑器 的 `<path d>` 原样内联，用与 `icon::paint`
 //! 完全相同的 `svg().path().text_color()` 管线渲染（SVG 只收黑色，着色由 `text_color` 注入）。
 //!
-//! 来源：`Figma – Figma.html` 快照里取色面板的 `svg[data-fpl-icon-size="24"]` 节点，
+//! 来源：`参考编辑器 – 参考编辑器.html` 快照里取色面板的 `svg[data-fpl-icon-size="24"]` 节点，
 //! 路径数据未做任何改写（只把 `fill="var(--fpl-icon-color…)"` 换成 `fill="#000"`）。
 
 use gpui::{Hsla, IntoElement, SharedString, prelude::*, svg};
@@ -37,16 +37,16 @@ struct Entry {
 
 /// 唯一资源表。`include_str!` 编译期内联，运行时零 I/O。
 static ENTRIES: &[Entry] = &[
-    Entry { icon: PickerIcon::Solid, name: "picker-solid", svg: include_str!("../assets/picker/picker-solid.svg") },
-    Entry { icon: PickerIcon::Gradient, name: "picker-gradient", svg: include_str!("../assets/picker/picker-gradient.svg") },
-    Entry { icon: PickerIcon::Blend, name: "picker-blend", svg: include_str!("../assets/picker/picker-blend.svg") },
-    Entry { icon: PickerIcon::Dropper, name: "picker-dropper", svg: include_str!("../assets/picker/picker-dropper.svg") },
-    Entry { icon: PickerIcon::Sliders, name: "picker-sliders", svg: include_str!("../assets/picker/picker-sliders.svg") },
-    Entry { icon: PickerIcon::Chevron, name: "picker-chevron", svg: include_str!("../assets/picker/picker-chevron.svg") },
+    Entry { icon: PickerIcon::Solid, name: "picker-solid", svg: include_str!("../assets/icons/picker/picker-solid.svg") },
+    Entry { icon: PickerIcon::Gradient, name: "picker-gradient", svg: include_str!("../assets/icons/picker/picker-gradient.svg") },
+    Entry { icon: PickerIcon::Blend, name: "picker-blend", svg: include_str!("../assets/icons/picker/picker-blend.svg") },
+    Entry { icon: PickerIcon::Dropper, name: "picker-dropper", svg: include_str!("../assets/icons/picker/picker-dropper.svg") },
+    Entry { icon: PickerIcon::Sliders, name: "picker-sliders", svg: include_str!("../assets/icons/picker/picker-sliders.svg") },
+    Entry { icon: PickerIcon::Chevron, name: "picker-chevron", svg: include_str!("../assets/icons/picker/picker-chevron.svg") },
 ];
 
 /// 资源前缀。完整格式：`picker:<name>.svg`。
-pub const ASSET_PREFIX: &str = "picker:";
+pub const ASSET_PREFIX: &str = "icons/picker/";
 
 impl PickerIcon {
     fn entry(self) -> &'static Entry {

@@ -256,7 +256,7 @@ impl ExtraState {
     }
 }
 
-/// 居中浮层（chrome）+ 对应面板的 body。`new_page`：Home 是「+」打开的临时页（Figma 桌面首页）。
+/// 居中浮层（chrome）+ 对应面板的 body。`new_page`：Home 是「+」打开的临时页（参考编辑器 桌面首页）。
 pub(crate) fn render(
     kind: &ExtraKind,
     app: &CanvasApp,
@@ -273,6 +273,7 @@ pub(crate) fn render(
         ExtraKind::Versions => versions_body(app, cmds, state, root, cx),
         ExtraKind::DevCompare { id, version } => compare_body(app, cmds, state, *id, version.as_deref()),
         // 「+」打开的临时页（`new_active`）用 Figma 桌面首页的样子：居中分类 + 搜索 + 最近文件。
+        // 「+」打开的临时页（`new_active`）用 参考编辑器 桌面首页的样子：居中分类 + 搜索 + 最近文件。
         ExtraKind::Home => crate::home::body(app, cmds, state, root, new_page),
     };
     if matches!(kind, ExtraKind::Home) {

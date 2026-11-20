@@ -128,15 +128,20 @@ pub(crate) const MAX_PANEL: f32 = 500.0;
 pub(crate) const DEFAULT_PANEL: f32 = 280.0;
 /// 两个分隔条各自的夹取范围：左栏 240..443，右栏 240..500（用户 2026-11-19：
 /// 左右最小宽度统一 240）。
+/// 参考编辑器 快照里两个分隔条的 ARIA 范围：左栏 240..443，右栏 241..500。
+/// 用户要求按各自的范围夹取，不再左右共用一个上下限。
 pub(crate) const MIN_LEFT_PANEL: f32 = 240.0;
 pub(crate) const MAX_LEFT_PANEL: f32 = 443.0;
 pub(crate) const MIN_RIGHT_PANEL: f32 = 240.0;
 pub(crate) const MAX_RIGHT_PANEL: f32 = 500.0;
 /// 窗口布局的默认宽度（用户 2026-11-19：打开时左右都是 240；左 rail 仍是 57）。
+/// 窗口布局的默认宽度，按 参考快照根节点的 CSS 变量：
+/// `--left-panel-width: 240px` / `--right-panel-width: 241px`（左 rail 仍是 57）。
+/// 左右栏宽度本来就不同，不再共用一个 `DEFAULT_PANEL`。
 pub(crate) const DEFAULT_LEFT_PANEL: f32 = 240.0;
 pub(crate) const DEFAULT_RIGHT_PANEL: f32 = 240.0;
 
-/// 左右栏头部间距，直接取自 Figma 参考 `Figma (7).fig` 的 **AutoLayout 数据**
+/// 左右栏头部间距，直接取自 参考稿的 **AutoLayout 数据**
 /// （不是量坐标猜的）。`AutoLayout { gap, padding, main_align, cross_align }`：
 ///
 /// Frame 38 右栏头部：
@@ -529,7 +534,7 @@ pub(crate) struct PanelSel {
     pub in_instance: bool,
 }
 
-/// 选区标题行的判断输入（`lizard right.rs::header`）。全是纯值，方便单测锁住显隐规则。
+/// 选区标题行的判断输入（`参考实现 right.rs::header`）。全是纯值，方便单测锁住显隐规则。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct HeaderSel {
     pub is_frame: bool,
@@ -537,12 +542,12 @@ pub(crate) struct HeaderSel {
     pub is_text: bool,
     pub is_component: bool,
     pub is_shape: bool,
-    /// 矢量编辑已经选中了顶点 / 线段（lizard `points_selected`）。
+    /// 矢量编辑已经选中了顶点 / 线段（参考实现 `points_selected`）。
     pub points_selected: bool,
     pub count: usize,
 }
 
-/// 标题行该画哪套东西（`lizard right.rs::header` 的分支结果）。
+/// 标题行该画哪套东西（`参考实现 right.rs::header` 的分支结果）。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct HeaderActions {
     /// 类型名带下拉（Frame / Group）。
@@ -557,12 +562,12 @@ pub(crate) struct HeaderActions {
     pub edit_object: bool,
 }
 
-/// 右栏按钮的**显隐条件**，逐条照 `ui-egui` / `lizard` 源码。集中成纯函数，避免条件散在各处，
+/// 右栏按钮的**显隐条件**，逐条照 `ui-egui` / `参考实现` 源码。集中成纯函数，避免条件散在各处，
 /// 也让「什么时候显示 / 什么时候隐藏」可以被单测锁住。
 pub(crate) mod visibility {
     use super::{HeaderActions, HeaderSel, PanelSel};
 
-    /// `lizard right.rs::header`：
+    /// `参考实现 right.rs::header`：
     /// * Frame / Group → 类型名下拉；单选 Frame 另有「交换方向」。
     /// * 已选矢量点 → 只留类型名那部分，右侧动作一个都不画（`return`）。
     /// * Component / ComponentSet → 走组件专属分支，普通动作一个都不画。
@@ -579,7 +584,7 @@ pub(crate) mod visibility {
         HeaderActions { quick: true, edit_object: s.is_shape, ..base }
     }
 
-    /// `lizard right.rs::header`：`bool_button.clicked() && sel.len() >= 2` 才执行 `bool.union`。
+    /// `参考实现 right.rs::header`：`bool_button.clicked() && sel.len() >= 2` 才执行 `bool.union`。
     pub fn bool_union_enabled(count: usize) -> bool {
         count >= 2
     }
@@ -654,7 +659,7 @@ pub(crate) struct RightFields {
     scale_ctx: std::rc::Rc<std::cell::RefCell<crate::panels::right::data::ScaleData>>,
     /// Frame 预设面板各分类的展开状态（egui 存在 `ui.data` 的临时值，默认只开 Phone）。
     preset_open: std::rc::Rc<std::cell::RefCell<Vec<(&'static str, bool)>>>,
-    /// Selection colors 节的展开态，键是 `ds.uid`（lizard
+    /// Selection colors 节的展开态，键是 `ds.uid`（参考实现
     /// `Id::new(("selection_colors_open", ds.uid))`）：**每个文档各自记住**开合状态，
     /// 缺省即折叠；折叠时头部右侧显示最多三个色块 + `+N`。
     selection_colors_open: std::rc::Rc<std::cell::RefCell<std::collections::HashMap<u64, bool>>>,
@@ -662,6 +667,7 @@ pub(crate) struct RightFields {
     /// 只有展开时才让 `panel_data` 去光栅化预览图，避免每份文档白白渲染一张缩略图。
     export_preview_open: std::rc::Rc<std::cell::Cell<bool>>,
     /// 该节头部是否悬停（lizard 只在悬停时画 chevron、把标题提亮）。
+    /// 该节头部是否悬停（参考实现 只在悬停时画 chevron、把标题提亮）。
     selection_colors_hover: std::rc::Rc<std::cell::RefCell<bool>>,
     /// 右栏当前标签：0 = Design，1 = Prototype，2 = Inspect（egui `app.ui.right_tab`）。纯 UI 状态，不进文档。
     right_tab: std::rc::Rc<std::cell::RefCell<u8>>,
@@ -3008,9 +3014,9 @@ mod cmd_queue_tests {
 mod visibility_tests {
     use super::{HeaderSel, PanelSel, visibility};
 
-    /// `lizard right.rs::header` 的分支：Frame / Group / Text / 形状 / 组件 / 已选矢量点。
+    /// `参考实现 right.rs::header` 的分支：Frame / Group / Text / 形状 / 组件 / 已选矢量点。
     #[test]
-    fn header_actions_follow_lizard_visibility_rules() {
+    fn header_actions_follow_reference_visibility_rules() {
         let a = |s: HeaderSel| visibility::header_actions(&s);
         // 普通矩形：类型名没有下拉，普通动作齐；单选形状多一个 Edit object。
         let plain = a(HeaderSel::default());
@@ -3029,7 +3035,7 @@ mod visibility_tests {
         assert!(text.text && !text.quick && !text.edit_object && !text.type_menu);
         // 多选文本同样走 Text 分支。
         assert!(a(HeaderSel { is_text: true, count: 3, ..HeaderSel::default() }).text);
-        // 组件 / 已选矢量点：右侧动作全隐藏，但 Frame 的交换方向仍在（lizard 在 return 之前画）。
+        // 组件 / 已选矢量点：右侧动作全隐藏，但 Frame 的交换方向仍在（参考实现 在 return 之前画）。
         let component = a(HeaderSel { is_component: true, count: 1, ..HeaderSel::default() });
         assert!(!component.quick && !component.text);
         let points = a(HeaderSel { points_selected: true, is_frame: true, count: 1, ..HeaderSel::default() });
@@ -3098,7 +3104,7 @@ mod visibility_tests {
         app.session.execute("layout.add", &serde_json::json!({})).expect("layout.add must accept the current selection");
 
         // 引擎把非 frame 节点先 `wrap` 成一个新 frame，再把自动布局挂到**那个 frame**上
-        // （见 engine `structure.rs::layout_add`），与 Figma「选中矩形 → 加自动布局 → 自动套一层 frame」一致。
+        // （见 engine `structure.rs::layout_add`），与 参考编辑器「选中矩形 → 加自动布局 → 自动套一层 frame」一致。
         // 所以 Blue 本身不改、被收进新 frame；新 frame 才是真正带 layout 的节点。
         let fid = *app.selection().first().expect("layout.add selects the new frame");
         assert_ne!(fid, blue, "layout.add wraps the rectangle in a new frame");

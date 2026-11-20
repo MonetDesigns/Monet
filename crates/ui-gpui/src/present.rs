@@ -86,7 +86,7 @@ struct MotionClock {
     base_ms: f64,
 }
 
-/// 对齐 desigma `animation_control` 的 op 语义，作用于一个画框的时钟。
+/// 对齐 参考实现 `animation_control` 的 op 语义，作用于一个画框的时钟。
 /// `at_ms` 是该画框当前播放头，`dur_ms` 是它的总时长（>=1）。
 ///
 /// * `Play{from_start:false}`：正在播且没到头 → 幂等不动；已到头 → 从头播；否则续播。
@@ -989,7 +989,7 @@ impl PresentState {
 /// 顶栏高度（px，eGUI `Chrome::FULL.bar_h`）。
 const BAR_H: f32 = 40.0;
 
-/// 预览窗格顶栏高度（px）。用普通标题栏的通用高度，不抄 Figma 预览模式更矮的 36。
+/// 预览窗格顶栏高度（px）。用普通标题栏的通用高度，不抄 参考编辑器 预览模式更矮的 36。
 const PANE_BAR_H: f32 = 38.0;
 
 /// 画面四周留白（eGUI `Chrome::FULL.pad`）。
@@ -2127,7 +2127,7 @@ mod tests {
 
     #[test]
     fn animation_op_resume_is_idempotent_while_playing() {
-        // Play{from_start:false} 正在播且没到头 → 幂等不动（desigma 语义）。
+        // Play{from_start:false} 正在播且没到头 → 幂等不动（参考实现 语义）。
         let cur = clock(true, 250.0);
         assert_eq!(apply_animation_op(AnimationOp::RESUME, cur, 250.0, 1000.0), cur);
     }

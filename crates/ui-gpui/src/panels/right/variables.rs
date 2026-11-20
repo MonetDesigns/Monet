@@ -408,6 +408,7 @@ impl MenuItem {
 /// edit / delete / move to a group / scope all act on every selected variable in one undo step.
 fn bulk_menu_items(rows: &[(String, String, VarKind)], groups: &[String]) -> Vec<MenuItem> {
     let mut items = vec![MenuItem::new(tr("Edit variable"), "ui.details", json!({ "variable": rows[0].0 }))];
+    let mut items = vec![MenuItem::new(tr("Edit variables"), "ui.details", json!({ "variable": rows[0].0 }))];
     let n = rows.len();
     let n_text = n.to_string();
     let delete_steps: Vec<Value> =
@@ -1198,6 +1199,8 @@ impl VariablesEditor {
         // A bulk delete leaves stale ids in `selected`; resolve the first *live* selected
         // row instead of blindly taking selected[0].
         let selected = st.borrow().selected.clone();
+        let sel = st.borrow().selected.first().cloned();
+        let Some(sel) = sel else { return };
         let list = Self::collections(st, data);
         let Some((c, r)) = selected.iter().find_map(|sel| {
             list.iter().find_map(|c| c.rows.iter().find(|r| r.id == *sel).map(|r| (c, r)))
@@ -2808,6 +2811,15 @@ impl VariablesEditor {
         let has_override = r.overrides.iter().any(|&o| o);
         // Bulk-menu snapshot is built once per table rebuild and shared by every row
         // (see `table`); cloning it per row made large collections allocate quadratically.
+        // Bulk-menu snapshot: the rows this collection can act on (inherited ones are changed in
+        // their own collection, as in egui `bulk_ids`).
+        let bulk_rows: Vec<(String, String, VarKind)> = c
+            .rows
+            .iter()
+            .filter(|x| !x.inherited)
+            .map(|x| (x.id.clone(), x.full_name.clone(), x.kind))
+            .collect();
+        let bulk_groups = c.groups.clone();
         let single_items = if movable {
             let mut v = vec![
                 MenuItem::new(tr("Edit variable"), "ui.details", json!({ "variable": r.id })),

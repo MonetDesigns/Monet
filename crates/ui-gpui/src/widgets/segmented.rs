@@ -48,7 +48,7 @@ impl SegItem {
     pub fn text(s: impl Into<SharedString>) -> Self {
         Self::Text(s.into())
     }
-    /// A typography-dialog glyph, from the lizard `typ-*.svg` set.
+    /// A typography-dialog glyph, from the 参考实现 `typ-*.svg` set.
     pub fn svg(i: crate::widgets::typ_icons::TypIcon) -> Self {
         Self::Svg(i)
     }
@@ -80,7 +80,7 @@ impl Segmented {
         Self::new(items.iter().copied().map(SegItem::Svg).collect())
     }
 
-    /// 固定整条 bar 的总宽；格子 `flex_1` 均分。用于对话框里 lizard 指定的定宽分段条。
+    /// 固定整条 bar 的总宽；格子 `flex_1` 均分。用于对话框里 参考实现 指定的定宽分段条。
     pub fn fixed_bar(mut self, w: f32) -> Self {
         self.fixed_w = Some(w);
         self.fill = false;
