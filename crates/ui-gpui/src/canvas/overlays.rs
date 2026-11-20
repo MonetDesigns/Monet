@@ -548,16 +548,20 @@ fn transform_box(
     if let Some(label) = label.filter(|_| app.session.prefs.show_dimensions) {
         let bottom = q.iter().map(|p| p.y).fold(f32::MIN, f32::max);
         let cx = q.iter().map(|p| p.x).sum::<f32>() / 4.0;
-        return Some(pill(painter, pos2(cx, bottom + 9.0), Align2::CENTER_TOP, label, col));
+        return Some(pill_with_bg(painter, pos2(cx, bottom + 9.0), Align2::CENTER_TOP, label, col, col));
     }
     None
 }
 
 /// 画布读数：`col` 底色的 pill 上白字（返回 pill 区域）。
 pub(super) fn pill(painter: &mut Painter, at: Pos2, align: Align2, text: String, col: Color32) -> Rect {
+    pill_with_bg(painter, at, align, text, col, under_white(col))
+}
+
+fn pill_with_bg(painter: &mut Painter, at: Pos2, align: Align2, text: String, col: Color32, bg: Color32) -> Rect {
     let galley = painter.layout_no_wrap(text, semibold(11.0), Color32::WHITE);
     let r = align.anchor_size(at, galley.size() + vec2(8.0, 4.0));
-    painter.rect_filled(r, CornerRadius::same(3), under_white(col));
+    painter.rect_filled(r, CornerRadius::same(3), bg);
     painter.galley(r.min + vec2(4.0, 2.0), galley, Color32::WHITE);
     r
 }
