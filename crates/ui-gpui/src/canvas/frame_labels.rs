@@ -14,7 +14,7 @@ use super::geom::*;
 use super::painter::Painter;
 use super::rulers::status_badge;
 use crate::app::CanvasApp;
-use crate::theme::{COMPONENT, Tokens};
+use crate::theme::{COMPONENT_TEXT, SLOT, Tokens};
 
 /// 文字身份色（图标层用橙色；这里先留接口）。
 pub const ICON: Color32 = Color32::from_rgb(0xFF, 0xB3, 0x4D);
@@ -64,9 +64,9 @@ pub fn draw(
     let edge = label_edge(p00, at(n.width, 0.0), p01);
     let tl = edge.corner;
     let mark = match n.kind {
-        NodeKind::Component { .. } | NodeKind::ComponentSet { .. } => Some(COMPONENT),
+        NodeKind::Component { .. } | NodeKind::ComponentSet { .. } => Some(COMPONENT_TEXT),
         NodeKind::Icon { .. } => Some(ICON),
-        _ => None,
+        _ => figcraft_engine::components::is_slot(doc, id).then_some(SLOT),
     };
     let col = if let Some(m) = mark {
         m

@@ -13,7 +13,7 @@ use super::outline::{draw_outline, node_quad, outline_colour, quad, stroke};
 use super::painter::Painter;
 use super::rulers::fmt;
 use crate::app::CanvasApp;
-use crate::theme::{COMPONENT, Tokens, stroke as s};
+use crate::theme::{COMPONENT, SLOT, Tokens, stroke as s};
 
 /// 三次贝塞尔在 `t` 处的点（GPUI 画笔没有贝塞尔图元，段要采样成折线）。
 fn cubic_at(p0: Pos2, p1: Pos2, p2: Pos2, p3: Pos2, t: f32) -> Pos2 {
@@ -230,7 +230,7 @@ pub(super) fn overlays(
     if let Some(d) = ov.drop_target
         && let Some(q) = node_quad(app, &doc, d)
     {
-        quad(painter, q, stroke(if figcraft_engine::components::is_slot(&doc, d) { COMPONENT } else { accent }, 1.0));
+        quad(painter, q, stroke(if figcraft_engine::components::is_slot(&doc, d) { SLOT } else { accent }, 1.0));
     }
     if let Some([x0, y0, x1, y1]) = ov.insert_line {
         painter.line_segment([app.to_screen(x0, y0), app.to_screen(x1, y1)], s(accent, 2.0));
@@ -263,7 +263,9 @@ pub(super) fn overlays(
     // 运动模式播放中：选中边框隐藏（物体在这一帧已不在选中框的位置，留在原地只会造成误导；
     // gizmo / 运动路径也已在播放时藏起，这里保持一致，用户 2026-11-12）。
     if !sel.is_empty() && !editing && ds.vector_edit.is_none() && !app.motion_overlay.playing {
-        let col = if sel.iter().any(|i| outline_colour(&doc, *i, accent) == COMPONENT) { COMPONENT } else { accent };
+        let slot_sel = sel.iter().any(|i| outline_colour(&doc, *i, accent) == SLOT);
+        let comp_sel = sel.iter().any(|i| outline_colour(&doc, *i, accent) == COMPONENT);
+        let col = if slot_sel { SLOT } else if comp_sel { COMPONENT } else { accent };
         for id in &sel {
             // 选中描边统一走 draw_outline（源码选中色、1px）。
             draw_outline(app, painter, &doc, *id, stroke(col, 1.0));

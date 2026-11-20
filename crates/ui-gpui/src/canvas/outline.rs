@@ -11,7 +11,7 @@ use figcraft_geom::Point;
 use super::geom::*;
 use super::painter::Painter;
 use crate::app::CanvasApp;
-use crate::theme::COMPONENT;
+use crate::theme::{COMPONENT, SLOT};
 
 pub(super) fn stroke(c: Color32, w: f32) -> Stroke {
     Stroke::new(w, c)
@@ -81,6 +81,9 @@ pub(super) fn quad(painter: &mut Painter, q: [Pos2; 4], s: Stroke) {
 /// 轮廓颜色：组件 / 组件集 / 实例（及其内部所有图层）用组件紫，其余用画布叠加色。
 pub(super) fn outline_colour(doc: &Document, id: NodeId, green: Color32) -> Color32 {
     use figcraft_engine::components::{owning_component, owning_instance};
+    if figcraft_engine::components::is_slot(doc, id) {
+        return SLOT;
+    }
     let set = matches!(doc.node(id).map(|n| &n.kind), Some(NodeKind::ComponentSet { .. }));
     if set || owning_component(doc, id).is_some() || owning_instance(doc, id).is_some() { COMPONENT } else { green }
 }

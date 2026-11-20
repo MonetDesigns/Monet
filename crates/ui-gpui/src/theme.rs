@@ -158,34 +158,34 @@ pub struct Tokens {
     pub selected_row: Color32,
     /// 选中行及其后代组成的整块底色（egui `selected_row_child`）。
     pub selected_row_child: Color32,
-    /// 整块全是组件时的 band 色（Figma `--color-bg-component-tertiary`）。
+    /// 整块全是组件时的 band 色。
     pub component_row: Color32,
     /// 组件选中块的后代行：同色系更浅一档（父子深浅必须同源）。
     pub component_row_child: Color32,
-    /// 整块全是插槽时的 band 色（Figma `--color-template-slot`）。
+    /// 整块全是插槽时的 band 色。
     pub slot_row: Color32,
     pub slot_row_child: Color32,
     /// 整块全是图标时的 band 色（egui `icon_layer_row`）。
     pub icon_layer_row: Color32,
-    /// 组件层前景紫色（Figma `--color-text-component`）。
+    /// 组件层前景紫色。
     pub component: Color32,
     /// 图标层前景橙色（egui `icon_layer`：图标类 row 的 icon 与 name 画成它）。
     pub icon_layer: Color32,
-    /// Figma `--color-text-component-tertiary`：未选中的组件行浅紫。
+    /// 未选中的组件行浅紫。
     pub component_secondary: Color32,
-    /// Figma `--ramp-pale-purple-450`：不可见组件行的中紫，与浅紫区分开。
+    /// 不可见组件行的中紫，与浅紫区分开。
     pub component_dim: Color32,
-    /// Figma `--color-text-template`：插槽的粉红（选中态）。
+    /// 插槽的粉红（选中态）。
     pub slot: Color32,
-    /// Figma `--color-text-template-secondary`：未选中插槽的淡粉。
+    /// 未选中插槽的淡粉。
     pub slot_secondary: Color32,
-    /// Figma `--ramp-pale-pink-500`：不可见插槽行更暗一档的粉。
+    /// 不可见插槽行更暗一档的粉。
     pub slot_dim: Color32,
-    /// Figma `--color-text-disabled` / `--color-icon-tertiary`：不可见层的文字与类型图标。
+    /// 不可见层的文字与类型图标。
     pub layer_muted: Color32,
-    /// Figma `--color-text-onselected` / `--color-icon-onselected`：选中普通层的文字。
+    /// 选中普通层的文字。
     pub layer_text_selected: Color32,
-    /// Figma `--color-icon-onselected`：选中普通层的类型图标。
+    /// 选中普通层的类型图标。
     pub layer_icon_selected: Color32,
     pub guide: Color32,
     pub danger: Color32,
@@ -260,11 +260,10 @@ impl Tokens {
             slot_row,
             slot_row_child: toward(slot_row, panel, 0.55),
             icon_layer_row: if dark { c(0x4A, 0x38, 0x1C) } else { c(0xFD, 0xF0, 0xDD) },
-            // 前景紫 / 橙：Figma `--color-(text|icon)-component` = --ramp-purple-600/400。
+            // 前景紫 / 橙：组件与图标层的固定产品色。
             component: if dark { c(0xD1, 0xA8, 0xFF) } else { c(0x86, 0x38, 0xE5) },
             icon_layer: if dark { c(0xFF, 0xB3, 0x4D) } else { c(0xD9, 0x7A, 0x06) },
-            // 以下图层行专用色取自保存的 Figma 外壳 HTML 的 [data-preferred-theme] 主题块，
-            // 不是从坐标量出来的近似值。明暗两套各自对应 --ramp-* 的解析结果。
+            // 图层行专用色，明暗两套按同一色阶对应。
             component_secondary: if dark { c(0x7F, 0x69, 0x9B) } else { c(0xC5, 0xB2, 0xDC) },
             component_dim: if dark { c(0x7F, 0x69, 0x9B) } else { c(0xA3, 0x8C, 0xC0) },
             slot: if dark { c(0xFC, 0x9C, 0xE0) } else { c(0xEA, 0x10, 0xAC) },
@@ -313,6 +312,10 @@ pub fn accent_on(t: &Tokens) -> Color32 {
 
 /// 组件层紫色。它是产品层色，不属于可换主题的品牌轴，故固定。
 pub const COMPONENT: Color32 = Color32::from_rgb(0x97, 0x47, 0xFF);
+/// 组件名称文本色。
+pub const COMPONENT_TEXT: Color32 = Color32::from_rgb(0x86, 0x38, 0xE5);
+/// 插槽层粉红色。
+pub const SLOT: Color32 = Color32::from_rgb(0xFF, 0x24, 0xBD);
 /// Handoff 状态徽标（其上白字，两主题皆然）。
 pub const DEV_READY: Color32 = Color32::from_rgb(0x08, 0x7D, 0x4F);
 pub const DEV_CHANGED: Color32 = Color32::from_rgb(0xA7, 0x5B, 0x00);

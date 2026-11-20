@@ -19,8 +19,8 @@ use figcraft_engine::booleans::distinct_op;
 use figcraft_engine::components::is_slot;
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Bounds, Context, Div, ElementId, Entity, Modifiers, MouseButton, MouseDownEvent, Pixels, Point, Render, SharedString, Size,
-    Stateful, StatefulInteractiveElement, Window, div, px,
+    AnyElement, App, Bounds, Context, Div, ElementId, Entity, Modifiers, MouseButton, MouseDownEvent, Pixels, Point, Render, ScrollStrategy,
+    SharedString, Size, Stateful, StatefulInteractiveElement, Window, div, px,
 };
 use serde_json::json;
 
@@ -96,10 +96,10 @@ pub struct LayerRow {
     /// 0 plain / 1 component family / 2 icon (drives the row's colour).
     pub mark_kind: u8,
     /// The node itself is a component / instance (as opposed to a child inside one).
-    /// Figma paints such a parent's type icon in the full component purple, its children in
+    /// A parent's type icon uses the full component purple, its children in
     /// the tertiary purple (`object_row--symbol.topLevel` vs `object_row--layerIcon.symbolChild`).
     pub component_root: bool,
-    /// A selected row with no selected ancestor. Figma gives it `--color-bg-selected`,
+    /// A selected row with no selected ancestor; descendants use the lighter shade.
     /// while selected descendants get `--color-bg-selected-secondary`.
     pub selected_root: bool,
     pub visible: bool,
@@ -197,7 +197,7 @@ fn row_ink(t: &crate::theme::Tokens, r: &LayerRow, mark: Mark) -> (gpui::Rgba, g
         t.layer_icon_selected
     } else {
         // A visible frame's glyph (`--color-icon-tertiary`) and a hidden row's
-        // (`--color-icon-disabled`) both resolve to 30% black in Figma's light theme.
+        // (`--color-icon-disabled`) both resolve to the same muted ink.
         t.layer_muted
     };
     (rgba(name), rgba(icon))
@@ -205,7 +205,7 @@ fn row_ink(t: &crate::theme::Tokens, r: &LayerRow, mark: Mark) -> (gpui::Rgba, g
 
 /// The coloured band behind a run of selected rows. The *brand* stays in charge of plain
 /// layers (`selected_row` / `selected_row_child`); components and slots take their own ramp
-/// from Figma (`--color-bg-component-tertiary`, `--color-template-slot`).
+/// from the component and slot ramps.
 fn run_color(t: &crate::theme::Tokens, rows: &[LayerRow], from: usize, to: usize, child: bool) -> gpui::Rgba {
     let run = &rows[from..=to];
     if run.iter().all(|r| r.icon == Icon::Slot) {
@@ -243,6 +243,8 @@ pub struct LayerTreeState {
     pub pointer: Point<Pixels>,
     /// Scroll handle of the virtual list, kept across frames.
     pub scroll: VirtualListScrollHandle,
+    /// Selection seen on the previous frame; a change reveals the selected row.
+    pub last_selection: Vec<NodeId>,
     clock: Instant,
 }
 
@@ -258,6 +260,7 @@ impl Default for LayerTreeState {
             calibrated: None,
             pointer: Point::new(px(0.0), px(0.0)),
             scroll: VirtualListScrollHandle::new(),
+            last_selection: Vec::new(),
             clock: Instant::now(),
         }
     }
@@ -476,7 +479,7 @@ impl CanvasView {
         // 参考实现 `pages()`: `resp.double_clicked()` starts an inline rename of that page row.
         let renaming_page = self.inline_rename.as_ref().filter(|r| r.target == crate::InlineRenameTarget::Page).and_then(|r| r.ids.first().copied());
         let rename_editor = self.inline_rename_field.clone();
-        // Figma: 列表高度 = 页数 * 32 + 8，夹到 40..232；空表用 104 的默认高度。
+        // 列表高度 = 页数 * 32 + 8，夹到 40..232；空表用 104 的默认高度。
         let pages_h = if pages.is_empty() { PAGES_DEFAULT_H } else { (pages.len() as f32 * ROW_H + 8.0).clamp(PAGES_MIN_H, PAGES_MAX_H) };
         let mut list = div()
             .id("pages-list")
@@ -705,7 +708,7 @@ impl CanvasView {
         // Hover comes from the whole row's hitbox, so it is bound to the group.
         let group: SharedString = format!("layer-row-{}", r.id.0).into();
 
-        // Row colours follow the saved Figma shell exactly: the name uses `color`, the type
+        // Row colours: the name uses `color`, the type
         // glyph uses `--fpl-icon-color`. They are different tokens (the frame glyph is 30% black
         // while its name is 90%), and a component/slot switches to the purple/pink ramp.
         let (name_color, icon_color) = row_ink(&t, r, mark);
@@ -720,7 +723,7 @@ impl CanvasView {
         let row_id = ElementId::from(SharedString::from(format!("layer-row-{}", id.0)));
         let me = entity.clone();
 
-        // Figma's expand caret is a plain icon, not the layer's type glyph: 30% black when the
+        // The expand caret is a plain icon, not the layer's type glyph: muted when the
         // row is idle, `--color-icon-onselected` (90% black) when it is selected.
         let chevron_color = if mark == Mark::Selected { rgba(t.layer_icon_selected) } else { rgba(t.layer_muted) };
         let chevron = if has_children {
@@ -948,13 +951,25 @@ impl CanvasView {
         let doc = &ds.doc;
         let page = ds.page;
         let Some(page_n) = doc.node(page) else { return (Vec::new(), Vec::new()) };
+        // A selection made on the canvas must be revealed here: expand its ancestors and
+        // defer a scroll to the first selected row once the virtual list has been laid out.
+        let selection: Vec<NodeId> = ds.selection.iter().copied().collect();
+        let selection_changed = selection != self.layer_tree.last_selection;
+        let mut reveal_ancestors = Vec::new();
+        if selection_changed {
+            for id in &selection {
+                reveal_ancestors.extend(doc.ancestors(*id));
+            }
+        }
+        let mut expanded_set = self.layer_tree.expanded.clone();
+        expanded_set.extend(reveal_ancestors);
         let mut visual = Vec::new();
         let mut drag_rows: Vec<drag::Row> = Vec::new();
         let mut stack: Vec<(NodeId, usize, String)> = page_n.children.iter().map(|&c| (c, 0, String::new())).collect();
         while let Some((id, depth, parent_path)) = stack.pop() {
             let Some(n) = doc.node(id) else { continue };
             let has_children = !n.children.is_empty();
-            let expanded = self.layer_tree.expanded.contains(&id);
+            let expanded = expanded_set.contains(&id);
             let path = if parent_path.is_empty() { id.0.to_string() } else { format!("{parent_path}/{}", id.0) };
             let can_into = n.kind.is_container() && !matches!(n.kind, NodeKind::Instance { .. });
             // Component members keep the component colour all the way down the tree: a child
@@ -972,7 +987,7 @@ impl CanvasView {
             };
             let icon = Self::node_icon(doc, id);
             let selected = ds.selection.contains(&id);
-            // Figma's `data-fpl-selected-root`: a selected row whose ancestors are not selected.
+            // A selected row whose ancestors are not selected.
             // It gets the deeper `--color-bg-selected`; descendants get `-secondary`.
             let selected_root = selected && !doc.ancestors(id).iter().any(|a| ds.selection.contains(a));
             let component_root = matches!(n.kind, NodeKind::Component { .. } | NodeKind::ComponentSet { .. } | NodeKind::Instance { .. });
@@ -1013,6 +1028,13 @@ impl CanvasView {
         if let Some((hit, b)) = self.layer_tree.calibrated {
             drag::calibrate(&mut drag_rows, hit, b);
         }
+        if selection_changed {
+            self.layer_tree.expanded = expanded_set;
+            self.layer_tree.last_selection = selection;
+            if let Some(ix) = visual.iter().position(|r| r.selected) {
+                self.layer_tree.scroll.scroll_to_item(ix, ScrollStrategy::Center);
+            }
+        }
         (visual, drag_rows)
     }
 
@@ -1031,6 +1053,13 @@ impl CanvasView {
         use crate::widgets::layer_icons::LayerIcon as L;
         let Some(n) = doc.node(id) else { return (None, false) };
         let absolute = n.child_layout.absolute && n.parent.and_then(|p| doc.node(p)).is_some_and(|p| p.layout.is_some());
+        // A variant inside a component set is a single solid diamond; leave the glyph to the
+        // generic icon painter (`Icon::Component`, filled diamond).
+        let variant = matches!(n.kind, NodeKind::Component { .. })
+            && n.parent.and_then(|p| doc.node(p)).is_some_and(|p| matches!(p.kind, NodeKind::ComponentSet { .. }));
+        if variant {
+            return (None, absolute);
+        }
         let mask_group = matches!(n.kind, NodeKind::Group) && n.children.iter().any(|c| doc.node(*c).is_some_and(|node| node.is_mask));
         let glyph = if mask_group {
             Some(L::Mask)
@@ -1040,7 +1069,7 @@ impl CanvasView {
             Some(L::Mask)
         } else {
             // Auto-layout frames pick their layer glyph from the mode *and* the cross-axis
-            // alignment (the same six glyphs Figma shows): H -> top/centre/bottom,
+            // alignment: H -> top/centre/bottom,
             // V -> left/centre/right. Baseline has no glyph and falls back to the start.
             let auto_glyph = || {
                 let align = n.layout.as_ref().map(|l| l.cross_align).unwrap_or_default();
@@ -1069,6 +1098,7 @@ impl CanvasView {
                 // `layer_glyph_element` 优先画 `r.shape` 里的真实轮廓，只有轮廓缺失时才
                 // 落到 `None` 分支，用主图标（`paint_icon`）兜底。
                 Icon::Component => Some(L::Component),
+                Icon::ComponentSet => Some(L::Component),
                 Icon::Instance => Some(L::Instance),
                 Icon::Group => Some(L::Group),
                 _ => None,
@@ -1717,7 +1747,7 @@ mod shape_glyph {
     }
 }
 
-/// The colour matrix is a direct transcription of the Figma shell's `--fpl-icon-color` / `color`
+/// The colour matrix locks the glyph / name ink pair for every row state
 /// inline styles, so it is worth locking against a future "simplification" back to one ink.
 #[cfg(test)]
 mod color_tests {
@@ -1747,7 +1777,7 @@ mod color_tests {
     }
 
     #[test]
-    fn figma_light_tokens_are_the_values_parsed_from_the_saved_html() {
+    fn layer_tokens_match_the_spec() {
         let t = Tokens::new(false, Accent::Green);
         assert_eq!(t.slot, Color32::from_rgb(0xEA, 0x10, 0xAC)); // --ramp-pink-600
         assert_eq!(t.slot_secondary, Color32::from_rgb(0xDA, 0xAA, 0xCE)); // --ramp-pale-pink-400
