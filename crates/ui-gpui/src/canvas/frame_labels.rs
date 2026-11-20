@@ -44,7 +44,16 @@ pub fn label_edge(p00: Pos2, p10: Pos2, p01: Pos2) -> LabelEdge {
 }
 
 /// 画 `id`（顶层帧或 section）的标签；返回它在屏幕上的四角（用于命中测试）。
-pub fn draw(app: &CanvasApp, painter: &mut Painter, t: &Tokens, doc: &Document, id: NodeId, selected: bool, hovered: bool, renaming: bool) -> Option<[Pos2; 4]> {
+pub fn draw(
+    app: &CanvasApp,
+    painter: &mut Painter,
+    t: &Tokens,
+    doc: &Document,
+    id: NodeId,
+    selected: bool,
+    hovered: bool,
+    renaming: bool,
+) -> Option<[Pos2; 4]> {
     let n = doc.node(id)?;
     let w = doc.world_transform(id);
     let at = |x: f64, y: f64| {

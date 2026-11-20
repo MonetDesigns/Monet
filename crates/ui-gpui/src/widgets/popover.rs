@@ -257,12 +257,7 @@ impl Popover {
         // 实际占的高度（构造期的 `height` 只是估算，估不准会让 `clamp` 把卡片钉死）。
         if let Some(f) = self.measure.clone() {
             let top = origin;
-            stack = stack.child(
-                gpui::canvas(move |bounds, _, _| f(bounds.origin.y - top.y), |_, _, _, _| {})
-                    .flex_none()
-                    .w_full()
-                    .h(px(0.0)),
-            );
+            stack = stack.child(gpui::canvas(move |bounds, _, _| f(bounds.origin.y - top.y), |_, _, _, _| {}).flex_none().w_full().h(px(0.0)));
         }
 
         // X 浮在右上角，不占布局行。

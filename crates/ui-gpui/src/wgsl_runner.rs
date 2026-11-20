@@ -203,12 +203,8 @@ pub(crate) fn pack_uniforms(
     // `depth` **after** this node's own overrides are applied. Ask the registry for the value
     // that will actually be uploaded, not the binding: a material whose depth the panel set
     // to 98 would otherwise get a band sized for 20 and a wrong "deep inside" fill between.
-    let depth_field = local.params(eid).into_iter()
-        .find(|p| p.field == "depth" || p.field.ends_with(".depth"))
-        .map(|p| p.field.clone());
-    let reach = depth_field.as_ref()
-        .and_then(|f| local.param_value(eid, f))
-        .unwrap_or(20.0);
+    let depth_field = local.params(eid).into_iter().find(|p| p.field == "depth" || p.field.ends_with(".depth")).map(|p| p.field.clone());
+    let reach = depth_field.as_ref().and_then(|f| local.param_value(eid, f)).unwrap_or(20.0);
     // Depth is a panel notch (1..100), not a pixel length. Figma turns it into a node-space
     // thickness upstream (see `figma_depth_coefficient.html` §1.5/§5); the CPU glass and this
     // external material must share that one conversion or the same document looks different
@@ -225,12 +221,8 @@ pub(crate) fn pack_uniforms(
         let _ = local.set_param(eid, f, reach_doc);
     }
     let band = (reach.max(1.0) * sc + 2.0 * sc + 8.0) as f32;
-    let vars: Vec<String> = local.scan(eid)
-        .map(|s| s.uniforms.keys().cloned().collect())
-        .unwrap_or_default();
-    let packed = vars.into_iter()
-        .filter_map(|var| local.uniform_bytes_for(eid, &var, ex).ok().map(|b| (var, b)))
-        .collect();
+    let vars: Vec<String> = local.scan(eid).map(|s| s.uniforms.keys().cloned().collect()).unwrap_or_default();
+    let packed = vars.into_iter().filter_map(|var| local.uniform_bytes_for(eid, &var, ex).ok().map(|b| (var, b))).collect();
     (packed, band)
 }
 
@@ -1030,7 +1022,9 @@ impl WgslRunner {
     /// the window keeps its size.
     fn ensure_backdrop(&mut self, node: u64, w: u32, h: u32, dpr: f32) {
         let count = backdrop_levels(w, h, dpr);
-        if self.backdrop.get(&node).is_some_and(|t| t.w == w && t.h == h && t.levels.len() as u32 == count) { return; }
+        if self.backdrop.get(&node).is_some_and(|t| t.w == w && t.h == h && t.levels.len() as u32 == count) {
+            return;
+        }
         // The chain has to cover `log2(frost × dpr)`, and `dpr` is the zoom: a budget fixed at eight
         // levels covers every radius only while `dpr ≈ 1`. Above that the shader's `frost` silently
         // clamped to level 7 (a 128-px blur) no matter how far you zoomed in — the pane's interior
@@ -1160,7 +1154,15 @@ impl WgslRunner {
     /// soon as frame N is submitted: the GPU consumes the queue in order and never reads a texture
     /// that a later frame has overwritten. The **readback** is the one resource that cannot be
     /// reused until its `map_async` completes and it is unmapped — hence the per-frame slot.
-    fn encode_submit(&mut self, canvas: &[u8], w: u32, h: u32, steps: &[Step<'_>], readback: Option<&wgpu::Buffer>, shade: Option<[u32; 4]>) -> Option<([u32; 4], u32)> {
+    fn encode_submit(
+        &mut self,
+        canvas: &[u8],
+        w: u32,
+        h: u32,
+        steps: &[Step<'_>],
+        readback: Option<&wgpu::Buffer>,
+        shade: Option<[u32; 4]>,
+    ) -> Option<([u32; 4], u32)> {
         let expected = (w as usize) * (h as usize) * 4;
         if steps.is_empty() || w == 0 || h == 0 || canvas.len() < expected {
             return None;
@@ -1247,14 +1249,7 @@ impl WgslRunner {
             if sw == 0 || sh == 0 {
                 continue;
             }
-            let bytes = fields_for_rect_banded(
-                sw,
-                sh,
-                p.node_px,
-                (p.origin_px.0 + sx as f32, p.origin_px.1 + sy as f32),
-                p.radii_px,
-                p.field_band,
-            );
+            let bytes = fields_for_rect_banded(sw, sh, p.node_px, (p.origin_px.0 + sx as f32, p.origin_px.1 + sy as f32), p.radii_px, p.field_band);
             self.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &fd.texture,
@@ -2528,9 +2523,15 @@ mod tests {
         };
         // Frost 0 so the interior is the backdrop itself, not a blur of it.
         let pass = RunPass {
-            effect: eid, node: NodeId(7), rect_px: [0, 0, 32, 32],
-            radii_px: [0.0; 4], node_px: (32.0, 32.0), origin_px: (0.0, 0.0),
-            field_bytes: None, field_band: f32::INFINITY, uniforms,
+            effect: eid,
+            node: NodeId(7),
+            rect_px: [0, 0, 32, 32],
+            radii_px: [0.0; 4],
+            node_px: (32.0, 32.0),
+            origin_px: (0.0, 0.0),
+            field_bytes: None,
+            field_band: f32::INFINITY,
+            uniforms,
             dpr: 1.0,
         };
         // Straight RGBA (the overlay's format): opaque red everywhere.
@@ -2571,9 +2572,15 @@ mod tests {
             vec![("u".to_string(), reg.uniform_bytes_for(&eid, "u", &ex).expect("pack u"))]
         };
         let pass = RunPass {
-            effect: eid, node: NodeId(9), rect_px: [0, 0, w, h],
-            radii_px: [24.0; 4], node_px: (w as f32, h as f32), origin_px: (0.0, 0.0),
-            field_bytes: None, field_band: f32::INFINITY, uniforms,
+            effect: eid,
+            node: NodeId(9),
+            rect_px: [0, 0, w, h],
+            radii_px: [24.0; 4],
+            node_px: (w as f32, h as f32),
+            origin_px: (0.0, 0.0),
+            field_bytes: None,
+            field_band: f32::INFINITY,
+            uniforms,
             dpr: 1.0,
         };
         let steps = [Step::Pass(&pass)];

@@ -471,10 +471,7 @@ fn paint(painter: &mut Painter, app: &CanvasApp, st: &State, src: &Document, g: 
                 let u = i as f64 / STEPS as f64;
                 let t = 1.0 - u;
                 let (w0, w1, w2, w3) = (t * t * t, 3.0 * t * t * u, 3.0 * t * u * u, u * u * u);
-                let v = figcraft_geom::Vec2::new(
-                    x0 * w0 + x1 * w1 + x2 * w2 + x3 * w3,
-                    y0 * w0 + y1 * w1 + y2 * w2 + y3 * w3,
-                );
+                let v = figcraft_geom::Vec2::new(x0 * w0 + x1 * w1 + x2 * w2 + x3 * w3, y0 * w0 + y1 * w1 + y2 * w2 + y3 * w3);
                 let Some(q) = centre_at(app, src, g.node, v) else { continue };
                 painter.line_segment([prev, q], s(accent, 1.0));
                 prev = q;
@@ -760,10 +757,8 @@ pub(crate) fn input(app: &mut CanvasApp, pos: Pos2, pressed: bool, down: bool, r
         // 以下三项都读 `node` / `ds`（借用 session），必须在 `begin_interaction`（可变借用）
         // 之前算好，否则与 `ds` 的不可变借用冲突。
         // 旋转增量用**关键帧**值（不含 clip）：clip 求值时另加，存进关键帧会叠加两次（CodeRabbit）。
-        let start_delta = motion::keyframed_value_at(node, AnimProperty::Rotation, st.playhead_ms)
-            .and_then(|v| v.scalar())
-            .map(|r| r - g.base_rot)
-            .unwrap_or(0.0);
+        let start_delta =
+            motion::keyframed_value_at(node, AnimProperty::Rotation, st.playhead_ms).and_then(|v| v.scalar()).map(|r| r - g.base_rot).unwrap_or(0.0);
         // 父级线性变换之逆：把「页面空间」位移转成节点局部（父坐标系）位移。
         let src = st.src.clone().unwrap_or_else(|| ds.doc.clone());
         let pc = parent_world(&src, g.node).inverse().as_coeffs();
@@ -905,9 +900,7 @@ mod tests {
         }
 
         let bbox = |pts: &[Pos2]| {
-            pts.iter().fold((f32::MAX, f32::MIN, f32::MAX, f32::MIN), |(x0, x1, y0, y1), p| {
-                (x0.min(p.x), x1.max(p.x), y0.min(p.y), y1.max(p.y))
-            })
+            pts.iter().fold((f32::MAX, f32::MIN, f32::MAX, f32::MIN), |(x0, x1, y0, y1), p| (x0.min(p.x), x1.max(p.x), y0.min(p.y), y1.max(p.y)))
         };
 
         let (linear, a, b) = drawn(Ease::Linear);
@@ -967,10 +960,7 @@ mod tests {
         // 曲线：点集必须明显偏离两端连线（否则手柄没生效，前两条等式断言会失去意义）。
         let (a, b) = (linear[0], *linear.last().unwrap());
         let chord = b - a;
-        let dev = linear
-            .iter()
-            .map(|p| (*p - a).dot(vec2(-chord.y, chord.x)).abs() / a.distance(b).max(1e-6))
-            .fold(0.0f32, f32::max);
+        let dev = linear.iter().map(|p| (*p - a).dot(vec2(-chord.y, chord.x)).abs() / a.distance(b).max(1e-6)).fold(0.0f32, f32::max);
         assert!(dev > 5.0, "手柄应把轨迹拉弯，实际最大偏离弦 {dev}px");
     }
 

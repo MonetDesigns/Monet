@@ -11,15 +11,13 @@ use std::sync::Arc;
 
 use figcraft_doc::{Document, NodeId, NodeKind};
 use figcraft_render::shade::{ShadeBoard, ShaderSpec};
-use figcraft_render::{render_view, render_view_single, Options, View};
+use figcraft_render::{Options, View, render_view, render_view_single};
 
 fn make_doc() -> (Document, NodeId) {
     let mut doc = Document::new("zoom-repro");
     let page = doc.pages[0];
     // A material node at the page origin so it is always in the view's top-left at any zoom.
-    let n = doc
-        .create(page, NodeKind::Rectangle, "Glass", 0.0, 0.0, 200.0, 400.0)
-        .unwrap();
+    let n = doc.create(page, NodeKind::Rectangle, "Glass", 0.0, 0.0, 200.0, 400.0).unwrap();
     (doc, n)
 }
 
@@ -50,10 +48,7 @@ fn glass_request_geometry_across_zooms() {
         let _ = render_view(&doc, doc.pages[0], &view, &Options { shade: Some(board.clone()), ..Default::default() });
         let banded = requests_for(&board, node);
 
-        println!(
-            "\n=== scale {z} ===  node_px expected ~ ({:.1},{:.1})",
-            200.0 * z, 400.0 * z
-        );
+        println!("\n=== scale {z} ===  node_px expected ~ ({:.1},{:.1})", 200.0 * z, 400.0 * z);
         println!("  SINGLE ({}) requests:", single.len());
         for r in &single {
             println!(
@@ -80,7 +75,8 @@ fn glass_request_geometry_across_zooms() {
         assert!(
             (s.origin_px.0 - b.origin_px.0).abs() < 2.0 && (s.origin_px.1 - b.origin_px.1).abs() < 2.0,
             "banding origin_px must match single render at scale {z}: {:?} vs {:?}",
-            s.origin_px, b.origin_px
+            s.origin_px,
+            b.origin_px
         );
     }
 }

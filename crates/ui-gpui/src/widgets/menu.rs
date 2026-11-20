@@ -125,6 +125,20 @@ pub fn menu_popup_in(
     vw: f32,
     vh: f32,
 ) -> AnyElement {
+    menu_popup_in_aligned(anchor, width_override, rows, on_pick, dismiss, vw, vh, crate::widgets::RectAlign::BottomStart)
+}
+
+/// 与 [`menu_popup_in`] 相同，但可指定相对锚点的对齐方式（右对齐的按钮用 `BottomEnd`）。
+pub fn menu_popup_in_aligned(
+    anchor: Bounds<Pixels>,
+    width_override: Option<f32>,
+    rows: Vec<MenuRow>,
+    on_pick: Rc<dyn Fn(&str, &mut Window, &mut App)>,
+    dismiss: Rc<dyn Fn(&mut Window, &mut App)>,
+    vw: f32,
+    vh: f32,
+    align: crate::widgets::RectAlign,
+) -> AnyElement {
     let t = tokens();
     // Every menu uses the one shared 24 pt row (user 2026-11-14).
     let row_h = pt(crate::menu_metrics::MENU_ROW_H);
@@ -183,7 +197,9 @@ pub fn menu_popup_in(
         }
         // 标签占满剩余宽度，超长裁掉（egui 把文字裁到 `r.max.x - 8.0`）。
         row = row.child(div().flex_1().min_w(pt(0.0)).overflow_hidden().whitespace_nowrap().child(label)).when_some(trail, |d, tr| {
-            d.child(div().ml(pt(crate::widgets::MENU_TRAIL_GAP)).pr(pt(10.0)).whitespace_nowrap().text_color(crate::menu_metrics::trail_ink()).child(tr))
+            d.child(
+                div().ml(pt(crate::widgets::MENU_TRAIL_GAP)).pr(pt(10.0)).whitespace_nowrap().text_color(crate::menu_metrics::trail_ink()).child(tr),
+            )
         });
         col = col.child(row);
     }
@@ -191,6 +207,7 @@ pub fn menu_popup_in(
     // `viewport` + `content` 才把控件自带的防溢出接通：顶部夹紧、水平贴边、装不下时
     // 内部滚动（`Menu::show` → `fit_vertical` / `fit_rows`）。
     crate::widgets::menu(anchor)
+        .align(align)
         .width(crate::widgets::Width::Min(width))
         .viewport(vw, vh)
         .content(content_w, rows_h, crate::menu_metrics::MENU_ROW_H)

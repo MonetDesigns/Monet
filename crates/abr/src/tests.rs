@@ -1,7 +1,7 @@
 //! Round trips through both ABR layouts, damage handling and library behaviour.
 
 use crate::descriptor::{Descriptor, Value};
-use crate::format::{AbrSample, LegacyBrush, LegacyTip, parse, write_v12, write_v6};
+use crate::format::{AbrSample, LegacyBrush, LegacyTip, parse, write_v6, write_v12};
 use crate::library::{BrushLibrary, LEGACY_IDS};
 use crate::mapping::{GrayTip, brushes_of};
 
@@ -132,12 +132,7 @@ fn computed_tip_is_a_soft_ellipse() {
 fn library_loads_external_files_and_resolves_legacy_ids() {
     let brushes: Vec<LegacyBrush> = LEGACY_IDS
         .iter()
-        .map(|name| LegacyBrush {
-            name: (*name).to_string(),
-            spacing: 20,
-            anti_alias: true,
-            tip: LegacyTip::Sampled(sample("", 2, 2, vec![255; 4])),
-        })
+        .map(|name| LegacyBrush { name: (*name).to_string(), spacing: 20, anti_alias: true, tip: LegacyTip::Sampled(sample("", 2, 2, vec![255; 4])) })
         .collect();
     let bytes = write_v12(2, &brushes, false).unwrap();
     let mut lib = BrushLibrary::empty();

@@ -64,10 +64,7 @@ mod tests {
         }
         let surface = code(include_str!("widgets/menu_popup.rs"));
         assert!(surface.contains("fn menu_surface"));
-        assert!(
-            surface.contains("text_color(crate::menu_metrics::ink())"),
-            "统一墨色必须写在通用 menu_surface() 内"
-        );
+        assert!(surface.contains("text_color(crate::menu_metrics::ink())"), "统一墨色必须写在通用 menu_surface() 内");
 
         for (name, src) in [
             ("menu_card", include_str!("menu_card.rs")),
@@ -77,10 +74,7 @@ mod tests {
             let src = code(src);
             assert!(!src.contains("t.menu_text"), "{name} 不能自己挑文字颜色");
             assert!(!src.contains("t.menu_dim"), "{name} 不能自己挑图标颜色");
-            assert!(
-                !src.contains("text_color(crate::menu_metrics::ink())"),
-                "{name} 不要再设默认墨色，继承通用控件"
-            );
+            assert!(!src.contains("text_color(crate::menu_metrics::ink())"), "{name} 不要再设默认墨色，继承通用控件");
         }
 
         let toolbar = include_str!("toolbar.rs");
@@ -97,10 +91,7 @@ mod tests {
         let more = code(more);
         assert!(!more.contains("t.menu_text"), "工具栏飞出菜单不能自己挑文字颜色");
         assert!(!more.contains("t.menu_dim"), "工具栏飞出菜单不能自己挑快捷键颜色");
-        assert!(
-            !more.contains("text_color(crate::menu_metrics::ink())"),
-            "工具栏飞出菜单要继承通用控件墨色"
-        );
+        assert!(!more.contains("text_color(crate::menu_metrics::ink())"), "工具栏飞出菜单要继承通用控件墨色");
     }
 
     #[test]

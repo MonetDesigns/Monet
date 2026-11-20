@@ -500,19 +500,14 @@ fn view_box_size(bytes: &[u8]) -> f32 {
 }
 
 pub fn natural_size(icon: Icon) -> f32 {
-    tool_stem(icon)
-        .and_then(tool_bytes)
-        .map(view_box_size)
-        .unwrap_or_else(|| view_box_size(&table()[icon as usize].svg))
+    tool_stem(icon).and_then(tool_bytes).map(view_box_size).unwrap_or_else(|| view_box_size(&table()[icon as usize].svg))
 }
 
 /// Draw a shape-tool mark at `size` pt. Geometry scales with the box; the stroke is
 /// compensated at load time so its visual width stays exactly [`ICON_STROKE`].
 pub fn paint_tool_at(icon: Icon, color: impl Into<gpui::Rgba>, size: f32) -> impl IntoElement {
     let rgba: gpui::Rgba = color.into();
-    let path = tool_stem(icon)
-        .map(|stem| SharedString::from(format!("tools/{stem}@{size}.svg")))
-        .unwrap_or_else(|| sized_icon_path(icon, size));
+    let path = tool_stem(icon).map(|stem| SharedString::from(format!("tools/{stem}@{size}.svg"))).unwrap_or_else(|| sized_icon_path(icon, size));
     svg().path(path).w(px(size)).h(px(size)).flex_none().text_color(Hsla::from(rgba))
 }
 
@@ -525,30 +520,81 @@ pub fn paint_tool(icon: Icon, color: impl Into<gpui::Rgba>) -> impl IntoElement 
 /// **网格和路径坐标保持原样**，只有显示尺寸会等比缩放；`__STROKE__` 由
 /// [`ICON_STROKE`] 按缩放比反算注入，缩放后视觉线宽恒为 1 pt。
 const FIGMA_UI_ICONS: [(Icon, &str); 17] = [
-    (Icon::Plus, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M12 6.5V12M12 12V17.5M12 12H6.5M12 12H17.5" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/></svg>"#),
-    (Icon::Minus, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M6.5 12H17.5" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/></svg>"#),
-    (Icon::Close, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M6.50003 17.5L13.6109 10.3891L17.5 6.50006M6.5 6.5L17.5 17.5" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/></svg>"#),
-    (Icon::ChevronDown, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M8.99994 11L12 14L14.9999 11" stroke="black" stroke-width="__STROKE__" stroke-linecap="round" stroke-linejoin="round"/></svg>"#),
+    (
+        Icon::Plus,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M12 6.5V12M12 12V17.5M12 12H6.5M12 12H17.5" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/></svg>"#,
+    ),
+    (
+        Icon::Minus,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M6.5 12H17.5" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/></svg>"#,
+    ),
+    (
+        Icon::Close,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M6.50003 17.5L13.6109 10.3891L17.5 6.50006M6.5 6.5L17.5 17.5" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/></svg>"#,
+    ),
+    (
+        Icon::ChevronDown,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M8.99994 11L12 14L14.9999 11" stroke="black" stroke-width="__STROKE__" stroke-linecap="round" stroke-linejoin="round"/></svg>"#,
+    ),
     // 其余三个方向都是同一个小箭头**旋转**出来的（用户 2026-11-15）：
     // 向下箭头顺时针 90° = 向左；逆时针 90° = 向右；180° = 向上。路径坐标不动。
-    (Icon::ChevronLeft, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><g transform="rotate(90 12 12)"><path d="M8.99994 11L12 14L14.9999 11" stroke="black" stroke-width="__STROKE__" stroke-linecap="round" stroke-linejoin="round"/></g></svg>"#),
-    (Icon::ChevronRight, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><g transform="rotate(-90 12 12)"><path d="M8.99994 11L12 14L14.9999 11" stroke="black" stroke-width="__STROKE__" stroke-linecap="round" stroke-linejoin="round"/></g></svg>"#),
-    (Icon::ChevronUp, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><g transform="rotate(180 12 12)"><path d="M8.99994 11L12 14L14.9999 11" stroke="black" stroke-width="__STROKE__" stroke-linecap="round" stroke-linejoin="round"/></g></svg>"#),
+    (
+        Icon::ChevronLeft,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><g transform="rotate(90 12 12)"><path d="M8.99994 11L12 14L14.9999 11" stroke="black" stroke-width="__STROKE__" stroke-linecap="round" stroke-linejoin="round"/></g></svg>"#,
+    ),
+    (
+        Icon::ChevronRight,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><g transform="rotate(-90 12 12)"><path d="M8.99994 11L12 14L14.9999 11" stroke="black" stroke-width="__STROKE__" stroke-linecap="round" stroke-linejoin="round"/></g></svg>"#,
+    ),
+    (
+        Icon::ChevronUp,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><g transform="rotate(180 12 12)"><path d="M8.99994 11L12 14L14.9999 11" stroke="black" stroke-width="__STROKE__" stroke-linecap="round" stroke-linejoin="round"/></g></svg>"#,
+    ),
     // 用户 2026-11-19 提供的 6 个 24 网格线框图标（逐项对应，不再乱套）：
     // Frame-4 → Frame（画框），Frame → Number（#），Frame-2 → Boolean，
     // Frame 163 → Text，Frame-1 → Pen，Frame-3 → Page。
-    (Icon::Frame, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M6 8H18M6 16H18M8 6V18M16 18V6" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/></svg>"#),
-    (Icon::Number, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M10.5 6.5L9.5 17.5" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/><path d="M14.5 6.5L13.5 17.5" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/><path d="M6.5 10H17.5M6.5 14H17.5" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/></svg>"#),
-    (Icon::Boolean, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><mask id="stroke0_274_459" fill="white"><path d="M9 16H15C17.2091 16 19 14.2091 19 12C19 9.79086 17.2091 8 15 8H9C6.79086 8 5 9.79086 5 12C5 14.2091 6.79086 16 9 16Z"/></mask><path d="M15 16H9C6.79086 16 5 14.2091 5 12C5 9.79086 6.79086 8 9 8H15C17.2091 8 19 9.79086 19 12C19 14.2091 17.2091 16 15 16Z" stroke="black" stroke-width="__STROKE__" mask="url(#stroke0_274_459)"/><circle cx="9.5" cy="12" r="2" stroke="black" stroke-width="__STROKE__"/></svg>"#),
-    (Icon::Text, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M6.5 9V6.5H12M17.5 9V6.5H12M12 6.5V17.5M12 17.5H9.5M12 17.5H14.5" stroke="black" stroke-width="__STROKE__" stroke-linecap="round" stroke-linejoin="round"/></svg>"#),
-    (Icon::Pen, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M13.5 17.5L14.6464 18.6464C14.8417 18.8417 15.1583 18.8417 15.3536 18.6464L18.6464 15.3536C18.8417 15.1583 18.8417 14.8417 18.6464 14.6464L17.5 13.5M13.5 17.5L17.5 13.5M13.5 17.5L11.0205 17.0041C9.48501 16.697 8.26993 15.5222 7.91128 13.9979L6.62759 8.54225C6.54827 8.20514 6.64902 7.85098 6.8939 7.6061L7.25 7.25M17.5 13.5L17.0041 11.0205C16.697 9.48501 15.5222 8.26993 13.9979 7.91128L8.54225 6.62759C8.20514 6.54827 7.85098 6.64902 7.6061 6.8939L7.25 7.25M7.25 7.25L11 11" stroke="black" stroke-width="__STROKE__" stroke-linejoin="round"/><circle cx="12" cy="12" r="1.5" stroke="black" stroke-width="__STROKE__"/></svg>"#),
-    (Icon::Page, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M8.5 6H12.793C12.925 6 13.052 6.053 13.146 6.146L16.854 9.854C16.947 9.947 17 10.075 17 10.208V16.5C17 17.328 16.328 18 15.5 18H8.5C7.672 18 7 17.328 7 16.5V7.5C7 6.672 7.672 6 8.5 6Z" stroke="black" stroke-width="__STROKE__" stroke-linejoin="round"/><path d="M13 7V10H16" stroke="black" stroke-width="__STROKE__" stroke-linejoin="round"/></svg>"#),
+    (
+        Icon::Frame,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M6 8H18M6 16H18M8 6V18M16 18V6" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/></svg>"#,
+    ),
+    (
+        Icon::Number,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M10.5 6.5L9.5 17.5" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/><path d="M14.5 6.5L13.5 17.5" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/><path d="M6.5 10H17.5M6.5 14H17.5" stroke="black" stroke-width="__STROKE__" stroke-linecap="round"/></svg>"#,
+    ),
+    (
+        Icon::Boolean,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><mask id="stroke0_274_459" fill="white"><path d="M9 16H15C17.2091 16 19 14.2091 19 12C19 9.79086 17.2091 8 15 8H9C6.79086 8 5 9.79086 5 12C5 14.2091 6.79086 16 9 16Z"/></mask><path d="M15 16H9C6.79086 16 5 14.2091 5 12C5 9.79086 6.79086 8 9 8H15C17.2091 8 19 9.79086 19 12C19 14.2091 17.2091 16 15 16Z" stroke="black" stroke-width="__STROKE__" mask="url(#stroke0_274_459)"/><circle cx="9.5" cy="12" r="2" stroke="black" stroke-width="__STROKE__"/></svg>"#,
+    ),
+    (
+        Icon::Text,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M6.5 9V6.5H12M17.5 9V6.5H12M12 6.5V17.5M12 17.5H9.5M12 17.5H14.5" stroke="black" stroke-width="__STROKE__" stroke-linecap="round" stroke-linejoin="round"/></svg>"#,
+    ),
+    (
+        Icon::Pen,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M13.5 17.5L14.6464 18.6464C14.8417 18.8417 15.1583 18.8417 15.3536 18.6464L18.6464 15.3536C18.8417 15.1583 18.8417 14.8417 18.6464 14.6464L17.5 13.5M13.5 17.5L17.5 13.5M13.5 17.5L11.0205 17.0041C9.48501 16.697 8.26993 15.5222 7.91128 13.9979L6.62759 8.54225C6.54827 8.20514 6.64902 7.85098 6.8939 7.6061L7.25 7.25M17.5 13.5L17.0041 11.0205C16.697 9.48501 15.5222 8.26993 13.9979 7.91128L8.54225 6.62759C8.20514 6.54827 7.85098 6.64902 7.6061 6.8939L7.25 7.25M7.25 7.25L11 11" stroke="black" stroke-width="__STROKE__" stroke-linejoin="round"/><circle cx="12" cy="12" r="1.5" stroke="black" stroke-width="__STROKE__"/></svg>"#,
+    ),
+    (
+        Icon::Page,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M8.5 6H12.793C12.925 6 13.052 6.053 13.146 6.146L16.854 9.854C16.947 9.947 17 10.075 17 10.208V16.5C17 17.328 16.328 18 15.5 18H8.5C7.672 18 7 17.328 7 16.5V7.5C7 6.672 7.672 6 8.5 6Z" stroke="black" stroke-width="__STROKE__" stroke-linejoin="round"/><path d="M13 7V10H16" stroke="black" stroke-width="__STROKE__" stroke-linejoin="round"/></svg>"#,
+    ),
     // Move = 主菜单用的商标（monet-mono）纯线框版，几何不动，线宽走 ICON_STROKE。
-    (Icon::Move, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M6.58595 6.58595C7.14047 6.03143 7.96787 5.8517 8.70216 6.12697L16.7022 9.12697C17.5218 9.43433 18.0467 10.2394 17.9971 11.1133C17.9473 11.9873 17.3346 12.728 16.4854 12.9404L13.6494 13.6494L12.9404 16.4854C12.728 17.3346 11.9873 17.9473 11.1133 17.9971C10.2394 18.0467 9.43433 17.5218 9.12697 16.7022L6.12697 8.70216C5.8517 7.96787 6.03143 7.14047 6.58595 6.58595Z" stroke="black" stroke-width="__STROKE__" stroke-linejoin="round"/></svg>"#),
+    (
+        Icon::Move,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M6.58595 6.58595C7.14047 6.03143 7.96787 5.8517 8.70216 6.12697L16.7022 9.12697C17.5218 9.43433 18.0467 10.2394 17.9971 11.1133C17.9473 11.9873 17.3346 12.728 16.4854 12.9404L13.6494 13.6494L12.9404 16.4854C12.728 17.3346 11.9873 17.9473 11.1133 17.9971C10.2394 18.0467 9.43433 17.5218 9.12697 16.7022L6.12697 8.70216C5.8517 7.96787 6.03143 7.14047 6.58595 6.58595Z" stroke="black" stroke-width="__STROKE__" stroke-linejoin="round"/></svg>"#,
+    ),
     // 标题栏用产品自带的减号 / 方框，不另造 Win* 图标。
-    (Icon::Play, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><g transform="rotate(90 12 12)"><path d="M10.9173 6.87673L5.58153 16.1253C5.10076 16.9586 5.70219 17.9999 6.66427 17.9999H17.3357C18.2978 17.9999 18.8992 16.9586 18.4185 16.1253L13.0827 6.87672C12.6017 6.04293 11.3983 6.04293 10.9173 6.87673Z" stroke="black" stroke-width="__STROKE__" stroke-linejoin="round"/></g></svg>"#),
-    (Icon::Rectangle, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="6.5" y="6.5" width="11" height="11" rx="1" stroke="black" stroke-width="__STROKE__"/></svg>"#),
-    (Icon::WinRestore, r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="8.5" y="5.5" width="9" height="9" fill="none" stroke="black" stroke-width="__STROKE__"/><path d="M15.5 15.5V18.5H6.5V9.5H9.5" fill="none" stroke="black" stroke-width="__STROKE__" stroke-linejoin="round"/></svg>"#),
+    (
+        Icon::Play,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><g transform="rotate(90 12 12)"><path d="M10.9173 6.87673L5.58153 16.1253C5.10076 16.9586 5.70219 17.9999 6.66427 17.9999H17.3357C18.2978 17.9999 18.8992 16.9586 18.4185 16.1253L13.0827 6.87672C12.6017 6.04293 11.3983 6.04293 10.9173 6.87673Z" stroke="black" stroke-width="__STROKE__" stroke-linejoin="round"/></g></svg>"#,
+    ),
+    (
+        Icon::Rectangle,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="6.5" y="6.5" width="11" height="11" rx="1" stroke="black" stroke-width="__STROKE__"/></svg>"#,
+    ),
+    (
+        Icon::WinRestore,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="8.5" y="5.5" width="9" height="9" fill="none" stroke="black" stroke-width="__STROKE__"/><path d="M15.5 15.5V18.5H6.5V9.5H9.5" fill="none" stroke="black" stroke-width="__STROKE__" stroke-linejoin="round"/></svg>"#,
+    ),
 ];
 
 /// `size` 是最终显示的点数：24 网格等比缩到 `size` 时把描边反向放大 `24/size`，

@@ -646,7 +646,13 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
                 l.path = path.clone();
                 l.name = m.name.clone();
             }
-            None => libs.enabled.push(LibraryLink { id: m.id.clone(), name: m.name.clone(), path: path.clone(), relative: String::new(), version: m.version }),
+            None => libs.enabled.push(LibraryLink {
+                id: m.id.clone(),
+                name: m.name.clone(),
+                path: path.clone(),
+                relative: String::new(),
+                version: m.version,
+            }),
         }
     }
     let mut out = assets_json(&lib);

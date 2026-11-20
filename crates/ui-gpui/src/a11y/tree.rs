@@ -6,9 +6,9 @@
 //! under their region. The state mapping follows the gpui-kit accessibility
 //! guide (role + name + state + action, one stable node id per control).
 
-use super::registry::{Control, Registry, ROOT_NODE_ID, States};
-use accesskit::{Action, Node, NodeId, Rect, Role, Toggled, Tree, TreeId, TreeUpdate};
+use super::registry::{Control, ROOT_NODE_ID, Registry, States};
 use crate::a11y::Region;
+use accesskit::{Action, Node, NodeId, Rect, Role, Toggled, Tree, TreeId, TreeUpdate};
 use gpui::FocusHandle;
 use std::collections::HashSet;
 
@@ -16,12 +16,7 @@ use std::collections::HashSet;
 fn bounds(b: gpui::Bounds<gpui::Pixels>, scale: f32) -> Rect {
     let x0 = f64::from(f32::from(b.origin.x)) * f64::from(scale);
     let y0 = f64::from(f32::from(b.origin.y)) * f64::from(scale);
-    Rect {
-        x0,
-        y0,
-        x1: x0 + f64::from(f32::from(b.size.width)) * f64::from(scale),
-        y1: y0 + f64::from(f32::from(b.size.height)) * f64::from(scale),
-    }
+    Rect { x0, y0, x1: x0 + f64::from(f32::from(b.size.width)) * f64::from(scale), y1: y0 + f64::from(f32::from(b.size.height)) * f64::from(scale) }
 }
 
 fn add_states(node: &mut Node, states: &States) {
@@ -67,12 +62,7 @@ fn control_node(control: &Control, scale: f32) -> Node {
 
 /// Build the whole window tree. `focused` is GPUI's current `FocusHandle`;
 /// when it belongs to a registered control that node becomes the tree focus.
-pub(crate) fn build_update(
-    registry: &Registry,
-    title: &str,
-    focused: Option<&FocusHandle>,
-    scale: f32,
-) -> TreeUpdate {
+pub(crate) fn build_update(registry: &Registry, title: &str, focused: Option<&FocusHandle>, scale: f32) -> TreeUpdate {
     let mut nodes: Vec<(NodeId, Node)> = Vec::new();
     let mut root = Node::new(Role::Window);
     if !title.is_empty() {
@@ -110,12 +100,7 @@ pub(crate) fn build_update(
     }
 
     nodes.push((ROOT_NODE_ID, root));
-    let update = TreeUpdate {
-        nodes,
-        tree: Some(Tree::new(ROOT_NODE_ID)),
-        tree_id: TreeId::ROOT,
-        focus: tree_focus,
-    };
+    let update = TreeUpdate { nodes, tree: Some(Tree::new(ROOT_NODE_ID)), tree_id: TreeId::ROOT, focus: tree_focus };
     repair_tree_update(update)
 }
 

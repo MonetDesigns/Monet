@@ -24,7 +24,9 @@ use serde_json::{Map, Value, json};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum ShapeHandle {
-    Radius { corner: usize },
+    Radius {
+        corner: usize,
+    },
     Ratio,
     /// A polygon's or star's point count, on its first point clockwise from the top (#2152).
     Count,

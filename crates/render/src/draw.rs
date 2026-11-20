@@ -764,9 +764,7 @@ fn shader_layer(
         (-p.x as f32, -p.y as f32)
     };
     let bounds = ctx.doc.bounds_of(&[n.id]);
-    let node_px = bounds.map_or((lw as f32, lh as f32), |r| {
-        ((r.width() * ctx.scale) as f32, (r.height() * ctx.scale) as f32)
-    });
+    let node_px = bounds.map_or((lw as f32, lh as f32), |r| ((r.width() * ctx.scale) as f32, (r.height() * ctx.scale) as f32));
     let bounds = bounds.map_or([0.0; 4], |r| [r.x0, r.y0, r.x1, r.y1]);
     let radii_px = n.corners.radii.map(|v| (v * ctx.scale).max(0.0) as f32);
     let smoothing = n.corners.smoothing;

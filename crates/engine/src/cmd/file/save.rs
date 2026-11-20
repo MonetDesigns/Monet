@@ -76,7 +76,9 @@ impl FileSnapshot {
         let mut doc = (*self.doc).clone();
         let opening = doc.pages.iter().copied().find(|&p| matches!(doc.get(p).map(|n| &n.kind), Ok(NodeKind::Page { opening: true, .. })));
         doc.current_page = Some(opening.unwrap_or(self.page));
-        if let Some(path) = self.path.as_deref() { crate::library::relate_links(&mut doc, path); }
+        if let Some(path) = self.path.as_deref() {
+            crate::library::relate_links(&mut doc, path);
+        }
         let thumb = thumbnail(&doc);
         figcraft_format::save_bytes_with_history(&doc, thumb.as_deref(), &self.versions, &self.branches)
             .map_err(|e| EngineError::Other(e.to_string()))

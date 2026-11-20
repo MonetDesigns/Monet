@@ -154,10 +154,7 @@ impl Slider {
                 let x0 = f32::from(bounds.origin.x);
                 let w = f32::from(bounds.size.width).max(1.0);
                 let cy = f32::from(bounds.origin.y) + f32::from(bounds.size.height) / 2.0;
-                let track_rect = Bounds {
-                    origin: gpui::point(px(x0), px(cy - TRACK_H / 2.0)),
-                    size: gpui::size(px(w), px(TRACK_H)),
-                };
+                let track_rect = Bounds { origin: gpui::point(px(x0), px(cy - TRACK_H / 2.0)), size: gpui::size(px(w), px(TRACK_H)) };
                 if let Some(paint) = &paint_track {
                     paint(window, track_rect, frac);
                 } else {
@@ -168,10 +165,7 @@ impl Slider {
                 }
                 // 滑块：外圈 1pt 描边感的边缘 + 亮面，中心压在取值位置。
                 let cx = x0 + w * frac;
-                let edge = Bounds {
-                    origin: gpui::point(px(cx - THUMB / 2.0), px(cy - THUMB / 2.0)),
-                    size: gpui::size(px(THUMB), px(THUMB)),
-                };
+                let edge = Bounds { origin: gpui::point(px(cx - THUMB / 2.0), px(cy - THUMB / 2.0)), size: gpui::size(px(THUMB), px(THUMB)) };
                 window.paint_quad(gpui::fill(edge, thumb_edge).corner_radii(pill(THUMB / 2.0)));
                 let inner = Bounds {
                     origin: gpui::point(px(cx - THUMB / 2.0 + 1.0), px(cy - THUMB / 2.0 + 1.0)),
@@ -219,20 +213,20 @@ impl Slider {
             .h_full()
             .cursor_pointer()
             .on_mouse_down(MouseButton::Left, move |e: &MouseDownEvent, window, cx| {
-            drag_down.set(true);
-            let Some(b) = hit_down.get() else { return };
-            let w = f32::from(b.size.width).max(1.0);
-            let f = ((f32::from(e.position.x) - f32::from(b.origin.x)) / w).clamp(0.0, 1.0);
-            let raw = min + f * (max - min);
-            let next = (if step > 0.0 { (raw / step).round() * step } else { raw }).clamp(min, max);
-            last_down.set(next);
-            if let Some(cb) = &on_change {
-                cb(next, window, cx);
-            } else {
-                let _ = next;
-            }
-        })
-        .child(canvas);
+                drag_down.set(true);
+                let Some(b) = hit_down.get() else { return };
+                let w = f32::from(b.size.width).max(1.0);
+                let f = ((f32::from(e.position.x) - f32::from(b.origin.x)) / w).clamp(0.0, 1.0);
+                let raw = min + f * (max - min);
+                let next = (if step > 0.0 { (raw / step).round() * step } else { raw }).clamp(min, max);
+                last_down.set(next);
+                if let Some(cb) = &on_change {
+                    cb(next, window, cx);
+                } else {
+                    let _ = next;
+                }
+            })
+            .child(canvas);
 
         let mut row = div().h(px(24.0)).flex().flex_row().items_center().gap(px(8.0));
         if let Some(w) = self.width {

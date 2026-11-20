@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use figcraft_doc::{Document, NodeId, NodeKind};
-use figcraft_render::shade::{premultiplied, ShadeBoard, ShadeRequest, ShaderSpec, Shaded};
+use figcraft_render::shade::{ShadeBoard, ShadeRequest, Shaded, ShaderSpec, premultiplied};
 use figcraft_render::wgsl_effect as fx;
 
 /// 一页里可见且绑了材质的图层，装成 `ShadeBoard` 需要的形状。
@@ -66,12 +66,7 @@ pub fn shade_pending(board: &ShadeBoard, runner: &mut crate::wgsl_runner::WgslRu
         done += 1;
     }
     if crate::canvas::render_worker::render_log() {
-        eprintln!(
-            "[shade] {} layers {:.1}ms ok={done}/{}",
-            requests.len(),
-            t0.elapsed().as_secs_f64() * 1000.0,
-            requests.len()
-        );
+        eprintln!("[shade] {} layers {:.1}ms ok={done}/{}", requests.len(), t0.elapsed().as_secs_f64() * 1000.0, requests.len());
     }
     done
 }
@@ -132,12 +127,7 @@ pub fn reach_px(doc: &Document, page: NodeId, scale: f64) -> f64 {
     for (id, spec) in specs(doc, page) {
         let Some(n) = doc.node(id) else { continue };
         let short = n.width.min(n.height).max(1.0);
-        let depth = spec
-            .params
-            .iter()
-            .find(|(k, _)| k.as_str() == "depth" || k.ends_with(".depth"))
-            .map(|(_, v)| *v)
-            .unwrap_or(20.0);
+        let depth = spec.params.iter().find(|(k, _)| k.as_str() == "depth" || k.ends_with(".depth")).map(|(_, v)| *v).unwrap_or(20.0);
         worst = worst.max(figcraft_doc::Glass::depth_reach_doc(depth, short));
     }
     if worst <= 0.0 {

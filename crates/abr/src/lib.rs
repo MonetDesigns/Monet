@@ -7,15 +7,17 @@
 //! Monet paints with the tip bitmaps this crate decodes: see `figcraft-render`'s brush-stroke
 //! compositor. The engine no longer contains any built-in brush shapes.
 
-mod io;
 pub mod descriptor;
 pub mod format;
+mod io;
 pub mod library;
 pub mod mapping;
 
 pub use descriptor::{Descriptor, Id, Value};
-pub use format::{AbrFile, AbrSample, LegacyBrush, LegacyTip, parse, write_v12, write_v6};
-pub use library::{BrushInfo, BrushLibrary, LEGACY_IDS, bootstrap, brushes_dir, ensure_defaults, global, import, infos, install, load_dir, resolve, warnings};
+pub use format::{AbrFile, AbrSample, LegacyBrush, LegacyTip, parse, write_v6, write_v12};
+pub use library::{
+    BrushInfo, BrushLibrary, LEGACY_IDS, bootstrap, brushes_dir, ensure_defaults, global, import, infos, install, load_dir, resolve, warnings,
+};
 pub use mapping::{BrushDef, GrayTip, brushes_of};
 
 #[cfg(test)]

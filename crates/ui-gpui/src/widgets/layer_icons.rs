@@ -75,12 +75,7 @@ pub fn natural_size(icon: LayerIcon) -> f32 {
 fn normalised() -> &'static Vec<&'static [u8]> {
     static CACHE: OnceLock<Vec<&'static [u8]>> = OnceLock::new();
     CACHE.get_or_init(|| {
-        ASSETS
-            .iter()
-            .map(|(_, bytes)| {
-                Box::leak(crate::widgets::icon::normalise_stroke(bytes).into_boxed_slice()) as &'static [u8]
-            })
-            .collect()
+        ASSETS.iter().map(|(_, bytes)| Box::leak(crate::widgets::icon::normalise_stroke(bytes).into_boxed_slice()) as &'static [u8]).collect()
     })
 }
 

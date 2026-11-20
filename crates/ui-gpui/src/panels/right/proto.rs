@@ -449,7 +449,13 @@ fn ms_of(trigger: &Value) -> u64 {
 }
 
 /// 一条交互行：连接字形 + 触发器（半粗）/ 动作摘要（次要）+ 删除；点行展开编辑器。
-fn interaction_line(f: &RightFields, it: &InteractionRow, i: usize, node: Option<figcraft_doc::NodeId>, remove: IconButton) -> crate::widgets::FieldRow {
+fn interaction_line(
+    f: &RightFields,
+    it: &InteractionRow,
+    i: usize,
+    node: Option<figcraft_doc::NodeId>,
+    remove: IconButton,
+) -> crate::widgets::FieldRow {
     let t = tokens();
     let open = (*f.proto_open.borrow()).is_some_and(|(n, k)| Some(n) == node && k == i);
     let glyph = IconButton::new(Icon::LinkOn).size(20.0);
@@ -477,7 +483,11 @@ fn interaction_line(f: &RightFields, it: &InteractionRow, i: usize, node: Option
             cmds.wake();
         })
         .child(
-            div().text_size(pt(11.0)).font_weight(crate::panels::UI_FONT_REGULAR).text_color(rgba(t.text)).child(SharedString::from(it.trigger.clone())),
+            div()
+                .text_size(pt(11.0))
+                .font_weight(crate::panels::UI_FONT_REGULAR)
+                .text_color(rgba(t.text))
+                .child(SharedString::from(it.trigger.clone())),
         )
         .child(div().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(it.summary.clone())));
     field_row(vec![glyph.into_any_element(), text.into_any_element()], vec![remove])

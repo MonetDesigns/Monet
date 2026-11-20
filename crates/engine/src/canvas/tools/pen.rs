@@ -183,12 +183,15 @@ pub(crate) fn pressure_profile(points: &[Point], pressure: &[Option<f32>]) -> Op
 fn profile_knots(points: &[Point], scales: &[f64]) -> Option<Vec<[f64; 2]>> {
     let (lengths, total) = lengths_of(points)?;
     let n = points.len().clamp(2, PROFILE_KNOTS);
-    Some((0..n).map(|k| {
-        let t = k as f64 / (n - 1) as f64;
-        [t, at_length(scales, &lengths, t * total)]
-    }).collect())
+    Some(
+        (0..n)
+            .map(|k| {
+                let t = k as f64 / (n - 1) as f64;
+                [t, at_length(scales, &lengths, t * total)]
+            })
+            .collect(),
+    )
 }
-
 
 /// Drop samples that cannot be a hand movement.
 ///

@@ -11,7 +11,7 @@
 use figcraft_doc::{Document, NodeKind};
 use figcraft_geom::Point;
 use figcraft_render::View;
-use figcraft_ui_gpui::wgsl_runner::{passes_for, WgslRunner};
+use figcraft_ui_gpui::wgsl_runner::{WgslRunner, passes_for};
 
 fn main() {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/solid.wgsl");
@@ -20,21 +20,13 @@ fn main() {
     let mut doc = Document::default();
     let page = doc.pages[0];
     // A 220×140 rectangle at the origin, no fill (the per-layer path drops the fill anyway).
-    let r = doc
-        .create(page, NodeKind::Rectangle, "R", 0.0, 0.0, 220.0, 140.0)
-        .expect("rect");
+    let r = doc.create(page, NodeKind::Rectangle, "R", 0.0, 0.0, 220.0, 140.0).expect("rect");
     // The material binding is stored in `plugin_data["figcraft.wgslMaterial"]` as a JSON string.
     // Windows paths carry backslashes, which MUST be escaped for the JSON to parse — the app itself
     // writes this through `WgslMaterialBinding::to_json` (serde escapes automatically); a hand-rolled
     // `format!` with a raw path produces `"C:\Users\..."` and `from_json` silently rejects it.
-    let binding = format!(
-        "{{\"path\":\"{}\",\"params\":{{}}}}",
-        path.replace('\\', "\\\\")
-    );
-    doc.get_mut(r)
-        .expect("rect node")
-        .plugin_data
-        .insert("figcraft.wgslMaterial".to_string(), binding);
+    let binding = format!("{{\"path\":\"{}\",\"params\":{{}}}}", path.replace('\\', "\\\\"));
+    doc.get_mut(r).expect("rect node").plugin_data.insert("figcraft.wgslMaterial".to_string(), binding);
 
     // ---- Ground-truth diagnostics (no GPU needed) ----
     println!("page={page:?} r={r:?}");
@@ -44,10 +36,7 @@ fn main() {
     println!("r.parent={:?}", doc.node(r).map(|n| n.parent));
     let b = doc.bounds_of(&[r]);
     println!("bounds(r)={:?}", b);
-    println!(
-        "plugin_data(r)={:?}",
-        doc.node(r).map(|n| n.plugin_data.keys().collect::<Vec<_>>())
-    );
+    println!("plugin_data(r)={:?}", doc.node(r).map(|n| n.plugin_data.keys().collect::<Vec<_>>()));
     if let Some(json) = doc.node(r).and_then(|n| n.plugin_data.get("figcraft.wgslMaterial")) {
         println!("binding json ({} bytes): {}", json.len(), json);
     }
@@ -77,14 +66,20 @@ fn main() {
             let (px1, py1) = (sx1.ceil().min(cw), sy1.ceil().min(ch));
             println!(
                 "scale={sc:.3} -> NO PASS  mapped=({x0:.1},{y0:.1})-({x1:.1},{y1:.1})  clipped=({sx0:.1},{sy0:.1})-({sx1:.1},{sy1:.1})  wholepx=({px0:.0},{py0:.0})-({px1:.0},{py1:.0})  w={} h={}",
-                rb.width(), rb.height()
+                rb.width(),
+                rb.height()
             );
             continue;
         }
         let p = &passes[0];
         println!(
             "scale={sc:.3} rect_px={:?} node_px={:?} origin_px={:?} radii_px={:?} uniforms={} field_bytes={:?}",
-            p.rect_px, p.node_px, p.origin_px, p.radii_px, p.uniforms.len(), p.field_bytes.as_ref().map(|v| v.len())
+            p.rect_px,
+            p.node_px,
+            p.origin_px,
+            p.radii_px,
+            p.uniforms.len(),
+            p.field_bytes.as_ref().map(|v| v.len())
         );
     }
 
@@ -124,7 +119,11 @@ fn main() {
         let win = (passes[0].rect_px[2] as f64 * passes[0].rect_px[3] as f64) as f64;
         println!(
             "scale={sc:.3} device={:?} drawn_px={} magenta_px={} ({:.1}% of window, {:.1}% of drawn)",
-            passes[0].rect_px, drawn, magenta, 100.0 * magenta as f64 / win.max(1.0), 100.0 * magenta as f64 / drawn.max(1) as f64
+            passes[0].rect_px,
+            drawn,
+            magenta,
+            100.0 * magenta as f64 / win.max(1.0),
+            100.0 * magenta as f64 / drawn.max(1) as f64
         );
     }
 }

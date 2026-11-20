@@ -117,11 +117,8 @@ impl BrushLibrary {
     pub fn from_dir(dir: &Path) -> Self {
         let mut lib = Self::empty();
         let Ok(rd) = std::fs::read_dir(dir) else { return lib };
-        let mut files: Vec<PathBuf> = rd
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.extension().and_then(OsStr::to_str).is_some_and(|e| e.eq_ignore_ascii_case("abr")))
-            .collect();
+        let mut files: Vec<PathBuf> =
+            rd.flatten().map(|e| e.path()).filter(|p| p.extension().and_then(OsStr::to_str).is_some_and(|e| e.eq_ignore_ascii_case("abr"))).collect();
         files.sort();
         for p in files {
             if let Err(e) = lib.add_file(&p) {

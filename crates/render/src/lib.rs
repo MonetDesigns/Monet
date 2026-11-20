@@ -6,10 +6,10 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod backdrop;
-pub mod brush_stroke;
 mod band;
 pub mod blur;
 pub mod boolean;
+pub mod brush_stroke;
 pub mod dots;
 pub mod draw;
 mod export_depth;
@@ -22,8 +22,8 @@ pub mod lod;
 pub mod paint;
 pub mod pattern;
 pub mod retained;
-pub mod shadow;
 pub mod shade;
+pub mod shadow;
 pub mod wgsl_effect;
 
 pub use dots::Dots;
@@ -206,7 +206,9 @@ pub(crate) fn render_part(doc: &Document, page: NodeId, view: &View, opts: &Opti
             let bands = threads.min(view.width / 96);
             (bands > 1).then(|| pool.install(|| render_columns(doc, page, view, opts, bands))).flatten()
         };
-        if rendered.is_some() { return rendered; }
+        if rendered.is_some() {
+            return rendered;
+        }
     }
     render_one(doc, page, view, opts)
 }
@@ -226,7 +228,8 @@ fn render_columns(doc: &Document, page: NodeId, view: &View, opts: &Options, ban
             let w = band_w.min(view.width.saturating_sub(x0)).max(1);
             let left = x0.saturating_sub(overlap);
             let right = (x0 + w + overlap).min(view.width).max(x0 + w);
-            let v = View { origin: (view.origin.0 + f64::from(left) / s, view.origin.1), scale: view.scale, width: right - left, height: view.height };
+            let v =
+                View { origin: (view.origin.0 + f64::from(left) / s, view.origin.1), scale: view.scale, width: right - left, height: view.height };
             let own = tiny_skia::IntRect::from_xywh((x0 - left) as i32, 0, w, view.height.clamp(1, 16_384));
             (x0, render_one(doc, page, &v, opts).zip(own).and_then(|(p, r)| p.clone_rect(r)))
         })
@@ -266,10 +269,7 @@ fn render_bands(doc: &Document, page: NodeId, view: &View, opts: &Options, bands
     let band_h = view.height.div_ceil(bands.max(1));
     let overlap = band_overlap(doc, view, band_h, opts.shade_reach)?;
     let spans = band_spans(doc, page, view, opts, band_h);
-    let parts: Vec<(u32, Option<Pixmap>)> = spans
-        .into_par_iter()
-        .map(|(y0, h)| (y0, render_band(doc, page, view, opts, y0, h, overlap)))
-        .collect();
+    let parts: Vec<(u32, Option<Pixmap>)> = spans.into_par_iter().map(|(y0, h)| (y0, render_band(doc, page, view, opts, y0, h, overlap))).collect();
     let mut out = new_pixmap(view.width, view.height)?;
     for (y0, part) in parts {
         if let Some(part) = part {

@@ -179,12 +179,9 @@ fn present(f: &RightFields) -> AnyElement {
     let t = tokens();
     let play_cmds = f.cmds.clone();
     // ▶ 是通用 24 pt 图标按钮（用户：图标是通用的控件24），命令 proto.present。
-    let play = IconButton::new(Icon::Play)
-        .id("right-present-play")
-        .size(24.0)
-        .on_click(move |_e, _w, _cx| {
-            play_cmds.push(Cmd { id: "proto.present", params: Some(json!({})) });
-        });
+    let play = IconButton::new(Icon::Play).id("right-present-play").size(24.0).on_click(move |_e, _w, _cx| {
+        play_cmds.push(Cmd { id: "proto.present", params: Some(json!({})) });
+    });
     let menu_cmds = f.cmds.clone();
     let root = f.root.clone();
     // ▾ 下拉宽 16（用户指定）；与前面 ▶ 图标距离 0。

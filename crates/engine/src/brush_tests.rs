@@ -5,8 +5,8 @@
 use serde_json::{Value, json};
 
 use crate::Session;
-use crate::params::id_of;
 use crate::ToolId;
+use crate::params::id_of;
 use crate::tools::{PenKind, PointerEvent, PointerKind, pressure_profile};
 use figcraft_doc::{NodeId, NodeKind};
 use figcraft_geom::Point;
@@ -531,17 +531,21 @@ fn ui_drawstyle_preset_paints_the_same_as_brushpreset() {
         let pix = figcraft_render::render_view(doc, s.page().unwrap(), &view, &figcraft_render::Options::default()).unwrap();
         pix.data().chunks_exact(4).filter(|p| p[3] > 0).count()
     }
-    let via_old = painted(|s| { s.execute("tool.brushPreset", &json!({"preset": "dots"})).unwrap(); });
-    let via_ui = painted(|s| { s.execute("tool.drawStyle", &json!({"tool": "brush", "preset": "dots"})).unwrap(); });
+    let via_old = painted(|s| {
+        s.execute("tool.brushPreset", &json!({"preset": "dots"})).unwrap();
+    });
+    let via_ui = painted(|s| {
+        s.execute("tool.drawStyle", &json!({"tool": "brush", "preset": "dots"})).unwrap();
+    });
     // The UI hands `infos()[].id`, which is `<group>/<index>/<name>` — not a legacy short name.
     let full_id = figcraft_abr::infos().first().map(|b| b.id.clone()).expect("test library has brushes");
-    let via_full_id = painted(|s| { s.execute("tool.drawStyle", &json!({"tool": "brush", "preset": full_id})).unwrap(); });
+    let via_full_id = painted(|s| {
+        s.execute("tool.drawStyle", &json!({"tool": "brush", "preset": full_id})).unwrap();
+    });
     assert!(via_old > 0, "brushPreset paints");
     assert!(via_ui > 0, "UI tool.drawStyle preset must paint, got 0 pixels");
     assert!(via_full_id > 0, "UI passes the full ABR id; it must paint, got 0 pixels");
 }
-
-
 
 /// End-to-end through the UI path: the toolbar's Flow / Opacity / Smoothing steppers issue
 /// `tool.drawStyle {tool:"brush", <key>: v}`; the next stroke must reflect each one.

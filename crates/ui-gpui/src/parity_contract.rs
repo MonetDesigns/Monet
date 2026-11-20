@@ -61,10 +61,7 @@ pub const CONTRACTS: &[Contract] = &[
         // The egui Rename layers dialog: Match / regex / Rename to / three code buttons / start /
         // a live preview, and ONE `object.batchRename`. Reverting to a single "Name" field (or
         // `object.rename`) drops every token below and fails the contract.
-        requires: &[
-            "object.batchRename", "batch_rename_params", "BatchRename::new", "InsertCodes", "RenamePreview",
-            "find", "to", "regex", "start",
-        ],
+        requires: &["object.batchRename", "batch_rename_params", "BatchRename::new", "InsertCodes", "RenamePreview", "find", "to", "regex", "start"],
     },
 ];
 
@@ -226,10 +223,7 @@ fn capabilities() -> BTreeSet<String> {
     if lib_src.contains("\"window.new\" | \"window.focus\"") {
         out.insert("window.new".into());
     }
-    if windows_src.contains(".open_window(")
-        && tabs_src.contains("id: \"window.new\"")
-        && lib_src.contains("windows::requests")
-    {
+    if windows_src.contains(".open_window(") && tabs_src.contains("id: \"window.new\"") && lib_src.contains("windows::requests") {
         out.insert("detach_window".into());
     }
     out

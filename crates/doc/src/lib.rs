@@ -1243,11 +1243,9 @@ impl Document {
         // motion editor's `scope_of` returns a node outside any frame as its own scope, so its
         // settings must survive a load/repair cycle instead of being dropped (CodeRabbit).
         self.timelines.retain(|k, _| {
-            self.nodes.get(k).is_some_and(|n| {
-                n.is_page()
-                    || n.kind.is_frame_like()
-                    || n.parent.is_some_and(|p| self.nodes.get(&p).is_some_and(|pn| pn.is_page()))
-            })
+            self.nodes
+                .get(k)
+                .is_some_and(|n| n.is_page() || n.kind.is_frame_like() || n.parent.is_some_and(|p| self.nodes.get(&p).is_some_and(|pn| pn.is_page())))
         });
         for (k, n) in self.nodes.iter() {
             if n.is_page() && !self.pages.contains(k) && Some(*k) != store {

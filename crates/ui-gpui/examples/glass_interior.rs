@@ -7,7 +7,7 @@
 use figcraft_color::{Color, Paint};
 use figcraft_doc::{Document, NodeKind};
 use figcraft_render::View;
-use figcraft_ui_gpui::wgsl_runner::{passes_for, WgslRunner};
+use figcraft_ui_gpui::wgsl_runner::{WgslRunner, passes_for};
 
 const CW: u32 = 1157;
 const CH: u32 = 1666;
@@ -20,24 +20,16 @@ fn main() {
     let page = doc.pages[0];
 
     // A distinctive backdrop: solid red, 800x600, so any copy of it is easy to recognise.
-    let red = doc
-        .create(page, NodeKind::Rectangle, "Backdrop", 0.0, 0.0, 800.0, 600.0)
-        .expect("backdrop");
-    doc.get_mut(red).expect("backdrop node").fills =
-        vec![Paint::solid(Color::from_hex("FF0000").unwrap())];
+    let red = doc.create(page, NodeKind::Rectangle, "Backdrop", 0.0, 0.0, 800.0, 600.0).expect("backdrop");
+    doc.get_mut(red).expect("backdrop node").fills = vec![Paint::solid(Color::from_hex("FF0000").unwrap())];
 
     // The pane: same box, glass material, and a **green** fill so a frame that fell back to the
     // plain fill is impossible to confuse with a frame that composited the material.
-    let pane = doc
-        .create(page, NodeKind::Rectangle, "Pane", 0.0, 0.0, 800.0, 600.0)
-        .expect("pane");
+    let pane = doc.create(page, NodeKind::Rectangle, "Pane", 0.0, 0.0, 800.0, 600.0).expect("pane");
     {
         let n = doc.get_mut(pane).expect("pane node");
         n.fills = vec![Paint::solid(Color::from_hex("00FF00").unwrap())];
-        let binding = format!(
-            "{{\"path\":\"{}\",\"params\":{{}}}}",
-            glass_path.replace('\\', "\\\\")
-        );
+        let binding = format!("{{\"path\":\"{}\",\"params\":{{}}}}", glass_path.replace('\\', "\\\\"));
         n.plugin_data.insert("figcraft.wgslMaterial".to_string(), binding);
     }
 
@@ -72,12 +64,18 @@ fn main() {
             );
             for (var, bytes) in &p.uniforms {
                 if var == "u" && bytes.len() >= 56 {
-                    let f = |at: usize| {
-                        f32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]])
-                    };
+                    let f = |at: usize| f32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
                     println!(
                         "   u: depth={:.2} disp={:.2} frost={:.2} splay={:.2} dpr={:.3} nodeSizePx=({:.0},{:.0}) origin=({:.1},{:.1})",
-                        f(20), f(24), f(28), f(32), f(36), f(40), f(44), f(48), f(52)
+                        f(20),
+                        f(24),
+                        f(28),
+                        f(32),
+                        f(36),
+                        f(40),
+                        f(44),
+                        f(48),
+                        f(52)
                     );
                 }
             }
