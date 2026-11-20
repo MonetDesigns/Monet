@@ -11,8 +11,14 @@ pub use crate::widgets::icon::ICON_STROKE;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LayerIcon {
     Frame,
-    LayoutH,
-    LayoutV,
+    /// Horizontal auto layout, cross-aligned top / centre / bottom.
+    LayoutHTop,
+    LayoutHCenter,
+    LayoutHBottom,
+    /// Vertical auto layout, cross-aligned left / centre / right.
+    LayoutVLeft,
+    LayoutVCenter,
+    LayoutVRight,
     LayoutGrid,
     Text,
     Absolute,
@@ -32,8 +38,12 @@ impl LayerIcon {
 /// (file stem, bytes). Order MUST match the enum above.
 pub static ASSETS: &[(&str, &[u8])] = &[
     ("layer-frame", include_bytes!("../../assets/icons/layer-frame.svg")),
-    ("layer-layout-horizontal", include_bytes!("../../assets/icons/layer-layout-horizontal.svg")),
-    ("layer-layout-vertical", include_bytes!("../../assets/icons/layer-layout-vertical.svg")),
+    ("layout-auto-h-top", include_bytes!("../../assets/icons/layout-auto-h-top.svg")),
+    ("layout-auto-h-center", include_bytes!("../../assets/icons/layout-auto-h-center.svg")),
+    ("layout-auto-h-bottom", include_bytes!("../../assets/icons/layout-auto-h-bottom.svg")),
+    ("layout-auto-v-left", include_bytes!("../../assets/icons/layout-auto-v-left.svg")),
+    ("layout-auto-v-center", include_bytes!("../../assets/icons/layout-auto-v-center.svg")),
+    ("layout-auto-v-right", include_bytes!("../../assets/icons/layout-auto-v-right.svg")),
     ("layer-layout-grid", include_bytes!("../../assets/icons/layout-grid.svg")),
     ("layer-text", include_bytes!("../../assets/icons/shape-text.svg")),
     ("layer-absolute", include_bytes!("../../assets/icons/layer-absolute.svg")),

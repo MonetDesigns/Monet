@@ -985,10 +985,30 @@ impl CanvasView {
         } else if n.is_mask {
             Some(L::Mask)
         } else {
+            // Auto-layout frames pick their layer glyph from the mode *and* the cross-axis
+            // alignment (the same six glyphs Figma shows): H -> top/centre/bottom,
+            // V -> left/centre/right. Baseline has no glyph and falls back to the start.
+            let auto_glyph = || {
+                let align = n.layout.as_ref().map(|l| l.cross_align).unwrap_or_default();
+                use figcraft_doc::{CrossAlign, LayoutMode};
+                match n.layout.as_ref().map(|l| l.mode).unwrap_or_default() {
+                    LayoutMode::Vertical => Some(match align {
+                        CrossAlign::Center => L::LayoutVCenter,
+                        CrossAlign::Max => L::LayoutVRight,
+                        _ => L::LayoutVLeft,
+                    }),
+                    LayoutMode::Grid => Some(L::LayoutGrid),
+                    LayoutMode::Horizontal => Some(match align {
+                        CrossAlign::Center => L::LayoutHCenter,
+                        CrossAlign::Max => L::LayoutHBottom,
+                        _ => L::LayoutHTop,
+                    }),
+                }
+            };
             match icon {
                 Icon::Frame => Some(L::Frame),
-                Icon::LayoutH => Some(L::LayoutH),
-                Icon::LayoutV => Some(L::LayoutV),
+                Icon::LayoutH => auto_glyph(),
+                Icon::LayoutV => auto_glyph(),
                 Icon::LayoutGrid => Some(L::LayoutGrid),
                 Icon::Text => Some(L::Text),
                 // 具体形状（矩形/椭圆/多边形/星形/线条/箭头/图片/矢量）不在这里给固定字形：

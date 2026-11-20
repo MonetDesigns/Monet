@@ -1,1 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="#000" stroke="none"><rect x="2.500" y="2.500" width="11.000" height="11.000" fill="none" stroke="#000" stroke-width="1"/><path d="M8.000 3.500 L12.500 8.000 L8.000 12.500 L3.500 8.000 Z"/></svg>
+<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+<path d="M3 8L8 3L13 8L8 13L3 8Z" fill="black"/>
+<mask id="stroke0_840_549" maskUnits="userSpaceOnUse" x="2" y="2" width="12" height="12" fill="black">
+<rect fill="white" x="2" y="2" width="12" height="12"/>
+<path d="M3 8L8 3L13 8L8 13L3 8Z"/>
+</mask>
+<path d="M3 8L8 3L13 8L8 13L3 8Z" stroke-width="2" stroke-linejoin="round" stroke="black" mask="url(#stroke0_840_549)"/>
+</svg>
