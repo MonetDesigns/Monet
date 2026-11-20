@@ -1124,7 +1124,7 @@ pub struct PageData {
     pub local_styles: usize,
 }
 
-/// Selection header（`lizard right.rs::header` 的全部判断输入）。
+/// Selection header（`参考实现 right.rs::header` 的全部判断输入）。
 ///
 /// 这一行不是普通区块：选中 Frame / Group / Text / 形状 / 组件时，右侧那排快捷动作**整套
 /// 换掉**。所以把判断所需的原值都快照下来，交给 `panels::visibility::header_actions` 这个
@@ -1132,22 +1132,22 @@ pub struct PageData {
 #[derive(Clone, Debug, PartialEq)]
 pub struct HeaderData {
     pub label: String,
-    /// 单选 Frame（lizard `is_frame`）。
+    /// 单选 Frame（参考实现 `is_frame`）。
     pub is_frame: bool,
-    /// 选区全是 Group（lizard `is_group`）。
+    /// 选区全是 Group（参考实现 `is_group`）。
     pub is_group: bool,
-    /// 选区全是 Text（lizard `is_text`）。
+    /// 选区全是 Text（参考实现 `is_text`）。
     pub is_text: bool,
-    /// 单选 Component / ComponentSet（lizard `header` 开头的组件专属分支）。
+    /// 单选 Component / ComponentSet（参考实现 `header` 开头的组件专属分支）。
     pub is_component: bool,
-    /// 单选形状（lizard `edit_id` → `vector.edit.begin`）。
+    /// 单选形状（参考实现 `edit_id` → `vector.edit.begin`）。
     pub is_shape: bool,
-    /// 布尔组当前运算（lizard `booleans::shown_op`）：决定布尔按钮图标与菜单勾选项。
+    /// 布尔组当前运算（参考实现 `booleans::shown_op`）：决定布尔按钮图标与菜单勾选项。
     pub bool_op: Option<figcraft_doc::BoolOp>,
-    /// 选区数量（lizard：Union 按钮只有 `sel.len() >= 2` 才执行）。
+    /// 选区数量（参考实现：Union 按钮只有 `sel.len() >= 2` 才执行）。
     pub count: usize,
     /// 「More actions」菜单行：`(显示名, 命令 id, 上方要分隔线)`。
-    /// 取自画布右键菜单的顶层可运行命令（lizard `text.more` 打开的就是它）。
+    /// 取自画布右键菜单的顶层可运行命令（参考实现 `text.more` 打开的就是它）。
     pub more_actions: Vec<(String, &'static str, bool)>,
 }
 
@@ -1264,7 +1264,7 @@ pub struct PanelData {
     /// 上游 `selection_colors.rs::section`：两组不同颜色才显示；只有一组时，若选中的层有子级
     /// 也显示（「画框里只有一个组件、一个颜色」也要列出那一行）。
     pub selection_has_children: bool,
-    /// 当前文档快照的 uid（lizard `ds.uid`）：Selection colors 的展开态按文档分档存，
+    /// 当前文档快照的 uid（参考实现 `ds.uid`）：Selection colors 的展开态按文档分档存，
     /// 切换文档时各自记住自己的开合状态，而不是共用一个全局布尔。
     pub doc_uid: u64,
     pub variable_modes: Vec<ModeRow>,
@@ -1308,7 +1308,7 @@ pub struct PanelData {
     pub variables: crate::panels::right::variables::VariablesData,
     /// Appearance 的可见性（`object.toggleVisible`）。
     pub visible: Option<bool>,
-    /// Frame-like 的「Clip content」勾选（Figma 的 Frame 设置区）；`None` = 多选不一致。
+    /// Frame-like 的「Clip content」勾选（参考编辑器 的 Frame 设置区）；`None` = 多选不一致。
     pub clip: Option<bool>,
     /// Appearance 圆角行旁「Corner smoothing」小窗的值（0..1）；`None` = 多选不一致。
     pub corner_smoothing: Option<f64>,
@@ -1575,7 +1575,7 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
 
     let first = ids.first().and_then(|i| doc.node(*i));
     let kinds = common(doc, ids, |n| n.kind.label().to_string());
-    // lizard `right.rs::header` 的五个判断输入，全部只读当前文档 / 选区。
+    // 参考实现 `right.rs::header` 的五个判断输入，全部只读当前文档 / 选区。
     let is_text = ids.iter().all(|i| doc.node(*i).is_some_and(|n| matches!(n.kind, NodeKind::Text(_))));
     let is_shape = ids.len() == 1 && first.is_some_and(|n| n.kind.is_shape());
     let is_component = ids.len() == 1 && first.is_some_and(|n| matches!(n.kind, NodeKind::Component { .. } | NodeKind::ComponentSet { .. }));
@@ -2165,7 +2165,7 @@ mod tests {
         assert!(!d.bound.contains_key("height"), "an unbound field has no chip");
     }
 
-    /// 上游 `selection_colors.rs::section` 的显示条件（Figma 实测）：**两种不同颜色**显示这一节；
+    /// 上游 `selection_colors.rs::section` 的显示条件（参考编辑器 实测）：**两种不同颜色**显示这一节；
     /// **只有一种颜色**时，只要选中的图层带子级（frame / group / component / instance）也显示。
     /// 之前只判 `len() < 2`，于是「画框里只有一个组件、一个颜色」整节消失。
     #[test]

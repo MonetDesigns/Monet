@@ -9,15 +9,14 @@
 //   rim_light_at() smoothstep(bevel .. 0.2·bevel)
 //   catches()      smoothstep(0.35, 1, facing) + 0.6 · smoothstep(0.35, 1, -facing)
 //   sheen_at()     the broad gradient, `BROAD = 0.05`
-//   dispersed()    the Figma decomposition into red / green / blue taps
+//   dispersed()    the reference decomposition into red / green / blue taps
 //
 // ---------------------------------------------------------------------------------------------
 // THE SEVEN CONTROLS — values and ranges, and where each comes from
 // ---------------------------------------------------------------------------------------------
-// The panel is Figma's Glass effect, so its fields are Figma's `GlassEffect` (Plugin API,
-// developers.figma.com/docs/plugins/api/Effect → GlassEffect) and the numbers the Figma help
-// article "Illustrate a flower vase … and the glass effect" itself uses in its example
-// (66°, 60%, Refraction 76, Depth 98, Dispersion 100, Frost 0, Splay 100).
+// The panel mirrors the reference glass effect. Its field names and the example values
+// (66°, 60%, Refraction 76, Depth 98, Dispersion 100, Frost 0, Splay 100) come from the
+// reference implementation, not from a screenshot reconstruction.
 //
 //   control           field             range        step   default  unit
 //   Light Angle       lightAngle        -180 … 180   1      -45      degrees (y-up, 0 = up)
@@ -25,7 +24,7 @@
 //   Refraction        refraction        0 … 1        0.01   0.8      ratio (panel shows 0–100)
 //   Depth             depth             1 … 100      1      20       document px — the API says only
 //                                                                     "must be >= 1"; 100 is where
-//                                                                     Figma's own panel stops
+//                                                                     the reference panel stops
 //   Dispersion        dispersion        0 … 1        0.01   0.5      ratio (panel shows 0–100)
 //   Frost             radius            0 … 100      1      4        blur radius in document px —
 //                                                                     the API calls this `radius`,
@@ -34,26 +33,26 @@
 //
 // `depth` and `frost` are **lengths in document units**, not 0–1 sliders and not dimensionless
 // counts. There is no coefficient between them and the shader: the render wasm copies
-// `bevelSize`/`refractionDistance` into the uniform block with 179 write sites and **0** `f32.mul`
-// (figma_depth_coefficient.html §0/§1), and it has no `depth` uniform at all. So the panel's Depth
-// IS the pixel thickness, converted once by device-pixels-per-unit (`dpr`) and by nothing else. An
-// earlier version of this file multiplied Depth by 1.3 and 0.25 — coefficients copied from a
-// superseded demo page that the source material itself lists as a failed delivery. They are gone.
+// `bevelSize`/`refractionDistance` into the uniform block with 179 write sites and **0** `f32.mul`,
+// and it has no `depth` uniform at all. So the panel's Depth IS the pixel thickness, converted
+// once by device-pixels-per-unit (`dpr`) and by nothing else. An earlier version of this file
+// multiplied Depth by 1.3 and 0.25 — coefficients copied from a superseded demo page that the
+// reference material itself lists as a failed delivery. They are gone.
 //
 // ---------------------------------------------------------------------------------------------
 // FROST — the original algorithm
 // ---------------------------------------------------------------------------------------------
-// Figma's frost is **not** computed inside the glass shader. It is a separate background pass:
-// the backdrop is run through a downsample → upsample blur chain, and `gen_backdrop_composite.wgsl`
-// only samples that finished texture, dithers it by 2/255 (its `d = 0.007843`) and composites it
-// under the mask (figma_effects_solidified.html §②, "已坐实 · 真实源码").
+// The reference frost is **not** computed inside the glass shader. It is a separate background
+// pass: the backdrop is run through a downsample → upsample blur chain, and the composite shader
+// only samples that finished texture, dithers it by 2/255 (`d = 0.007843`) and composites it
+// under the mask.
 //
 // "Downsample to level L, sample it bilinearly" is exactly that chain: a 2×2 box reduction per
 // level is the downsample, the sampler's linear filter is the upsample. The host uploads the whole
 // mip chain of the backdrop, so this shader picks a level — `log2(radius)` levels for a radius of
 // `2^L` pixels — instead of running a fixed ring of taps, which was a stand-in that does not exist
-// anywhere in Figma's pipeline. The 2/255 dither then removes the banding the reduction creates,
-// with the same hash and the same amplitude as Figma's.
+// anywhere in the reference pipeline. The 2/255 dither then removes the banding the reduction
+// creates, with the same hash and the same amplitude as the reference.
 //
 // @fx id glass
 // @fx label Glass
@@ -121,7 +120,7 @@ const BROAD: f32 = 0.05;
 const DISPERSION_SPREAD: f32 = 0.16;
 /// The share of the reach the bend-direction difference is taken over.
 const KSTEP: f32 = 0.5;
-/// Figma's dither amplitude: `0.007843 = 2/255` (`gen_backdrop_composite.wgsl`'s `d`).
+/// The reference dither amplitude: `0.007843 = 2/255`.
 const DITHER: f32 = 0.007843;
 
 struct VSOut {
@@ -165,7 +164,7 @@ fn texel_uv(uv : vec2<f32>) -> vec2<f32> {
 
 /// The backdrop at `uv`, sampled at mip level `lod`. Level `L` is the backdrop reduced by `2^L`
 /// (a 2×2 box each level) and the sampler's linear filter is the upsample, so this one call is
-/// Figma's downsample → upsample blur chain; `lod = 0` is the untouched backdrop.
+/// The reference downsample → upsample blur chain; `lod = 0` is the untouched backdrop.
 fn sample_backdrop(uv : vec2<f32>, lod : f32) -> vec4<f32> {
     // The host only builds as many levels as a frost radius can reach, so ask the texture instead
     // of assuming twelve: sampling a level that does not exist would be undefined.
@@ -173,7 +172,7 @@ fn sample_backdrop(uv : vec2<f32>, lod : f32) -> vec4<f32> {
     return textureSampleLevel(backdrop, samp, texel_uv(uv), clamp(lod, 0.0, max_lod));
 }
 
-/// Figma's 2/255 dither, its own hash (`fract(sin(dot(p, (12.9898, 78.233))) * 43758.547)`), applied
+/// The reference 2/255 dither, with the same hash (`fract(sin(dot(p, (12.9898, 78.233))) * 43758.547)`), applied
 /// to a straight-alpha colour. It removes the banding the blur chain leaves in flat areas.
 fn ditherize(c : vec3<f32>, frag : vec2<f32>) -> vec3<f32> {
     let h = fract(sin(dot(frag, vec2<f32>(12.9898, 78.233))) * 43758.547);

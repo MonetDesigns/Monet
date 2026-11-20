@@ -107,9 +107,29 @@ pub fn ensure_loaded(path: &str) -> String {
     let id = effect_id(path);
     let mut reg = fx::shared().lock().unwrap_or_else(|e| e.into_inner());
     if reg.scan(&id).is_none() {
-        let _ = reg.load(&id, fx::Source::Path(std::path::PathBuf::from(path)));
+        let _ = reg.load(&id, fx::Source::Path(resolve_shader_path(path)));
     }
     id
+}
+
+/// Resolve a stored binding path to the current external-material folder.
+///
+/// Documents saved before the shader folder moved can still carry
+/// `crates/ui-gpui/assets/wgsl/glass.wgsl` (or an absolute path to it). Keep the binding id
+/// derived from the stored path so old documents keep their per-node params, but load the file
+/// from [`material_dir`] by file name when the old location no longer exists.
+fn resolve_shader_path(path: &str) -> PathBuf {
+    let p = PathBuf::from(path);
+    if p.is_file() {
+        return p;
+    }
+    if let Some(name) = p.file_name() {
+        let candidate = material_dir().join(name);
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+    p
 }
 
 /// The user-facing controls declared by a shader, seeded with their declared defaults.
@@ -161,11 +181,34 @@ pub struct WgslFile {
     pub path: PathBuf,
 }
 
-/// The folder scanned for `.wgsl` files: `$FIGCRAFT_WGSL_DIR`, else `<cwd>/assets/wgsl`.
+/// The folder scanned for `.wgsl` files.
+///
+/// `$FIGCRAFT_WGSL_DIR` wins while it exists. Otherwise the first existing candidate is used: the working
+/// directory's `assets/wgsl` (the documented external-material folder), the same folder next to
+/// the executable, the dev checkout's crate-local legacy folder, then the source checkout's root
+/// `assets/wgsl`. The final fallback is `<cwd>/assets/wgsl`, so a fresh install still gets a
+/// stable path to create.
 pub fn material_dir() -> PathBuf {
     if let Some(dir) = std::env::var_os(DIR_ENV) {
         let p = PathBuf::from(dir);
-        if !p.as_os_str().is_empty() {
+        // A stale override (for example the old crate-local folder) must not hide the shipped
+        // `assets/wgsl`; only honour it while it still exists.
+        if !p.as_os_str().is_empty() && p.is_dir() {
+            return p;
+        }
+    }
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let mut candidates = vec![cwd.join("assets").join("wgsl"), cwd.join("crates/ui-gpui/assets/wgsl")];
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        candidates.push(dir.join("assets/wgsl"));
+        candidates.push(dir.join("../../../assets/wgsl"));
+    }
+    candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/wgsl"));
+    candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/wgsl"));
+    for p in candidates {
+        if p.is_dir() {
             return p;
         }
     }
@@ -239,6 +282,24 @@ mod tests {
         assert!(v["props"]["pluginData"][BINDING_KEY].is_string());
         let v = write_binding_params(None);
         assert!(v["props"]["pluginData"][BINDING_KEY].is_null(), "None removes the binding");
+    }
+
+    #[test]
+    fn the_shipped_shader_is_in_the_root_assets_folder() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        assert!(root.join("assets/wgsl/glass.wgsl").is_file(), "root assets/wgsl is the external material folder");
+    }
+
+    #[test]
+    fn material_dir_finds_the_shipped_folder() {
+        let dir = material_dir();
+        assert!(dir.join("glass.wgsl").is_file(), "material_dir = {}", dir.display());
+    }
+
+    #[test]
+    fn an_old_crate_local_binding_path_still_resolves() {
+        let params = params_for("crates/ui-gpui/assets/wgsl/glass.wgsl");
+        assert!(!params.is_empty(), "old bindings must load the moved shader");
     }
 
     #[test]

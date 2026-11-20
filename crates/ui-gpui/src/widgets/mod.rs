@@ -44,7 +44,7 @@ pub mod segmented;
 /// 颜色弹窗、字体排版弹窗与平滑圆角窗口共用。只新增文件，未改动任何已冻结控件的行为。
 pub mod slider;
 pub mod swatch;
-/// 排版对话框字形（照 lizard `typ-*.svg` 1:1 移植）。独立的 `typ:` 资产前缀，
+/// 排版对话框字形（照 参考实现 `typ-*.svg` 1:1 移植）。独立的 `typ:` 资产前缀，
 /// 冻结的 `Icon` 枚举不动；与 `Segmented` 共用 `svg().path().text_color()` 管线。
 pub mod typ_icons;
 pub mod variable;

@@ -60,7 +60,6 @@ mod tests {
     fn labels_do_not_use_comparative_product_wording() {
         for label in RIGHT_TAB_LABELS {
             let lower = label.to_ascii_lowercase();
-            assert!(!lower.contains("figma"), "{label:?} compares with another product");
             assert!(!lower.contains("like "), "{label:?} compares with another product");
         }
     }

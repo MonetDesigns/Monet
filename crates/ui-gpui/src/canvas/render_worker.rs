@@ -2308,7 +2308,7 @@ mod async_refine_tests {
         let page = doc.pages[0];
         let r = doc.create(page, figcraft_doc::NodeKind::Rectangle, "R", 20.0, 20.0, 100.0, 100.0).expect("a rectangle");
         doc.get_mut(r).expect("the rectangle").fills = vec![figcraft_color::Paint::solid(figcraft_color::Color::from_hex("FF2020").expect("hex"))];
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/wgsl/glass.wgsl");
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/wgsl/glass.wgsl");
         let binding = crate::wgsl_material::WgslMaterialBinding::new(path.to_string_lossy());
         doc.get_mut(r).expect("the rectangle").plugin_data.insert(crate::wgsl_material::BINDING_KEY.into(), binding.to_json());
         (doc, page)
@@ -2498,7 +2498,7 @@ mod material_apply_tests {
         let plain = pixels(&super::Renders::default().refine(&job_for(doc.clone(), page)).expect("a render"));
         assert!(!plain.is_empty(), "the CPU render produced pixels");
 
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/wgsl/glass.wgsl");
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/wgsl/glass.wgsl");
         let binding = crate::wgsl_material::WgslMaterialBinding::new(path.to_string_lossy());
         doc.get_mut(r).expect("the rectangle").plugin_data.insert(crate::wgsl_material::BINDING_KEY.into(), binding.to_json());
         let bound = pixels(&super::Renders::default().refine(&job_for(doc, page)).expect("a render"));
@@ -2525,7 +2525,7 @@ mod material_apply_tests {
         let centre = at(&plain, 70, 70);
         assert!(centre[2] > 200, "the plain image really has the red fill at the centre: {centre:?}");
 
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/wgsl/glass.wgsl");
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/wgsl/glass.wgsl");
         let binding = crate::wgsl_material::WgslMaterialBinding::new(path.to_string_lossy());
         doc.get_mut(r).expect("the rectangle").plugin_data.insert(crate::wgsl_material::BINDING_KEY.into(), binding.to_json());
         let bound_done = super::Renders::default().refine(&job_for(doc, page)).expect("a render");
@@ -2539,7 +2539,7 @@ mod material_apply_tests {
         );
     }
 
-    /// Zooming the canvas must not change the glass. The Figma panel `Depth` is a document-unit
+    /// Zooming the canvas must not change the glass. The 参考编辑器 panel `Depth` is a document-unit
     /// value; the shader turns it into device px via `dpr` (= view.scale), so the refraction band
     /// keeps the same width *relative to the node* at every zoom. This test renders the SAME bound
     /// document at 1x and 2x through the real material channel (`Renders::refine`), maps the 2x
@@ -2558,7 +2558,7 @@ mod material_apply_tests {
         doc.get_mut(stripe).expect("stripe").fills = solid("F0D020"); // yellow edge behind the pane
         let pane = doc.create(page, figcraft_doc::NodeKind::Rectangle, "P", 20.0, 20.0, 100.0, 100.0).expect("pane");
         doc.get_mut(pane).expect("pane").fills = solid("FF2020"); // red glass on top
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/wgsl/glass.wgsl");
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/wgsl/glass.wgsl");
         let binding = crate::wgsl_material::WgslMaterialBinding::new(path.to_string_lossy());
         doc.get_mut(pane).expect("pane").plugin_data.insert(crate::wgsl_material::BINDING_KEY.into(), binding.to_json());
 
@@ -2606,7 +2606,7 @@ mod material_apply_tests {
     fn unbinding_restores_the_plain_image() {
         let _gpu = crate::wgsl_runner::GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let (mut doc, page, r) = red_square();
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/wgsl/glass.wgsl");
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/wgsl/glass.wgsl");
         let binding = crate::wgsl_material::WgslMaterialBinding::new(path.to_string_lossy());
         doc.get_mut(r).expect("the rectangle").plugin_data.insert(crate::wgsl_material::BINDING_KEY.into(), binding.to_json());
         let bound = pixels(&super::Renders::default().refine(&job_for(doc.clone(), page)).expect("a render"));
@@ -2628,7 +2628,7 @@ mod material_apply_tests {
         let bg = doc.create(page, figcraft_doc::NodeKind::Rectangle, "BG", 0.0, 0.0, 140.0, 140.0).expect("bg");
         doc.get_mut(bg).expect("bg").fills = solid("3040C0");
         let frame = doc.create(page, figcraft_doc::NodeKind::Frame, "Glass", 20.0, 20.0, 100.0, 100.0).expect("frame");
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/wgsl/glass.wgsl");
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/wgsl/glass.wgsl");
         let binding = crate::wgsl_material::WgslMaterialBinding::new(path.to_string_lossy());
         doc.get_mut(frame).expect("frame").plugin_data.insert(crate::wgsl_material::BINDING_KEY.into(), binding.to_json());
         let chip = doc.create(frame, figcraft_doc::NodeKind::Rectangle, "Chip", 10.0, 10.0, 80.0, 80.0).expect("chip");
@@ -2777,7 +2777,7 @@ mod overscan_tests {
         let mut doc = Document::default();
         let page = doc.pages[0];
         let pane = doc.create(page, NodeKind::Rectangle, "pane", 0.0, 0.0, 200.0, 200.0).expect("pane");
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/wgsl/glass.wgsl").replace('\\', "\\\\");
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/wgsl/glass.wgsl").replace('\\', "\\\\");
         doc.get_mut(pane)
             .expect("pane node")
             .plugin_data

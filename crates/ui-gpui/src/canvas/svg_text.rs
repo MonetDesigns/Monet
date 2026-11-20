@@ -29,11 +29,11 @@ impl AssetSource for AppAssets {
         if let Some(spec) = path.strip_prefix(PREFIX) {
             return Ok(svg_bytes(spec).map(|svg| Cow::Owned(svg.into_bytes())));
         }
-        // 排版对话框字形（照 lizard typ-*.svg 1:1 移植），编译期内联、不碰冻结的 Icon 枚举。
+        // 排版对话框字形（照 参考实现 typ-*.svg 1:1 移植），编译期内联、不碰冻结的 Icon 枚举。
         if let Some(name) = path.strip_prefix(crate::widgets::typ_icons::ASSET_PREFIX).and_then(|s| s.strip_suffix(".svg")) {
             return Ok(crate::widgets::typ_icons::TypIcon::load(name).map(|s| Cow::Borrowed(s.as_bytes())));
         }
-        // 取色器四条工具栏的 24 pt 图标（Figma DOM 原始 SVG，见 `crate::picker_icons`）。
+        // 取色器四条工具栏的 24 pt 图标（参考编辑器 DOM 原始 SVG，见 `crate::picker_icons`）。
         if let Some(name) = path.strip_prefix(crate::picker_icons::ASSET_PREFIX).and_then(|s| s.strip_suffix(".svg")) {
             return Ok(crate::picker_icons::PickerIcon::load(name).map(|s| Cow::Borrowed(s.as_bytes())));
         }

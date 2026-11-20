@@ -53,7 +53,7 @@ pub(crate) enum Kind {
     /// A8 + A17 — one text value, used by batch rename and menu-input commands.
     Rename,
     /// A menu-input command: `text.link` needs the URL before it can run
-    /// (`lizard menus.rs::invoke` → `MenuInput::Link`).
+    /// (`参考实现 menus.rs::invoke` → `MenuInput::Link`).
     Link,
     /// A17 — `vector.offset` needs the distance before it can run
     /// (`MenuInput::Offset`).
@@ -774,7 +774,7 @@ pub(crate) fn spec(kind: Kind, data: &Value) -> Spec {
                 .button(Button::close(tr("Cancel")))
                 .button(Button::derived(tr("Rename"), json!({ "ids": ids })))
         }
-        // `lizard dialogs.rs::MenuInput::Link`: 一个 URL 输入框，提交时由按钮把它作为
+        // `参考实现 dialogs.rs::MenuInput::Link`: 一个 URL 输入框，提交时由按钮把它作为
         // `{"url": …}` 交给 `text.link`（引擎只认这个键）。
         Kind::Link => Spec::new(tr("Create link"))
             .width(360.0)

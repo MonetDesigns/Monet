@@ -306,7 +306,7 @@ impl Render for TextField {
             let on_trail = self.on_trail.clone();
             let editor = self.edit.clone();
             // 悬停换标：文字槽（Hug / Fill）平时显示尺寸模式的文字，指针一进来就换成
-            // 那个 24 pt 槽里的下拉箭头 —— 与 Figma 的尺寸字段一致（用户 2026-11-11 指定）。
+            // 那个 24 pt 槽里的下拉箭头 —— 与 参考编辑器 的尺寸字段一致（用户 2026-11-11 指定）。
             // 命中区是**整个 24 pt 槽**，所以点文字和点箭头是同一个按钮，都弹同一个菜单。
             let show_chevron = is_text_trail && self.trail_hover;
             let shown = if show_chevron { Slot::Icon(Icon::ChevronDown) } else { trail.clone() };

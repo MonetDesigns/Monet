@@ -154,7 +154,7 @@ fn build_rows(doc: &Document, selection: &[NodeId], ui: &MotionUi, scope: NodeId
         if ui.folded.contains(&id) {
             continue;
         }
-        // Clips first, then the keyframe tracks (Figma's order).
+        // Clips first, then the keyframe tracks (参考编辑器's order).
         for c in &n.motion.clips {
             rows.push(Row {
                 node: id,

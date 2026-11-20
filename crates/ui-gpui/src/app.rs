@@ -169,7 +169,7 @@ pub fn sample_doc() -> Document {
     let al_h = doc.create(page, NodeKind::Frame, "AutoLayout · H", 40.0, 560.0, 480.0, 180.0).unwrap_or(page);
     if let Some(n) = doc.node_mut(al_h) {
         n.layout = Some(AutoLayout { mode: LayoutMode::Horizontal, gap: 24.0, padding: [32.0, 32.0, 32.0, 32.0], ..Default::default() });
-        // 自适应（Hug）：拖 padding 时 frame 跟着内容+内边距变大变小（Figma 的 Hug 行为）。
+        // 自适应（Hug）：拖 padding 时 frame 跟着内容+内边距变大变小（参考编辑器 的 Hug 行为）。
         n.child_layout.sizing_h = figcraft_doc::Sizing::Hug;
         n.child_layout.sizing_v = figcraft_doc::Sizing::Hug;
     }
