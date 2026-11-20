@@ -5,7 +5,7 @@
   "sources": [
     "figcraft.wxs"
   ],
-  "icon": "assets/app-icon/figcraft.ico",
+  "icon": "assets/app-icon/monet.ico",
   "localization": [
     "figcraft.en-us.wxl"
   ],

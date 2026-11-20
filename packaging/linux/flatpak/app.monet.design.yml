@@ -4,17 +4,17 @@
 #
 #   curl -fsSLO https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/master/cargo/flatpak-cargo-generator.py
 #   python3 flatpak-cargo-generator.py Cargo.lock -o packaging/linux/flatpak/cargo-sources.json
-#   flatpak-builder --user --install --force-clean build-flatpak packaging/linux/flatpak/ai.storyteller.figcraft.yml
-#   flatpak run ai.storyteller.figcraft
+#   flatpak-builder --user --install --force-clean build-flatpak packaging/linux/flatpak/app.monet.design.yml
+#   flatpak run app.monet.design
 #
 # For Flathub, replace the `dir` source with a `git` source pinned to a release tag and commit.
-# The single-file .flatpak attached to each release comes from ai.storyteller.figcraft.bundle.yml,
+# The single-file .flatpak attached to each release comes from app.monet.design.bundle.yml,
 # which repackages the prebuilt release binaries. Keep runtime-version and finish-args identical.
 #
 # Official release binaries embed craft-fonts (storytold/craft-fonts, OFL fonts); this from-source
 # build doesn't (add it as a git source and set CRAFT_FONTS_DIR to include it), so it uses the
 # runtime's system fonts.
-id: ai.storyteller.figcraft
+id: app.monet.design
 runtime: org.freedesktop.Platform
 runtime-version: '26.08'
 sdk: org.freedesktop.Sdk
@@ -55,14 +55,14 @@ modules:
       - cargo --offline build --release --locked -p figcraft
       - install -Dm755 target/release/figcraft /app/bin/figcraft
       - install -Dm644 NOTICE /app/share/doc/figcraft/NOTICE
-      - install -Dm644 packaging/linux/ai.storyteller.figcraft.desktop /app/share/applications/ai.storyteller.figcraft.desktop
-      - install -Dm644 packaging/linux/ai.storyteller.figcraft.mime.xml /app/share/mime/packages/ai.storyteller.figcraft.xml
+      - install -Dm644 packaging/linux/app.monet.design.desktop /app/share/applications/app.monet.design.desktop
+      - install -Dm644 packaging/linux/app.monet.design.mime.xml /app/share/mime/packages/app.monet.design.xml
       - mkdir -p /app/share/icons && cp -R assets/app-icon/hicolor /app/share/icons/
       - >-
         version=$(awk '/^\[/{p=($0=="[workspace.package]");next} p&&$1=="version"{gsub(/[" ]/,"",$3);print $3;exit}' Cargo.toml);
         install -d /app/share/metainfo;
         sed -e "s/@VERSION@/$version/" -e "s/@DATE@/$(date -u +%Y-%m-%d)/"
-        packaging/linux/ai.storyteller.figcraft.metainfo.xml.in > /app/share/metainfo/ai.storyteller.figcraft.metainfo.xml
+        packaging/linux/app.monet.design.metainfo.xml.in > /app/share/metainfo/app.monet.design.metainfo.xml
     sources:
       - type: dir
         path: ../../..

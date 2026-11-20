@@ -1,157 +1,159 @@
 <p align="center">
-  <img alt="Monet" src="docs/brand/monet.svg" width="96" height="96">
+  <img alt="Monet" src="assets/app-icon/hicolor/256x256/apps/app.monet.design.png" width="128" height="128">
 </p>
 
 <h1 align="center">Monet</h1>
 
 <p align="center">
-  <b>设计一个设计工具，本身就是一次设计。</b><br>
-  画框、自动布局、组件与变体、矢量网络、样式、变量和原型——<br>
-  一个秒开、离线可用、数据全在本地的设计软件。
+  <b>用 GPUI 构建的原生设计工具前端。</b><br>
+  画框、自动布局、组件与变体、矢量网络、样式、变量和原型，<br>
+  加上动画时间轴——由 Rust 文档引擎驱动，离线即可打开使用。
 </p>
 
 <p align="center">
-  <a href="README.md">English</a> ·
+  <a href="README.md">English</a> · <a href="README.zh-CN.md">中文</a>
+</p>
+
+<p align="center">
   <img alt="100% Rust" src="https://img.shields.io/badge/100%25-Rust-b7410e?style=flat-square&logo=rust">
   <img alt="UI: GPUI" src="https://img.shields.io/badge/UI-GPUI-0EA5C6?style=flat-square">
   <img alt="License: MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-3a3a3a?style=flat-square">
   <img alt="Status: early alpha" src="https://img.shields.io/badge/status-early%20alpha-d69e2e?style=flat-square">
+  <br>
+  <a href="https://sonarcloud.io/project/overview?id=MonetDesigns_Monet"><img alt="Scanned by SonarCloud" src="https://img.shields.io/badge/Scanned_by-SonarCloud-4b9fd5?style=flat-square&logo=sonarqubecloud&logoColor=white"></a>
+  <a href="https://coderabbit.ai"><img alt="Reviewed by CodeRabbit" src="https://img.shields.io/coderabbit/prs/github/MonetDesigns/Monet?style=flat-square&label=Reviewed%20by%20CodeRabbit&logo=coderabbit"></a>
 </p>
+
+<br>
+
+> [!NOTE]
+> **本项目是 GPUI 前端。** 文档引擎与最初的 egui 前端在上游项目
+> **[storytold/figcraft](https://github.com/storytold/figcraft)** 开发。引擎改动请提到上游，
+> 本仓库只接收 GPUI 界面改动。详见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 <p align="center">
-  <img src="docs/images/monet-hero.gif" alt="Monet：设计面板中的玻璃效果，由动画时间轴上的关键帧驱动，循环播放一个完整周期" width="100%">
-  <br><sub>一个完整的动画周期：Design 面板里的玻璃效果，由 Motion 时间轴上的关键帧驱动。</sub>
+  <a href="#a-look-around">界面一览</a> ·
+  <a href="#what-this-is">这是什么</a> ·
+  <a href="#features">特性</a> ·
+  <a href="#get-started">开始使用</a> ·
+  <a href="#contributing">参与贡献</a>
 </p>
 
----
+<br>
+
+## 界面一览
+
+以下截图均来自运行中的 GPUI 应用（`cargo run -p figcraft-ui-gpui --example run`）。
+
+<table>
+<tr>
+<td width="50%" valign="top">
+  <img src="docs/images/screenshots/01-design-light.png" alt="浅色主题下的 Monet：左侧栏和 File 面板列出页面与图层树（Hello 文本图层、自动布局画框、接缝线）；画布显示一个自动布局画框；浮动工具栏在画布上方；右侧 Design 面板显示布局、尺寸（Hug/Hug）、调整大小、外观和排版分区" width="100%">
+  <p align="center"><sub><b>设计面板 · 浅色主题</b>：图层、画布与自动布局属性</sub></p>
+</td>
+<td width="50%" valign="top">
+  <img src="docs/images/screenshots/02-design-dark.png" alt="同一 Monet 编辑器的深色主题：深色侧栏、面板和 Design 控件，画布与选中状态不变" width="100%">
+  <p align="center"><sub><b>深色主题</b>：同一文档，界面换肤</sub></p>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+  <img src="docs/images/screenshots/05-assets.png" alt="左侧 File 面板切换到 Assets，显示 Components 与 Styles 标签页和资产搜索框" width="100%">
+  <p align="center"><sub><b>资产库</b>：组件与样式</sub></p>
+</td>
+<td width="50%" valign="top">
+  <img src="docs/images/screenshots/04-devmode.png" alt="开发者模式：右侧面板显示所选图层的 Development 分区，画布与浮动工具栏可见" width="100%">
+  <p align="center"><sub><b>开发者模式</b>：检查与交付控件</sub></p>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+  <img src="docs/images/screenshots/06-motion-timeline.png" alt="窗口底部的动画时间轴：Hello 图层上一个 1.5 秒循环片段，Position 轨道，0、0.75、1.5 秒三个菱形关键帧，左侧有播放控制" width="100%">
+  <p align="center"><sub><b>动画时间轴</b>：循环 Position 轨道上的关键帧</sub></p>
+</td>
+<td width="50%" valign="top">
+  <img src="docs/images/screenshots/07-variables.png" alt="编辑器上方打开的变量窗口，显示变量集合及其模式" width="100%">
+  <p align="center"><sub><b>变量</b>：集合与模式</sub></p>
+</td>
+</tr>
+</table>
 
 ## 这是什么
 
-Monet 是一个完全用 Rust 写的桌面设计工具，分两层：
+Monet 是一个桌面设计工具前端。下半部分是文档引擎：场景图、布局、矢量网络、文本、组件、
+变量与原型；上半部分是驱动这个引擎的界面。
 
-- **文档引擎**：场景图、布局、矢量网络、文字、组件、样式、变量、原型、动画，以及渲染器。
-  文件存在本地，打开文档不需要账号，也不需要联网。
-- **GPUI 前端**：你看到的面板、画布、浮层、菜单、对话框和时间轴。最初的前端是用 egui
-  （立即模式工具库，每帧重建整个界面）写的；Monet 用 Zed 的 **GPUI**（保留模式、GPU 合成）
-  重建了它：声明式元素树、持久控件状态、taffy 布局，面板、浮层和画布共用一棵渲染树。
+引擎最初的前端用 **egui**（立即模式工具库）编写。本仓库把这个前端移植到 **GPUI**——Zed 背后的
+保留模式、GPU 合成框架：声明式元素树、持久状态、taffy 布局，面板、浮层与画布合成为一个 GPU 场景。
 
-移植坚持**一比一**：面板顺序、控件尺寸、菜单行高、键盘路径和对话框行为都对照 egui 实现核对，
-而不是另起炉灶。egui 前端留在仓库里作为参照；
-[`docs/gpui-egui-parity-plan.md`](docs/gpui-egui-parity-plan.md) 和
-[`docs/ui-inventory.md`](docs/ui-inventory.md) 记录了已对齐与仍有差异的部分。
+移植刻意保持一一对应：每个面板、对话框、浮层、菜单和键盘路径都按 egui 前端的布局、尺寸和
+行为重建，[`docs/gpui-egui-parity-plan.md`](docs/gpui-egui-parity-plan.md) 记录仍有差异之处。
+egui 前端作为冻结参照保留在仓库中；引擎改动在上游进行，不在本仓库。
 
-## 界面截图
+## 特性
 
-下面每张图都是运行中的软件实拍，不是效果图。
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>🎛️ 单一 GPU 场景</h3>
+      面板、浮层、浮动工具栏和画布共享同一棵渲染树，重叠菜单、拖拽预览和动画时间轴按屏幕上的
+      顺序合成。
+    </td>
+    <td width="50%" valign="top">
+      <h3>⚡ 流畅画布</h3>
+      大文档下平移、缩放和选择依然跟手。图块在 UI 线程之外栅格化并流式载入，先显示低分辨率概览。
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>🧱 引擎支撑的编辑</h3>
+      自动布局、组件实例与覆盖、样式、变量与模式、布尔运算、矢量网络、原型和画板都在引擎里，
+      与上游项目共享。
+    </td>
+    <td width="50%" valign="top">
+      <h3>🎬 动画</h3>
+      关键帧、缓动和画布下方的时间轴驱动同一个场景，支持循环片段和按属性分轨。
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>🖌️ 本地笔刷</h3>
+      笔刷是导入到本地库的外部 <code>.abr</code> 文件；笔画保留笔尖的柔和边缘，沿路径盖章绘制。
+    </td>
+    <td width="50%" valign="top">
+      <h3>🔒 离线、本地优先</h3>
+      无需账号、服务器，打开文件不需要网络往返。界面跟随系统语言，所有文案来自文案目录。
+    </td>
+  </tr>
+</table>
 
-| | |
-|---|---|
-| <img src="docs/images/screenshots/01-design-light.png" alt="浅色主题的设计面板" width="780"> | <img src="docs/images/screenshots/02-design-dark.png" alt="深色主题的设计面板" width="780"> |
-| *设计画布（浅色）：图层树、自动布局与右侧属性检查器。* | *同一份文档的深色主题；文档自身的颜色不受主题影响。* |
-| <img src="docs/images/screenshots/03-prototype.png" alt="原型面板" width="780"> | <img src="docs/images/screenshots/04-devmode.png" alt="开发模式 / 检查" width="780"> |
-| *原型面板：流程、交互与智能动画设置。* | *开发模式：检查、测量与交付信息。* |
-| <img src="docs/images/screenshots/05-assets.png" alt="资源面板" width="780"> | <img src="docs/images/screenshots/06-motion-timeline.png" alt="动画时间轴" width="780"> |
-| *Assets：本地组件与样式，带搜索。* | *Motion：每个可动画属性一条轨道，片段循环，关键帧可见。* |
-| <img src="docs/images/screenshots/07-variables.png" alt="变量表" width="780"> | |
-| *Variables：集合、分组与模式，位于可拖动的浮动窗口中。* | |
+## 开始使用
 
-## 功能亮点
-
-### 真正的设计画布
-
-- 画框、嵌套自动布局（横向、纵向、Wrap）、绝对定位、约束、标尺、参考线、像素网格和布局网格。
-- 矢量网络（钢笔、节点编辑、布尔运算）与路径；笔刷引擎盖章外部 `.abr` 笔刷，
-  文档里仍保留可编辑路径。
-- 使用系统字体目录的文字、文字样式与逐字符属性。
-- 组件、实例、覆写与变体；本地组件和样式库。
-- 颜色样式、带模式的变量，以及图层属性到变量的绑定。
-- 原型流程、交互、条件动作，以及全屏演示播放器。
-
-### 动画不是附加功能
-
-时间轴停靠在画布下方。一个画框拥有一条时间轴，框内所有图层共用同一个播放头、时长和片段——
-动画针对的是一幅合成画面，而不是彼此孤立的对象。关键帧、缓动（含空间贝塞尔手柄）、循环、
-片段检查器（从片段本身或关键帧区间打开）一应俱全。导出时由同一套引擎求值生成 GIF、
-WebM（AV1）或 PNG 帧压缩包，统一走 `motion.export` 命令。
-
-### 开发模式与交付
-
-检查图层的几何、字体、填充、描边、效果和导出设置，添加测量标注，与已保存版本对比，
-读取开发者需要的数值。右侧面板在 Design、Prototype、Inspect 之间切换，开发模式有快捷键。
-
-### 为键盘和所有人设计
-
-所有引擎命令只有一条实现路径——菜单、快捷键、动作面板、CLI、MCP 和本地控制通道调用的是
-同一批命令规格。菜单共用一套行高与墨色；焦点顺序、键盘导航和读屏角色属于控件层，
-而不是事后补丁。界面跟随系统语言，翻译维护在 [`docs/translating.md`](docs/translating.md)。
-
-### 离线、本地优先、可脚本化
-
-无需登录、无需服务器、没有远程文档库。需要自动化时，用 `--control 7811` 启动软件，
-通过本地控制通道驱动（`ui.inspect`、`engine.execute`、`ui.pointer`、`ui.key`）。
-协议见 [`docs/control-protocol.md`](docs/control-protocol.md)。CLI 和 MCP 服务复用同一批引擎命令，
-分别见 [`docs/cli.md`](docs/cli.md) 与 [`docs/mcp.md`](docs/mcp.md)。
-
-## 架构
-
-```
-crates/
-  doc/ geom/ color/ text/ pathops/ svg/ layout/ render/ format/     文档引擎与渲染器
-  engine/                       命令规格、会话、历史、工具、动画
-  abr/                          外部 Photoshop 笔刷导入
-  collab/ collab-net/           协作原语与传输
-  i18n/                         本地化目录
-  ui-gpui/                      本项目开发的 GPUI 前端
-  ui-egui/                      原前端，作为一比一参照保留（不参与编译）
-  mcp/ plugin/ pdf/             Model Context Protocol、插件 SDK、PDF 导出
-apps/
-  figcraft-cli/                 命令行前端
-  figcraft-server/              可选的自托管服务
-```
-
-引擎不依赖任何 UI 工具库。`motion.export`、`view.zoomFit` 这样的命令在 `crates/engine`
-里只有一份实现，所有前端都调用它。这正是 egui / GPUI 对照能成立的原因：两套 UI 共享同一份
-文档、同一套命令和同一批测试。
-
-## 构建与运行
-
-需要较新的稳定版 Rust 工具链（edition 2024，最低 1.95）；Windows 上使用 MSVC 工具链。
+需要较新的稳定版 Rust 工具链（edition 2024，`rust-version = 1.95`）。Windows 上需 MSVC 工具链。
 
 ```sh
 cargo run -p figcraft-ui-gpui --example run
 ```
 
-运行 GPUI 界面测试：
+测试：
 
 ```sh
 cargo test -p figcraft-ui-gpui --lib --features test-support
 ```
 
-要让运行中的软件接受自动化，启动时加上 `-- --control 7811`，再连接 `127.0.0.1:7811`。
-打包与发布步骤见 [`docs/releasing.md`](docs/releasing.md)。
+## 参与贡献
 
-## 参与开发
+引擎与 egui 改动请提交到 **[storytold/figcraft](https://github.com/storytold/figcraft)**；
+本仓库只接收 GPUI 前端改动。完整规则、一一对应要求和每个 PR 的检查项见
+[CONTRIBUTING.md](CONTRIBUTING.md)。
 
-所有改动都通过 PR 合入；`main` 受保护，CI 必须通过。界面改动遵守一比一规则：
-照抄 egui 参照实现的控件、顺序、尺寸和行为，再更新 parity 契约，防止简化实现蒙混过关。
-审阅流程和不可妥协项见 [`CONTRIBUTING.md`](CONTRIBUTING.md) 与 [`AGENTS.md`](AGENTS.md)。
-自动审阅由 CodeRabbit 承担。
+与上游的差距记录在 [`docs/monet-upstream-diff.md`](docs/monet-upstream-diff.md)。
 
-## 文档
+## 归属与许可
 
-- [架构](docs/architecture.md)——引擎与 UI 为什么分开。
-- [GPUI ↔ egui 对齐计划](docs/gpui-egui-parity-plan.md)——移植逐项状态。
-- [UI 清单](docs/ui-inventory.md)——1,016 行，把界面元素映射到命令和源文件。
-- [Monet 与上游 FigCraft 差异](docs/monet-upstream-diff.md)——带入了哪些引擎特性，哪些是本地独有。
-- [文件格式对照](docs/file-format-parity.md)、[控制协议](docs/control-protocol.md)、
-  [CLI](docs/cli.md)、[MCP](docs/mcp.md)。
+Monet 的 GPUI 前端是本仓库的原创工作。文档引擎与 egui 前端来自
+[storytold/figcraft](https://github.com/storytold/figcraft)；第三方素材与署名见
+[ATTRIBUTION.md](ATTRIBUTION.md)。
 
-## 致谢
-
-应用图标是项目所有者的变色龙手绘原稿，经矢量化后由 `cargo xtask icon` 渲染出各平台尺寸。
-第三方组件及其许可见 [`ATTRIBUTION.md`](ATTRIBUTION.md)，贡献者见
-[`docs/contributors.md`](docs/contributors.md)。
-
-## 许可
-
-MIT OR Apache-2.0，任选其一。
+采用 [MIT](LICENSE-MIT) 或 [Apache-2.0](LICENSE-APACHE) 双许可，任选其一。
+品牌素材另有条款，见 [`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt)。

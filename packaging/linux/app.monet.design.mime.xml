@@ -5,7 +5,7 @@
 <mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
   <mime-type type="application/x-figcraft">
     <comment>FigCraft document</comment>
-    <icon name="ai.storyteller.figcraft"/>
+    <icon name="app.monet.design"/>
     <glob pattern="*.figcraft"/>
   </mime-type>
   <!-- Sketch 48 and newer save a zip of JSON. -->

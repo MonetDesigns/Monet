@@ -12,12 +12,12 @@
 # installed per-user from Flathub. Unless --no-test, the bundle is then installed per-user and
 # `figcraft-cli --version` (or `figcraft --version` without the CLI) is run inside the sandbox
 # as a smoke test.
-# Manifest: packaging/linux/flatpak/ai.storyteller.figcraft.bundle.yml.
+# Manifest: packaging/linux/flatpak/app.monet.design.bundle.yml.
 set -euo pipefail
 # shellcheck source=../env.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 HERE="$ROOT/packaging/linux"
-APP_ID=ai.storyteller.figcraft
+APP_ID=app.monet.design
 FLATHUB=https://dl.flathub.org/repo/flathub.flatpakrepo
 
 TEST=1

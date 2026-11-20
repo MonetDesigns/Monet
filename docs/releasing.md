@@ -7,7 +7,7 @@ Nobody sees a draft until a maintainer publishes it.
 
 This is FigCraft's [release playbook](release-playbook.md). User-facing names say **FigCraft**.
 Files, binaries and ids stay
-lowercase (`figcraft-<version>-<platform>-<arch>.<ext>`, `ai.storyteller.figcraft`).
+lowercase (`figcraft-<version>-<platform>-<arch>.<ext>`, `app.monet.design`).
 
 ## FigCraft's names
 
@@ -15,8 +15,8 @@ lowercase (`figcraft-<version>-<platform>-<arch>.<ext>`, `ai.storyteller.figcraf
 |---|---|
 | Display name | FigCraft |
 | Packages / binaries | `figcraft` (app), `figcraft-cli` (headless CLI), `figcraft-web` (browser) |
-| Bundle / app id | `ai.storyteller.figcraft` (CLI signing identifier `ai.storyteller.figcraft-cli`) |
-| Native document | `.figcraft`, MIME `application/x-figcraft`, UTI `ai.storyteller.figcraft.document` |
+| Bundle / app id | `app.monet.design` (CLI signing identifier `app.monet.design-cli`) |
+| Native document | `.figcraft`, MIME `application/x-figcraft`, UTI `app.monet.design.document` |
 | Also opens | `.svg`, `.png`, `.jpg`/`.jpeg` ("Open with", never the default app) |
 | WiX UpgradeCode | `7F8B9827-D065-41B7-A514-2A454B21F484` (fixed forever; never reuse it in another app) |
 | Linux categories | `Graphics;2DGraphics;VectorGraphics;X-Design;` (`Design` isn't a registered freedesktop category, so `desktop-file-validate` rejects it) |
@@ -167,7 +167,7 @@ Locally on Windows: `dotnet tool install -g wix --version 5.0.2`,
 ### Linux
 
 `packaging/linux/package.sh [--formats "appimage deb rpm tar"]` stages one FHS tree (binaries,
-`ai.storyteller.figcraft.desktop`, hicolor icons 16–512 px, AppStream metainfo, a
+`app.monet.design.desktop`, hicolor icons 16–512 px, AppStream metainfo, a
 shared-mime-info file for `.figcraft`) and builds every format from it: `.tar.gz`; `.deb` and
 `.rpm` with [nfpm](https://nfpm.goreleaser.com/) (`nfpm.yaml` lists the dlopen'd runtime
 libraries as dependencies); and an `.AppImage` with update information and a `.zsync`, whose
@@ -175,7 +175,7 @@ libraries as dependencies); and an `.AppImage` with update information and a `.z
 (`FIGCRAFT_NO_DESKTOP_INTEGRATION=1` opts out; covered by `apprun-test.sh`) and runs the bundled
 `figcraft-cli` for `FigCraft.AppImage cli <args>`.
 `flatpak-bundle.sh` repackages the tarball into a `.flatpak` with
-`flatpak/ai.storyteller.figcraft.bundle.yml` (freedesktop 26.08). `flatpak/ai.storyteller.figcraft.yml`
+`flatpak/app.monet.design.bundle.yml` (freedesktop 26.08). `flatpak/app.monet.design.yml`
 is the from-source manifest for a Flathub submission (not built in CI; vendor crates with
 `flatpak-cargo-generator.py` first). Both manifests keep the same runtime and `finish-args`
 (packaging-lint checks). Binaries are built on Ubuntu 22.04 and need glibc ≥ 2.35.
