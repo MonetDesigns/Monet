@@ -34,7 +34,7 @@ pub static ASSETS: &[(&str, &[u8])] = &[
     ("layer-frame", include_bytes!("../../assets/icons/layer-frame.svg")),
     ("layer-layout-horizontal", include_bytes!("../../assets/icons/layer-layout-horizontal.svg")),
     ("layer-layout-vertical", include_bytes!("../../assets/icons/layer-layout-vertical.svg")),
-    ("layer-layout-grid", include_bytes!("../../assets/icons/layer-layout-grid.svg")),
+    ("layer-layout-grid", include_bytes!("../../assets/icons/layout-grid.svg")),
     ("layer-text", include_bytes!("../../assets/icons/shape-text.svg")),
     ("layer-absolute", include_bytes!("../../assets/icons/layer-absolute.svg")),
     ("layer-mask", include_bytes!("../../assets/icons/layer-mask.svg")),
