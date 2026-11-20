@@ -72,7 +72,7 @@
 | **GPUI vs egui 前端** | 上游维护 egui 前端（`ui-egui` 31 文件差异多为上游的新 UI 改进） | 我们开发 `ui-gpui` 1:1 移植，`ui-egui` 是冻结参照 | **部分冲突**：上游 egui 的新控件（autopan、assets 面板统计、typography 等）我们要判断是否在 GPUI 侧实现 | 逐项评估 UI 层，引擎层照带 |
 | **共享 craft-libs rev** | 全部 bump 到 `ea9407b3` | 停在旧 rev（`453b0da7` 等） | **非冲突，是版本差**：我们已在用同样 crate | 可带入，但需 `cargo update` + 适配新 API |
 | **layout hug 行为** | 上游改 Fill across hugging | 本地 mindmap 几何测试依赖旧 hug 行为（3 个测试未平） | **真实重叠**：带入上游规则可能改变 mindmap 节点尺寸 | 带入时同步修 mindmap 布局，不可直接丢弃上游改进 |
-| **100% 上游命令覆盖** | 657 命令 | 696 命令（多 42 本地独有） | 无冲突 | 保持 |
+| **100% 上游命令覆盖** | 652 命令 | 691 命令（多 42 本地独有） | 无冲突 | 保持 |
 | **Shift+Pencil 45° 直线** | `pen.rs` 的 `pencil_add` 在 Shift 时直接返回，画图走 `draw_pencil_line` | 我们为笔刷系统把 `pencil_add` 改成带笔刷取样（`pencil_color_at`/stabilizer），Shift 分支是笔刷逻辑 | **真实冲突**：同一个 `pencil_add` 接入点，双方语义互斥（上游要几何直线，我们要笔刷压力线） | **不丢弃**：保留本地笔刷，但要重新设计——把 Shift 直线提到笔刷盖章之前（先算 45° 约束路径，再按笔刷 stamp），两边都保住 |
 | **共享 craft-libs 切到单一 rev** | 最近 8 提交把 10+ 个 craft-* 依赖统一 bump 到 `ea9407b3` | 我们停在多个旧 rev | 非语义冲突，是版本差 | 带入时统一 bump + 适配新 API；不可当作"丢弃" |
 
@@ -83,7 +83,7 @@
 本次审计中没有任何一项属于"必须丢弃"：
 - **Shift+Pencil** 不是互斥——是可分层共存的（几何约束 → 笔刷盖章），需要一次小重构，已列为待办。
 - **Fill across hugging** 与 mindmap 尺寸测试是耦合，带入时同步修测试即可。
-- 其余 90 个未包含文件都是同文件不同区域的三向合并，互不覆盖。
+- 其余 94 个未包含文件都是同文件不同区域的三向合并，互不覆盖。
 
 ---
 
