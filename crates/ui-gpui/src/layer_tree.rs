@@ -162,12 +162,10 @@ fn selection_runs(m: &[Mark]) -> (Vec<usize>, Vec<usize>) {
     (first, last)
 }
 
-/// The row's two inks, straight from the Figma layer-row CSS matrix:
-/// `--fpl-icon-color` (glyph) and `color` (name). The user-visible axes are
-/// visible / invisible, selected parent / descendant, component / slot, and glyph / text.
-/// `component_root` distinguishes `object_row--symbol.topLevel` (full purple icon) from a
-/// component child (`--color-icon-component-tertiary`); a selected or hidden row is tertiary.
-/// Slots use the template (pink) ramp: full pink name, pale pink glyph when nested/selected.
+/// The row's two inks: the type glyph (`--fpl-icon-color`) and the name (`color`).
+/// Selection is the *saturated* end of each ramp and the idle row the pale end — a selected
+/// component/slot must not look washed out. The axes are selected / idle, visible / hidden,
+/// selected parent / descendant, component / slot, and glyph / text.
 fn row_ink(t: &crate::theme::Tokens, r: &LayerRow, mark: Mark) -> (gpui::Rgba, gpui::Rgba) {
     let slot = r.icon == Icon::Slot;
     let component = r.mark_kind == 1;
@@ -176,12 +174,11 @@ fn row_ink(t: &crate::theme::Tokens, r: &LayerRow, mark: Mark) -> (gpui::Rgba, g
     let child = mark == Mark::Child;
 
     let name = if slot {
-        // Saved Figma DOM: the selected Slot2 keeps `color: var(--color-text-template)`.
-        if r.visible { t.slot } else { t.slot_secondary }
+        if selected { t.slot } else if r.visible { t.slot_secondary } else { t.slot_dim }
     } else if component {
-        if r.visible && !selected && !child { t.component } else { t.component_secondary }
+        if selected { t.component } else if r.visible { t.component_secondary } else { t.component_dim }
     } else if icon_layer {
-        if r.visible && !selected && !child { t.icon_layer } else { t.layer_muted }
+        if selected { t.icon_layer } else if r.visible { t.layer_muted } else { t.layer_muted }
     } else if selected {
         t.layer_text_selected
     } else if r.visible && !child {
@@ -191,19 +188,37 @@ fn row_ink(t: &crate::theme::Tokens, r: &LayerRow, mark: Mark) -> (gpui::Rgba, g
     };
 
     let icon = if slot {
-        if r.visible && !selected && !child { t.slot } else { t.slot_secondary }
+        if selected { t.slot } else if r.visible && r.component_root { t.slot_secondary } else { t.slot_dim }
     } else if component {
-        if r.visible && r.component_root && !selected && !child { t.component } else { t.component_secondary }
+        if selected { t.component } else if r.visible && r.component_root { t.component_secondary } else { t.component_dim }
     } else if icon_layer {
-        if r.visible && !selected && !child { t.icon_layer } else { t.layer_muted }
+        if selected { t.icon_layer } else { t.layer_muted }
     } else if selected {
         t.layer_icon_selected
     } else {
-        // Both a visible frame's type glyph (`--color-icon-tertiary`) and a hidden row's
-        // (`--color-icon-disabled`) resolve to the same 30% black in the light Figma theme.
+        // A visible frame's glyph (`--color-icon-tertiary`) and a hidden row's
+        // (`--color-icon-disabled`) both resolve to 30% black in Figma's light theme.
         t.layer_muted
     };
     (rgba(name), rgba(icon))
+}
+
+/// The coloured band behind a run of selected rows. The *brand* stays in charge of plain
+/// layers (`selected_row` / `selected_row_child`); components and slots take their own ramp
+/// from Figma (`--color-bg-component-tertiary`, `--color-template-slot`).
+fn run_color(t: &crate::theme::Tokens, rows: &[LayerRow], from: usize, to: usize, child: bool) -> gpui::Rgba {
+    let run = &rows[from..=to];
+    if run.iter().all(|r| r.icon == Icon::Slot) {
+        rgba(if child { t.slot_row_child } else { t.slot_row })
+    } else if run.iter().all(|r| r.mark_kind == 1) {
+        rgba(if child { t.component_row_child } else { t.component_row })
+    } else if run.iter().all(|r| r.mark_kind == 2) {
+        rgba(t.icon_layer_row)
+    } else if child {
+        rgba(t.selected_row_child)
+    } else {
+        rgba(t.selected_row)
+    }
 }
 
 /// Drag and expansion state for the tree, kept on `CanvasView` across frames.
@@ -568,6 +583,7 @@ impl CanvasView {
     }
 
     fn render_layer_tree(&mut self, cx: &mut Context<Self>) -> VirtualList {
+        let t = tokens();
         let (rows, drag_rows) = self.collect_layer_rows();
         // Keep the full row list for dragging and hit testing; only the viewport is rendered.
         // `drag::calibrate` rebuilds the column from a hit row plus the fixed pitch, so virtualisation does not change drop resolution.
@@ -589,9 +605,8 @@ impl CanvasView {
                 k += 1;
             }
             let end = k - 1;
-            let t = tokens();
             for j in start..=end {
-                band[j] = Some(rgba(if rows[j].selected_root { t.layer_selected_root } else { t.layer_selected_child }));
+                band[j] = Some(run_color(&t, &rows, start, end, !rows[j].selected_root));
             }
         }
         // The per-row render snapshot (`'static` closures only get `&mut App`).
@@ -705,6 +720,9 @@ impl CanvasView {
         let row_id = ElementId::from(SharedString::from(format!("layer-row-{}", id.0)));
         let me = entity.clone();
 
+        // Figma's expand caret is a plain icon, not the layer's type glyph: 30% black when the
+        // row is idle, `--color-icon-onselected` (90% black) when it is selected.
+        let chevron_color = if mark == Mark::Selected { rgba(t.layer_icon_selected) } else { rgba(t.layer_muted) };
         let chevron = if has_children {
             div()
                 .w(px(ICON_BOX))
@@ -724,7 +742,7 @@ impl CanvasView {
                         cx.stop_propagation();
                     }
                 })
-                .child(paint_icon(if expanded { Icon::ChevronDown } else { Icon::ChevronRight }, ink(), ICON_GLYPH))
+                .child(paint_icon(if expanded { Icon::ChevronDown } else { Icon::ChevronRight }, chevron_color, ICON_GLYPH))
         } else {
             div().w(px(ICON_BOX))
         };
@@ -782,8 +800,9 @@ impl CanvasView {
             (if run_top { BLOCK_PAD } else { 0.0 }, if run_bottom { BLOCK_PAD } else { 0.0 })
         };
         let highlight = if mark == Mark::None {
-            // Hover is the theme's light accent tint, not a neutral grey.
-            div().size_full().rounded(pt(5.0)).group_hover(group.clone(), |s| s.bg(rgba(t.selected_row_child)))
+            // Hover is `--color-bg-hover` (F5F5F5), not the brand's selected tint: the
+            // brand colour belongs to the *selection* band of plain layers.
+            div().size_full().rounded(pt(5.0)).group_hover(group.clone(), |s| s.bg(rgba(t.hover)))
         } else {
             let mut h = div().size_full().bg(band_color.unwrap_or(rgba(t.selected_row_child)));
             if run_top {
@@ -1734,27 +1753,32 @@ mod color_tests {
         assert_eq!(t.slot_secondary, Color32::from_rgb(0xDA, 0xAA, 0xCE)); // --ramp-pale-pink-400
         assert_eq!(t.component, Color32::from_rgb(0x86, 0x38, 0xE5)); // --ramp-purple-600
         assert_eq!(t.component_secondary, Color32::from_rgb(0xC5, 0xB2, 0xDC)); // --ramp-pale-purple-400
-        assert_eq!(t.layer_selected_root, Color32::from_rgb(0xE5, 0xF4, 0xFF)); // --color-bg-selected
-        assert_eq!(t.layer_selected_child, Color32::from_rgb(0xF2, 0xF9, 0xFF)); // --color-bg-selected-secondary
+        assert_eq!(t.component_row, Color32::from_rgb(0xF1, 0xE5, 0xFF)); // --color-bg-component-tertiary
+        assert_eq!(t.slot_row, Color32::from_rgb(0xFF, 0xBD, 0xF2)); // --color-template-slot
+        assert_eq!(t.hover, Color32::from_rgb(0xF5, 0xF5, 0xF5)); // --color-bg-hover
     }
 
     #[test]
-    fn slot_is_pink_and_component_is_purple_with_separate_glyph_ink() {
+    fn selection_is_the_saturated_end_and_idle_is_pale() {
         let t = Tokens::new(false, Accent::Green);
         let (name, glyph) = row_ink(&t, &row(Icon::Slot, 0, false, true), Mark::Selected);
-        assert_eq!(name, rgba(t.slot), "Slot2's name keeps the full template pink");
-        assert_eq!(glyph, rgba(t.slot_secondary), "a nested slot's glyph is the pale pink");
+        assert_eq!(name, rgba(t.slot), "a selected slot's name is the full pink");
+        assert_eq!(glyph, rgba(t.slot), "a selected slot's glyph is the full pink too");
 
         let (name, glyph) = row_ink(&t, &row(Icon::Component, 1, true, true), Mark::None);
-        assert_eq!(name, rgba(t.component), "a visible component parent is full purple");
+        assert_eq!(name, rgba(t.component_secondary), "an idle component is pale purple");
+        assert_eq!(glyph, rgba(t.component_secondary));
+
+        let (name, glyph) = row_ink(&t, &row(Icon::Component, 1, true, true), Mark::Selected);
+        assert_eq!(name, rgba(t.component), "a selected component is full purple");
         assert_eq!(glyph, rgba(t.component));
 
         let (_, glyph) = row_ink(&t, &row(Icon::Component, 1, false, true), Mark::None);
-        assert_eq!(glyph, rgba(t.component_secondary), "a component child's glyph is tertiary purple");
+        assert_eq!(glyph, rgba(t.component_dim), "a component child is a shade deeper than the parent");
     }
 
     #[test]
-    fn visibility_and_parent_child_change_the_ink() {
+    fn visibility_parent_child_and_band_keep_their_own_axes() {
         let t = Tokens::new(false, Accent::Green);
         let plain = row(Icon::Frame, 0, false, true);
         let (name, glyph) = row_ink(&t, &plain, Mark::None);
@@ -1771,8 +1795,16 @@ mod color_tests {
         assert_eq!(glyph, rgba(t.layer_muted));
 
         let hidden_comp = row(Icon::Component, 1, true, false);
-        let (name, glyph) = row_ink(&t, &hidden_comp, Mark::Selected);
-        assert_eq!(name, rgba(t.component_secondary), "a hidden selected component is tertiary");
-        assert_eq!(glyph, rgba(t.component_secondary));
+        let (name, glyph) = row_ink(&t, &hidden_comp, Mark::None);
+        assert_eq!(name, rgba(t.component_dim), "a hidden idle component is a shade deeper");
+        assert_eq!(glyph, rgba(t.component_dim));
+        let (_, glyph) = row_ink(&t, &hidden_comp, Mark::Selected);
+        assert_eq!(glyph, rgba(t.component), "hidden but selected stays saturated");
+
+        // Plain layers must keep the brand-derived selection band; only typed runs take a ramp.
+        assert_eq!(run_color(&t, &[plain.clone()], 0, 0, false), rgba(t.selected_row));
+        assert_eq!(run_color(&t, &[plain], 0, 0, true), rgba(t.selected_row_child));
+        assert_eq!(run_color(&t, &[row(Icon::Slot, 0, false, true)], 0, 0, false), rgba(t.slot_row));
+        assert_eq!(run_color(&t, &[row(Icon::Component, 1, true, true)], 0, 0, false), rgba(t.component_row));
     }
 }

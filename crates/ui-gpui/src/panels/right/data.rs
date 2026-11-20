@@ -1375,6 +1375,10 @@ pub struct PanelData {
     pub vector: Option<VectorData>,
     /// 选中节点是否都是「无自动布局（或自身 absolute）的 frame 子层」——只有这种才显示 Constraints 子节。
     pub in_frame: bool,
+    /// 选中的层是否都在 auto layout 父级里（egui `position_row` 的 `pv.parent_al`）。
+    pub parent_al: bool,
+    /// 这些层的 absolute 状态；`None` = 多选不一致。驱动标题栏的「忽略自动布局」按钮。
+    pub absolute: Option<bool>,
     /// Constraints 子节的水平 / 垂直约束（egui `right.rs::position_fields`）。`None` = Mixed。
     pub constraints_h: Option<&'static str>,
     pub constraints_v: Option<&'static str>,
@@ -1958,6 +1962,8 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
         figcraft_doc::VConstraint::Scale => "scale",
     });
     d.in_frame = in_frame;
+    d.parent_al = parent_al;
+    d.absolute = common(doc, ids, |n| n.child_layout.absolute);
     d.constraints_h = constraints_h;
     d.constraints_v = constraints_v;
 

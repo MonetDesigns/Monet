@@ -2396,9 +2396,28 @@ pub(crate) fn right_panel(
                         const C: [&str; 3] = ["object.rotateRight", "object.flipH", "object.flipV"];
                         rot_cmds.push(Cmd { id: C[i.min(2)], params: None });
                     });
-            let mut pos_sec = PanelSection::new(tr("Position"));
+            // egui `right.rs::position_row`: children of an auto layout frame can ignore the
+            // layout (absolute position). The command / active state are the same, but the
+            // button lives in the Position section's header slot, not in the X/Y field row.
+            let absolute_btn = data.parent_al.then(|| {
+                let abs_cmds = f.cmds.clone();
+                let on = data.absolute.unwrap_or(false);
+                IconButton::new(Icon::AbsolutePosition).size(24.0).active(on).on_click(move |_e, _w, _cx| {
+                    abs_cmds.push(Cmd { id: "node.set", params: Some(serde_json::json!({ "props": { "absolute": !on } })) });
+                })
+            });
+            // One trailing slot, so both optional header buttons share it.
+            let has_pos_trail = distribute_btn.is_some() || absolute_btn.is_some();
+            let mut pos_trail = div().flex().flex_row().items_center().gap(pt(4.0));
             if let Some(b) = distribute_btn {
-                pos_sec = pos_sec.header_trail(b);
+                pos_trail = pos_trail.child(b);
+            }
+            if let Some(b) = absolute_btn {
+                pos_trail = pos_trail.child(b);
+            }
+            let mut pos_sec = PanelSection::new(tr("Position"));
+            if has_pos_trail {
+                pos_sec = pos_sec.header_trail(pos_trail);
             }
             let pos_sec = pos_sec
                 .child(sublabel_row(tr("Alignment")))
