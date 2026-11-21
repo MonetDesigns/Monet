@@ -2158,7 +2158,8 @@ pub(crate) fn left_rail(
         //    egui 的 rail 是**带文字**的，之前这里只有图标（而且三个都是占位圆点）。
         .child(rail_item("rail-file", Icon::Page, tr("File"), file_active, Some(Box::new(on_file))))
         .child(rail_item("rail-assets", Icon::Assets, tr("Assets"), assets_active, Some(Box::new(on_assets))))
-        .child(rail_item("rail-variables", Icon::Variables, tr("Variables"), variables_tab, Some(Box::new(on_variables))))
+        // 本地变量入口用 data-variable.svg（六边形+点），与字段绑定图标同一枚。
+        .child(rail_item("rail-variables", Icon::Variable, tr("Variables"), variables_tab, Some(Box::new(on_variables))))
 }
 
 /// 竖条的一项：56 pt 高的整列可点，32×32 的图标格（悬停/选中底色）+ 下面 9 pt 的文字
@@ -2723,20 +2724,15 @@ pub(crate) fn auto_layout_section(
         let settings_queue = f.queue();
         let settings_data = data.clone();
         // 跨帧稳定探针：第一次按下就量到按钮真实顶部，窗口顶部严格对齐按钮顶部。
-        let layout_dots = crate::popovers::with_window_trigger(
-            IconButton::new(Icon::Menu).id("layout-settings-dots").size(24.0).active(popups.is_open("layout")).on_click(
-                move |_e, window, cx: &mut App| {
-                    if std::env::var_os("FC_DEBUG_POPUP_BTN").is_some() {
-                        eprintln!("[popup-btn] layout dots clicked");
-                    }
-                    let top = crate::popovers::anchored_top("layout", window);
-                    right::sections::open_detached_with(popups.clone(), "layout", Some(top), cx, |anchor, cx| {
-                        crate::popovers::WindowState::layout(settings_queue.clone(), &settings_data, cx, anchor)
-                    });
-                },
-            ),
-            "layout",
-        );
+        let layout_dots = right::sections::window_open_button("layout", Icon::Menu, popups.is_open("layout"), move |window, cx| {
+            if std::env::var_os("FC_DEBUG_POPUP_BTN").is_some() {
+                eprintln!("[popup-btn] layout dots clicked");
+            }
+            let top = crate::popovers::anchored_top("layout", window);
+            right::sections::open_detached_with(popups.clone(), "layout", Some(top), cx, |anchor, cx| {
+                crate::popovers::WindowState::layout(settings_queue.clone(), &settings_data, cx, anchor)
+            });
+        });
         sec = sec.child(sublabel_row2(left_cap, tr("Spacing"))).child(crate::widgets::field_row_h(
             vec![picker, right_col],
             vec![layout_dots],

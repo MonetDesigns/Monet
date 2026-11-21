@@ -1104,8 +1104,9 @@ impl CanvasView {
             if ds.selection.contains(&id) && ds.selection.len() > 1 { ds.selection.iter().copied().collect() } else { vec![id] };
         let label = if moving.len() == 1 { ds.doc.node(id).map(|n| n.name.clone()).unwrap_or_default() } else { format!("{} layers", moving.len()) };
         self.layer_tree.drag = Some(drag::Drag::start(index, id.0, label));
-        // Once a drag starts it is no longer a click.
-        self.layer_tree.candidate = None;
+        // Keep the press candidate: GPUI starts the drag on mouse-down, so a plain click
+        // (Ctrl/Shift included) also reaches here. `layer_drag_up` decides whether it was a
+        // real drag (commit the drop) or just a click (consume the candidate as a selection).
         cx.notify();
     }
 
@@ -1262,18 +1263,38 @@ impl CanvasView {
         cx.notify();
     }
 
-    /// Called from the root `on_mouse_up`: a drag commits its drop **here and only here**;
+    /// Called from the root `on_mouse_up`: a drag commits its drop **here and only here**.
+    ///
+    /// GPUI starts the drag on mouse-down, so a plain click also carries a press candidate.
+    /// Match egui's release semantics: a gesture that produced a drop target (a committed move,
+    /// or one refused/no-op because it landed on its own subtree) is *not* a click and must not
+    /// change the selection. Only a press that never resolved a target (target == None) is a
+    /// plain (or Ctrl/Shift) click, so only that path applies the candidate via `layer_click`.
     pub(crate) fn layer_drag_up(&mut self, cx: &mut Context<Self>) {
         if let Some(mut d) = self.layer_tree.drag.take() {
-            if let Some(target) = d.take()
-                && !target.refused
-                && !target.noop
-            {
-                self.layer_commit_drop(&d, &target, cx);
+            let target = d.take();
+            match target {
+                Some(t) if !t.refused && !t.noop => {
+                    // A completed drop decides the selection through the reparent; the press
+                    // candidate must not fire a click afterwards (it would collapse a multi-selection).
+                    self.layer_tree.candidate = None;
+                    self.layer_commit_drop(&d, &t, cx);
+                }
+                Some(_) => {
+                    // Refused / no-op drag: egui leaves the selection untouched on this release.
+                    self.layer_tree.candidate = None;
+                }
+                None => {
+                    // No drop target ever resolved: pure press/release, i.e. a click. Keep the
+                    // candidate so the fallback below applies it with its modifiers.
+                }
             }
             self.layer_tree.calibrated = None;
             cx.notify();
-        } else if let Some((cid, _, m)) = self.layer_tree.candidate.take() {
+        }
+        // Only a pure click still has a candidate here; a drag (committed or refused) consumed
+        // its candidate above, so it can no longer change the selection after the release.
+        if let Some((cid, _, m)) = self.layer_tree.candidate.take() {
             self.layer_click(cid, m, cx);
         }
     }
@@ -1520,6 +1541,24 @@ mod shape_glyph {
         use crate::CanvasView;
         use figcraft_doc::{NodeId, StrokeCap};
         use gpui::Modifiers;
+
+        #[test]
+        fn ctrl_click_toggles_and_shift_click_selects_a_range() {
+            let order = [NodeId(1), NodeId(2), NodeId(3), NodeId(4)];
+            let plain = Modifiers::default();
+            let ctrl = Modifiers { control: true, ..Default::default() };
+            let shift = Modifiers { shift: true, ..Default::default() };
+
+            let (s, set_anchor) = CanvasView::selection_after_click(&order, &[], None, NodeId(1), plain);
+            assert_eq!(s, vec![NodeId(1)]);
+            assert!(set_anchor, "plain click sets the shift anchor");
+
+            let (s, _) = CanvasView::selection_after_click(&order, &s, Some(NodeId(1)), NodeId(3), ctrl);
+            assert_eq!(s, vec![NodeId(1), NodeId(3)], "Ctrl+click adds a second layer");
+
+            let (s, _) = CanvasView::selection_after_click(&order, &s, Some(NodeId(1)), NodeId(4), shift);
+            assert_eq!(s, vec![NodeId(1), NodeId(2), NodeId(3), NodeId(4)], "Shift+click takes the range");
+        }
 
         fn node(kind: NodeKind, w: f64, h: f64) -> Node {
             Node::new(NodeId(1), kind, "shape", w, h)
