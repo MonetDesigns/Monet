@@ -4279,6 +4279,8 @@ impl CanvasView {
     /// `session.selection()` for Combine / Crop.
     fn open_layer_context_menu(&mut self, id: NodeId, pointer: Point<Pixels>, cx: &mut Context<Self>) {
         if !self.app.session.selection().contains(&id) {
+            // The row under the pointer is already visible: don't recenter the tree under it.
+            self.layer_tree.suppress_reveal = true;
             self.app.session.set_selection(vec![id]);
         }
         let ids = vec![id];

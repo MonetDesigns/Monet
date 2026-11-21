@@ -1880,7 +1880,10 @@ impl WindowState {
                     let dc = dc.clone();
                     let d_name = d_name.clone();
                     tf.set_on_commit(move |text, _w, _cx| {
-                        let value: Value = if d_kind == "boolean" { json!(text.trim().eq_ignore_ascii_case("true")) } else { json!(text.trim()) };
+                        // Boolean parses trimmed text; Text properties preserve whitespace —
+                        // the engine's Text coercion keeps the string verbatim, so trimming here
+                        // would silently change the saved default (" Label " / blank defaults).
+                        let value: Value = if d_kind == "boolean" { json!(text.trim().eq_ignore_ascii_case("true")) } else { json!(text) };
                         dc.push(Cmd {
                             id: "component.editProperty",
                             params: Some(json!({ "id": owner, "name": d_name, "default": value })),

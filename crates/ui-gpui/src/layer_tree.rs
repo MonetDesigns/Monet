@@ -245,6 +245,8 @@ pub struct LayerTreeState {
     pub scroll: VirtualListScrollHandle,
     /// Selection seen on the previous frame; a change reveals the selected row.
     pub last_selection: Vec<NodeId>,
+    /// Identity of the document that `last_selection` belongs to (its in-memory address).
+    pub last_doc: Option<usize>,
     /// A row press in the list owns its own viewport position; skip the reveal on that change.
     pub suppress_reveal: bool,
     clock: Instant,
@@ -263,6 +265,7 @@ impl Default for LayerTreeState {
             pointer: Point::new(px(0.0), px(0.0)),
             scroll: VirtualListScrollHandle::new(),
             last_selection: Vec::new(),
+            last_doc: None,
             suppress_reveal: false,
             clock: Instant::now(),
         }
@@ -958,7 +961,13 @@ impl CanvasView {
         // A selection made on the canvas must be revealed here: expand its ancestors and
         // defer a scroll to the first selected row once the virtual list has been laid out.
         let selection: Vec<NodeId> = ds.selection.iter().copied().collect();
-        let selection_changed = selection != self.layer_tree.last_selection;
+        // NodeIds restart at 1 in every document: a stale snapshot from a previous document can
+        // equal the new selection and wrongly suppress the reveal. Compare against an empty
+        // snapshot on a document switch (write-back at the end records the new doc identity).
+        let doc_identity = std::sync::Arc::as_ptr(doc) as usize;
+        let doc_switched = self.layer_tree.last_doc != Some(doc_identity);
+        let effective_last: &[NodeId] = if doc_switched { &[] } else { &self.layer_tree.last_selection };
+        let selection_changed = selection.as_slice() != effective_last;
         let reveal = selection_changed && !suppress_reveal;
         let mut reveal_ancestors = Vec::new();
         if reveal {
@@ -1035,6 +1044,7 @@ impl CanvasView {
         }
         if selection_changed {
             self.layer_tree.last_selection = selection;
+            self.layer_tree.last_doc = Some(doc_identity);
             if reveal {
                 self.layer_tree.expanded = expanded_set;
                 if let Some(ix) = visual.iter().position(|r| r.selected) {

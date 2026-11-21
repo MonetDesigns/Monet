@@ -156,6 +156,31 @@ pub(crate) fn slot(n: &mut usize) -> usize {
 
 /// 一个「点开菜单选中即推命令」的下拉（egui `menu_popup` + `menu_item`）。
 /// `rows`: (显示名, 选中后推的命令 id, 命令额外参数)。`cmds` 句柄 clone 进 `on_pick`。
+pub(crate) fn pick_dropdown_lead(
+    f: &RightFields,
+    label: impl Into<SharedString>,
+    width: f32,
+    rows: Vec<(String, &'static str, Value)>,
+    lead: Option<Icon>,
+) -> Dropdown {
+    let menu: Vec<MenuRow> = rows.iter().map(|(l, _, _)| MenuRow::row(l.clone())).collect();
+    let mut d = Dropdown::new(label, width, lead.map(crate::widgets::dropdown::DropLead::Icon)).fill();
+    if let Some(root) = f.root.clone() {
+        let cmds = f.cmds.clone();
+        d = d.on_click(move |anchor, _window, cx: &mut App| {
+            let rows = rows.clone();
+            let cmds = cmds.clone();
+            let on_pick = Rc::new(move |label: &str, _w: &mut Window, _cx: &mut App| {
+                if let Some((_, cmd, params)) = rows.iter().find(|(l, _, _)| l == label) {
+                    cmds.push(Cmd { id: cmd, params: Some(params.clone()) });
+                }
+            });
+            root.update(cx, |cv, cx| cv.open_menu(anchor, Some(width.max(120.0)), menu.clone(), on_pick, cx));
+        });
+    }
+    d
+}
+
 pub(crate) fn pick_dropdown(f: &RightFields, label: impl Into<SharedString>, width: f32, rows: Vec<(String, &'static str, Value)>) -> Dropdown {
     let menu: Vec<MenuRow> = rows.iter().map(|(l, _, _)| MenuRow::row(l.clone())).collect();
     let mut d = Dropdown::new(label, width, None).fill();
