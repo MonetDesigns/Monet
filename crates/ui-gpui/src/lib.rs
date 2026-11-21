@@ -3759,11 +3759,24 @@ impl CanvasView {
     ///   按 `files[].name` 逐个写入（egui `services.pick_folder` 同义）；
     /// * `file.exportLayers` 的 zip（顶层 `data`）→ 保存对话框，扩展名 `.zip`。
     fn deliver_download(&mut self, command: &str, result: &serde_json::Value, cx: &mut Context<Self>) {
+        // 原生文件对话框是**阻塞**的（内部跑系统消息循环）。若在当前 `Context<Self>` 的
+        // borrow 期间直接调用，消息循环会让异步任务 re-enter 并再次 update 同一个实体，
+        // 触发 `RefCell already borrowed`（点导出按钮崩溃）。把整段推迟到本轮 effect 结束、
+        // 实体归还 App 之后执行——与 windows.rs 的建窗 defer 同款。
+        let this = cx.entity().downgrade();
+        let command = command.to_string();
+        let result = result.clone();
+        let doc_name = self.app.session.ds().ok().map(|d| d.doc.name.clone()).unwrap_or_else(|| "export".into());
+        cx.defer(move |cx| {
+            let _ = this.update(cx, |view, cx| view.deliver_download_now(&command, &result, &doc_name, cx));
+        });
+    }
+
+    /// 实际落盘：只从 [`Self::deliver_download`] 的 defer 回调里调用（borrow 已释放）。
+    fn deliver_download_now(&mut self, command: &str, result: &serde_json::Value, doc_name: &str, cx: &mut Context<Self>) {
         use base64::Engine as _;
 
         let decode = |s: &str| base64::engine::general_purpose::STANDARD.decode(s).ok();
-
-        let doc_name = self.app.session.ds().ok().map(|d| d.doc.name.clone()).unwrap_or_else(|| "export".into());
 
         if result.get("data").is_none() {
             let files: Vec<(String, Vec<u8>)> = result
