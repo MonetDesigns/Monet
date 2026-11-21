@@ -32,49 +32,85 @@ pub(crate) fn section(f: &RightFields, d: &PanelData, cx: &mut App, n: &mut usiz
     //   **不显示** 属性定义列表（Properties）。用户图1：选变体时应展示 current variant。
     // - 组件集 / 独立组件 → `properties_ui`：只有属性栏（Properties）。用户图2。
     if c.set_id.is_some() && !c.owner_is_set {
-        return Some(variant_section(f, c));
+        return Some(variant_section(f, c, cx, n));
     }
     Some(properties_section(f, c, cx, n))
 }
 
-/// 选中变体（lizard `variant_ui`）：Component values + Current variant 区。
-/// 引擎（storytold/figcraft）没有 setVariantValue / component_matrix，变体值改走
-/// `component.editProperty`（按属性名改当前变体的名字编码值）， grit 见下。
-fn variant_section(f: &RightFields, c: &ComponentData) -> PanelSection {
+/// 选中变体（严格对齐 GitHub lizard main `variant_ui`）：
+///   ① Component values：每个变体属性的候选值概览（lizard 用 `matrix_ui` 值表窗口；
+///      Monet 暂无值表 UI，先按「属性 → 候选值」列出，不拼成一行）。
+///   ② 分隔线 + "Current variant" 标题（带「Go to component set」按钮）。
+///   ③ 每属性一行：**属性名可改**（`component.editProperty {newName}`）+ **值可输入/选**（`setVariantValue`），
+///      对应 lizard 的 inline text_field + TextFieldWithPresets。之前是静态名 + 下拉，且与 ① 重复。
+fn variant_section(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut usize) -> PanelSection {
     let t = tokens();
     let variant_id = c.main_id.unwrap_or(NodeId(0));
+    let set = c.set_id.unwrap_or(NodeId(0));
     let mut sec = PanelSection::new(c.title);
 
-    // ── Component values：属性 → 候选值概览（lizard `matrix_ui` 的紧凑摘要）。
-    // storytold/figcraft 引擎没有 component_matrix / 值表，这里只展示每个变体属性的可选值。
+    // ① Component values：属性 → 候选值（每行一个属性，值用 " / " 分隔）。
     if !c.own_variant_props.is_empty() {
         sec = sec.child(field_row_full(div().text_size(pt(11.0)).text_color(rgba(t.text)).child(tr("Component values"))));
         for (name, values, _) in &c.own_variant_props {
             let label = div().w(px(84.0)).flex_none().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(name.clone()));
-            let shown = if values.is_empty() { tr("None").to_string() } else { values.join(", ") };
+            let shown = if values.is_empty() { tr("None").to_string() } else { values.join(" / ") };
             let value = div().flex_1().min_w(px(0.0)).text_size(pt(11.0)).text_color(rgba(t.text)).child(SharedString::from(shown));
             sec = sec.child(field_row_full(div().flex().flex_row().items_center().gap(pt(8.0)).child(label).child(value)));
         }
     }
 
-    // ── Current variant：当前变体的每个属性值用下拉切换。引擎无 setVariantValue，
-    // 走 `node.set {props:{name: "Property=Value, ..."}}` 重建变体名（KEYS 支持 name）。
-    sec = sec.child(field_row_full(div().text_size(pt(11.0)).text_color(rgba(t.text)).child(tr("Current variant"))));
+    // ② Current variant 标题 + 「Go to component set」按钮（选中该 set）。
+    let go = icon_cmd(Icon::ComponentSet, "select.set", json!({ "ids": [set.0] }), f, false);
+    sec = sec.child(field_row_full_trailing(
+        div().text_size(pt(11.0)).text_color(rgba(t.text)).child(tr("Current variant")),
+        vec![go.into_any_element()],
+    ));
     if c.own_variant_props.is_empty() {
         sec = sec.child(field_row_full(div().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(tr("No variant properties"))));
     }
+
+    // ③ 每属性：属性名可改 + 值可输入（两半并排，lizard `variant_ui` 的行布局）。
     for (name, values, current) in &c.own_variant_props {
-        let label = div().w(px(84.0)).flex_none().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(name.clone()));
-        let rows: Vec<(String, &'static str, Value)> = values
-            .iter()
-            .map(|v| {
-                // `component.setVariantValue` is lizard-only (see its SOURCE NOTE in the engine);
-                // until figcraft gains an equivalent we use it here for Current variant edits.
-                (v.clone(), "component.setVariantValue", json!({ "id": variant_id.0, "property": name, "value": v }))
-            })
-            .collect();
-        let dd = pick_dropdown(f, current.clone(), 0.0, rows);
-        sec = sec.child(field_row_full(div().flex().flex_row().items_center().gap(pt(8.0)).child(label).child(dd)));
+        let name_edit = f.row_field(
+            cx,
+            slot(n),
+            name,
+            RowEditCtx {
+                cmd: "component.editProperty",
+                params: json!({ "id": set.0, "name": name }),
+                key: "newName",
+                scale: 1.0,
+                string_value: true,
+                paint: None,
+                nest: None,
+                nest_key: None,
+                paint_color: None,
+            },
+        );
+        let value_edit = f.row_field(
+            cx,
+            slot(n),
+            current,
+            RowEditCtx {
+                cmd: "component.setVariantValue",
+                params: json!({ "id": variant_id.0, "property": name }),
+                key: "value",
+                scale: 1.0,
+                string_value: true,
+                paint: None,
+                nest: None,
+                nest_key: None,
+                paint_color: None,
+            },
+        );
+        let hint = values.join(" / ");
+        sec = sec.child(field_row_full(
+            div().flex().flex_row().items_center().gap(pt(8.0)).w_full()
+                .child(div().flex_1().min_w(px(0.0)).child(name_edit))
+                .child(div().flex_1().min_w(px(0.0)).child(value_edit))
+                .child(div().text_size(pt(10.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(hint))),
+        ));
     }
     sec
 }
@@ -480,7 +516,8 @@ fn instance_section(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut us
                 )
                 .into_any_element(),
             "variant" | "swap" => {
-                // options 已经是（显示名, 提交值）。
+                // options 已经是（显示名, 提交值），且 preferred 已排在前面（lizard 的
+                // Preferred / All components 顺序）。
                 let rows: Vec<(String, &'static str, Value)> = p
                     .options
                     .iter()
@@ -488,7 +525,11 @@ fn instance_section(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut us
                     .collect();
                 pick_dropdown(f, p.value.clone(), 0.0, rows).into_any_element()
             }
-            _ => div().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(tr("Slot"))).into_any_element(),
+            // Slot：lizard `instance_props` 的 `PropDef::Slot` → `slot_fill`。下拉里列出
+            // preferred 组件 + 全部组件（`instance.slotInsert`），再给「Reset slot」。
+            // 之前这里只画了一个静态 "Slot" 文字，等于完全没接。
+            "slot" => slot_fill_control(f, c, p),
+            _ => div().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(p.value.clone())).into_any_element(),
         };
         let line = div().flex().flex_row().items_center().gap(pt(8.0)).w_full().child(label).child(div().flex_1().min_w(px(0.0)).child(control));
         sec = sec.child(field_row_full(line));
@@ -497,6 +538,37 @@ fn instance_section(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut us
 }
 
 /// 占满字段列的普通文字。
+/// 实例里一个 slot 属性的填充控件（lizard `slot_fill`）：显示「Empty / Default content / N layers」，
+/// 下拉列出 preferred 组件 + 全部组件（`instance.slotInsert`），已编辑时再给「Reset slot」。
+fn slot_fill_control(f: &RightFields, c: &ComponentData, p: &ComponentProp) -> gpui::AnyElement {
+    let t = tokens();
+    let label = if !p.slot_edited {
+        if p.slot_layers == 0 { tr("Empty").to_string() } else { tr("Default content").to_string() }
+    } else {
+        format!("{} layers", p.slot_layers)
+    };
+    let Some(slot_id) = p.slot_id else {
+        // 找不到实例里的槽副本（主组件里没有对应 frame）：只读显示当前状态。
+        return div().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(label)).into_any_element();
+    };
+    // preferred 组件排前面，其余组件随后（与 lizard 的分组顺序一致）。
+    let mut ordered: Vec<&(NodeId, String)> =
+        p.preferred.iter().filter_map(|id| c.components.iter().find(|(cid, _)| cid.0 == *id)).collect();
+    for comp in &c.components {
+        if !ordered.iter().any(|(cid, _)| cid == &comp.0) {
+            ordered.push(comp);
+        }
+    }
+    let mut rows: Vec<(String, &'static str, Value)> = ordered
+        .into_iter()
+        .map(|(cid, name)| (name.clone(), "instance.slotInsert", json!({ "id": slot_id.0, "component": cid.0 })))
+        .collect();
+    if p.slot_edited {
+        rows.push((tr("Reset slot").to_string(), "instance.resetSlot", json!({ "id": slot_id.0 })));
+    }
+    pick_dropdown(f, label, 0.0, rows).into_any_element()
+}
+
 fn plain_label(text: &'static str) -> Div {
     let t = tokens();
     div().flex_1().min_w(px(0.0)).text_size(pt(11.0)).text_color(rgba(t.text)).child(SharedString::from(text))

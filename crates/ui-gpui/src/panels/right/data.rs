@@ -887,6 +887,15 @@ pub struct ComponentProp {
     pub value: String,
     /// 可选值：variant 的候选值、swap 的候选（显示名 + 提交值，逗号 id）。
     pub options: Vec<(String, Value)>,
+    /// instanceSwap / slot 的 preferred 组件 id（swap 下拉优先分组；slot 填充优先）。
+    /// 对应 lizard `instance_props` 的 `PropDef::InstanceSwap { preferred }` / `Slot { preferred }`。
+    pub preferred: Vec<u64>,
+    /// slot 属性对应的槽节点 id（实例里的副本），供 `instance.slotInsert` / `resetSlot`。
+    pub slot_id: Option<NodeId>,
+    /// slot 是否已由实例自己填过内容（`slot_edited`）；未填时显示主组件默认内容。
+    pub slot_edited: bool,
+    /// slot 当前内容层数（`slot_edited` 时用于 "N layers" 文案）。
+    pub slot_layers: usize,
 }
 
 /// Component / Instance 面板（egui `component_panel::instance_section`）。
@@ -1011,46 +1020,76 @@ pub fn read_component(doc: &Document, ids: &[NodeId]) -> Option<ComponentData> {
                         kind: "variant",
                         value: current.get(&k).cloned().unwrap_or_default(),
                         options: vals.into_iter().map(|v| (v.clone(), serde_json::json!(v))).collect(),
+                        preferred: Vec::new(),
+                        slot_id: None,
+                        slot_edited: false,
+                        slot_layers: 0,
                     });
                 }
             }
-            // bool / text / swap / slot 属性。
-            if let figcraft_doc::NodeKind::Component { props: defs, .. } = &doc.node(*component)?.kind {
-                for (k, d) in defs {
-                    let v = props.get(k).cloned().unwrap_or_else(|| components::prop_default_value(d));
-                    match d {
-                        figcraft_doc::PropDef::Boolean { .. } => out.props.push(ComponentProp {
+            // bool / text / swap / slot 属性（lizard `instance_props`）。
+            // 用 `prop_list` 而不是直接匹配 NodeKind::Component：主组件被删时后者里的 `?`
+            // 会让整个面板消失（lizard 此时仍显示 "Main component deleted" + Reset/Detach）。
+            let slots = components::slots_of(doc, *id);
+            for (k, d) in components::prop_list(doc, *component) {
+                let v = props.get(&k).cloned().unwrap_or_else(|| components::prop_default_value(&d));
+                match &d {
+                    figcraft_doc::PropDef::Boolean { .. } => out.props.push(ComponentProp {
+                        name: k.clone(),
+                        kind: "boolean",
+                        value: v.as_bool().unwrap_or(false).to_string(),
+                        options: Vec::new(),
+                        preferred: Vec::new(),
+                        slot_id: None,
+                        slot_edited: false,
+                        slot_layers: 0,
+                    }),
+                    figcraft_doc::PropDef::Text { .. } => out.props.push(ComponentProp {
+                        name: k.clone(),
+                        kind: "text",
+                        value: v.as_str().unwrap_or_default().to_string(),
+                        options: Vec::new(),
+                        preferred: Vec::new(),
+                        slot_id: None,
+                        slot_edited: false,
+                        slot_layers: 0,
+                    }),
+                    figcraft_doc::PropDef::InstanceSwap { preferred, .. } => {
+                        let options = preferred
+                            .iter()
+                            .chain(out.components.iter().map(|(i, _)| i))
+                            .filter_map(|c| doc.node(*c).map(|x| (x.name.clone(), serde_json::json!(c.0))))
+                            .collect();
+                        let cur = figcraft_engine::params::id_of(&v);
+                        out.props.push(ComponentProp {
                             name: k.clone(),
-                            kind: "boolean",
-                            value: v.as_bool().unwrap_or(false).to_string(),
-                            options: Vec::new(),
-                        }),
-                        figcraft_doc::PropDef::Text { .. } => out.props.push(ComponentProp {
-                            name: k.clone(),
-                            kind: "text",
-                            value: v.as_str().unwrap_or_default().to_string(),
-                            options: Vec::new(),
-                        }),
-                        figcraft_doc::PropDef::InstanceSwap { preferred, .. } => {
-                            let options = preferred
-                                .iter()
-                                .chain(out.components.iter().map(|(i, _)| i))
-                                .filter_map(|c| doc.node(*c).map(|x| (x.name.clone(), serde_json::json!(c.0))))
-                                .collect();
-                            let cur = figcraft_engine::params::id_of(&v);
-                            out.props.push(ComponentProp {
-                                name: k.clone(),
-                                kind: "swap",
-                                value: cur.and_then(|c| doc.node(c)).map(|x| x.name.clone()).unwrap_or_else(|| tr("None").into()),
-                                options,
-                            });
-                        }
-                        // Slot 的填充走 `slot_fill`（挑选组件填进去），此轮只标注出来。
-                        figcraft_doc::PropDef::Slot { .. } => {
-                            out.props.push(ComponentProp { name: k.clone(), kind: "slot", value: String::new(), options: Vec::new() })
-                        }
-                        figcraft_doc::PropDef::Variant { .. } => {}
+                            kind: "swap",
+                            value: cur.and_then(|c| doc.node(c)).map(|x| x.name.clone()).unwrap_or_else(|| tr("None").into()),
+                            options,
+                            preferred: preferred.iter().map(|p| p.0).collect(),
+                            slot_id: None,
+                            slot_edited: false,
+                            slot_layers: 0,
+                        });
                     }
+                    // Slot：找到实例里对应的槽副本，交给 `slot_fill` 挑组件填入
+                    // （lizard `instance_props` 的 `PropDef::Slot` 分支 → `slot_fill`）。
+                    figcraft_doc::PropDef::Slot { preferred, .. } => {
+                        let slot_id = slots.iter().find(|(_, name)| name == &k).map(|(sid, _)| *sid);
+                        let edited = slot_id.map(|sid| components::slot_edited(doc, sid)).unwrap_or(false);
+                        let layers = slot_id.and_then(|sid| doc.node(sid)).map(|n| n.children.len()).unwrap_or(0);
+                        out.props.push(ComponentProp {
+                            name: k.clone(),
+                            kind: "slot",
+                            value: String::new(),
+                            options: Vec::new(),
+                            preferred: preferred.iter().map(|p| p.0).collect(),
+                            slot_id,
+                            slot_edited: edited,
+                            slot_layers: layers,
+                        });
+                    }
+                    figcraft_doc::PropDef::Variant { .. } => {}
                 }
             }
             Some(out)
