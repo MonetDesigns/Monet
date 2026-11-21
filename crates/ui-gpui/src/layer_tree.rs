@@ -1263,24 +1263,38 @@ impl CanvasView {
         cx.notify();
     }
 
-    /// Called from the root `on_mouse_up`: a drag commits its drop **here and only here**;
+    /// Called from the root `on_mouse_up`: a drag commits its drop **here and only here**.
+    ///
+    /// GPUI starts the drag on mouse-down, so a plain click also carries a press candidate.
+    /// Match egui's release semantics: a gesture that produced a drop target (a committed move,
+    /// or one refused/no-op because it landed on its own subtree) is *not* a click and must not
+    /// change the selection. Only a press that never resolved a target (target == None) is a
+    /// plain (or Ctrl/Shift) click, so only that path applies the candidate via `layer_click`.
     pub(crate) fn layer_drag_up(&mut self, cx: &mut Context<Self>) {
-        let mut click = None;
         if let Some(mut d) = self.layer_tree.drag.take() {
             let target = d.take();
-            if let Some(t) = target.as_ref()
-                && !t.refused
-                && !t.noop
-            {
-                self.layer_commit_drop(&d, target.as_ref().unwrap(), cx);
-            } else {
-                // The drag never resolved to a move: this was a plain (or Ctrl/Shift) click.
-                click = self.layer_tree.candidate.take();
+            match target {
+                Some(t) if !t.refused && !t.noop => {
+                    // A completed drop decides the selection through the reparent; the press
+                    // candidate must not fire a click afterwards (it would collapse a multi-selection).
+                    self.layer_tree.candidate = None;
+                    self.layer_commit_drop(&d, &t, cx);
+                }
+                Some(_) => {
+                    // Refused / no-op drag: egui leaves the selection untouched on this release.
+                    self.layer_tree.candidate = None;
+                }
+                None => {
+                    // No drop target ever resolved: pure press/release, i.e. a click. Keep the
+                    // candidate so the fallback below applies it with its modifiers.
+                }
             }
             self.layer_tree.calibrated = None;
             cx.notify();
         }
-        if let Some((cid, _, m)) = click.or_else(|| self.layer_tree.candidate.take()) {
+        // Only a pure click still has a candidate here; a drag (committed or refused) consumed
+        // its candidate above, so it can no longer change the selection after the release.
+        if let Some((cid, _, m)) = self.layer_tree.candidate.take() {
             self.layer_click(cid, m, cx);
         }
     }

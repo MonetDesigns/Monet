@@ -395,7 +395,9 @@ pub(crate) enum Setting {
     Radio {
         tab: u8,
         label: SharedString,
-        on: bool,
+        /// Shared so clicking a choice can immediately update its checked state and wake the
+        /// window, instead of waiting for a reopen (the document value drives it on rebuild).
+        on: std::rc::Rc<std::cell::RefCell<bool>>,
         cmd: Opt,
     },
     /// 一条只读小标题（egui `widgets::label(..., text_secondary)`）：单选组前的分组名。
@@ -4931,7 +4933,10 @@ impl WindowState {
                 if *st != tab {
                     return None;
                 }
-                // egui `widgets::radio`：一个小圆环 + 中间实心点 + 文案；点未选中项才推命令。
+                // egui `widgets::radio`：一个小圆环 + 中间实心点 + 文案。All rows stay clickable
+                // (including the checked one); a click pushes the command and immediately flips
+                // the shared on-state so the window reflects the choice without a reopen.
+                let checked = *on.borrow();
                 let ring = div()
                     .w(pt(12.0))
                     .h(pt(12.0))
@@ -4941,24 +4946,38 @@ impl WindowState {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .when(*on, |d| d.child(div().w(pt(6.0)).h(pt(6.0)).rounded_full().bg(rgba(t.accent))));
+                    .when(checked, |d| d.child(div().w(pt(6.0)).h(pt(6.0)).rounded_full().bg(rgba(t.accent))));
                 let radio_id: SharedString = format!("export-radio-{}", label).into();
                 let row = div().id(radio_id).w_full().h(pt(24.0)).flex().flex_row().items_center().gap(pt(6.0)).child(ring).child(
-                    div().text_size(pt(11.0)).text_color(rgba(if *on { t.text } else { t.text_secondary })).child(label.clone()),
+                    div().text_size(pt(11.0)).text_color(rgba(if checked { t.text } else { t.text_secondary })).child(label.clone()),
                 );
-                if *on {
-                    Some(row.into_any_element())
-                } else {
-                    let cmds = self.cmds.clone();
-                    let opt = cmd.clone();
-                    Some(
-                        row.cursor_pointer()
-                            .on_click(move |_e, _w, _cx| {
+                // Only an unchecked choice issues a command; clicking the checked one is a no-op,
+                // but the row is still interactive (it can be re-clicked after switching away).
+                let cmds = self.cmds.clone();
+                let wake = self.cmds.clone();
+                let opt = cmd.clone();
+                let on_state = on.clone();
+                let settings = self.settings.clone();
+                let tab_val = *st;
+                Some(
+                    row.cursor_pointer()
+                        .on_click(move |_e, _w, _cx| {
+                            if !*on_state.borrow() {
+                                // Mutually exclusive within this tab's radio group.
+                                for s in settings.borrow_mut().iter_mut() {
+                                    if let Setting::Radio { tab: rtab, on: ron, .. } = s {
+                                        if *rtab == tab_val {
+                                            *ron.borrow_mut() = false;
+                                        }
+                                    }
+                                }
+                                *on_state.borrow_mut() = true;
                                 cmds.push(Cmd { id: opt.cmd, params: Some(opt.now()) });
-                            })
-                            .into_any_element(),
-                    )
-                }
+                                wake.wake();
+                            }
+                        })
+                        .into_any_element(),
+                )
             }
             Setting::ExpandedRows { tab: st, flag, rows } => {
                 if *st != tab || !*flag.borrow() {
