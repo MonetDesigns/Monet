@@ -154,62 +154,28 @@ fn menu_popup_impl(
     let card_w = if fit_width { natural_w } else { natural_w.max(width) };
     let width_spec = if fit_width { crate::widgets::Width::Fit } else { crate::widgets::Width::Min(width) };
 
-    // 这个菜单里**有**可勾选的行才留 28pt 勾选列；一条都没有就不留（否则左边白空一条缩进）。
+    // 这个菜单里**有**可勾选的行才留 24pt 勾选列；一条都没有就不留（否则左边白空一条缩进）。
     let has_check = rows.iter().any(|r| r.checked.is_some());
-    for r in rows {
-        if r.separator_before {
-            col = col.child(crate::menu_metrics::divider(card_w));
-        }
-        // ⛔ 勾选列是**固定 24pt 的一列**（与 `menu_card::CHECK_W` 同一个 24×24 槽位），
-        // 不是文字前缀。勾号画在槽中心，文字起点是槽右缘 + 图标槽 + 4pt。
-        // 没有勾选态的行不占这一列。
-        let check = if r.checked == Some(true) { "✓" } else { "" };
-        // 统一到 Item 后 key 非 Option：空 key = 回落到 label（原 None 的语义）。
-        // Preserve an explicitly empty key (`.key("")` clears the brush tip); only an
-        // unspecified key from row() falls back to the label (the old `None` semantics).
-        let pick_text = if r.key_explicit || !r.key.is_empty() { r.key.clone() } else { r.label.clone() }.to_string();
-        let label = r.label;
-        let trail = r.trail;
-        let enum_icon = r.icon;
-        let on_pick = on_pick.clone();
-        let dismiss = dismiss.clone();
-        let mut row = div()
-            .h(row_h)
-            .w_full()
-            .flex()
-            .flex_row()
-            .items_center()
-            .rounded(pt(5.0))
-            // 墨色由通用 menu_surface() 统一注入；调用处只改快捷键的 trail_ink。
-            .text_size(pt(crate::widgets::TEXT_PT))
-            .hover(|s| s.bg(rgba(t.menu_hover)))
-            .on_mouse_down(MouseButton::Left, move |_: &MouseDownEvent, window, cx| {
-                on_pick(pick_text.as_str(), window, cx);
-                dismiss(window, cx);
-            });
-        if has_check {
-            // 勾号在一个 24pt 槽里居中（字形约 12 宽，中心 12）。
-            row = row.child(div().w(pt(24.0)).flex_none().flex().flex_row().items_center().justify_center().child(check));
-        } else {
-            // 没有勾选列时左边至少留 8pt —— 不能把文字顶到行首。
-            row = row.pl(pt(8.0));
-        }
-        // 前置图标：与 menu_card 同一套 Item 配置（统一 Icon 枚举）。无图标的行完全不变——
-        // 只有带图标的项才多这一列，既有菜单零样式回退。
-        let icon_ink = crate::menu_metrics::ink();
-        if let Some(icon) = enum_icon {
-            row = row.child(
-                div().w(pt(24.0)).flex_none().flex().items_center().justify_center().child(paint_in_slot(icon, 16.0, Some(icon_ink))),
-            );
-        }
-        // 标签占满剩余宽度，超长裁掉（egui 把文字裁到 `r.max.x - 8.0`）。
-        row = row.child(div().flex_1().min_w(pt(0.0)).overflow_hidden().whitespace_nowrap().child(label)).when_some(trail, |d, tr| {
-            d.child(
-                div().ml(pt(crate::widgets::MENU_TRAIL_GAP)).pr(pt(10.0)).whitespace_nowrap().text_color(crate::menu_metrics::trail_ink()).child(tr),
-            )
-        });
-        col = col.child(row);
-    }
+    // 组装骨架与卡片菜单完全共用；这里只挂「下拉行为」：pick 后 dismiss，无子菜单 / 键盘高亮。
+    // 空 key 且未显式设置时回落到 label —— 这条规则是行为，不是骨架，所以放在调用处。
+    let behavior = crate::menu_rows::dropdown_behavior(on_pick, dismiss);
+    let (row_els, _) = crate::menu_rows::assemble(
+        &rows,
+        crate::menu_metrics::MENU_ROW_H,
+        has_check,
+        card_w,
+        0.0,
+        None,
+        |r: &MenuRow| {
+            if r.key_explicit || !r.key.is_empty() {
+                r.key.as_ref()
+            } else {
+                r.label.as_ref()
+            }
+        },
+        behavior,
+    );
+    col = col.children(row_els);
     // The rows go on the one shared `Menu` control; no second popup chrome here.
     // `viewport` + `content` 才把控件自带的防溢出接通：顶部夹紧、水平贴边、装不下时
     // 内部滚动（`Menu::show` → `fit_vertical` / `fit_rows`）。

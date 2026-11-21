@@ -19,7 +19,8 @@
 //! is view state, so it survives the frame).
 
 pub(crate) use crate::widgets::Width;
-use crate::widgets::icon::{Icon, paint_in_slot};
+use crate::menu_rows;
+use crate::widgets::icon::Icon;
 use crate::widgets::{MENU_TRAIL_GAP, pt, rgba, tokens};
 use gpui::prelude::*;
 use gpui::{AnyElement, App, MouseButton, MouseDownEvent, SharedString, TextRun, Window, div};
@@ -28,17 +29,6 @@ use std::rc::Rc;
 /// The card's inset (egui `menu_frame`: `Margin::same(8)`). The fill, the 13 pt corners and the
 /// shadow come from [`crate::widgets::menu_surface`] — one definition for every popup.
 const PAD: f32 = crate::menu_metrics::MENU_PAD;
-/// A menu item's own radius (egui `rect_filled(r, CornerRadius::same(5), …)`).
-const ITEM_RADIUS: f32 = 5.0;
-/// 动作库行的字号（egui `MenuItem::show_palette` 的 `regular(13.0)`）。
-const PALETTE_TEXT_PT: f32 = 13.0;
-/// The check column: one whole 24 pt grid slot, centred.
-const CHECK_W: f32 = crate::menu_metrics::MENU_SLOT_W;
-/// The icon column's left edge and the label's, for a row that carries a mark.
-const ICON_X: f32 = crate::menu_metrics::MENU_SLOT_W;
-const ICON_SIZE: f32 = 16.0;
-/// Check slot + icon slot; the two slots touch, so the label starts at 48.
-const ICON_LABEL_X: f32 = ICON_X + CHECK_W;
 /// A separator's height, shared by every menu: 4 + 1 + 4.
 const SEP_H: f32 = crate::menu_metrics::MENU_SEP_H;
 
@@ -139,18 +129,6 @@ impl Item {
 pub type OnPick = Rc<dyn Fn(&str, &mut Window, &mut App)>;
 pub type OnSub = Rc<dyn Fn(usize, &mut Window, &mut App)>;
 
-/// 标签的左内缩：无勾选列 8；有勾选列时普通行 28、带图标的工具行 48。
-fn label_x(item: &Item, has_check: bool) -> f32 {
-    let marked = item.icon.is_some();
-    match (has_check, marked) {
-        (true, true) => ICON_LABEL_X,
-        (true, false) => CHECK_W,
-        // No check column: the leading glyph starts at 0 and owns one 24pt slot.
-        (false, true) => crate::menu_metrics::MENU_SLOT_W,
-        (false, false) => 8.0,
-    }
-}
-
 /// 卡片内容高度：上下各 8pt 内边距 + 每行行高 + 每条分隔线 9pt。
 pub(crate) fn height(items: &[Item], row_h: f32) -> f32 {
     2.0 * PAD + items.len() as f32 * row_h + items.iter().filter(|i| i.separator_before).count() as f32 * SEP_H
@@ -167,14 +145,13 @@ fn widest(items: &[Item], has_check: bool, window: &Window) -> f32 {
             underline: None,
             strikethrough: None,
         };
-        // 测量必须和渲染用同一个字号（渲染是 PALETTE_TEXT_PT=13）：旧代码用 TEXT_PT=11
-        // 量，长标签会把卡片算窄、文字被裁（CodeRabbit PR#28）。
-        f32::from(window.text_system().shape_line(s.clone(), pt(PALETTE_TEXT_PT), &[run], None).width)
+        // 测量必须和渲染用同一个字号（共用骨架 `menu_rows::TEXT_PT`）：两边各写一份就会漂移。
+        f32::from(window.text_system().shape_line(s.clone(), pt(menu_rows::TEXT_PT), &[run], None).width)
     };
     items
         .iter()
         .map(|i| {
-            let mut w = label_x(i, has_check) + measure(&i.label) + 10.0;
+            let mut w = menu_rows::label_x(i, has_check) + measure(&i.label) + 10.0;
             if let Some(trail) = &i.trail {
                 if !trail.is_empty() {
                     w += MENU_TRAIL_GAP + measure(trail) + 16.0;
@@ -207,119 +184,32 @@ pub(crate) fn rows(
     // 悬停某一行时回调（`MenuAim` 的输入）：子菜单的展开 / 收起由通用状态机裁决，
     // 不再靠点击切换。工具栏飞出 / palette 传空闭包即可。
     on_hover: OnSub,
-    // Kept for call sites' readability; every menu is the dark surface now, so the row's ink no
-    // longer depends on it (user 2026-11-18).
+    // Kept for call sites' readability; every menu is the dark surface now.
     _menu_surface: bool,
     window: &Window,
     vh: f32,
 ) -> (Vec<AnyElement>, Vec<AnyElement>) {
-    let t = tokens();
-    let mut out: Vec<AnyElement> = Vec::new();
-    let mut subs: Vec<AnyElement> = Vec::new();
-    let mut y = top + PAD;
-    for (i, item) in items.iter().enumerate() {
-        if item.separator_before {
-            out.push(crate::menu_metrics::divider(width).into_any_element());
-            y += SEP_H;
-        }
-        let key = item.key.clone();
-        let has_sub = !item.sub.is_empty();
-        let inset = label_x(item, has_check);
-        // This row's top — the submenu is pinned to it.
-        let row_top = y;
-
-        let mut row = div()
-            .relative()
-            .h(pt(row_h))
-            .w_full()
-            .flex()
-            .flex_row()
-            .items_center()
-            .rounded(pt(ITEM_RADIUS))
-            .pl(pt(inset))
-            .pr(pt(8.0))
-            // 默认墨色由通用 `menu_surface()` 统一注入，调用处不许再设行文字颜色。
-            .text_size(pt(PALETTE_TEXT_PT))
-            .when(item.disabled, |d| d.opacity(0.4));
-        if !item.disabled {
-            // Every menu is the dark surface with `t.menu_text` (white) labels, so the hover fill
-            // must be the dark menu hover, not `t.field` (#F5F5F5 in light theme: white on near-white
-            // is unreadable). CodeRabbit #28/#30/#31/#32.
-            row = row.hover(|s| s.bg(rgba(t.menu_hover))).cursor_pointer();
-            let hover = on_hover.clone();
-            row = row.on_mouse_move(move |_e, window, cx| hover(i, window, cx));
-            let pick = on_pick.clone();
-            let sub = on_sub.clone();
-            row = row.on_mouse_down(MouseButton::Left, move |_: &MouseDownEvent, window, cx| {
-                if has_sub {
-                    // A submenu row opens its card instead of running a command.
-                    sub(i, window, cx);
-                } else {
-                    pick(key.as_ref(), window, cx);
-                }
-            });
-        }
-        // The keyboard-highlighted row (palette Up/Down) and an explicitly lit row (the toolbar
-        // flyout's checked tool) both wear the *hover* fill — the very same `t.menu_hover` as
-        // `.hover(...)` above, just always on. Other menus never set `active_fill`, so their
-        // checked rows stay plain (no behaviour change outside the toolbar).
-        if (selected == Some(i) || item.active_fill) && !item.disabled {
-            row = row.bg(rgba(t.menu_hover));
-        }
-        // The check mark and the icon are absolutely placed so the label's own inset stays exact.
-        if has_check {
-            row = row.child(
-                div()
-                    .absolute()
-                    .left(pt(0.0))
-                    .w(pt(CHECK_W))
-                    .top(pt(0.0))
-                    .h(pt(row_h))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(if item.checked == Some(true) { "✓" } else { "" }),
-            );
-        }
-        // 与标签、勾号同色；.disabled 的变淡由行盒的 opacity(0.4) 统一负责。
-        let color = crate::menu_metrics::ink();
-        if let Some(icon) = item.icon {
-            // With a check column the icon sits after it; without one it starts at 0 so it never
-            // overlaps the label (the label inset is derived from this same slot in label_x).
-            let icon_x = if has_check { ICON_X } else { 0.0 };
-            row = row.child(div().absolute().left(pt(icon_x)).w(pt(crate::menu_metrics::MENU_SLOT_W)).top(pt(0.0)).h(pt(row_h)).flex().items_center().justify_center().child(paint_in_slot(icon, 16.0, Some(color))));
-        }
-        row = row.child(div().flex_1().min_w(pt(0.0)).overflow_hidden().whitespace_nowrap().child(item.label.clone()));
-        if has_sub {
-            row = row.child(div().ml(pt(MENU_TRAIL_GAP)).whitespace_nowrap().text_color(crate::menu_metrics::trail_ink()).child("▸"));
-        } else if let Some(trail) = &item.trail {
-            // `用户 2026-11-06`：无快捷键就不预留占位（避免「项内右侧空一截」）。
-            if !trail.is_empty() {
-                row = row.child(div().ml(pt(MENU_TRAIL_GAP)).whitespace_nowrap().text_color(crate::menu_metrics::trail_ink()).child(trail.clone()));
-            }
-        }
-        out.push(row.into_any_element());
-        y += row_h;
-        // The open submenu hangs off this row: right of the card, its first row level with this one
-        // (egui `submenu_at`: `pos2(r.max.x + gap, r.min.y - 8.0)`).
-        if !item.sub.is_empty() && open_sub == Some(i) {
-            // 子卡片（目前最多一级）不再继续嵌套瞄准：传空悬停回调，避免行下标串级。
-            subs.push(card(
+    // 组装骨架完全共用；这里只挂「卡片行为」：子菜单展开、键盘高亮、点击不关闭浮层。
+    let make_sub = {
+        let (on_pick, on_sub) = (on_pick.clone(), on_sub.clone());
+        Rc::new(move |sub: &[Item], row_top: f32, window: &Window| {
+            Some(card(
                 left + width + 4.0,
-                row_top - PAD,
+                row_top - menu_rows::PAD,
                 Width::Min(width),
                 row_h,
-                &item.sub,
+                sub,
                 None,
                 on_pick.clone(),
                 on_sub.clone(),
                 Rc::new(|_, _, _| {}),
                 window,
                 vh,
-            ));
-        }
-    }
-    (out, subs)
+            ))
+        })
+    };
+    let behavior = menu_rows::card_behavior(on_pick, on_sub, on_hover, open_sub, selected, row_h, make_sub);
+    menu_rows::assemble(items, row_h, has_check, width, top, Some(window), |item| item.key.as_ref(), behavior)
 }
 
 /// The card at `(left, top)` (window coordinates).
@@ -380,16 +270,14 @@ mod tests {
         assert_eq!(height(&[], h), 2.0 * PAD);
     }
 
-    /// The label's inset: a checked row puts it after the 28 pt check column, a tool row after the
-    /// 16 pt icon (which is centred at 32 under egui's flyout metrics).
+    /// 标签内缩由共用骨架算，卡片这一侧不再有一份自己的规则。
     #[test]
     fn label_inset_follows_the_check_and_icon_columns() {
         let plain = Item::new("a", "A");
-        assert_eq!(label_x(&plain, false), 8.0);
-        assert_eq!(label_x(&plain, true), CHECK_W);
+        assert_eq!(menu_rows::label_x(&plain, false), 8.0);
+        assert_eq!(menu_rows::label_x(&plain, true), menu_rows::SLOT);
         let tool = Item::new("b", "B").icon(Icon::Move);
-        assert_eq!(label_x(&tool, true), ICON_LABEL_X);
-        assert_eq!(ICON_X + ICON_SIZE, 40.0);
+        assert_eq!(menu_rows::label_x(&tool, true), menu_rows::SLOT * 2.0);
     }
 
     /// 统一后：下拉 / 右键 / 工具栏 / 主菜单共用这一个 Item。`row()` 是旧 MenuRow::new 的
@@ -403,7 +291,7 @@ mod tests {
         assert_eq!(r.icon, Some(Icon::Check));
         assert_eq!(r.checked, Some(true));
         assert!(r.separator_before);
-        assert_eq!(label_x(&r, true), ICON_LABEL_X, "带图标的行也要给图标列留位");
+        assert_eq!(menu_rows::label_x(&r, true), menu_rows::SLOT * 2.0, "带图标的行也要给图标列留位");
         // 普通 row() 的 pick key 为空 → 渲染器回落到 label，等价旧 None 语义。
         let plain = Item::row("All");
         assert!(plain.key.is_empty());
