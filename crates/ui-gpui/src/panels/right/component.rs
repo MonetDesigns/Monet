@@ -9,7 +9,7 @@
 //! 属性设置走 `WindowState::component_property`（通用弹窗卡 + Setting 行），不再用行下内联框。
 //! 全部走冻结通用控件与列表行编辑器池，没有新建控件。
 
-use super::data::{ComponentData, ComponentDef, ComponentProp, PanelData};
+use super::data::{BindingData, ComponentData, ComponentDef, ComponentProp, PanelData};
 use super::sections::{icon_cmd, icon_row, open_detached_with, pick_dropdown, slot, window_open_button};
 use crate::panels::{RightFields, RowEditCtx};
 use crate::widgets::{Icon, IconButton, PanelSection, field_row, field_row_full, field_row_full_trailing, pt, rgba, sublabel_row, tokens};
@@ -20,7 +20,12 @@ use serde_json::{Value, json};
 
 /// Component / Instance 节（`None` = 选中的不是组件相关节点）。
 pub(crate) fn section(f: &RightFields, d: &PanelData, cx: &mut App, n: &mut usize) -> Option<PanelSection> {
-    let c = d.component.as_ref()?;
+    // 组件内 / 实例内的普通图层：显示属性绑定与覆盖（lizard 的 text_value_ui /
+    // visibility_value_ui / scoped_property_row / overrides_ui）。之前这里直接 `?` 返回 None，
+    // 所以选组件里的图层什么都不显示。
+    let Some(c) = d.component.as_ref() else {
+        return d.binding.as_ref().map(|b| binding_section(f, b));
+    };
     if c.is_instance {
         return Some(instance_section(f, c, cx, n));
     }
@@ -119,8 +124,20 @@ fn variant_section(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut usi
 fn properties_section(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut usize) -> PanelSection {
     // lizard `instance_section`: ComponentSet 直接进入 `properties_ui` —— 标题由 Design panel
     // header 画，这里**没有** description 输入框（之前我塞了一个在 Properties 上面，是错的）。
+    let t = tokens();
     let sec = PanelSection::new(c.title);
     let sec = property_rows(f, c, cx, n).into_iter().fold(sec, |s, row| s.child(row));
+    // 变体值冲突警告（lizard `variant_conflicts`：同一组合出现多个变体时给黄条）。
+    let sec = if c.variant_conflicts.is_empty() {
+        sec
+    } else {
+        sec.child(field_row_full(
+            div()
+                .text_size(pt(11.0))
+                .text_color(rgba(t.warning))
+                .child(tr("Some variants have the same property values: give each one a unique combination")),
+        ))
+    };
     sec
 }
 
@@ -437,9 +454,12 @@ fn current_variant_rows(f: &RightFields, c: &ComponentData) -> Vec<crate::widget
 fn instance_section(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut usize) -> PanelSection {
     let t = tokens();
     let reset = icon_cmd(Icon::Rotate, "component.resetInstance", json!({}), f, false);
-    let mut trail = vec![reset];
+    // lizard `instance_ui` 头部：Dots 菜单（Go to main / Push changes / Restore / Reset / Detach）
+    // + Detach + Reset。之前只有 Reset / Detach，pushChanges 完全没有入口。
+    let mut trail: Vec<gpui::AnyElement> = vec![instance_more_button(f, c)];
+    trail.push(reset.into_any_element());
     if !c.nested {
-        trail.push(icon_cmd(Icon::Detach, "component.detach", json!({}), f, false));
+        trail.push(icon_cmd(Icon::Detach, "component.detach", json!({}), f, false).into_any_element());
     }
     let mut sec = PanelSection::new(SharedString::from(c.title)).header_trail(icon_row(trail));
 
@@ -473,71 +493,254 @@ fn instance_section(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut us
         sec = sec.child(sublabel_row(tr("Properties")));
     }
     for p in &c.props {
-        // 每个属性行左侧的类型图标（lizard `prop_label`）。
-        let p_icon = match p.kind {
-            "boolean" => Icon::Boolean,
-            "text" => Icon::Text,
-            "variant" => Icon::ComponentSet,
-            "swap" => Icon::Instance,
-            "slot" => Icon::Slot,
-            _ => Icon::ComponentSet,
-        };
-        let label = div()
-            .w(px(84.0))
-            .flex_none()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(pt(6.0))
-            .child(crate::widgets::icon::paint_in_slot(p_icon, 14.0, Some(rgba(t.text_secondary))))
-            .child(SharedString::from(p.name.clone()));
-        let control: gpui::AnyElement = match p.kind {
-            "boolean" => {
-                let on = p.value == "true";
-                let btn = icon_cmd(Icon::Check, "instance.setProperties", json!({ "properties": { p.name.clone(): !on } }), f, on);
-                div().flex().flex_row().items_center().child(btn).into_any_element()
-            }
-            "text" => f
-                .row_field(
-                    cx,
-                    slot(n),
-                    &p.value,
-                    RowEditCtx {
-                        cmd: "instance.setProperties",
-                        params: json!({}),
-                        key: "value",
-                        scale: 1.0,
-                        string_value: true,
-                        paint: None,
-                        nest: Some("properties"),
-                        nest_key: Some(p.name.clone()),
-                        paint_color: None,
-                    },
-                )
-                .into_any_element(),
-            "variant" | "swap" => {
-                // options 已经是（显示名, 提交值），且 preferred 已排在前面（lizard 的
-                // Preferred / All components 顺序）。
-                let rows: Vec<(String, &'static str, Value)> = p
-                    .options
-                    .iter()
-                    .map(|(label, value)| (label.clone(), "instance.setProperties", json!({ "properties": { p.name.clone(): value.clone() } })))
-                    .collect();
-                pick_dropdown(f, p.value.clone(), 0.0, rows).into_any_element()
-            }
-            // Slot：lizard `instance_props` 的 `PropDef::Slot` → `slot_fill`。下拉里列出
-            // preferred 组件 + 全部组件（`instance.slotInsert`），再给「Reset slot」。
-            // 之前这里只画了一个静态 "Slot" 文字，等于完全没接。
-            "slot" => slot_fill_control(f, c, p),
-            _ => div().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(p.value.clone())).into_any_element(),
-        };
-        let line = div().flex().flex_row().items_center().gap(pt(8.0)).w_full().child(label).child(div().flex_1().min_w(px(0.0)).child(control));
-        sec = sec.child(field_row_full(line));
+        sec = sec.child(instance_prop_row(f, c, cx, n, p));
+    }
+    // 暴露属性的嵌套实例（lizard `exposed_copies`）：名字小标题 + 它们各自的属性行。
+    // 之前这块完全没接，实例里暴露的嵌套实例属性在右栏看不到。
+    for (name, props) in &c.exposed_instances {
+        sec = sec.child(field_row_full(
+            div().mt(pt(6.0)).text_size(pt(11.0)).text_color(rgba(t.text)).child(SharedString::from(name.clone())),
+        ));
+        for p in props {
+            sec = sec.child(instance_prop_row(f, c, cx, n, p));
+        }
     }
     sec
 }
 
-/// 占满字段列的普通文字。
+/// 实例属性的一行（lizard `instance_props` 的 row）：类型图标 + 属性名 + 值控件。
+fn instance_prop_row(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut usize, p: &ComponentProp) -> crate::widgets::FieldRow {
+    let t = tokens();
+    let p_icon = match p.kind {
+        "boolean" => Icon::Boolean,
+        "text" => Icon::Text,
+        "variant" => Icon::ComponentSet,
+        "swap" => Icon::Instance,
+        "slot" => Icon::Slot,
+        _ => Icon::ComponentSet,
+    };
+    let label = div()
+        .w(px(84.0))
+        .flex_none()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(pt(6.0))
+        .child(crate::widgets::icon::paint_in_slot(p_icon, 14.0, Some(rgba(t.text_secondary))))
+        .child(SharedString::from(p.name.clone()));
+    let control: gpui::AnyElement = match p.kind {
+        "boolean" => {
+            let on = p.value == "true";
+            let btn = icon_cmd(Icon::Check, "instance.setProperties", json!({ "properties": { p.name.clone(): !on } }), f, on);
+            div().flex().flex_row().items_center().child(btn).into_any_element()
+        }
+        "text" => f
+            .row_field(
+                cx,
+                slot(n),
+                &p.value,
+                RowEditCtx {
+                    cmd: "instance.setProperties",
+                    params: json!({}),
+                    key: "value",
+                    scale: 1.0,
+                    string_value: true,
+                    paint: None,
+                    nest: Some("properties"),
+                    nest_key: Some(p.name.clone()),
+                    paint_color: None,
+                },
+            )
+            .into_any_element(),
+        "variant" | "swap" => {
+            let rows: Vec<(String, &'static str, Value)> = p
+                .options
+                .iter()
+                .map(|(label, value)| (label.clone(), "instance.setProperties", json!({ "properties": { p.name.clone(): value.clone() } })))
+                .collect();
+            pick_dropdown(f, p.value.clone(), 0.0, rows).into_any_element()
+        }
+        "slot" => slot_fill_control(f, c, p),
+        _ => div().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(p.value.clone())).into_any_element(),
+    };
+    let line = div().flex().flex_row().items_center().gap(pt(8.0)).w_full().child(label).child(div().flex_1().min_w(px(0.0)).child(control));
+    field_row_full(line)
+}
+
+/// 实例头部的 More 菜单（lizard `instance_ui` 的 `Icon::Dots`）：
+/// Go to main component / Push changes to main / Restore main / Reset all changes / Detach。
+/// pushChanges 之前没有任何 UI 入口。
+fn instance_more_button(f: &RightFields, c: &ComponentData) -> gpui::AnyElement {
+    let root = f.root.clone();
+    let cmds = f.cmds.clone();
+    let t = tokens();
+    let missing = c.missing;
+    let nested = c.nested;
+    let node = c.main_id.map(|i| i.0).unwrap_or(0);
+    let instance_node = c.instance_id.unwrap_or(NodeId(0));
+    div()
+        .id("window-open-instance-more")
+        .size(pt(24.0))
+        .rounded(pt(5.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .hover(|s| s.bg(rgba(t.hover)))
+        .child(crate::widgets::icon::paint(Icon::Menu, rgba(t.icon), 16.0))
+        .on_mouse_down(gpui::MouseButton::Left, move |_e, window, cx: &mut App| {
+            let Some(root) = root.clone() else { return };
+            let p = window.mouse_position();
+            let anchor = gpui::Bounds { origin: p, size: gpui::size(px(0.0), px(0.0)) };
+            let mut items: Vec<(&'static str, &'static str)> = Vec::new();
+            if !missing {
+                items.push(("Go to main component", "goToMain"));
+                items.push(("Push changes to main component", "pushChanges"));
+            }
+            if missing && !nested {
+                items.push(("Restore main component", "restoreMain"));
+            }
+            items.push(("Reset all changes", "resetInstance"));
+            if !nested {
+                items.push(("Detach instance", "detach"));
+            }
+            let rows: Vec<crate::widgets::menu::MenuRow> =
+                items.iter().map(|(label, key)| crate::widgets::menu::MenuRow::row(tr(*label)).key(*key)).collect();
+            let cmds = cmds.clone();
+            let on_pick = std::rc::Rc::new(move |key: &str, _w: &mut gpui::Window, _cx: &mut App| {
+                let id = instance_node.0;
+                let (cmd, params): (&'static str, Value) = match key {
+                    "goToMain" => ("component.goToMain", json!({ "id": id })),
+                    "pushChanges" => ("component.pushChanges", json!({ "id": id })),
+                    "restoreMain" => ("component.restoreMain", json!({ "id": id })),
+                    "resetInstance" => ("component.resetInstance", json!({ "ids": [id] })),
+                    "detach" => ("component.detach", json!({ "ids": [id] })),
+                    _ => return,
+                };
+                let _ = node;
+                cmds.push(crate::panels::Cmd { id: cmd, params: Some(params) });
+            });
+            root.update(cx, |cv, cx| cv.open_menu(anchor, Some(220.0), rows, on_pick, cx));
+        })
+        .into_any_element()
+}
+
+/// 组件内 / 实例内图层的属性绑定与覆盖（lizard `component_panel.rs` 末尾）：
+/// - 在实例里 → Overrides 节（每组一行 + 单组重置 + 全部重置）。
+/// - 在组件里 → Component property 节：Visible / Text / Instance / Slot 各一行的绑定下拉。
+fn binding_section(f: &RightFields, b: &BindingData) -> PanelSection {
+    let t = tokens();
+    let mut sec = PanelSection::new(tr("Component property"));
+
+    // ── Overrides（实例内图层）──────────────────────────────────────────────
+    if b.in_instance && !b.overrides.is_empty() {
+        let reset_all = icon_cmd(Icon::Rotate, "component.resetOverride", json!({ "id": b.node.0 }), f, false);
+        sec = sec.child(field_row_full_trailing(
+            div().text_size(pt(11.0)).text_color(rgba(t.text)).child(tr("Overrides")),
+            vec![reset_all.into_any_element()],
+        ));
+        for g in &b.overrides {
+            let reset = icon_cmd(Icon::Close, "component.resetOverride", json!({ "id": b.node.0, "group": g }), f, false);
+            sec = sec.child(field_row_full_trailing(
+                div().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(override_group_label(g))),
+                vec![reset.into_any_element()],
+            ));
+        }
+        return sec;
+    }
+
+    if b.in_instance {
+        return sec;
+    }
+
+    // ── Visible 绑定（所有组件内图层，lizard `visibility_value_ui`）───────────
+    sec = sec.child(bind_row(f, b, "visible", tr("Visible"), "boolean", b.visible.to_string()));
+    // ── Text 绑定（文本图层，lizard `text_value_ui`）────────────────────────
+    if b.kind == "text" {
+        sec = sec.child(bind_row(f, b, "characters", tr("Text content"), "text", String::new()));
+    }
+    // ── Instance 绑定（嵌套实例，lizard `scoped_property_row(mainComponent)`）─
+    if b.show_main_component_row {
+        sec = sec.child(bind_row(f, b, "mainComponent", tr("Instance"), "instanceSwap", String::new()));
+    }
+    // ── Slot 绑定（Frame，lizard `scoped_property_row(slot)` → Make slot / Remove slot）─
+    if b.show_slot_row {
+        let label = if b.is_slot { tr("Slot") } else { tr("Convert to slot") };
+        sec = sec.child(bind_row(f, b, "slot", label, "slot", b.slot_name.clone().unwrap_or_default()));
+    }
+    sec
+}
+
+/// 一行绑定控件：字段标签 + 下拉（列出类型匹配的属性、解除绑定、创建属性；slot 另有 Make/Remove）。
+fn bind_row(
+    f: &RightFields,
+    b: &BindingData,
+    field: &'static str,
+    label: &'static str,
+    ty: &'static str,
+    current: String,
+) -> crate::widgets::FieldRow {
+    let t = tokens();
+    let bound = b.bound.iter().find(|(k, _)| k == field).map(|(_, v)| v.clone());
+    let shown = bound.clone().unwrap_or_else(|| current.clone());
+    let shown = if shown.is_empty() { tr("Not bound").to_string() } else { shown };
+    let mut rows: Vec<(String, &'static str, Value)> = Vec::new();
+    // 类型匹配的属性。
+    for (name, kind) in &b.props {
+        if *kind == ty {
+            rows.push((name.clone(), "component.bindProperty", json!({ "layer": b.node.0, "field": field, "property": name })));
+        }
+    }
+    if ty == "slot" {
+        if b.is_slot {
+            rows.push((tr("Remove slot").to_string(), "component.removeSlot", json!({ "id": b.node.0 })));
+        } else {
+            rows.push((tr("Make slot").to_string(), "component.makeSlot", json!({ "id": b.node.0 })));
+        }
+    } else {
+        // 新建一个同类型属性并绑到本图层（lizard `Create property…`）。
+        rows.push((tr("Create property").to_string(), "component.addProperty", json!({ "id": b.node.0, "name": label, "type": ty })));
+        if bound.is_some() {
+            rows.push((tr("Detach property").to_string(), "component.bindProperty", json!({ "layer": b.node.0, "field": field, "property": null })));
+        }
+    }
+    let dd = pick_dropdown(f, shown, 0.0, rows);
+    field_row(
+        vec![div().w(px(84.0)).flex_none().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(label)).into_any_element(),
+             dd.into_any_element()],
+        Vec::<gpui::AnyElement>::new(),
+    )
+}
+
+/// 覆盖组的显示名（lizard `group_label`）。
+fn override_group_label(g: &str) -> String {
+    match g {
+        "fills" => tr("Fill"),
+        "strokes" => tr("Stroke"),
+        "effects" => tr("Effects"),
+        "opacity" => tr("Opacity & blend"),
+        "visible" => tr("Visibility"),
+        "name" => tr("Layer name"),
+        "corners" => tr("Corner radius"),
+        "characters" => tr("Text content"),
+        "textStyle" => tr("Text style"),
+        "padding" => tr("Padding"),
+        "gap" => tr("Gap"),
+        "alignment" => tr("Alignment"),
+        "grids" => tr("Layout grids"),
+        "exports" => tr("Export settings"),
+        "interactions" => tr("Interactions"),
+        "size" => tr("Size"),
+        "resizing" => tr("Resizing"),
+        "position" => tr("Position"),
+        "component" => tr("Swapped instance"),
+        "props" => tr("Instance properties"),
+        "slot" => tr("Slot content"),
+        other => other,
+    }
+    .to_string()
+}
+
 /// 实例里一个 slot 属性的填充控件（lizard `slot_fill`）：显示「Empty / Default content / N layers」，
 /// 下拉列出 preferred 组件 + 全部组件（`instance.slotInsert`），已编辑时再给「Reset slot」。
 fn slot_fill_control(f: &RightFields, c: &ComponentData, p: &ComponentProp) -> gpui::AnyElement {
