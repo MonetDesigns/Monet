@@ -2612,6 +2612,61 @@ fn corner_smoothing_button(f: &RightFields, d: &PanelData) -> gpui::AnyElement {
     })
 }
 
+/// 可见性绑定按钮（lizard `visibility_value_ui` / `value_binding_button`）：把本图层的
+/// visible 绑到一个布尔组件属性。已绑定时图标高亮，菜单里可解除绑定。
+fn visibility_bind_button(f: &RightFields, b: &super::data::BindingData) -> gpui::AnyElement {
+    let root = f.root.clone();
+    let cmds = f.cmds.clone();
+    let t = tokens();
+    let bound = b.bound.iter().find(|(k, _)| k == "visible").map(|(_, v)| v.clone());
+    let is_bound = bound.is_some();
+    let node = b.node.0;
+    let bool_props: Vec<String> = b.props.iter().filter(|(_, k)| *k == "boolean").map(|(n, _)| n.clone()).collect();
+    div()
+        .id("window-open-visible-bind")
+        .size(pt(24.0))
+        .rounded(pt(5.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .when(is_bound, |d| d.bg(rgba(t.selected_row)))
+        .when(!is_bound, |d| d.hover(|s| s.bg(rgba(t.hover))))
+        .child(crate::widgets::icon::paint(if is_bound { Icon::LinkOn } else { Icon::LinkOff }, rgba(if is_bound { t.accent } else { t.icon }), 16.0))
+        .on_mouse_down(gpui::MouseButton::Left, move |_e, window, cx: &mut App| {
+            let Some(root) = root.clone() else { return };
+            let p = window.mouse_position();
+            let anchor = gpui::Bounds { origin: p, size: gpui::size(px(0.0), px(0.0)) };
+            let mut rows: Vec<crate::widgets::menu::MenuRow> = bool_props
+                .iter()
+                .map(|name| {
+                    crate::widgets::menu::MenuRow::row(SharedString::from(name.clone()))
+                        .key(format!("bind:{}", name))
+                        .icon(Icon::Boolean)
+                })
+                .collect();
+            rows.push(crate::widgets::menu::MenuRow::row(tr("Create boolean property")).key("create").icon(Icon::Plus));
+            if is_bound {
+                rows.push(crate::widgets::menu::MenuRow::row(tr("Detach property")).key("detach").icon(Icon::LinkOff));
+            }
+            let cmds = cmds.clone();
+            let on_pick = std::rc::Rc::new(move |key: &str, _w: &mut gpui::Window, _cx: &mut App| {
+                let (cmd, params): (&'static str, Value) = if key == "create" {
+                    ("component.addProperty", json!({ "id": node, "name": "Visible", "type": "boolean" }))
+                } else if key == "detach" {
+                    ("component.bindProperty", json!({ "layer": node, "field": "visible", "property": null }))
+                } else if let Some(name) = key.strip_prefix("bind:") {
+                    ("component.bindProperty", json!({ "layer": node, "field": "visible", "property": name }))
+                } else {
+                    return;
+                };
+                cmds.push(crate::panels::Cmd { id: cmd, params: Some(params) });
+            });
+            root.update(cx, |cv, cx| cv.open_menu(anchor, Some(200.0), rows, on_pick, cx));
+        })
+        .into_any_element()
+}
+
 /// Appearance 的 header 图标（egui `paints.rs::appearance`：Eye/Variable/Blend）。
 pub(crate) fn appearance(
     f: &RightFields,
@@ -2671,7 +2726,17 @@ pub(crate) fn appearance(
     } else {
         None
     };
-    let mut sec = PanelSection::new(tr("Appearance")).header_trail(icon_row(vec![eye.into_any_element(), blend.into_any_element()]));
+    // 组件内图层的「可见性绑定」按钮（lizard `visibility_value_ui` 的 `value_binding_button`）：
+    // 布尔属性在组件里就是它所绑图层的可见性；不绑定时设置可见性只影响这一层，绑了之后
+    // 实例上的布尔属性就能让这一层出现 / 消失。之前 Monet 完全没有这颗按钮。
+    let mut trail = vec![eye.into_any_element()];
+    if let Some(b) = &d.binding {
+        if !b.in_instance && b.owner.is_some() {
+            trail.push(visibility_bind_button(f, b));
+        }
+    }
+    trail.push(blend.into_any_element());
+    let mut sec = PanelSection::new(tr("Appearance")).header_trail(icon_row(trail));
     let corner_row_trail: Vec<gpui::AnyElement> = indep_toggle.into_iter().collect();
     // 参考实现 `right.rs::appearance`：`radius_ok` 管的是**整个第二列** —— 圆角 caption、
     // 圆角输入框、展开按钮一起出现 / 一起消失；不支持圆角的层（如纯矢量路径）该列不存在，

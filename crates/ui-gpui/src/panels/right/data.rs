@@ -1016,7 +1016,8 @@ pub fn read_props_of_instance(doc: &Document, instance: NodeId, components: &[(N
     }
     // bool / text / swap / slot。
     let slots = components::slots_of(doc, instance);
-    for (k, d) in components::prop_list(doc, *component) {
+    // 实例只列被图层读取的属性（上游 instance_prop_list，#2022），不显示已删变体留下的死属性。
+    for (k, d) in components::instance_prop_list(doc, *component) {
         let v = props.get(&k).cloned().unwrap_or_else(|| components::prop_default_value(&d));
         match &d {
             figcraft_doc::PropDef::Boolean { .. } => out.push(ComponentProp {
