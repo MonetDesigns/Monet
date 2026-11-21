@@ -171,8 +171,14 @@ pub enum Icon {
     Moon,
     /// A presentation tab's play triangle.
     Play,
-    /// Frameless title bar: restore.
+    /// Frameless title bar: minimise (Figma 16-grid outline).
+    WinMinimize,
+    /// Frameless title bar: maximise (Figma 16-grid outline).
+    WinMaximize,
+    /// Frameless title bar: restore (Figma 16-grid outline).
     WinRestore,
+    /// Frameless title bar: close (Figma 16-grid outline).
+    WinClose,
     /// A live session whose connection dropped.
     LiveDisconnected,
     LayoutH,
@@ -291,7 +297,10 @@ impl Icon {
         Icon::Sun,
         Icon::Moon,
         Icon::Play,
+        Icon::WinMinimize,
+        Icon::WinMaximize,
         Icon::WinRestore,
+        Icon::WinClose,
         Icon::LiveDisconnected,
         Icon::LayoutH,
         Icon::LayoutV,
@@ -407,7 +416,10 @@ impl Icon {
             Icon::Sun => "ui-sun",
             Icon::Moon => "ui-moon",
             Icon::Play => "ui-play",
+            Icon::WinMinimize => "ui-win-minimize",
+            Icon::WinMaximize => "ui-win-maximize",
             Icon::WinRestore => "ui-win-restore",
+            Icon::WinClose => "ui-win-close",
             Icon::LiveDisconnected => "ui-live-disconnected",
             Icon::LayoutH => "layout-h",
             Icon::LayoutV => "layout-v",
@@ -524,7 +536,10 @@ impl Icon {
             Icon::Sun => "ui-sun",
             Icon::Moon => "ui-moon",
             Icon::Play => "ui-play",
+            Icon::WinMinimize => "ui-win-minimize",
+            Icon::WinMaximize => "ui-win-maximize",
             Icon::WinRestore => "ui-win-restore",
+            Icon::WinClose => "ui-win-close",
             Icon::LiveDisconnected => "ui-live-disconnected",
             Icon::LayoutH => "layout-h",
             Icon::LayoutV => "layout-v",
@@ -661,7 +676,10 @@ static ICON_FILES: &[(&str, &[u8])] = &[
     ("ui-trash", include_bytes!("../../assets/icons/ui-dot.svg")),
     ("ui-unlock", include_bytes!("../../assets/icons/ui-unlock.svg")),
     ("ui-view-grid", include_bytes!("../../assets/icons/ui-view-grid.svg")),
+    ("ui-win-minimize", include_bytes!("../../assets/icons/ui-win-minimize.svg")),
+    ("ui-win-maximize", include_bytes!("../../assets/icons/ui-win-maximize.svg")),
     ("ui-win-restore", include_bytes!("../../assets/icons/ui-win-restore.svg")),
+    ("ui-win-close", include_bytes!("../../assets/icons/ui-win-close.svg")),
     ("layout-corner-bl", include_bytes!("../../assets/icons/layout-corner-bl.svg")),
     ("layout-corner-br", include_bytes!("../../assets/icons/layout-corner-br.svg")),
     ("layout-corner-individual", include_bytes!("../../assets/icons/layout-corner-individual.svg")),
@@ -846,7 +864,7 @@ mod tests {
 
     #[test]
     fn every_icon_has_an_external_svg_with_the_shared_stroke() {
-        assert_eq!(Icon::ALL.len(), 111, "Icon 变体数变了：请同步 ALL / asset_name / asset_rel / 本断言");
+        assert_eq!(Icon::ALL.len(), 114, "Icon 变体数变了：请同步 ALL / asset_name / asset_rel / 本断言");
         let mut names = HashSet::new();
         for &icon in Icon::ALL {
             let rel = icon.asset_rel();

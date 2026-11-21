@@ -30,8 +30,10 @@ use std::rc::Rc;
 const PAD: f32 = crate::menu_metrics::MENU_PAD;
 /// A menu item's own radius (egui `rect_filled(r, CornerRadius::same(5), …)`).
 const ITEM_RADIUS: f32 = 5.0;
-/// 动作库行的字号（egui `MenuItem::show_palette` 的 `regular(13.0)`）。
-const PALETTE_TEXT_PT: f32 = 13.0;
+/// 菜单行字号：与下拉菜单通用控件 [`crate::widgets::TEXT_PT`] 统一为 11pt。
+/// 右键菜单、工具栏 flyout、动作库共用本文件的行渲染（`rows`/`card`），
+/// 必须和 `widgets::menu` 的 `Item` 行渲染同一个字号，否则同一套菜单模型出现两种字高。
+const PALETTE_TEXT_PT: f32 = crate::widgets::TEXT_PT;
 /// The check column: one whole 24 pt grid slot, centred.
 const CHECK_W: f32 = crate::menu_metrics::MENU_SLOT_W;
 /// The icon column's left edge and the label's, for a row that carries a mark.
@@ -167,8 +169,8 @@ fn widest(items: &[Item], has_check: bool, window: &Window) -> f32 {
             underline: None,
             strikethrough: None,
         };
-        // 测量必须和渲染用同一个字号（渲染是 PALETTE_TEXT_PT=13）：旧代码用 TEXT_PT=11
-        // 量，长标签会把卡片算窄、文字被裁（CodeRabbit PR#28）。
+        // 测量必须和渲染用同一个字号（渲染是 PALETTE_TEXT_PT=11）：两者不同会让长标签
+        // 把卡片算窄、文字被裁（CodeRabbit PR#28）。
         f32::from(window.text_system().shape_line(s.clone(), pt(PALETTE_TEXT_PT), &[run], None).width)
     };
     items
