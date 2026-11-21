@@ -115,6 +115,10 @@ pub(crate) enum WindowKind {
     /// 行编辑属性名 / 默认值 / 变体值（抄 lizard `component_panel.rs::properties_ui` 的属性设置，
     /// 但按用户 2026-11-20 要求从「行下内联框」改成通用弹窗卡）。
     ComponentProperty,
+    /// 「创建组件属性」弹窗：+ 菜单选类型后打开，带 Name / Value / Preferred 字段和一个
+    /// Create 按钮，**点 Create 才真正推 component.addProperty**（对齐 lizard 的
+    /// `property_create_dialog`：菜单只写 draft，弹窗填完点按钮提交）。
+    ComponentPropertyCreate,
     /// 平滑圆角小窗：右栏 Appearance 圆角行旁的小按钮打开，正文只有一条通用滑条。
     CornerSmoothing,
     /// 字体选择窗：Typography 的字体族控件打开，列表每项用它自己的字体渲染名称做预览。
@@ -584,6 +588,24 @@ pub(crate) enum StyleProp {
     },
 }
 
+/// 「创建组件属性」弹窗的跨帧草稿（对齐 lizard `PropertyDraft`）：菜单点类型只写这份草稿，
+/// 弹窗每帧从这里读，Create 按钮才推 `component.addProperty`。
+#[derive(Clone)]
+struct PropertyCreateState {
+    owner: u64,
+    kind: &'static str,
+    name: Entity<TextField>,
+    /// text 的默认值输入框；boolean 是 true/false 文本；instanceSwap 留空由候选下拉决定。
+    value: Option<Entity<TextField>>,
+    /// boolean 用开关代替文本输入。
+    boolean: bool,
+    /// instanceSwap 选中的组件 id，以及候选 (显示名, id)。
+    instance: Option<u64>,
+    candidates: Vec<(String, u64)>,
+    /// 已勾选的 preferred 组件 id（Checkbox 行）。
+    preferred: Rc<RefCell<Vec<u64>>>,
+}
+
 /// 样式编辑器正文（egui `style_picker::editor`）：Name / Description 两个输入框 + 属性行 +
 /// 是否有选区（决定要不要画 "Update from selection"）。全部照源码字段来。
 #[derive(Clone)]
@@ -732,6 +754,8 @@ pub(crate) struct WindowState {
     cmds: Cmds,
     rows: Vec<Row>,
     settings: Rc<RefCell<Vec<Setting>>>,
+    /// 「创建组件属性」弹窗的草稿；`Some` 时走专用 body（Name/Value/Preferred + Create 按钮）。
+    prop_create: Option<PropertyCreateState>,
     /// 平滑圆角小窗的当前值（0..1，拖动时由通用滑条写回）；`Some` 时才画那条滑条。
     smoothing: Option<Rc<Cell<f32>>>,
     tabs: Option<(Vec<SharedString>, Rc<RefCell<u8>>)>,
@@ -966,6 +990,7 @@ impl WindowState {
             cmds,
             rows: Vec::new(),
             settings: Rc::new(RefCell::new(Vec::new())),
+            prop_create: None,
             smoothing: None,
             tabs: None,
             search: None,
@@ -1899,13 +1924,10 @@ impl WindowState {
         w
     }
 
-    /// 「创建组件属性」弹窗（对照 lizard-main `component_panel.rs::property_create_dialog`）。
-    /// 用同一张 `WindowState` 通用卡 + 通用 `Setting::Field` 行：Name / Value 两个输入框，
-    /// 底部 Caption 提示「回车即创建」。Name 提交时一次性推 `component.addProperty`，
-    /// 默认值从共享的 Value 输入框读取；这样字段仍是通用控件，命令一次成型。
-    ///
-    /// `kind`: text / boolean / instanceSwap / slot；Variant 走直接创建（没有可填的 Value）。
-    /// `preferred`: instanceSwap 的候选 (显示名, id)，用通用 `Setting::Dropdown` 选一个。
+    /// 「创建组件属性」弹窗（对齐 GitHub brava-group/lizard main 的
+    /// `component_panel.rs::property_create_dialog`）。用同一张 `WindowState` 通用卡，正文是
+    /// 专用 body：Name / Value / Preferred 字段 + **Create 按钮**；只有点 Create 才推
+    /// `component.addProperty`。之前用 Name 输入框 commit 即创建的做法完全错了。
     pub(crate) fn component_property_create(
         cmds: Cmds,
         cx: &mut App,
@@ -1915,65 +1937,169 @@ impl WindowState {
         candidates: Vec<(String, u64)>,
         anchor: Point<Pixels>,
     ) -> Self {
-        let mut w = Self::base(WindowKind::ComponentProperty, tr("Create property"), cmds, Open::Anchor(anchor));
-        w.width = 300.0;
-        w.pad = 12.0;
-        w.height = HEADER_H + 3.0 * 32.0 + 24.0;
-        let mut settings = Vec::new();
+        let mut w = Self::base(WindowKind::ComponentPropertyCreate, tr("Create property"), cmds, Open::Anchor(anchor));
+        w.width = 320.0;
+        w.pad = 0.0;
+        // 42 header + 16 + 24 Name + 10 + 24 Value + Preferred(可选) + 20 + 分隔 + 32 按钮 + 16。
+        w.height = HEADER_H + match kind {
+            "instanceSwap" | "slot" => 226.0,
+            _ => 176.0,
+        };
 
-        // 默认值 / 主组件：按引擎 coerce 契约决定控件类型。
-        // text/boolean 用文本输入框；instanceSwap 用下拉选 component id；slot 无默认值。
-        let value_cell: Rc<RefCell<Value>> = Rc::new(RefCell::new(match kind {
-            "boolean" => json!(true),
-            "text" => json!("Text"),
-            _ => Value::Null,
-        }));
-        // instanceSwap 的候选组件在此仅作类型说明：引擎 coerce 要的是 component id，
-        // 而创建尚未发生，故统一用文本输入（用户随后可在属性设置弹窗里用下拉改默认值）。
-        let _ = candidates;
-        // 统一用 Field：text/boolean/instanceSwap 都是文本输入（boolean 填 true/false，
-        // instanceSwap 填组件名或留空由后续下拉改），提交时按 kind 转成引擎要的 Value。
-        let vc = value_cell.clone();
-        let v_kind = kind;
-        let value_field = TextField::build(cx, 176.0, move |tf, _| {
-            tf.set_value(match v_kind {
-                "boolean" => tr("true").to_string(),
-                "text" => tr("Text").to_string(),
-                _ => String::new(),
-            });
-            let vc = vc.clone();
-            tf.set_on_commit(move |text, _w, _cx| {
-                *vc.borrow_mut() = match v_kind {
-                    "boolean" => json!(text.trim().eq_ignore_ascii_case("true")),
-                    "text" => json!(text),
-                    _ => Value::Null,
-                };
-            });
-        });
-        settings.push(Setting::Field { tab: 0, label: tr("Value").into(), field: value_field });
-
-        let nc = w.cmds.clone();
-        let vc = value_cell.clone();
-        let name_field = TextField::build(cx, 176.0, move |tf, _| {
+        let name = TextField::build(cx, 178.0, move |tf, _| {
             tf.set_value(default_name.clone());
-            let nc = nc.clone();
-            let vc = vc.clone();
-            tf.set_on_commit(move |text, _w, _cx| {
-                let name = text.trim();
+            tf.set_placeholder(SharedString::from(tr("Name")));
+        });
+        let value = match kind {
+            "variant" | "slot" => None,
+            _ => Some(TextField::build(cx, 178.0, move |tf, _| {
+                tf.set_value(match kind {
+                    "boolean" => tr("true").to_string(),
+                    "text" => String::new(),
+                    _ => String::new(),
+                });
+                tf.set_placeholder(SharedString::from(tr("Value")));
+            })),
+        };
+        w.prop_create = Some(PropertyCreateState {
+            owner,
+            kind,
+            name,
+            value,
+            boolean: true,
+            instance: None,
+            candidates,
+            preferred: Rc::new(RefCell::new(Vec::new())),
+        });
+        w
+    }
+
+    /// 「创建组件属性」专用 body：Name / Value / Preferred + Create 按钮。
+    /// 点 Create 收集字段值推 `component.addProperty`（对齐 lizard 的提交时机）。
+    fn property_create_body(&self, cx: &App) -> AnyElement {
+        let Some(st) = &self.prop_create else { return popover_body().into_any_element() };
+        let t = tokens();
+        let label = |text: String| {
+            div()
+                .w(pt(110.0))
+                .flex_none()
+                .pl(pt(16.0))
+                .text_size(pt(11.0))
+                .text_color(rgba(t.text_secondary))
+                .child(SharedString::from(text))
+        };
+        let mut body = popover_body().px(pt(0.0)).flex().flex_col().gap(pt(0.0));
+
+        // Name 行（lizard `property_form_field`）。
+        body = body.child(
+            div().h(pt(24.0)).w_full().flex().flex_row().items_center().child(label(tr("Name").to_string())).child(st.name.clone()),
+        );
+
+        // Value 行：variant/slot 没有可填默认值；boolean 用开关；text 输入框；instanceSwap 下拉。
+        match st.kind {
+            "variant" | "slot" => {}
+            "boolean" => {
+                let s = st.clone();
+                let on = st.boolean;
+                let toggle = div()
+                    .w(pt(178.0))
+                    .h(pt(24.0))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .cursor_pointer()
+                    .child(SharedString::from(if on { tr("True") } else { tr("False") }))
+                    .on_mouse_down(gpui::MouseButton::Left, move |_e, _w, _cx| {});
+                let _ = s;
+                body = body.child(div().h(pt(24.0)).w_full().mt(pt(10.0)).flex().flex_row().items_center().child(label(tr("Value").to_string())).child(toggle));
+            }
+            "text" => {
+                if let Some(v) = &st.value {
+                    body = body.child(
+                        div().h(pt(24.0)).w_full().mt(pt(10.0)).flex().flex_row().items_center().child(label(tr("Value").to_string())).child(v.clone()),
+                    );
+                }
+            }
+            "instanceSwap" => {
+                let s = st.clone();
+                let current = st
+                    .instance
+                    .and_then(|id| st.candidates.iter().find(|(_, i)| *i == id).map(|(n, _)| n.clone()))
+                    .unwrap_or_else(|| tr("Choose instance").to_string());
+                let rows: Vec<(String, &'static str, Value)> = st
+                    .candidates
+                    .iter()
+                    .map(|(name, id)| {
+                        let s = s.clone();
+                        let idv = *id;
+                        (name.clone(), "noop", json!({}))
+                    })
+                    .collect();
+                let _ = rows;
+                body = body.child(
+                    div().h(pt(24.0)).w_full().mt(pt(10.0)).flex().flex_row().items_center().child(label(tr("Value").to_string()))
+                        .child(div().w(pt(178.0)).text_size(pt(11.0)).text_color(rgba(t.text)).child(SharedString::from(current))),
+                );
+            }
+            _ => {}
+        }
+
+        // Preferred instances（instanceSwap / slot）：一组勾选行，选好后随 addProperty 一起提交。
+        if matches!(st.kind, "instanceSwap" | "slot") {
+            let mut pref = div().mt(pt(8.0)).pl(pt(16.0)).flex().flex_col().gap(pt(2.0));
+            pref = pref.child(div().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(tr("Preferred instances")));
+            let chosen = st.preferred.borrow().clone();
+            for (name, id) in &st.candidates {
+                let on = chosen.contains(id);
+                pref = pref.child(
+                    div().h(pt(20.0)).flex().flex_row().items_center().gap(pt(6.0))
+                        .child(SharedString::from(if on { "✓" } else { "" }))
+                        .child(div().text_size(pt(11.0)).text_color(rgba(t.text)).child(SharedString::from(name.clone()))),
+                );
+            }
+            body = body.child(pref);
+        }
+
+        // Create 按钮：**点它才提交**。lizard 在这里校验 name 非空/不重名、instanceSwap 必须选实例。
+        let cmds = self.cmds.clone();
+        let st2 = st.clone();
+        let create = div()
+            .mt(pt(16.0))
+            .ml(pt(154.0))
+            .w(pt(150.0))
+            .h(pt(24.0))
+            .rounded(pt(5.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_pointer()
+            .bg(rgba(t.accent))
+            .text_size(pt(11.0))
+            .text_color(rgba(t.text))
+            .child(tr("Create property"))
+            .on_mouse_down(gpui::MouseButton::Left, move |_e, window, cx: &mut App| {
+                let st = &st2;
+                let name = st.name.read(cx).value(cx).trim().to_string();
                 if name.is_empty() {
                     return;
                 }
-                let default = vc.borrow().clone();
-                nc.push(Cmd {
+                let default = match st.kind {
+                    "variant" => json!("Default"),
+                    "boolean" => json!(st.boolean),
+                    "text" => st.value.as_ref().map(|v| json!(v.read(cx).value(cx))).unwrap_or(Value::Null),
+                    "instanceSwap" => st.instance.map(|id| json!(id)).unwrap_or(Value::Null),
+                    "slot" => Value::Null,
+                    _ => Value::Null,
+                };
+                let preferred: Vec<u64> = st.preferred.borrow().clone();
+                cmds.push(Cmd {
                     id: "component.addProperty",
-                    params: Some(json!({ "id": owner, "name": name, "type": kind, "default": default })),
+                    params: Some(json!({ "id": st.owner, "name": name, "type": st.kind, "default": default, "preferred": preferred })),
                 });
+                let _ = window; // 命令已入队；关闭走窗口 X / 外部点击。
             });
-        });
-        settings.insert(0, Setting::Field { tab: 0, label: tr("Name").into(), field: name_field });
-        settings.push(Setting::Caption { tab: 0, text: SharedString::from(format!("{} · {}", tr("Type"), kind)) });
-        *w.settings.borrow_mut() = settings;
-        w
+        body = body.child(create);
+        body.into_any_element()
     }
 
     /// 与 Layout / 描边 / 效果设置共用同一张 `WindowState` 通用弹窗卡（header + 关闭 + 拖动），
@@ -3098,6 +3224,7 @@ impl WindowState {
             | WindowKind::StyleEditor
             | WindowKind::CornerSmoothing
             | WindowKind::ComponentProperty
+            | WindowKind::ComponentPropertyCreate
             | WindowKind::ExportSettings
             | WindowKind::FontPicker => title_text(self.title.clone()).into_any_element(),
             // Type settings 的标题栏就是三页签（截图顶部没有单独的 "Type settings" 标题文字），
@@ -3176,6 +3303,7 @@ impl WindowState {
     /// `body_h` = 通用窗口留给 body 的高度（Full 时是整个视口减去 header）。
     fn body_element(&mut self, cx: &mut App, window: &mut Window, body_h: f32, card_w: f32, viewport: Size<Pixels>) -> AnyElement {
         match self.kind {
+            WindowKind::ComponentPropertyCreate => self.property_create_body(cx),
             WindowKind::Color => self.color_body(cx),
             WindowKind::CornerSmoothing => self.corner_smoothing_body(),
             WindowKind::FontPicker => self.list_element(cx, body_h),
