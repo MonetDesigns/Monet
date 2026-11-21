@@ -176,37 +176,74 @@ pub(crate) fn pick_dropdown(f: &RightFields, label: impl Into<SharedString>, wid
 }
 
 /// 约束图形选择器：外框里的子层与四条边的 pin，中间十字设居中。
+fn constraint_rect(window: &mut Window, x: f32, y: f32, w: f32, h: f32, color: gpui::Rgba, radius: f32) {
+    if w <= 0.0 || h <= 0.0 {
+        return;
+    }
+    let corners = gpui::Corners {
+        top_left: px(radius),
+        top_right: px(radius),
+        bottom_right: px(radius),
+        bottom_left: px(radius),
+    };
+    window.paint_quad(
+        gpui::fill(
+            gpui::Bounds { origin: gpui::point(px(x), px(y)), size: gpui::size(px(w), px(h)) },
+            color,
+        )
+        .corner_radii(corners),
+    );
+}
+
+/// 约束图形选择器：与其余右栏控件同一套 1fr 网格；图形本身在 canvas 上绘制，
+/// 上层只叠 5 个 22×22 的命中盒。
 pub(crate) fn constraint_graphic(f: &RightFields, d: &PanelData, width: f32) -> gpui::AnyElement {
     let t = tokens();
     let h = d.constraints_h;
     let v = d.constraints_v;
-    let active = rgba(t.accent);
-    let idle = rgba(t.text_secondary);
-    let mut root = div()
-        .relative()
-        .w(px(width))
-        .h(px(56.0))
-        .flex_none()
-        .rounded(px(5.0))
-        .bg(rgba(t.field))
-        .child(
-            div()
-                .absolute()
-                .left(px(16.0))
-                .right(px(16.0))
-                .top(px(16.0))
-                .bottom(px(16.0))
-                .rounded(px(5.0))
-                .border(px(1.0))
-                .border_color(gpui::Rgba { a: 0.4, ..rgba(t.text_secondary) }),
-        );
+    let accent = t.accent;
+    let field = t.field;
+    let secondary = t.text_secondary;
+    let border = gpui::Rgba { a: 0.4, ..rgba(secondary) };
+    let height = 56.0f32;
 
-    let pin = |f: &RightFields, label: &'static str, x: f32, y: f32, horizontal: bool, on: bool| {
+    let draw = canvas(
+        move |_, _, _| {},
+        move |bounds: Bounds<Pixels>, _, window: &mut Window, _| {
+            let x = f32::from(bounds.origin.x);
+            let y = f32::from(bounds.origin.y);
+            let w = f32::from(bounds.size.width).max(1.0);
+            constraint_rect(window, x, y, w, height, rgba(field), 5.0);
+            // 子层矩形：1pt 边框由「边框色底 + 内缩 1pt 的底色」画出，避免透明路径叠加。
+            constraint_rect(window, x + 16.0, y + 16.0, w - 32.0, height - 32.0, border, 5.0);
+            constraint_rect(window, x + 17.0, y + 17.0, w - 34.0, height - 34.0, rgba(field), 4.0);
+
+            let cy = y + height / 2.0;
+            let cx = x + w / 2.0;
+            let pins = [
+                (x + 8.0, cy, true, matches!(h, Some("left" | "leftRight"))),
+                (x + w - 8.0, cy, true, matches!(h, Some("right" | "leftRight"))),
+                (cx, y + 8.0, false, matches!(v, Some("top" | "topBottom"))),
+                (cx, y + height - 8.0, false, matches!(v, Some("bottom" | "topBottom"))),
+            ];
+            for (px, py, horizontal, active) in pins {
+                let col = if active { rgba(accent) } else { rgba(secondary) };
+                let thick = if active { 3.0 } else { 1.5 };
+                if horizontal {
+                    constraint_rect(window, px - 5.0, py - thick / 2.0, 10.0, thick, col, thick / 2.0);
+                } else {
+                    constraint_rect(window, px - thick / 2.0, py - 5.0, thick, 10.0, col, thick / 2.0);
+                }
+            }
+            let center_col = if matches!(h, Some("center")) || matches!(v, Some("center")) { rgba(accent) } else { rgba(secondary) };
+            constraint_rect(window, cx - 7.0, cy - 0.5, 14.0, 1.0, center_col, 0.0);
+            constraint_rect(window, cx - 0.5, cy - 7.0, 1.0, 14.0, center_col, 0.0);
+        },
+    );
+
+    let mut root = div().relative().w(px(width)).h(px(height)).flex_none().child(draw.absolute().inset_0());
+    let hit = |f: &RightFields, label: &'static str, x: f32, y: f32, horizontal: bool| {
         let cmds = f.cmds.clone();
-        let col = if on { active } else { idle };
-        let bar = if on { 3.0 } else { 1.5 };
-        let w = if horizontal { 10.0 } else { bar };
-        let hgt = if horizontal { bar } else { 10.0 };
         let key = if horizontal { "horizontal" } else { "vertical" };
         div()
             .absolute()
@@ -214,46 +251,32 @@ pub(crate) fn constraint_graphic(f: &RightFields, d: &PanelData, width: f32) -> 
             .top(px(y - 11.0))
             .w(px(22.0))
             .h(px(22.0))
-            .flex()
-            .items_center()
-            .justify_center()
+            .cursor_pointer()
             .on_mouse_down(MouseButton::Left, move |_e, _w, _cx| {
                 cmds.push(Cmd { id: "node.set", params: Some(json!({ "props": { "constraints": { key: label } } })) });
             })
-            .child(div().w(px(w)).h(px(hgt)).bg(col))
             .into_any_element()
     };
-
     root = root
-        .child(pin(f, "left", 8.0, 28.0, true, matches!(h, Some("left" | "leftRight"))))
-        .child(pin(f, "right", width - 8.0, 28.0, true, matches!(h, Some("right" | "leftRight"))))
-        .child(pin(f, "top", width / 2.0, 8.0, false, matches!(v, Some("top" | "topBottom"))))
-        .child(pin(f, "bottom", width / 2.0, 48.0, false, matches!(v, Some("bottom" | "topBottom"))));
-
+        .child(hit(f, "left", 8.0, height / 2.0, true))
+        .child(hit(f, "right", width - 8.0, height / 2.0, true))
+        .child(hit(f, "top", width / 2.0, 8.0, false))
+        .child(hit(f, "bottom", width / 2.0, height - 8.0, false));
     let center_cmds = f.cmds.clone();
-    let center_col = if matches!(h, Some("center")) || matches!(v, Some("center")) { active } else { idle };
     root.child(
         div()
             .absolute()
             .left(px(width / 2.0 - 11.0))
-            .top(px(17.0))
+            .top(px(height / 2.0 - 11.0))
             .w(px(22.0))
             .h(px(22.0))
-            .flex()
-            .items_center()
-            .justify_center()
+            .cursor_pointer()
             .on_mouse_down(MouseButton::Left, move |_e, _w, _cx| {
                 center_cmds.push(Cmd {
                     id: "node.set",
                     params: Some(json!({ "props": { "constraints": { "horizontal": "center", "vertical": "center" } } })),
                 });
-            })
-            .child(
-                div()
-                    .relative()
-                    .child(div().absolute().left(px(4.0)).top(px(10.5)).w(px(14.0)).h(px(1.0)).bg(center_col))
-                    .child(div().absolute().left(px(10.5)).top(px(4.0)).w(px(1.0)).h(px(14.0)).bg(center_col)),
-            ),
+            }),
     )
     .into_any_element()
 }

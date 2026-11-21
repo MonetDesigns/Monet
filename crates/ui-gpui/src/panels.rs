@@ -2576,6 +2576,7 @@ pub(crate) fn right_panel(
                 pos_sec.child(sublabel_row(tr("Constraints"))).child(field_row_h(
                     vec![
                         div()
+                            .w_full()
                             .flex()
                             .flex_col()
                             .h_full()
