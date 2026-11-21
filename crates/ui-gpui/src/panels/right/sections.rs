@@ -39,23 +39,8 @@ fn push(f: &RightFields, id: &'static str, params: Value) {
     f.cmds.push(Cmd { id, params: Some(params) });
 }
 
-/// 一个 `assets/icons/<name>.svg` 的资源路径。`layout-corner-*` / `layout-padding-*`
-/// 已注册进 `ICON_FILES`（2026-11-20 图标整理），但主 `Icon` 枚举冻结、没有对应变体；
-/// 直接按名字走 `svg().path()` 就能让 `IconAssets::load` 命中，不必改冻结文件。
-pub(crate) fn named_icon(name: &'static str) -> SharedString {
-    SharedString::from(format!("icons/{name}.svg"))
-}
-
-/// 一个命名字形，画成字段 lead / 菜单图标。`size` 由调用处给；`assets/icons/` 里的
-/// layout-corner / layout-padding / constraint 等资源都是 24 网格，按 24pt 画满槽位。
-pub(crate) fn named_icon_glyph(name: &'static str, color: gpui::Rgba, size: f32) -> gpui::AnyElement {
-    svg().path(named_icon(name)).w(pt(size)).h(pt(size)).flex_none().text_color(Hsla::from(color)).into_any_element()
-}
-
-/// 24 pt 切换按钮，字形走 `assets/icons/<name>.svg`（`layout-corner-individual` /
-/// `layout-padding-individual` 这些没有 `Icon` 枚举变体的图标）。外观与通用 `IconButton`
-/// 完全一致：hover / active 换底、24 网格原生尺寸、accent 着色。
-pub(crate) fn named_icon_toggle(name: &'static str, active: bool, on_click: impl Fn() + 'static) -> gpui::AnyElement {
+/// 24 pt 切换按钮：与通用 `IconButton` 同外观，字形走统一图标枚举入口。
+pub(crate) fn named_icon_toggle(icon: Icon, active: bool, on_click: impl Fn() + 'static) -> gpui::AnyElement {
     let t = tokens();
     let ink = if active { rgba(t.accent) } else { rgba(t.icon) };
     div()
@@ -67,7 +52,7 @@ pub(crate) fn named_icon_toggle(name: &'static str, active: bool, on_click: impl
         .cursor_pointer()
         .when(active, |d| d.bg(rgba(t.selected_row)))
         .when(!active, |d| d.hover(|s| s.bg(rgba(t.hover))))
-        .child(named_icon_glyph(name, ink, 24.0))
+        .child(crate::widgets::icon::paint_in_slot(icon, 24.0, Some(ink)))
         .on_mouse_down(MouseButton::Left, move |_e, _w, _cx| on_click())
         .into_any_element()
 }
@@ -929,8 +914,7 @@ fn menu_icon(f: &RightFields, icon: Icon, width: f32, rows: Vec<(String, &'stati
 fn named_icon_menu(
     f: &RightFields,
     key: &'static str,
-    trigger: &'static str,
-    trigger_size: f32,
+    trigger: Icon,
     menu: Vec<MenuRow>,
     active: bool,
     on_pick: Rc<dyn Fn(&str, &mut Window, &mut App)>,
@@ -950,7 +934,7 @@ fn named_icon_menu(
         .cursor_pointer()
         .when(active, |d| d.bg(rgba(t.selected_row)))
         .when(!active, |d| d.hover(|s| s.bg(rgba(t.hover))))
-        .child(named_icon_glyph(trigger, ink, trigger_size))
+        .child(crate::widgets::icon::paint_in_slot(trigger, 24.0, Some(ink)))
         .on_mouse_down(MouseButton::Left, move |_e, _window, cx: &mut App| {
             let Some(root) = root.clone() else { return };
             // 探针 cell 已被按钮每帧写入真实矩形；首帧还没量到才回落到空，由 open 端播种。
@@ -1610,29 +1594,27 @@ pub(crate) fn paints(
             // 四边输入框 —— 用户 2026-11-20：选 Top/Left 等只是把一条边设宽，不该展开四个框。
             let w = d.stroke_weight.unwrap_or(1.0);
             let sides_mode = stroke_sides_mode(d.stroke_sides);
-            let row = |key: &'static str, label: SharedString, glyph: &'static str, sel: bool, sep: bool| {
-                let mut r = MenuRow::row(label).key(key).glyph(named_icon(glyph)).checked(Some(sel));
+            let row = |key: &'static str, label: SharedString, icon: Icon, sel: bool, sep: bool| {
+                let mut r = MenuRow::row(label).key(key).icon(icon).checked(Some(sel));
                 if sep { r = r.separator(); }
                 r
             };
             let menu = vec![
-                row("all", tr("All").into(), "property-stroke-sides", sides_mode == "all", false),
-                row("top", tr("Top").into(), "stroke-side-top", sides_mode == "top", false),
-                row("right", tr("Right").into(), "stroke-side-right", sides_mode == "right", false),
-                row("bottom", tr("Bottom").into(), "stroke-side-bottom", sides_mode == "bottom", false),
-                row("left", tr("Left").into(), "stroke-side-left", sides_mode == "left", false),
+                row("all", tr("All").into(), Icon::StrokeSides, sides_mode == "all", false),
+                row("top", tr("Top").into(), Icon::StrokeSideTop, sides_mode == "top", false),
+                row("right", tr("Right").into(), Icon::StrokeSideRight, sides_mode == "right", false),
+                row("bottom", tr("Bottom").into(), Icon::StrokeSideBottom, sides_mode == "bottom", false),
+                row("left", tr("Left").into(), Icon::StrokeSideLeft, sides_mode == "left", false),
                 // 用户：Custom 放在分隔线下面，跟上面 5 个方位分开。
-                row("custom", tr("Custom").into(), "stroke-side-check", sides_mode == "custom", true),
+                row("custom", tr("Custom").into(), Icon::StrokeSideCheck, sides_mode == "custom", true),
             ];
-            // 触发按钮图标随当前模式变：与菜单里那一项用同一个字形（用户 2026-11-20：
-            // 「按钮图标按我实际选的来」）。typ-settings 是 24 网格画 24pt，其余 16 网格画 16pt。
-            let (trigger_icon, trigger_size): (&'static str, f32) = match sides_mode {
-                "top" => ("stroke-side-top", 16.0),
-                "right" => ("stroke-side-right", 16.0),
-                "bottom" => ("stroke-side-bottom", 16.0),
-                "left" => ("stroke-side-left", 16.0),
-                "all" => ("property-stroke-sides", 16.0),
-                _ => ("stroke-side-check", 16.0), // custom
+            let trigger_icon = match sides_mode {
+                "top" => Icon::StrokeSideTop,
+                "right" => Icon::StrokeSideRight,
+                "bottom" => Icon::StrokeSideBottom,
+                "left" => Icon::StrokeSideLeft,
+                "all" => Icon::StrokeSides,
+                _ => Icon::StrokeSideCheck,
             };
             let sides = {
                 let cmds = f.cmds.clone();
@@ -1640,7 +1622,6 @@ pub(crate) fn paints(
                     f,
                     "stroke-sides",
                     trigger_icon,
-                    trigger_size,
                     menu,
                     false,
                     Rc::new(move |key: &str, _w, _cx| {
@@ -2627,7 +2608,7 @@ pub(crate) fn appearance(
     let indep_toggle = if smooth_ok {
         let flag = f.corners_individual.clone();
         let cmds = f.cmds.clone();
-        Some(named_icon_toggle("layout-corner-individual", indep_open, move || {
+        Some(named_icon_toggle(Icon::CornerIndividual, indep_open, move || {
             // ⛔ 不能写成 `*flag.borrow_mut() = !*flag.borrow()`：同一表达式里先可变借用再借用，
             // RefCell 会直接 panic（点一下卡死）。与 padding 的 `pad_individual` 同样拆两句。
             let next = !*flag.borrow();

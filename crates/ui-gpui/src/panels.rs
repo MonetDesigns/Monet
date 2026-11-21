@@ -1021,7 +1021,7 @@ fn nf_corner(cx: &mut App, lead: &'static str, key: &'static str, cmds: &Cmds) -
 /// where `<key>` is `strokeTopWeight` / `strokeRightWeight` / …; the engine's `props.rs`
 /// turns a single side write into `stroke.sides = Some([t,r,b,l])` (filling the others from
 /// the current `weight`), which is exactly egui's `app.field(&ids, field, …)` behaviour.
-fn nf_stroke_side(cx: &mut App, icon: &'static str, key: &'static str, cmds: &Cmds, wake: &std::rc::Rc<dyn Fn()>) -> Entity<TextField> {
+fn nf_stroke_side(cx: &mut App, icon: Icon, key: &'static str, cmds: &Cmds, wake: &std::rc::Rc<dyn Fn()>) -> Entity<TextField> {
     let cmds = cmds.clone();
     let wake = wake.clone();
     let field = TextField::build(cx, DEFAULT_COL, move |tf, _| {
@@ -1039,30 +1039,11 @@ fn nf_stroke_side(cx: &mut App, icon: &'static str, key: &'static str, cmds: &Cm
     field
 }
 
-/// Replace a field's text lead with a named SVG glyph from `assets/icons/`.
-///
-/// The corner / padding / stroke-side fields were built with a text lead (`C`, `TL`, `H`, `T`, …)
-/// before the matching icons existed. The SVGs live in `assets/icons/`, are registered in
-/// `ICON_FILES` and are authored on the 24 unit grid, so the lead is drawn at 24 pt — the field's
-/// slot size — exactly like the enum-variant icons via `default_glyph`. `Slot::Custom` is the
-/// route that avoids touching the frozen widget files and the frozen `Icon` enum. It is called
-/// again on every frame, so the icon inks from the current tokens just like the text lead did.
-fn set_icon_lead(tf: &Entity<TextField>, cx: &mut App, name: &'static str) {
-    let path = right::sections::named_icon(name);
-    // 这些 SVG 都是 24 网格资源（见 icon.rs 的 ICON_FILES 与
-    // `layout_property_icons_fill_their_twenty_four_point_slot` 断言），按原生尺寸画满
-    // 字段的 24pt lead 槽。此前写死 16 会把 24 的矢量压小，看起来像被挤压。
-    let glyph = 24.0f32;
+/// Put an enum icon in a field's lead slot. All sizing, stroke compensation and colour come
+/// from the shared icon contract — this function only forwards them to `paint_icon`.
+fn set_icon_lead(tf: &Entity<TextField>, cx: &mut App, icon: Icon) {
     tf.update(cx, |tf, _| {
-        tf.set_lead(Slot::custom(move || {
-            svg()
-                .path(path.clone())
-                .w(px(glyph))
-                .h(px(glyph))
-                .flex_none()
-                .text_color(Hsla::from(rgba(tokens().icon)))
-                .into_any_element()
-        }));
+        tf.set_lead(Slot::custom(move || crate::widgets::icon::paint_in_slot(icon, 24.0, None).into_any_element()));
     });
 }
 
@@ -1390,10 +1371,10 @@ impl RightFields {
             corners_individual: std::rc::Rc::new(std::cell::RefCell::new(false)),
             constraints_open: std::rc::Rc::new(std::cell::RefCell::new(false)),
             // 描边逐边权重：与菜单里 T/R/B/L 四项、展开后 lead 同一族图标。
-            stroke_side_t: nf_stroke_side(cx, "layout-padding-top", "strokeTopWeight", &cmds, wake),
-            stroke_side_r: nf_stroke_side(cx, "layout-padding-right", "strokeRightWeight", &cmds, wake),
-            stroke_side_b: nf_stroke_side(cx, "layout-padding-bottom", "strokeBottomWeight", &cmds, wake),
-            stroke_side_l: nf_stroke_side(cx, "layout-padding-left", "strokeLeftWeight", &cmds, wake),
+            stroke_side_t: nf_stroke_side(cx, Icon::PaddingTop, "strokeTopWeight", &cmds, wake),
+            stroke_side_r: nf_stroke_side(cx, Icon::PaddingRight, "strokeRightWeight", &cmds, wake),
+            stroke_side_b: nf_stroke_side(cx, Icon::PaddingBottom, "strokeBottomWeight", &cmds, wake),
+            stroke_side_l: nf_stroke_side(cx, Icon::PaddingLeft, "strokeLeftWeight", &cmds, wake),
             align_main_label: std::cell::RefCell::new(SharedString::from("min")),
             align_cross_label: std::cell::RefCell::new(SharedString::from("min")),
             // Blend-mode dropdown: a button that opens the blend menu on click (egui `dropdown`).
@@ -1416,21 +1397,18 @@ impl RightFields {
             cmds,
             editors: Vec::new(),
         };
-        // 圆角 / 间距字段接上 2026-11-20 新建的 layout-* 图标（外观 Corner radius、四个独立
-        // 圆角；布局 H/V 与四个独立内边距）。此前只注册了 SVG、没有 Icon 枚举变体，字段仍用
-        // 文本 lead（C / TL / H / T…）——用户指出「图标做了但外观和布局都没接入」。
-        // 这些 SVGs 是 16 网格，按原生 16pt 画（viewBox 原生尺寸规矩）。
-        set_icon_lead(&fields.corner, cx, "layout-corner-individual");
-        set_icon_lead(&fields.corner_tl, cx, "layout-corner-tl");
-        set_icon_lead(&fields.corner_tr, cx, "layout-corner-tr");
-        set_icon_lead(&fields.corner_bl, cx, "layout-corner-bl");
-        set_icon_lead(&fields.corner_br, cx, "layout-corner-br");
-        set_icon_lead(&fields.pad_h, cx, "layout-padding-individual");
-        set_icon_lead(&fields.pad_v, cx, "layout-padding-individual");
-        set_icon_lead(&fields.pad_t, cx, "layout-padding-top");
-        set_icon_lead(&fields.pad_r, cx, "layout-padding-right");
-        set_icon_lead(&fields.pad_b, cx, "layout-padding-bottom");
-        set_icon_lead(&fields.pad_l, cx, "layout-padding-left");
+        // 圆角 / 间距字段的 lead 走统一图标枚举，尺寸、线宽、颜色都由通用入口负责。
+        set_icon_lead(&fields.corner, cx, Icon::CornerIndividual);
+        set_icon_lead(&fields.corner_tl, cx, Icon::CornerTopLeft);
+        set_icon_lead(&fields.corner_tr, cx, Icon::CornerTopRight);
+        set_icon_lead(&fields.corner_bl, cx, Icon::CornerBottomLeft);
+        set_icon_lead(&fields.corner_br, cx, Icon::CornerBottomRight);
+        set_icon_lead(&fields.pad_h, cx, Icon::PaddingIndividual);
+        set_icon_lead(&fields.pad_v, cx, Icon::PaddingIndividual);
+        set_icon_lead(&fields.pad_t, cx, Icon::PaddingTop);
+        set_icon_lead(&fields.pad_r, cx, Icon::PaddingRight);
+        set_icon_lead(&fields.pad_b, cx, Icon::PaddingBottom);
+        set_icon_lead(&fields.pad_l, cx, Icon::PaddingLeft);
         // 点画布时统一失焦提交：收集所有缓存的编辑器实体（TextField 的内层 + 颜色行 + 行池）。
         let mut editors: Vec<Entity<TextEdit>> = [
             &fields.x,
@@ -2911,7 +2889,7 @@ pub(crate) fn auto_layout_section(
         let pad_flag = f.pad_individual.clone();
         // 独立内边距开关接上 layout-padding-individual 图标（田字格）。此前用的是
         // Icon::AbsolutePosition 占位字形，与展开后的四边图标不是同一族。
-        let toggle = right::sections::named_icon_toggle("layout-padding-individual", individual, move || {
+        let toggle = right::sections::named_icon_toggle(Icon::PaddingIndividual, individual, move || {
             let new_val = !*pad_flag.borrow();
             *pad_flag.borrow_mut() = new_val;
             // 翻转后必须唤醒视图重绘，否则右栏读到的还是旧 `pad_individual`，四个内边距字段不展开。

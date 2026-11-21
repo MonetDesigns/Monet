@@ -178,6 +178,25 @@ pub enum Icon {
     LayoutH,
     LayoutV,
     LayoutGrid,
+    // ── 右栏属性字段（此前走命名路径绕过枚举，统一收编）────────────────────────────────
+    CornerIndividual,
+    CornerTopLeft,
+    CornerTopRight,
+    CornerBottomLeft,
+    CornerBottomRight,
+    PaddingIndividual,
+    PaddingTop,
+    PaddingRight,
+    PaddingBottom,
+    PaddingLeft,
+    StrokeSides,
+    StrokeSideTop,
+    StrokeSideRight,
+    StrokeSideBottom,
+    StrokeSideLeft,
+    StrokeSideCheck,
+    ConstraintHorizontal,
+    ConstraintVertical,
 }
 
 impl Icon {
@@ -277,6 +296,24 @@ impl Icon {
         Icon::LayoutH,
         Icon::LayoutV,
         Icon::LayoutGrid,
+        Icon::CornerIndividual,
+        Icon::CornerTopLeft,
+        Icon::CornerTopRight,
+        Icon::CornerBottomLeft,
+        Icon::CornerBottomRight,
+        Icon::PaddingIndividual,
+        Icon::PaddingTop,
+        Icon::PaddingRight,
+        Icon::PaddingBottom,
+        Icon::PaddingLeft,
+        Icon::StrokeSides,
+        Icon::StrokeSideTop,
+        Icon::StrokeSideRight,
+        Icon::StrokeSideBottom,
+        Icon::StrokeSideLeft,
+        Icon::StrokeSideCheck,
+        Icon::ConstraintHorizontal,
+        Icon::ConstraintVertical,
     ];
 
     /// Stable file stem (kebab-case).
@@ -375,6 +412,24 @@ impl Icon {
             Icon::LayoutH => "layout-h",
             Icon::LayoutV => "layout-v",
             Icon::LayoutGrid => "layout-grid",
+            Icon::CornerIndividual => "layout-corner-individual",
+            Icon::CornerTopLeft => "layout-corner-tl",
+            Icon::CornerTopRight => "layout-corner-tr",
+            Icon::CornerBottomLeft => "layout-corner-bl",
+            Icon::CornerBottomRight => "layout-corner-br",
+            Icon::PaddingIndividual => "layout-padding-individual",
+            Icon::PaddingTop => "layout-padding-top",
+            Icon::PaddingRight => "layout-padding-right",
+            Icon::PaddingBottom => "layout-padding-bottom",
+            Icon::PaddingLeft => "layout-padding-left",
+            Icon::StrokeSides => "property-stroke-sides",
+            Icon::StrokeSideTop => "stroke-side-top",
+            Icon::StrokeSideRight => "stroke-side-right",
+            Icon::StrokeSideBottom => "stroke-side-bottom",
+            Icon::StrokeSideLeft => "stroke-side-left",
+            Icon::StrokeSideCheck => "stroke-side-check",
+            Icon::ConstraintHorizontal => "constraint-horizontal",
+            Icon::ConstraintVertical => "constraint-vertical",
         }
     }
 
@@ -474,6 +529,24 @@ impl Icon {
             Icon::LayoutH => "layout-h",
             Icon::LayoutV => "layout-v",
             Icon::LayoutGrid => "layout-grid",
+            Icon::CornerIndividual => "layout-corner-individual",
+            Icon::CornerTopLeft => "layout-corner-tl",
+            Icon::CornerTopRight => "layout-corner-tr",
+            Icon::CornerBottomLeft => "layout-corner-bl",
+            Icon::CornerBottomRight => "layout-corner-br",
+            Icon::PaddingIndividual => "layout-padding-individual",
+            Icon::PaddingTop => "layout-padding-top",
+            Icon::PaddingRight => "layout-padding-right",
+            Icon::PaddingBottom => "layout-padding-bottom",
+            Icon::PaddingLeft => "layout-padding-left",
+            Icon::StrokeSides => "property-stroke-sides",
+            Icon::StrokeSideTop => "stroke-side-top",
+            Icon::StrokeSideRight => "stroke-side-right",
+            Icon::StrokeSideBottom => "stroke-side-bottom",
+            Icon::StrokeSideLeft => "stroke-side-left",
+            Icon::StrokeSideCheck => "stroke-side-check",
+            Icon::ConstraintHorizontal => "constraint-horizontal",
+            Icon::ConstraintVertical => "constraint-vertical",
         }
     }
 
@@ -694,6 +767,31 @@ pub fn default_glyph(icon: Icon) -> f32 {
     natural_size(icon)
 }
 
+/// 槽位尺寸 → 该图标在这里该画多大。
+///
+/// 规则：24pt 槽画原生尺寸；其余槽位（16 / 32）就把图标缩放到槽大小，线宽由
+/// `rescale_strokes` 反比补偿，视觉上始终是 `ICON_STROKE`。
+/// 将来若某个图标要出专门的 16 / 32 变体，在 `ICON_FILES` 里登记
+/// `<stem>@<size>` 资源并在这里优先命中即可，调用处不需改动。
+pub fn slot_glyph(icon: Icon, slot: f32) -> f32 {
+    let dedicated = format!("{}@{}", icon.asset_rel(), slot as i32);
+    if file_bytes(&dedicated).is_some() {
+        return slot;
+    }
+    if slot == 24.0 {
+        natural_size(icon)
+    } else {
+        slot
+    }
+}
+
+/// 按槽位画图标，颜色缺省取 `tokens().icon`。这是业务代码唯一需要记的入口：
+/// 传 `Icon` 和槽位大小即可，尺寸换算、线宽补偿、默认墨色全在通用层。
+pub fn paint_in_slot(icon: Icon, slot: f32, color: Option<gpui::Rgba>) -> impl IntoElement {
+    let rgba = color.unwrap_or_else(|| crate::widgets::rgba(crate::widgets::tokens().icon));
+    paint(icon, rgba, slot_glyph(icon, slot))
+}
+
 /// Paint `icon` centred in `bounds`, scaled to the shorter side, through `Window::paint_svg`.
 pub(crate) fn draw_centred(window: &mut Window, bounds: Bounds<Pixels>, icon: Icon, color: gpui::Rgba, cx: &App) {
     let w: f32 = bounds.size.width.into();
@@ -748,7 +846,7 @@ mod tests {
 
     #[test]
     fn every_icon_has_an_external_svg_with_the_shared_stroke() {
-        assert_eq!(Icon::ALL.len(), 93, "Icon 变体数变了：请同步 ALL / asset_name / 本断言");
+        assert_eq!(Icon::ALL.len(), 111, "Icon 变体数变了：请同步 ALL / asset_name / asset_rel / 本断言");
         let mut names = HashSet::new();
         for &icon in Icon::ALL {
             let rel = icon.asset_rel();
@@ -766,13 +864,33 @@ mod tests {
     }
 
     #[test]
+    fn slot_glyph_scales_to_the_slot_and_keeps_native_at_24() {
+        // 24 槽取原生（无论资源是 16 还是 24 网格）；16 / 32 槽直接按槽位画，
+        // 线宽由 rescale_strokes 补偿，视觉恒为 1pt。
+        assert_eq!(slot_glyph(Icon::Plus, 24.0), natural_size(Icon::Plus));
+        assert_eq!(slot_glyph(Icon::Plus, 16.0), 16.0);
+        assert_eq!(slot_glyph(Icon::Plus, 32.0), 32.0);
+        assert_eq!(slot_glyph(Icon::CornerTopLeft, 24.0), 24.0);
+        assert_eq!(slot_glyph(Icon::CornerTopLeft, 16.0), 16.0);
+    }
+
+    #[test]
+    fn every_registered_asset_has_an_enum_variant() {
+        // 规范：只往 ICON_FILES 加资源、不进枚举 = 图标不存在。这条断言把老路彻底堵死。
+        let mapped: HashSet<&str> = Icon::ALL.iter().map(|i| i.asset_rel()).collect();
+        for (rel, _) in ICON_FILES {
+            assert!(mapped.contains(rel), "{rel} 只注册了资源、没有 Icon 枚举变体");
+        }
+    }
+
+    #[test]
     fn the_icon_usage_contract_is_documented() {
         let doc = include_str!("../../assets/icons/README.md");
         for clause in [
             "## 使用流程（强制，唯一合法路径）",
             "没有枚举变体的图标等于不存在",
-            "icon::paint",
-            "default_glyph",
+            "icon::paint_in_slot",
+            "slot_glyph",
             "rescale_strokes",
             "❌ `svg().path(\"icons/…\")`",
         ] {

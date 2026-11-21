@@ -24,14 +24,15 @@
 //! outside clicks; rows highlight on hover; a click picks an item and dismisses.
 
 use crate::canvas::geom::Color32;
+use crate::widgets::icon::paint_in_slot;
 use crate::widgets::input::text_field::TextField;
 use crate::widgets::{pt, rgba, tokens};
 use figcraft_i18n::tr;
 use gpui::{AnyElement, App, Bounds, Entity, MouseButton, MouseDownEvent, Pixels, Point, SharedString, Window, div, prelude::*, svg};
 use std::rc::Rc;
 
-/// 菜单行的**唯一**模型在 [`crate::menu_card::Item`]：单选勾选、图标（`Icon` 枚举或资源路径
-/// `glyph`）、分隔线、快捷键、子菜单都是那一个结构的配置。本模块的下拉菜单、右键菜单、
+/// 菜单行的**唯一**模型在 [`crate::menu_card::Item`]：单选勾选、图标（统一 `Icon` 枚举）、
+/// 分隔线、快捷键、子菜单都是那一个结构的配置。本模块的下拉菜单、右键菜单、
 /// 工具栏飞出、主菜单都用它 —— 这里只是把同一个结构按别名导出，避免两套行模型各自漂移。
 ///
 /// 旧 `MenuRow` 的 `new(label)` / `separator()` 由 `Item::row()` / `Item::separator()` 兼容，
@@ -66,7 +67,7 @@ pub(crate) fn menu_metrics(rows: &[MenuRow]) -> (f32, f32) {
             let label: f32 = r.label.chars().map(|c| if c.is_ascii() { 6.5 } else { 11.0 }).sum();
             let trail: f32 = r.trail.as_ref().map(|s| s.chars().count() as f32 * 6.5 + 12.0).unwrap_or(0.0);
             // 勾 / 图标各占一个 24×24 槽位，两槽相邻无间距；带图标时标签从 48 起。
-            let icon: f32 = if r.icon.is_some() || r.glyph.is_some() { 24.0 } else { 0.0 };
+            let icon: f32 = if r.icon.is_some() { 24.0 } else { 0.0 };
             label + trail + icon + if r.checked.is_some() { 24.0 } else { 8.0 } + 10.0
         })
         .fold(0.0f32, f32::max);
@@ -164,7 +165,6 @@ fn menu_popup_impl(
         let pick_text = if r.key.is_empty() { r.label.clone() } else { r.key.clone() }.to_string();
         let label = r.label;
         let trail = r.trail;
-        let glyph = r.glyph;
         let enum_icon = r.icon;
         let on_pick = on_pick.clone();
         let dismiss = dismiss.clone();
@@ -189,18 +189,12 @@ fn menu_popup_impl(
             // 没有勾选列时左边至少留 8pt —— 不能把文字顶到行首。
             row = row.pl(pt(8.0));
         }
-        // 前置图标：与 menu_card 同一套 Item 配置（resource glyph 或 Icon 枚举）。无图标的
-        // 行完全不变——只有带图标的项才多这一列，既有菜单零样式回退。
+        // 前置图标：与 menu_card 同一套 Item 配置（统一 Icon 枚举）。无图标的行完全不变——
+        // 只有带图标的项才多这一列，既有菜单零样式回退。
         let icon_ink = crate::menu_metrics::ink();
-        if let Some(path) = glyph {
+        if let Some(icon) = enum_icon {
             row = row.child(
-                div().w(pt(24.0)).flex_none().flex().items_center().justify_center().child(
-                    svg().path(path).w(pt(16.0)).h(pt(16.0)).flex_none().text_color(gpui::Hsla::from(icon_ink)),
-                ),
-            );
-        } else if let Some(icon) = enum_icon {
-            row = row.child(
-                div().w(pt(24.0)).flex_none().flex().items_center().justify_center().child(crate::widgets::icon::paint(icon, icon_ink, 16.0)),
+                div().w(pt(24.0)).flex_none().flex().items_center().justify_center().child(paint_in_slot(icon, 16.0, Some(icon_ink))),
             );
         }
         // 标签占满剩余宽度，超长裁掉（egui 把文字裁到 `r.max.x - 8.0`）。

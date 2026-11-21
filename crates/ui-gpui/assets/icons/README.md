@@ -44,15 +44,21 @@
 
 1. **资源**：把 SVG 放进本目录（遵守上面的命名 / 绘制规则）。
 2. **注册 + 枚举**：在 `widgets/icon.rs` 的 `ICON_FILES` 注册文件名，并在 `Icon` 枚举里加变体、`asset_rel()` 里加映射。**没有枚举变体的图标等于不存在**——不允许"只注册资源、直接按路径画"。
-3. **调用处只引用枚举、只传颜色**：一律走 `icon::paint(icon, color, size)` 或 `icon::default_glyph(icon)`。
-   - 24pt 槽：直接 `paint(icon, color, 24.0)`。
-   - 16/32pt 槽：尺寸交给 `default_glyph(icon)` / `natural_size(icon)`，由它按 viewBox 换算。
-   - 颜色一律从 `tokens()` 取（`tokens().icon` / `.icon_secondary` / `.accent_on` …），由 `text_color` 注入。
+3. **调用处只引用枚举**：一律走 `icon::paint_in_slot(icon, slot, color)`。
+   - `slot` 是**槽位**大小（16 / 24 / 32），尺寸换算由 `slot_glyph` 负责：
+     - 24 槽：画图标的原生尺寸（24 网格画 24，16 网格仍画 16）。
+     - 16 / 32 槽：图标缩放到槽大小；线宽由 `rescale_strokes` 反比补偿，视觉恒为 1pt。
+     - 若将来某图标新增了专门的 `<stem>@<size>` 变体，会优先命中它，调用处不用改。
+   - `color` 传 `Some(tokens().x)` 指定；传 `None` 时默认取 `tokens().icon`。
+   - 需要裸尺寸时用 `icon::default_glyph(icon)` / `natural_size(icon)`。
 4. **尺寸与线宽不自行计算**：`rescale_strokes` 在加载时按目标尺寸反比补偿 SVG 的 `stroke-width`，保证 16 / 24 / 32 下视觉线宽恒为 `ICON_STROKE`（1pt）。
 
 ```rust
-// 正确
-.child(paint_icon(Icon::PaddingTop, rgba(tokens().icon), crate::widgets::icon::default_glyph(Icon::PaddingTop)))
+// 正确：只认枚举 + 槽位，颜色可省
+.child(paint_in_slot(Icon::PaddingTop, 24.0, None))
+
+// 正确：指定颜色
+.child(paint_in_slot(Icon::Eye, 16.0, Some(rgba(tokens().icon))))
 
 // 错误：绕过枚举直接按路径画 —— 尺寸和线宽都没人管
 .child(svg().path("icons/layout-padding-top.svg").w(px(16.0)).h(px(16.0)))
