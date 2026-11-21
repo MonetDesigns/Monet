@@ -597,8 +597,8 @@ struct PropertyCreateState {
     name: Entity<TextField>,
     /// text 的默认值输入框；boolean 是 true/false 文本；instanceSwap 留空由候选下拉决定。
     value: Option<Entity<TextField>>,
-    /// boolean 用开关代替文本输入。
-    boolean: bool,
+    /// boolean 用开关代替文本输入（Cell 让点击跨帧保持）。
+    boolean: Rc<Cell<bool>>,
     /// instanceSwap 选中的组件 id，以及候选 (显示名, id)。
     instance: Option<u64>,
     candidates: Vec<(String, u64)>,
@@ -1966,7 +1966,7 @@ impl WindowState {
             kind,
             name,
             value,
-            boolean: true,
+            boolean: Rc::new(Cell::new(true)),
             instance: None,
             candidates,
             preferred: Rc::new(RefCell::new(Vec::new())),
@@ -1974,9 +1974,10 @@ impl WindowState {
         w
     }
 
-    /// 「创建组件属性」专用 body：Name / Value / Preferred + Create 按钮。
-    /// 点 Create 收集字段值推 `component.addProperty`（对齐 lizard 的提交时机）。
-    fn property_create_body(&self, cx: &App) -> AnyElement {
+    /// 「创建组件属性」专用 body —— 严格对齐 GitHub lizard main `property_create_dialog`：
+    /// Name 行 / Value 行 / Preferred 标题行(+按钮) / 分隔线 / 右对齐 Create 按钮，
+    /// 没有「类型」标签、没有 Preferred 复选框列表（那些是我之前加戏，删掉）。
+    fn property_create_body(&self, _cx: &App) -> AnyElement {
         let Some(st) = &self.prop_create else { return popover_body().into_any_element() };
         let t = tokens();
         let label = |text: String| {
@@ -1995,12 +1996,18 @@ impl WindowState {
             div().h(pt(24.0)).w_full().flex().flex_row().items_center().child(label(tr("Name").to_string())).child(st.name.clone()),
         );
 
-        // Value 行：variant/slot 没有可填默认值；boolean 用开关；text 输入框；instanceSwap 下拉。
+        // Value 行：text 输入框 / boolean 开关 / instanceSwap 下拉；variant 与 slot 没有。
         match st.kind {
-            "variant" | "slot" => {}
+            "text" => {
+                if let Some(v) = &st.value {
+                    body = body.child(
+                        div().h(pt(24.0)).w_full().mt(pt(10.0)).flex().flex_row().items_center().child(label(tr("Value").to_string())).child(v.clone()),
+                    );
+                }
+            }
             "boolean" => {
                 let s = st.clone();
-                let on = st.boolean;
+                let on = s.boolean.get();
                 let toggle = div()
                     .w(pt(178.0))
                     .h(pt(24.0))
@@ -2009,33 +2016,18 @@ impl WindowState {
                     .items_center()
                     .cursor_pointer()
                     .child(SharedString::from(if on { tr("True") } else { tr("False") }))
-                    .on_mouse_down(gpui::MouseButton::Left, move |_e, _w, _cx| {});
-                let _ = s;
+                    .on_mouse_down(gpui::MouseButton::Left, move |_e, _w, cx| {
+                        // 开关就地翻转：状态存在 Rc<Cell> 里，下一帧重建 body 时读取。
+                        s.boolean.set(!s.boolean.get());
+                        let _ = cx;
+                    });
                 body = body.child(div().h(pt(24.0)).w_full().mt(pt(10.0)).flex().flex_row().items_center().child(label(tr("Value").to_string())).child(toggle));
             }
-            "text" => {
-                if let Some(v) = &st.value {
-                    body = body.child(
-                        div().h(pt(24.0)).w_full().mt(pt(10.0)).flex().flex_row().items_center().child(label(tr("Value").to_string())).child(v.clone()),
-                    );
-                }
-            }
             "instanceSwap" => {
-                let s = st.clone();
                 let current = st
                     .instance
                     .and_then(|id| st.candidates.iter().find(|(_, i)| *i == id).map(|(n, _)| n.clone()))
                     .unwrap_or_else(|| tr("Choose instance").to_string());
-                let rows: Vec<(String, &'static str, Value)> = st
-                    .candidates
-                    .iter()
-                    .map(|(name, id)| {
-                        let s = s.clone();
-                        let idv = *id;
-                        (name.clone(), "noop", json!({}))
-                    })
-                    .collect();
-                let _ = rows;
                 body = body.child(
                     div().h(pt(24.0)).w_full().mt(pt(10.0)).flex().flex_row().items_center().child(label(tr("Value").to_string()))
                         .child(div().w(pt(178.0)).text_size(pt(11.0)).text_color(rgba(t.text)).child(SharedString::from(current))),
@@ -2044,27 +2036,25 @@ impl WindowState {
             _ => {}
         }
 
-        // Preferred instances（instanceSwap / slot）：一组勾选行，选好后随 addProperty 一起提交。
+        // Preferred instances：只有标题行 + + 按钮（lizard `preferred_instances_field`），
+        // 点 + 才弹菜单勾选；不在 body 里铺一列复选框。
         if matches!(st.kind, "instanceSwap" | "slot") {
-            let mut pref = div().mt(pt(8.0)).pl(pt(16.0)).flex().flex_col().gap(pt(2.0));
-            pref = pref.child(div().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(tr("Preferred instances")));
-            let chosen = st.preferred.borrow().clone();
-            for (name, id) in &st.candidates {
-                let on = chosen.contains(id);
-                pref = pref.child(
-                    div().h(pt(20.0)).flex().flex_row().items_center().gap(pt(6.0))
-                        .child(SharedString::from(if on { "✓" } else { "" }))
-                        .child(div().text_size(pt(11.0)).text_color(rgba(t.text)).child(SharedString::from(name.clone()))),
-                );
-            }
-            body = body.child(pref);
+            let n = st.preferred.borrow().len();
+            let shown = if n == 0 { tr("Preferred instances").to_string() } else { tr("Preferred instances").to_string() };
+            body = body.child(
+                div().mt(pt(8.0)).pt(pt(8.0)).w_full().flex().flex_row().items_center()
+                    .child(div().w(pt(264.0)).pl(pt(16.0)).text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(shown)))
+                    .child(crate::widgets::icon::paint_in_slot(crate::widgets::Icon::Plus, 16.0, Some(rgba(t.icon)))),
+            );
         }
 
-        // Create 按钮：**点它才提交**。lizard 在这里校验 name 非空/不重名、instanceSwap 必须选实例。
+        // 底部：分隔线 + 14pt 间距 → 右对齐 150×24 Create 按钮 → 下方 16pt 留白（lizard 原样）。
+        let sep = div().mt(pt(20.0)).w_full().h(px(1.0)).bg(rgba(t.border));
+        body = body.child(sep);
         let cmds = self.cmds.clone();
         let st2 = st.clone();
         let create = div()
-            .mt(pt(16.0))
+            .mt(pt(14.0))
             .ml(pt(154.0))
             .w(pt(150.0))
             .h(pt(24.0))
@@ -2077,18 +2067,16 @@ impl WindowState {
             .text_size(pt(11.0))
             .text_color(rgba(t.text))
             .child(tr("Create property"))
-            .on_mouse_down(gpui::MouseButton::Left, move |_e, window, cx: &mut App| {
+            .on_mouse_down(gpui::MouseButton::Left, move |_e, _window, cx: &mut App| {
                 let st = &st2;
                 let name = st.name.read(cx).value(cx).trim().to_string();
                 if name.is_empty() {
                     return;
                 }
                 let default = match st.kind {
-                    "variant" => json!("Default"),
-                    "boolean" => json!(st.boolean),
                     "text" => st.value.as_ref().map(|v| json!(v.read(cx).value(cx))).unwrap_or(Value::Null),
+                    "boolean" => json!(st.boolean.get()),
                     "instanceSwap" => st.instance.map(|id| json!(id)).unwrap_or(Value::Null),
-                    "slot" => Value::Null,
                     _ => Value::Null,
                 };
                 let preferred: Vec<u64> = st.preferred.borrow().clone();
@@ -2096,9 +2084,8 @@ impl WindowState {
                     id: "component.addProperty",
                     params: Some(json!({ "id": st.owner, "name": name, "type": st.kind, "default": default, "preferred": preferred })),
                 });
-                let _ = window; // 命令已入队；关闭走窗口 X / 外部点击。
             });
-        body = body.child(create);
+        body = body.child(create).child(div().h(pt(16.0)));
         body.into_any_element()
     }
 

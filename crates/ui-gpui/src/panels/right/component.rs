@@ -81,31 +81,10 @@ fn variant_section(f: &RightFields, c: &ComponentData) -> PanelSection {
 
 /// 选中组件集 / 独立组件（lizard `properties_ui`）：只有属性栏（描述 + Properties + 属性行）。
 fn properties_section(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut usize) -> PanelSection {
-    let mut sec = PanelSection::new(c.title);
-    if !c.description.is_empty() || c.editable_description {
-        let field = f.row_field(
-            cx,
-            slot(n),
-            &c.description,
-            RowEditCtx {
-                cmd: "node.set",
-                params: json!({}),
-                key: "description",
-                scale: 1.0,
-                string_value: true,
-                paint: None,
-                nest: Some("props"),
-                nest_key: None,
-                paint_color: None,
-            },
-        );
-        sec = sec.child(field_row_full(field));
-    }
-    for row in property_rows(f, c, cx, n) {
-        sec = sec.child(row);
-    }
-    // Only a component set has a variant matrix; an independent component's variant grid is
-    // shown as "Add variant" from `property_rows` and has no Current variant section here.
+    // lizard `instance_section`: ComponentSet 直接进入 `properties_ui` —— 标题由 Design panel
+    // header 画，这里**没有** description 输入框（之前我塞了一个在 Properties 上面，是错的）。
+    let sec = PanelSection::new(c.title);
+    let sec = property_rows(f, c, cx, n).into_iter().fold(sec, |s, row| s.child(row));
     sec
 }
 
@@ -350,9 +329,15 @@ fn add_property_button(f: &RightFields, c: &ComponentData) -> gpui::AnyElement {
             .collect();
             let cmds = cmds.clone();
             let on_pick = std::rc::Rc::new(move |ty: &str, window: &mut gpui::Window, cx: &mut App| {
-                // 所有类型都打开同一个「创建属性」弹窗（Name / Value / Preferred + Create 按钮），
-                // 只有点 Create 才推 component.addProperty —— 对齐 lizard 的 property_create_dialog：
-                // 菜单项只选类型，绝不直接创建。
+                // lizard `add_property_menu`：Variant 点一下直接建、不弹窗；其余 4 种
+                // (Text/Boolean/Instance swap/Slot) 才写 draft 打开带 Create 按钮的弹窗。
+                if ty == "variant" {
+                    cmds.push(crate::panels::Cmd {
+                        id: "component.addProperty",
+                        params: Some(json!({ "id": owner.0, "name": unique_prop_name(&used_names), "type": "variant", "default": "Default" })),
+                    });
+                    return;
+                }
                 let trigger = format!("component-create-property-{}", ty);
                 let top = crate::popovers::anchored_top(&trigger, window);
                 let base = match ty {
