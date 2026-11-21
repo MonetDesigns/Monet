@@ -9,7 +9,7 @@ use figcraft_geom::Point;
 use std::sync::Arc;
 
 use super::geom::*;
-use super::outline::{draw_outline, node_quad, outline_colour, quad, stroke};
+use super::outline::{crisp_line, draw_outline, node_quad, outline_colour, quad, stroke};
 use super::painter::Painter;
 use super::rulers::fmt;
 use crate::app::CanvasApp;
@@ -119,13 +119,13 @@ pub(super) fn overlays(
         let mut x = p0.x.floor();
         while x <= p1.x {
             let sx = app.to_screen(x, 0.0).x;
-            painter.line_segment([pos2(sx, r.min.y), pos2(sx, r.max.y)], s(col, 1.0));
+            crisp_line(painter, pos2(sx, r.min.y), pos2(sx, r.max.y), 1.0, app.ppp, col);
             x += 1.0;
         }
         let mut y = p0.y.floor();
         while y <= p1.y {
             let sy = app.to_screen(0.0, y).y;
-            painter.line_segment([pos2(r.min.x, sy), pos2(r.max.x, sy)], s(col, 1.0));
+            crisp_line(painter, pos2(r.min.x, sy), pos2(r.max.x, sy), 1.0, app.ppp, col);
             y += 1.0;
         }
     }
@@ -151,12 +151,12 @@ pub(super) fn overlays(
                     };
                     match line {
                         figcraft_layout::GridLine::Line { a, b } => {
-                            painter.line_segment([to_screen(a), to_screen(b)], s(col, 1.0));
+                            crisp_line(painter, to_screen(a), to_screen(b), 1.0, app.ppp, col);
                         }
                         figcraft_layout::GridLine::SlashLine(pts) => {
                             let v: Vec<Pos2> = pts.into_iter().map(to_screen).collect();
-                            if v.len() >= 2 {
-                                painter.add_shape(v, false, Color32::TRANSPARENT, s(col, 1.0));
+                            for seg in v.windows(2) {
+                                crisp_line(painter, seg[0], seg[1], 1.0, app.ppp, col);
                             }
                         }
                         figcraft_layout::GridLine::Band(r) => {

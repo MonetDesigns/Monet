@@ -192,6 +192,30 @@ pub(super) fn crisp_rect(painter: &mut Painter, r: Rect, width: f32, ppp: f32, c
     true
 }
 
+/// Draw a line on whole device pixels: a 1 pt stroke at a fractional screen position otherwise
+/// lands across two pixels and looks alternately thick and thin as the canvas pans.
+pub(super) fn crisp_line(painter: &mut Painter, a: Pos2, b: Pos2, width: f32, ppp: f32, col: Color32) {
+    if !(ppp.is_finite() && ppp > 0.0 && width.is_finite() && width > 0.0) {
+        painter.line_segment([a, b], stroke(col, width));
+        return;
+    }
+    let t = (width * ppp).round().clamp(1.0, 64.0) / ppp;
+    let snap = |v: f32| (v * ppp).round() / ppp;
+    if (a.x - b.x).abs() <= f32::EPSILON {
+        let x = snap((a.x + b.x) * 0.5 - t * 0.5);
+        let (y0, y1) = (snap(a.y.min(b.y)), snap(a.y.max(b.y)));
+        painter.rect_filled(Rect::from_min_max(pos2(x, y0), pos2(x + t, y1)), CornerRadius::ZERO, col);
+        return;
+    }
+    if (a.y - b.y).abs() <= f32::EPSILON {
+        let y = snap((a.y + b.y) * 0.5 - t * 0.5);
+        let (x0, x1) = (snap(a.x.min(b.x)), snap(a.x.max(b.x)));
+        painter.rect_filled(Rect::from_min_max(pos2(x0, y), pos2(x1, y + t)), CornerRadius::ZERO, col);
+        return;
+    }
+    painter.line_segment([pos2(snap(a.x), snap(a.y)), pos2(snap(b.x), snap(b.y))], stroke(col, t));
+}
+
 #[cfg(test)]
 mod crisp_tests {
     use super::*;
@@ -257,5 +281,25 @@ mod crisp_tests {
         assert!(!crisp_rect(&mut p, r, 1.0, f32::NAN, Color32::WHITE));
         assert!(!crisp_rect(&mut p, r, 0.0, 1.0, Color32::WHITE));
         assert!(p.ops.is_empty());
+    }
+
+    /// Grid lines and guides must stay the same thickness at fractional pan offsets.
+    #[test]
+    fn a_crisp_line_lands_on_whole_device_pixels() {
+        let ppp = 1.75f32;
+        let mut p = Painter::new(Rect::from_min_max(pos2(0.0, 0.0), pos2(200.0, 200.0)));
+        crisp_line(&mut p, pos2(10.37, 4.0), pos2(10.37, 90.0), 1.0, ppp, Color32::WHITE);
+        crisp_line(&mut p, pos2(4.0, 20.61), pos2(90.0, 20.61), 1.0, ppp, Color32::WHITE);
+        let q = rects(&p);
+        assert_eq!(q.len(), 2);
+        let t = (1.0f32 * ppp).round() / ppp;
+        for band in &q {
+            for v in [band.min.x, band.min.y, band.max.x, band.max.y] {
+                let d = v * ppp;
+                assert!((d - d.round()).abs() < 1e-3, "{v} is not on a device pixel");
+            }
+            let thick = (band.max.x - band.min.x).min(band.max.y - band.min.y);
+            assert!((thick - t).abs() < 1e-4, "thickness {thick} is not {t}");
+        }
     }
 }
