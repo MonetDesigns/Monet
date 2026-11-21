@@ -1509,23 +1509,23 @@ pub(crate) fn paints(
                 r
             };
             let menu = vec![
-                row("all", tr("All").into(), "layout-padding-individual", sides_mode == "all", false),
-                row("top", tr("Top").into(), "layout-padding-top", sides_mode == "top", false),
-                row("right", tr("Right").into(), "layout-padding-right", sides_mode == "right", false),
-                row("bottom", tr("Bottom").into(), "layout-padding-bottom", sides_mode == "bottom", false),
-                row("left", tr("Left").into(), "layout-padding-left", sides_mode == "left", false),
+                row("all", tr("All").into(), "property-stroke-sides", sides_mode == "all", false),
+                row("top", tr("Top").into(), "stroke-side-top", sides_mode == "top", false),
+                row("right", tr("Right").into(), "stroke-side-right", sides_mode == "right", false),
+                row("bottom", tr("Bottom").into(), "stroke-side-bottom", sides_mode == "bottom", false),
+                row("left", tr("Left").into(), "stroke-side-left", sides_mode == "left", false),
                 // 用户：Custom 放在分隔线下面，跟上面 5 个方位分开。
-                row("custom", tr("Custom").into(), "typ-settings", sides_mode == "custom", true),
+                row("custom", tr("Custom").into(), "stroke-side-check", sides_mode == "custom", true),
             ];
             // 触发按钮图标随当前模式变：与菜单里那一项用同一个字形（用户 2026-11-20：
             // 「按钮图标按我实际选的来」）。typ-settings 是 24 网格画 24pt，其余 16 网格画 16pt。
             let (trigger_icon, trigger_size): (&'static str, f32) = match sides_mode {
-                "top" => ("layout-padding-top", 16.0),
-                "right" => ("layout-padding-right", 16.0),
-                "bottom" => ("layout-padding-bottom", 16.0),
-                "left" => ("layout-padding-left", 16.0),
-                "all" => ("layout-padding-individual", 16.0),
-                _ => ("typ-settings", 24.0), // custom
+                "top" => ("stroke-side-top", 16.0),
+                "right" => ("stroke-side-right", 16.0),
+                "bottom" => ("stroke-side-bottom", 16.0),
+                "left" => ("stroke-side-left", 16.0),
+                "all" => ("property-stroke-sides", 16.0),
+                _ => ("stroke-side-check", 16.0), // custom
             };
             let sides = {
                 let cmds = f.cmds.clone();
