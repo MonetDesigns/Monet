@@ -538,6 +538,8 @@ pub(crate) struct RightFields {
     local_style_folded: std::rc::Rc<std::cell::RefCell<std::collections::HashSet<String>>>,
     /// A3: the Comments panel's local state (filter / sort / search / open thread).
     comment_ui: crate::comments::CommentState,
+    /// A3: the Comments panel's search box (retained across frames).
+    comment_search: gpui::Entity<crate::widgets::TextField>,
     /// Inspect 标签的三个选择：代码语言下标、颜色格式下标、Web 语言是否用 rem。
     inspect_lang: std::rc::Rc<std::cell::RefCell<usize>>,
     inspect_fmt: std::rc::Rc<std::cell::RefCell<usize>>,
@@ -818,8 +820,20 @@ fn nf_pad(
 }
 
 impl RightFields {
-    pub(crate) fn new(cx: &mut App, pending: &Pending, wake: &std::rc::Rc<dyn Fn()>) -> Self {
+    pub(crate) fn new(cx: &mut App, pending: &Pending, wake: &std::rc::Rc<dyn Fn()>, comment_ui: crate::comments::CommentState) -> Self {
         let cmds: Cmds = CmdQueue::new(wake);
+        // A3: the Comments search box filters the list as you type (egui `comment_search`).
+        let comment_search = crate::widgets::search_field(cx, 200.0, "", "Search comments");
+        {
+            let ui = comment_ui.clone();
+            let wake = wake.clone();
+            comment_search.update(cx, |tf, _| {
+                tf.set_on_change(move |text, _, _| {
+                    ui.borrow_mut().search = text.to_string();
+                    wake();
+                });
+            });
+        }
         let n = |cx: &mut App, lead: &'static str, val: f64, suffix: &str, step: f64, prop: Option<Prop>| {
             nf(cx, lead, val, suffix, step, prop, pending, wake)
         };
@@ -946,7 +960,8 @@ impl RightFields {
                 }
             }),
             local_style_folded: std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashSet::new())),
-            comment_ui: std::rc::Rc::new(std::cell::RefCell::new(crate::comments::CommentUi::default())),
+            comment_ui,
+            comment_search,
             inspect_lang: std::rc::Rc::new(std::cell::RefCell::new(0usize)),
             inspect_fmt: std::rc::Rc::new(std::cell::RefCell::new(0usize)),
             inspect_rem: std::rc::Rc::new(std::cell::RefCell::new(false)),
@@ -1101,6 +1116,11 @@ impl RightFields {
     /// A3: the Comments panel's local state.
     pub(crate) fn comment_ui(&self) -> crate::comments::CommentState {
         self.comment_ui.clone()
+    }
+
+    /// A3: the Comments panel's retained search box.
+    pub(crate) fn comment_search(&self) -> gpui::Entity<crate::widgets::TextField> {
+        self.comment_search.clone()
     }
 
     pub(crate) fn queue(&self) -> Cmds {
@@ -1827,7 +1847,7 @@ pub(crate) fn right_panel(
     // A3: the Comment tool shows the Comments list instead of the design sections
     // (egui `right.rs`: `if tool == Comment { crate::comments::panel(...); return; }`).
     if data.comment_tool {
-        body = body.child(crate::comments::panel(f, &data.comments, data.comments_total));
+        body = body.child(crate::comments::panel(f, &data.comments, data.comments_total, f.comment_search()));
         return wrap(body);
     }
 

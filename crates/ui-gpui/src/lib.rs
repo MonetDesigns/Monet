@@ -89,6 +89,9 @@ mod main_menu;
 /// 点锚定的菜单卡片：右键菜单与工具栏飞出菜单共用的一套行模型。
 mod menu_card;
 
+/// all menus share one 24 pt row / full-bleed divider / white-ink palette (2026-11-14).
+mod menu_metrics;
+
 /// B2: the Actions palette's data (tabs, Recents, grouped commands, ranking). No widgets here.
 mod palette;
 
@@ -508,6 +511,9 @@ pub struct CanvasView {
     /// 当前打开的弹出层（菜单 / 取色器）；`None` 表示没打开。render 时画在最上层。
     popup: Option<Popup>,
 
+    /// A3: the open comment draft / thread popover (egui's `Area::show`).
+    comment_overlay: Option<comments::Overlay>,
+
     /// 变量编辑器**独立于 `popup`**（egui 的 `app.ui.variables`：不是 dialog，与主菜单等并存）。
 
     /// 关掉时只把 `variables_open` 置 false、**保留实体**，这样 Full/Floating、窗口位置、
@@ -720,7 +726,7 @@ impl CanvasView {
 
         // 右栏字段是有状态实体：只建一次，跨帧复用（不能每帧重建，否则输入状态会丢）。
 
-        let fields = panels::RightFields::new(cx, &pending, &panel_wake);
+        let fields = panels::RightFields::new(cx, &pending, &panel_wake, app.comment_ui());
 
         // Actions 面板的搜索框：Enter 提交时把搜索词写进视图，列表按它过滤。
 
@@ -784,6 +790,7 @@ impl CanvasView {
             last_col: 0.0,
 
             popup: None,
+            comment_overlay: None,
 
             variables_editor: None,
 
@@ -1438,6 +1445,33 @@ impl CanvasView {
                         self.toast(e.to_string(), cx);
                     }
 
+                    continue;
+                }
+
+                // A3: Comment tool — a click on the canvas asks for a new comment at this page
+                // point (egui `app/commands.rs`: `comments::start_draft`).
+                "comment.new" => {
+                    let x = r.data.get("x").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+                    let y = r.data.get("y").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+                    {
+                        let ui = self.app.comment_ui();
+                        comments::start_draft(&mut ui.borrow_mut(), x, y);
+                    }
+                    let root = cx.entity();
+                    let overlay = comments::Overlay::draft(&self.app, self.app.comment_ui(), self.fields.queue(), root, cx);
+                    self.comment_overlay = Some(overlay);
+                    cx.notify();
+                    continue;
+                }
+
+                // A3: opening a thread (pin click, panel row, `comment.open` command).
+                "comment.open" => {
+                    if let Some(id) = r.data.get("id").and_then(serde_json::Value::as_u64) {
+                        let root = cx.entity();
+                        let overlay = comments::Overlay::thread(&self.app, self.app.comment_ui(), self.fields.queue(), root, id, cx);
+                        self.comment_overlay = Some(overlay);
+                        cx.notify();
+                    }
                     continue;
                 }
 
@@ -3923,6 +3957,55 @@ impl CanvasView {
         }
     }
 
+    /// A3: close the comment draft / thread popover.
+    pub(crate) fn close_comment(&mut self, cx: &mut Context<Self>) {
+        if self.comment_overlay.take().is_some() {
+            self.fields.comment_ui().borrow_mut().close();
+            cx.notify();
+        }
+    }
+
+    /// A3: submit the text in the open comment composer (called by its send button).
+    pub(crate) fn submit_comment(&mut self, cx: &mut Context<Self>) {
+        if let Some(o) = self.comment_overlay.as_mut() {
+            o.submit(cx);
+        }
+    }
+
+    /// A3: handle a key the composer did not consume (mention navigation / Enter / Escape).
+    fn comment_key(&mut self, key: comments::PendingAct, cx: &mut Context<Self>) {
+        if let Some(o) = self.comment_overlay.as_mut() {
+            o.key(key, cx);
+        }
+    }
+
+    /// A3: apply a pin hit-test result. Returns true when the pointer was consumed.
+    fn apply_pin_action(&mut self, action: comments::PinAction, cx: &mut Context<Self>) -> bool {
+        match action {
+            comments::PinAction::Toggle(id) => {
+                let open = self.app.comment_ui().borrow().open == Some(id);
+                if open {
+                    self.close_comment(cx);
+                } else {
+                    let root = cx.entity();
+                    let overlay = comments::Overlay::thread(&self.app, self.app.comment_ui(), self.fields.queue(), root, id, cx);
+                    self.comment_overlay = Some(overlay);
+                }
+                true
+            }
+            comments::PinAction::Zoom(ids) => {
+                let _ = self.app.session.execute("comment.zoom", &serde_json::json!({ "ids": ids }));
+                true
+            }
+            comments::PinAction::Move { id, x, y } => {
+                let _ = self.app.session.execute("comment.move", &serde_json::json!({ "id": id, "x": x, "y": y }));
+                true
+            }
+            comments::PinAction::Consumed => true,
+            comments::PinAction::None => false,
+        }
+    }
+
     /// 变量面板在 Floating / Full 之间切换（header 的展开按钮用）。
 
     /// 左栏选中态由 `variables_full` 驱动，所以切换后要重画一帧。
@@ -4558,6 +4641,19 @@ impl Render for CanvasView {
                         return;
                     }
 
+                    // A3: comment pins own the pointer before the engine's pointer tool.
+                    if !this.space && !this.zoom_key {
+                        let action = {
+                            let ui = this.app.comment_ui();
+                            let mut ui = ui.borrow_mut();
+                            comments::input(&this.app, &mut ui, pos, true, true)
+                        };
+                        if this.apply_pin_action(action, cx) {
+                            cx.notify();
+                            return;
+                        }
+                    }
+
                     if this.space {
                         if let Ok(ds) = this.app.session.ds() {
                             this.pan = Some((pos, ds.view.cx, ds.view.cy));
@@ -4691,6 +4787,19 @@ impl Render for CanvasView {
                     return;
                 }
 
+                // A3: advance a comment pin drag (updates the bubble position).
+                if this.app.comment_ui().borrow().dragging() {
+                    let action = {
+                        let ui = this.app.comment_ui();
+                        let mut ui = ui.borrow_mut();
+                        comments::input(&this.app, &mut ui, pos, false, this.primary_down)
+                    };
+                    if matches!(action, comments::PinAction::Consumed) {
+                        cx.notify();
+                        return;
+                    }
+                }
+
                 let kind = if this.dragging { PointerKind::Move } else { PointerKind::Hover };
 
                 this.send(kind, pos, &e.modifiers);
@@ -4735,6 +4844,18 @@ impl Render for CanvasView {
 
                         cx.notify();
 
+                        return;
+                    }
+
+                    // A3: finish a comment pin drag (move the pin or open its thread).
+                    if this.app.comment_ui().borrow().dragging() {
+                        let action = {
+                            let ui = this.app.comment_ui();
+                            let mut ui = ui.borrow_mut();
+                            comments::input(&this.app, &mut ui, pos, false, false)
+                        };
+                        this.apply_pin_action(action, cx);
+                        cx.notify();
                         return;
                     }
 
@@ -4870,6 +4991,30 @@ impl Render for CanvasView {
             .on_key_down(cx.listener(|this: &mut CanvasView, e: &KeyDownEvent, _window, cx| {
                 this.mods = e.keystroke.modifiers;
 
+                // A3: the comment composer owns the keyboard while open (egui `composer` /
+                // `keys`): mention arrows, Enter to post, Escape to close.
+                if this.comment_overlay.is_some() {
+                    let key = e.keystroke.key.as_str();
+                    let act = match key {
+                        "escape" => Some(comments::PendingAct::Cancel),
+                        "enter" if !e.keystroke.modifiers.shift => {
+                            if this.fields.comment_ui().borrow().mention.active() {
+                                Some(comments::PendingAct::MentionPick)
+                            } else {
+                                Some(comments::PendingAct::Submit)
+                            }
+                        }
+                        "tab" if this.fields.comment_ui().borrow().mention.active() => Some(comments::PendingAct::MentionPick),
+                        "arrowdown" if this.fields.comment_ui().borrow().mention.active() => Some(comments::PendingAct::MentionDown),
+                        "arrowup" if this.fields.comment_ui().borrow().mention.active() => Some(comments::PendingAct::MentionUp),
+                        _ => None,
+                    };
+                    if let Some(a) = act {
+                        this.comment_key(a, cx);
+                        return;
+                    }
+                }
+
                 // R4/R5: Escape cancels an inline rename (egui `Rename` keeps the old name);
 
                 // it must not reach the engine or leave a late focus-out commit behind.
@@ -4884,6 +5029,30 @@ impl Render for CanvasView {
                     cx.notify();
 
                     return;
+                }
+
+                // A3: Up / Down walk the Comments panel while the Comment tool is active and
+                // nothing is being typed (egui `comments::keys`).
+                if this.comment_overlay.is_none() && this.app.session.tool.tool == figcraft_engine::ToolId::Comment {
+                    let dir = match e.keystroke.key.as_str() {
+                        "arrowdown" => Some(1),
+                        "arrowup" => Some(-1),
+                        _ => None,
+                    };
+                    if let Some(dir) = dir {
+                        let ui = this.app.comment_ui();
+                        let tool = this.app.session.tool.tool;
+                        if comments::keys(&mut this.app.session, &mut ui.borrow_mut(), tool, dir) {
+                            let id = ui.borrow().open;
+                            if let Some(id) = id {
+                                let root = cx.entity();
+                                let overlay = comments::Overlay::thread(&this.app, ui, this.fields.queue(), root, id, cx);
+                                this.comment_overlay = Some(overlay);
+                            }
+                            cx.notify();
+                            return;
+                        }
+                    }
                 }
 
                 // ── Motion 时间轴快捷键（egui timeline.rs:1093-1158）──
@@ -6097,6 +6266,15 @@ impl Render for CanvasView {
             popup_el.extend(els);
         }
 
+        // A3: the comment draft / thread popover, anchored to its pin on the canvas.
+        let comment_el: Vec<AnyElement> = if let Some(o) = self.comment_overlay.as_mut() {
+            let canvas_left = dock.center_x();
+            let canvas_top = dock.titlebar_h;
+            o.render(vp, canvas_left, canvas_top, cx)
+        } else {
+            Vec::new()
+        };
+
         // ── 变量编辑器（结构性：独立于 `popup`，egui `app.ui.variables`）────────────────────
 
         // 不画 backdrop：egui 的 Floating 是 `egui::Area`（没有「点外面就关」），Full 更是一块页面。
@@ -6353,6 +6531,7 @@ impl Render for CanvasView {
             // dialog layer, so a dropdown inside a dialog is not covered by it. This is the one
             // place the layer order lives, so every dropdown everywhere gets it.
             .children(popup_el)
+            .children(comment_el)
             // 通用拖拽的视觉层（插入线 / Into 整行描边 / 跟随光标的标签）画在最上面，
             // 用窗口坐标绝对定位，覆盖所有面板。
             .children(self.layer_overlay())

@@ -515,7 +515,11 @@ pub(crate) fn draw_overlays(app: &mut CanvasApp, painter: &mut Painter, t: &Toke
     // 评论/注解手柄之上（用户 2026-11-12：有动画就显示，播放中隐藏）。
     motion_overlay::draw(app, painter, t);
     // A3: comment pins, over the overlays (egui `comments::draw` after `overlays()`).
-    crate::comments::draw(app, painter, t);
+    {
+        let cu = app.comment_ui();
+        let cu = cu.borrow();
+        crate::comments::draw(app, &cu, painter, t);
+    }
     // 注解 callout：egui 在 `overlays()` 之后、`handles::draw()` 之前画（Inspect 标签才画）。
     dev::draw_annotations(app, painter, t);
     // 自动布局的 padding/gap 手柄（原 `show()` 里 `crate::handles::draw` 就在 overlays 之后）。

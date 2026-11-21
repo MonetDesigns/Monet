@@ -54,6 +54,8 @@ pub struct CanvasApp {
     /// 由 `CanvasView::sync_motion` 每帧设置，渲染请求与叠加层都读它，
     /// 这样 `ds.doc` 在一帧内不再被临时替换，引擎 / 撤销 / 命中 / 右栏始终看到源文档。
     pub display_doc: Option<std::sync::Arc<Document>>,
+    /// Comment 工具的 UI 状态（草稿 / 打开的 thread / 筛选 / 拖拽），与右栏面板共用。
+    pub comment_ui: crate::comments::CommentState,
 }
 
 impl CanvasApp {
@@ -77,6 +79,7 @@ impl CanvasApp {
             motion_overlay: crate::canvas::motion_overlay::State::default(),
             motion_gizmo: crate::canvas::motion_overlay::Interaction::default(),
             display_doc: None,
+            comment_ui: std::rc::Rc::new(std::cell::RefCell::new(crate::comments::CommentUi::default())),
         };
         // 预选一个自动布局容器：启动即可见 hatch（紧贴轮廓 + padding 蓝斜线 + spacing 粉斜线），
         // 不用先手动点选，方便核对"选中=1px / 悬停=2px"与边距斜线管线。
@@ -115,6 +118,11 @@ impl CanvasApp {
     /// 当前选中。
     pub fn selection(&self) -> Vec<NodeId> {
         self.session.ds().map(|d| d.selection.clone()).unwrap_or_default()
+    }
+
+    /// Comment 工具的 UI 状态（与右栏面板共用同一份）。
+    pub fn comment_ui(&self) -> crate::comments::CommentState {
+        self.comment_ui.clone()
     }
 }
 
