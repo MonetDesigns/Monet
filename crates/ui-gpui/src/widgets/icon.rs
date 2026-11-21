@@ -47,6 +47,8 @@ pub enum Icon {
     Frame,
     /// The letter "T" (a `Text` node kind).
     Text,
+    /// The bottom toolbar's dedicated text tool glyph.
+    ToolText,
     /// Filled diamond (a `Component` / `ComponentSet` node kind).
     Component,
     /// Outlined diamond (an `Instance` node kind).
@@ -207,6 +209,7 @@ impl Icon {
         Icon::Ellipse,
         Icon::Frame,
         Icon::Text,
+        Icon::ToolText,
         Icon::Component,
         Icon::Instance,
         Icon::Page,
@@ -307,6 +310,7 @@ impl Icon {
             Icon::Ellipse => "shape-ellipse",
             Icon::Frame => "shape-frame",
             Icon::Text => "shape-text",
+            Icon::ToolText => "tool-text",
             Icon::Component => "shape-component",
             Icon::Instance => "shape-instance",
             Icon::Page => "shape-page",
@@ -405,6 +409,7 @@ impl Icon {
             Icon::Ellipse => "shape-ellipse",
             Icon::Frame => "shape-frame",
             Icon::Text => "shape-text",
+            Icon::ToolText => "tool-text",
             Icon::Component => "shape-component",
             Icon::Instance => "shape-instance",
             Icon::Page => "shape-page",
@@ -530,6 +535,12 @@ static ICON_FILES: &[(&str, &[u8])] = &[
     ("shape-text", include_bytes!("../../assets/icons/shape-text.svg")),
     ("shape-union", include_bytes!("../../assets/icons/shape-union.svg")),
     ("shape-vector", include_bytes!("../../assets/icons/shape-vector.svg")),
+    ("property-stroke-sides", include_bytes!("../../assets/icons/property-stroke-sides.svg")),
+    ("stroke-side-check", include_bytes!("../../assets/icons/stroke-side-check.svg")),
+    ("stroke-side-top", include_bytes!("../../assets/icons/stroke-side-top.svg")),
+    ("stroke-side-right", include_bytes!("../../assets/icons/stroke-side-right.svg")),
+    ("stroke-side-bottom", include_bytes!("../../assets/icons/stroke-side-bottom.svg")),
+    ("stroke-side-left", include_bytes!("../../assets/icons/stroke-side-left.svg")),
     ("tool-comment", include_bytes!("../../assets/icons/tool-comment.svg")),
     ("tool-connector", include_bytes!("../../assets/icons/tool-connector.svg")),
     ("tool-eraser", include_bytes!("../../assets/icons/tool-eraser.svg")),
@@ -541,6 +552,7 @@ static ICON_FILES: &[(&str, &[u8])] = &[
     ("tool-scale", include_bytes!("../../assets/icons/tool-scale.svg")),
     ("tool-shape-builder", include_bytes!("../../assets/icons/shape-intersect.svg")),
     ("tool-text-on-path", include_bytes!("../../assets/icons/tool-text-on-path.svg")),
+    ("tool-text", include_bytes!("../../assets/icons/tool-text.svg")),
     ("ui-actions", include_bytes!("../../assets/icons/ui-actions.svg")),
     ("ui-animation", include_bytes!("../../assets/icons/ui-animation.svg")),
     ("ui-assets", include_bytes!("../../assets/icons/ui-assets.svg")),
@@ -734,7 +746,7 @@ mod tests {
 
     #[test]
     fn every_icon_has_an_external_svg_with_the_shared_stroke() {
-        assert_eq!(Icon::ALL.len(), 92, "Icon 变体数变了：请同步 ALL / asset_name / 本断言");
+        assert_eq!(Icon::ALL.len(), 93, "Icon 变体数变了：请同步 ALL / asset_name / 本断言");
         let mut names = HashSet::new();
         for &icon in Icon::ALL {
             let rel = icon.asset_rel();
@@ -763,6 +775,30 @@ mod tests {
         }
         assert!(assets.load("icons/not-a-real-icon.svg").unwrap().is_none());
         assert_eq!(assets.list("icons").unwrap().len(), Icon::ALL.len());
+    }
+
+    /// 右栏圆角 / 间距 / sides 下拉引用的 16 网格图标虽无 `Icon` 枚举变体（冻结文件不能加），
+    /// 但都已注册进 `ICON_FILES`，必须能从 `icons/<name>.svg` 解析出来 —— 否则字段 lead /
+    /// 菜单行画出的是空白方块。
+    #[test]
+    fn layout_glyphs_resolve_through_the_shared_prefix() {
+        let assets = IconAssets;
+        for name in [
+            "layout-corner-individual",
+            "layout-corner-tl",
+            "layout-corner-tr",
+            "layout-corner-bl",
+            "layout-corner-br",
+            "layout-padding-individual",
+            "layout-padding-top",
+            "layout-padding-right",
+            "layout-padding-bottom",
+            "layout-padding-left",
+        ] {
+            assert!(file_bytes(name).is_some(), "{name} 没进 ICON_FILES");
+            let path = format!("icons/{name}.svg");
+            assert!(assets.load(&path).unwrap().is_some(), "{path} 无法解析");
+        }
     }
 
     #[test]

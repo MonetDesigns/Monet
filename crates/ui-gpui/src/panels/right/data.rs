@@ -909,6 +909,26 @@ pub struct ComponentData {
     pub props: Vec<ComponentProp>,
     /// 组件 / 组件集：描述可编辑。
     pub editable_description: bool,
+    /// 组件 / 组件集自己拥有的属性定义（增删/重命名/默认值用）。实例时为空。
+    pub defs: Vec<ComponentDef>,
+    /// 组件集：变体属性 → 可选值（供 Properties 节展示与编辑）。
+    pub variants: Vec<(String, Vec<String>)>,
+    /// 文件里的组件/组件集（新建 instanceSwap 属性时给它一个合法默认主组件）。
+    pub component_candidates: Vec<(NodeId, String)>,
+    /// 组件/组件集内的第一个 Frame（新建 slot 属性时引擎要求一个 frame 作 layer）。
+    pub slot_layer: Option<NodeId>,
+}
+
+/// 组件/组件集的一行属性定义（抄 lizard `component_panel.rs::properties_ui`）。
+#[derive(Clone, Debug, PartialEq)]
+pub struct ComponentDef {
+    pub name: String,
+    /// boolean / text / instanceSwap / variant / slot
+    pub kind: &'static str,
+    /// 默认值（显示用）：bool 为 True/False，text 为文本，swap 为组件名。
+    pub default: String,
+    /// swap 候选的 (显示名, node id 字符串)。
+    pub options: Vec<(String, u64)>,
 }
 
 /// 读 Component 面板的数据。
@@ -924,6 +944,7 @@ pub fn read_component(doc: &Document, ids: &[NodeId]) -> Option<ComponentData> {
                 set.or(Some(*component)).and_then(|c| doc.node(c)).map(|c| c.name.clone()).unwrap_or_else(|| tr("Main component deleted").into());
             let nested = components::inside_instance(doc, *id);
             let components = list_components(doc);
+            let component_candidates = components.clone();
             let mut out = ComponentData {
                 is_instance: true,
                 nested,
@@ -937,6 +958,10 @@ pub fn read_component(doc: &Document, ids: &[NodeId]) -> Option<ComponentData> {
                 nested_in_main: !nested && components::owning_component(doc, *id).is_some_and(|c| c != *id),
                 props: Vec::new(),
                 editable_description: false,
+                defs: Vec::new(),
+                variants: Vec::new(),
+                component_candidates,
+                slot_layer: None,
             };
             // 主组件（或变体集）的描述。
             out.description = [Some(*component), set]
@@ -1004,13 +1029,80 @@ pub fn read_component(doc: &Document, ids: &[NodeId]) -> Option<ComponentData> {
             Some(out)
         }
         figcraft_doc::NodeKind::ComponentSet { description } => {
-            Some(ComponentData { title: tr("Component set"), description: description.clone(), editable_description: true, ..Default::default() })
+            let variants = components::variant_options(doc, *id);
+            // 共享属性定义在第一个变体上（lizard `properties_ui` 同款）。
+            let first = doc.node(*id).and_then(|set| {
+                set.children.iter().copied().find(|c| matches!(doc.node(*c).map(|n| &n.kind), Some(figcraft_doc::NodeKind::Component { .. })))
+            });
+            let defs = first.map(|c| read_defs(doc, c)).unwrap_or_default();
+            Some(ComponentData {
+                title: tr("Component set"),
+                description: description.clone(),
+                editable_description: true,
+                main_id: Some(*id),
+                component_candidates: list_components(doc),
+                slot_layer: first_frame(doc, *id),
+                defs,
+                variants,
+                ..Default::default()
+            })
         }
-        figcraft_doc::NodeKind::Component { description, .. } => {
-            Some(ComponentData { title: tr("Component"), description: description.clone(), editable_description: true, ..Default::default() })
+        figcraft_doc::NodeKind::Component { description, props, .. } => {
+            let defs = read_defs(doc, *id);
+            let variants = components::variant_set(doc, *id).map(|set| components::variant_options(doc, set)).unwrap_or_default();
+            let _ = props; // defs 已从节点读到
+            Some(ComponentData {
+                title: tr("Component"),
+                description: description.clone(),
+                editable_description: true,
+                main_id: Some(*id),
+                component_candidates: list_components(doc),
+                slot_layer: first_frame(doc, *id),
+                defs,
+                variants,
+                ..Default::default()
+            })
         }
         _ => None,
     }
+}
+
+/// 组件子树里第一个 Frame（slot 属性的 layer 候选）。
+fn first_frame(doc: &Document, root: NodeId) -> Option<NodeId> {
+    doc.subtree(root).into_iter().find(|id| doc.node(*id).is_some_and(|n| matches!(n.kind, figcraft_doc::NodeKind::Frame)))
+}
+
+/// 从一个组件节点读它的属性定义（供右栏 Properties 节增删/改名/默认值）。
+fn read_defs(doc: &Document, id: NodeId) -> Vec<ComponentDef> {
+    let Some(figcraft_doc::NodeKind::Component { props, prop_order, .. }) = doc.node(id).map(|n| &n.kind) else {
+        return Vec::new();
+    };
+    figcraft_doc::ordered_props(props, prop_order)
+        .into_iter()
+        .map(|(name, d)| {
+            let (kind, default, options) = match d {
+                figcraft_doc::PropDef::Boolean { default } => ("boolean", if *default { tr("True") } else { tr("False") }.to_string(), Vec::new()),
+                figcraft_doc::PropDef::Text { default } => ("text", default.clone(), Vec::new()),
+                figcraft_doc::PropDef::InstanceSwap { default, preferred } => (
+                    "instanceSwap",
+                    doc.node(*default).map(|n| n.name.clone()).unwrap_or_else(|| tr("Missing").into()),
+                    preferred
+                        .iter()
+                        .copied()
+                        .chain(doc.nodes().filter_map(|n| matches!(n.kind, figcraft_doc::NodeKind::Component { .. }).then_some(n.id)))
+                        .filter_map(|c| doc.node(c).map(|n| (n.name.clone(), c.0)))
+                        .collect(),
+                ),
+                figcraft_doc::PropDef::Variant { default, options } => ("variant", default.clone(), options.iter().map(|v| (v.clone(), 0)).collect()),
+                figcraft_doc::PropDef::Slot { preferred } => (
+                    "slot",
+                    String::new(),
+                    preferred.iter().copied().filter_map(|c| doc.node(c).map(|n| (n.name.clone(), c.0))).collect(),
+                ),
+            };
+            ComponentDef { name: name.clone(), kind, default, options }
+        })
+        .collect()
 }
 
 /// 文件里的本地组件与组件集（swap 菜单的候选）。
@@ -1313,6 +1405,10 @@ pub struct PanelData {
     /// 选中节点的共同描边宽度（egui `paints.rs` 的 `weight.unwrap_or(1.0)`）：
     /// 「Individual strokes」菜单里每个边的权重必须用它，不能硬编码 1.0。
     pub stroke_weight: Option<f64>,
+    /// 选中节点的逐边描边权重 `[top, right, bottom, left]`。egui `paints.rs::stroke` 的
+    /// `if let Some(sides) = common(doc, sel, |n| n.stroke.sides).flatten()`：有值才画四边输入框。
+    /// `None` = 没有逐边设置（All）/多选不一致 → 展开区不显示。
+    pub stroke_sides: Option<[f64; 4]>,
     /// 选中节点的共同笔刷（`None`：多选不一致或无笔刷）。画笔线选中后右栏据此显示真实 preset。
     pub brush: Option<figcraft_doc::Brush>,
     /// 选中节点的共同 dash 模式（`None`：多选不一致）。空数组 = Solid。
@@ -1375,6 +1471,10 @@ pub struct PanelData {
     pub vector: Option<VectorData>,
     /// 选中节点是否都是「无自动布局（或自身 absolute）的 frame 子层」——只有这种才显示 Constraints 子节。
     pub in_frame: bool,
+    /// 选中的层是否都在 auto layout 父级里（egui `position_row` 的 `pv.parent_al`）。
+    pub parent_al: bool,
+    /// 这些层的 absolute 状态；`None` = 多选不一致。驱动标题栏的「忽略自动布局」按钮。
+    pub absolute: Option<bool>,
     /// Constraints 子节的水平 / 垂直约束（egui `right.rs::position_fields`）。`None` = Mixed。
     pub constraints_h: Option<&'static str>,
     pub constraints_v: Option<&'static str>,
@@ -1760,6 +1860,8 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
         figcraft_doc::StrokeAlign::Outside => tr("Outside"),
     });
     d.stroke_weight = common(doc, ids, |n| n.stroke.weight);
+    // Per-side weights: drives the four T/R/B/L fields under the stroke row (egui `paints.rs`).
+    d.stroke_sides = common(doc, ids, |n| n.stroke.sides).flatten();
     // The selection's real brush, so a brush stroke reads back as one (user 2026-11-18).
     d.brush = common(doc, ids, |n| n.stroke.brush.clone()).flatten();
     d.dashes = common(doc, ids, |n| n.stroke.dashes.clone());
@@ -1958,6 +2060,8 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
         figcraft_doc::VConstraint::Scale => "scale",
     });
     d.in_frame = in_frame;
+    d.parent_al = parent_al;
+    d.absolute = common(doc, ids, |n| n.child_layout.absolute);
     d.constraints_h = constraints_h;
     d.constraints_v = constraints_v;
 

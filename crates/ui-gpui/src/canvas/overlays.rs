@@ -9,11 +9,11 @@ use figcraft_geom::Point;
 use std::sync::Arc;
 
 use super::geom::*;
-use super::outline::{draw_outline, node_quad, outline_colour, quad, stroke};
+use super::outline::{crisp_line, draw_outline, node_quad, outline_colour, quad, stroke};
 use super::painter::Painter;
 use super::rulers::fmt;
 use crate::app::CanvasApp;
-use crate::theme::{COMPONENT, Tokens, stroke as s};
+use crate::theme::{COMPONENT, SLOT, Tokens, stroke as s};
 
 /// 三次贝塞尔在 `t` 处的点（GPUI 画笔没有贝塞尔图元，段要采样成折线）。
 fn cubic_at(p0: Pos2, p1: Pos2, p2: Pos2, p3: Pos2, t: f32) -> Pos2 {
@@ -119,13 +119,13 @@ pub(super) fn overlays(
         let mut x = p0.x.floor();
         while x <= p1.x {
             let sx = app.to_screen(x, 0.0).x;
-            painter.line_segment([pos2(sx, r.min.y), pos2(sx, r.max.y)], s(col, 1.0));
+            crisp_line(painter, pos2(sx, r.min.y), pos2(sx, r.max.y), 1.0, app.ppp, col);
             x += 1.0;
         }
         let mut y = p0.y.floor();
         while y <= p1.y {
             let sy = app.to_screen(0.0, y).y;
-            painter.line_segment([pos2(r.min.x, sy), pos2(r.max.x, sy)], s(col, 1.0));
+            crisp_line(painter, pos2(r.min.x, sy), pos2(r.max.x, sy), 1.0, app.ppp, col);
             y += 1.0;
         }
     }
@@ -151,12 +151,12 @@ pub(super) fn overlays(
                     };
                     match line {
                         figcraft_layout::GridLine::Line { a, b } => {
-                            painter.line_segment([to_screen(a), to_screen(b)], s(col, 1.0));
+                            crisp_line(painter, to_screen(a), to_screen(b), 1.0, app.ppp, col);
                         }
                         figcraft_layout::GridLine::SlashLine(pts) => {
                             let v: Vec<Pos2> = pts.into_iter().map(to_screen).collect();
-                            if v.len() >= 2 {
-                                painter.add_shape(v, false, Color32::TRANSPARENT, s(col, 1.0));
+                            for seg in v.windows(2) {
+                                crisp_line(painter, seg[0], seg[1], 1.0, app.ppp, col);
                             }
                         }
                         figcraft_layout::GridLine::Band(r) => {
@@ -230,7 +230,7 @@ pub(super) fn overlays(
     if let Some(d) = ov.drop_target
         && let Some(q) = node_quad(app, &doc, d)
     {
-        quad(painter, q, stroke(if figcraft_engine::components::is_slot(&doc, d) { COMPONENT } else { accent }, 1.0));
+        quad(painter, q, stroke(if figcraft_engine::components::is_slot(&doc, d) { SLOT } else { accent }, 1.0));
     }
     if let Some([x0, y0, x1, y1]) = ov.insert_line {
         painter.line_segment([app.to_screen(x0, y0), app.to_screen(x1, y1)], s(accent, 2.0));
@@ -263,7 +263,9 @@ pub(super) fn overlays(
     // 运动模式播放中：选中边框隐藏（物体在这一帧已不在选中框的位置，留在原地只会造成误导；
     // gizmo / 运动路径也已在播放时藏起，这里保持一致，用户 2026-11-12）。
     if !sel.is_empty() && !editing && ds.vector_edit.is_none() && !app.motion_overlay.playing {
-        let col = if sel.iter().any(|i| outline_colour(&doc, *i, accent) == COMPONENT) { COMPONENT } else { accent };
+        let slot_sel = sel.iter().any(|i| outline_colour(&doc, *i, accent) == SLOT);
+        let comp_sel = sel.iter().any(|i| outline_colour(&doc, *i, accent) == COMPONENT);
+        let col = if slot_sel { SLOT } else if comp_sel { COMPONENT } else { accent };
         for id in &sel {
             // 选中描边统一走 draw_outline（源码选中色、1px）。
             draw_outline(app, painter, &doc, *id, stroke(col, 1.0));
@@ -546,18 +548,36 @@ fn transform_box(
     if let Some(label) = label.filter(|_| app.session.prefs.show_dimensions) {
         let bottom = q.iter().map(|p| p.y).fold(f32::MIN, f32::max);
         let cx = q.iter().map(|p| p.x).sum::<f32>() / 4.0;
-        return Some(pill(painter, pos2(cx, bottom + 9.0), Align2::CENTER_TOP, label, col));
+        // Keep the requested layer-colour background, but choose a legible foreground: a light
+        // Yellow (#FFCC00) with white text was ~1.5:1. Dark ink on light fills, white on dark.
+        let fg = contrasting_ink(col);
+        return Some(pill_with_bg(painter, pos2(cx, bottom + 9.0), Align2::CENTER_TOP, label, col, fg, col));
     }
     None
 }
 
 /// 画布读数：`col` 底色的 pill 上白字（返回 pill 区域）。
 pub(super) fn pill(painter: &mut Painter, at: Pos2, align: Align2, text: String, col: Color32) -> Rect {
-    let galley = painter.layout_no_wrap(text, semibold(11.0), Color32::WHITE);
+    pill_with_bg(painter, at, align, text, col, Color32::WHITE, under_white(col))
+}
+
+fn pill_with_bg(painter: &mut Painter, at: Pos2, align: Align2, text: String, _col: Color32, fg: Color32, bg: Color32) -> Rect {
+    let galley = painter.layout_no_wrap(text, semibold(11.0), fg);
     let r = align.anchor_size(at, galley.size() + vec2(8.0, 4.0));
-    painter.rect_filled(r, CornerRadius::same(3), under_white(col));
-    painter.galley(r.min + vec2(4.0, 2.0), galley, Color32::WHITE);
+    painter.rect_filled(r, CornerRadius::same(3), bg);
+    painter.galley(r.min + vec2(4.0, 2.0), galley, fg);
     r
+}
+
+/// WCAG relative-luminance split: near-black ink on light fills, white on dark fills.
+fn contrasting_ink(bg: Color32) -> Color32 {
+    let [r, g, b, _] = bg.to_array();
+    let lin = |v: u8| {
+        let c = f32::from(v) / 255.0;
+        if c <= 0.03928 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    };
+    let lum = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+    if lum > 0.35 { Color32::from_black_alpha(230) } else { Color32::WHITE }
 }
 
 /// 白字下面的底色需要压暗才够对比（对应 `theme::under_white`）。

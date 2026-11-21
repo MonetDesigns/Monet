@@ -389,11 +389,11 @@ fn open_recent_menu(
         tr("Show in folder")
     };
     let exists = std::path::Path::new(&path).exists();
-    let mut rows = vec![MenuRow::new(open)];
+    let mut rows = vec![MenuRow::row(open)];
     if exists {
-        rows.push(MenuRow::new(reveal));
+        rows.push(MenuRow::row(reveal));
     }
-    rows.push(MenuRow::new(remove).separator());
+    rows.push(MenuRow::row(remove).separator());
 
     let cmds_pick = cmds.clone();
     let on_pick = Rc::new(move |label: &str, _: &mut Window, _: &mut App| {

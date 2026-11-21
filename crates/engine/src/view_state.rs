@@ -132,11 +132,11 @@ impl ViewState {
         self.cy = r.center().y + (self.vh - area_h) / 2.0 / self.zoom;
     }
 
-    /// The zoom from which the pixel grid shows (400%).
-    pub const PIXEL_GRID_ZOOM: f64 = 4.0;
-    /// Whether the pixel grid draws: it's on and the canvas is zoomed in to 400% or more.
+    /// The zoom from which the pixel grid shows (507%).
+    pub const PIXEL_GRID_ZOOM: f64 = 5.07;
+    /// Whether the pixel grid draws: it's on and the canvas is zoomed in past 507%.
     pub fn pixel_grid_shown(&self) -> bool {
-        self.pixel_grid && self.zoom >= Self::PIXEL_GRID_ZOOM - 1e-9
+        self.pixel_grid && self.zoom > Self::PIXEL_GRID_ZOOM
     }
     /// Pixel preview's resolution (rendered pixels per page pixel) when it's on and zoomed in past
     /// it; below that the canvas is already coarser than the preview.

@@ -16,7 +16,7 @@ use crate::widgets::{
 use figcraft_color::BlendMode;
 use figcraft_i18n::tr;
 use figcraft_i18n::tr_noop;
-use gpui::{App, Div, Entity, SharedString, Stateful, Window, div, prelude::*, px};
+use gpui::{App, Div, Entity, Hsla, SharedString, Stateful, Window, div, prelude::*, px, svg};
 use serde_json::Value;
 use std::rc::Rc;
 
@@ -762,6 +762,14 @@ pub(crate) struct RightFields {
     corner_br: Entity<TextField>,
     /// 「独立圆角」展开开关（egui `right.rs` 的 `Id::new("indep_corners")` 临时标记）。
     corners_individual: std::rc::Rc<std::cell::RefCell<bool>>,
+    /// Whether the constraints row under X/Y is revealed.
+    constraints_open: std::rc::Rc<std::cell::RefCell<bool>>,
+    /// 描边逐边权重 T/R/B/L（`strokeTopWeight` … `strokeLeftWeight`）。选「Custom」后展开，
+    /// 对应 egui `paints.rs::stroke` 的 `common(doc, sel, |n| n.stroke.sides)` 那两行输入框。
+    stroke_side_t: Entity<TextField>,
+    stroke_side_r: Entity<TextField>,
+    stroke_side_b: Entity<TextField>,
+    stroke_side_l: Entity<TextField>,
     /// Alignment dropdown current labels (serde names) for the main and cross axes.
     align_main_label: std::cell::RefCell<SharedString>,
     align_cross_label: std::cell::RefCell<SharedString>,
@@ -1007,6 +1015,50 @@ fn nf_corner(cx: &mut App, lead: &'static str, key: &'static str, cmds: &Cmds) -
             }
         });
     })
+}
+
+/// One of the four per-side stroke weight fields. Commits `node.set {"props": {<key>: v}}`
+/// where `<key>` is `strokeTopWeight` / `strokeRightWeight` / …; the engine's `props.rs`
+/// turns a single side write into `stroke.sides = Some([t,r,b,l])` (filling the others from
+/// the current `weight`), which is exactly egui's `app.field(&ids, field, …)` behaviour.
+fn nf_stroke_side(cx: &mut App, icon: &'static str, key: &'static str, cmds: &Cmds, wake: &std::rc::Rc<dyn Fn()>) -> Entity<TextField> {
+    let cmds = cmds.clone();
+    let wake = wake.clone();
+    let field = TextField::build(cx, DEFAULT_COL, move |tf, _| {
+        tf.set_numeric("", 1.0);
+        let cmds = cmds.clone();
+        let wake = wake.clone();
+        tf.set_on_commit(move |text, _window, _cx| {
+            if let Ok(v) = text.trim().parse::<f64>() {
+                cmds.push(Cmd { id: "node.set", params: Some(serde_json::json!({ "props": { key: v.max(0.0) } })) });
+                wake();
+            }
+        });
+    });
+    set_icon_lead(&field, cx, icon);
+    field
+}
+
+/// Replace a field's text lead with a named SVG glyph from `assets/icons/`.
+///
+/// The corner / padding fields were built with a text lead (`C`, `TL`, `H`, `T`, …) before the
+/// matching 16-grid icons existed. The SVGs are registered in `ICON_FILES` but have no frozen
+/// `Icon` enum variant, so `Slot::Custom` + `svg().path()` is the only route that does not touch
+/// the frozen widget files. `Slot::Custom` is called again on every frame, so the icon inks from
+/// the current tokens just like the text lead did.
+fn set_icon_lead(tf: &Entity<TextField>, cx: &mut App, name: &'static str) {
+    let path = right::sections::named_icon(name);
+    tf.update(cx, |tf, _| {
+        tf.set_lead(Slot::custom(move || {
+            svg()
+                .path(path.clone())
+                .w(px(16.0))
+                .h(px(16.0))
+                .flex_none()
+                .text_color(Hsla::from(rgba(tokens().icon)))
+                .into_any_element()
+        }));
+    });
 }
 
 impl RightFields {
@@ -1331,6 +1383,12 @@ impl RightFields {
             corner_bl: nf_corner(cx, "BL", "bottomLeftRadius", &cmds),
             corner_br: nf_corner(cx, "BR", "bottomRightRadius", &cmds),
             corners_individual: std::rc::Rc::new(std::cell::RefCell::new(false)),
+            constraints_open: std::rc::Rc::new(std::cell::RefCell::new(false)),
+            // 描边逐边权重：与菜单里 T/R/B/L 四项、展开后 lead 同一族图标。
+            stroke_side_t: nf_stroke_side(cx, "layout-padding-top", "strokeTopWeight", &cmds, wake),
+            stroke_side_r: nf_stroke_side(cx, "layout-padding-right", "strokeRightWeight", &cmds, wake),
+            stroke_side_b: nf_stroke_side(cx, "layout-padding-bottom", "strokeBottomWeight", &cmds, wake),
+            stroke_side_l: nf_stroke_side(cx, "layout-padding-left", "strokeLeftWeight", &cmds, wake),
             align_main_label: std::cell::RefCell::new(SharedString::from("min")),
             align_cross_label: std::cell::RefCell::new(SharedString::from("min")),
             // Blend-mode dropdown: a button that opens the blend menu on click (egui `dropdown`).
@@ -1353,6 +1411,21 @@ impl RightFields {
             cmds,
             editors: Vec::new(),
         };
+        // 圆角 / 间距字段接上 2026-11-20 新建的 layout-* 图标（外观 Corner radius、四个独立
+        // 圆角；布局 H/V 与四个独立内边距）。此前只注册了 SVG、没有 Icon 枚举变体，字段仍用
+        // 文本 lead（C / TL / H / T…）——用户指出「图标做了但外观和布局都没接入」。
+        // 这些 SVGs 是 16 网格，按原生 16pt 画（viewBox 原生尺寸规矩）。
+        set_icon_lead(&fields.corner, cx, "layout-corner-individual");
+        set_icon_lead(&fields.corner_tl, cx, "layout-corner-tl");
+        set_icon_lead(&fields.corner_tr, cx, "layout-corner-tr");
+        set_icon_lead(&fields.corner_bl, cx, "layout-corner-bl");
+        set_icon_lead(&fields.corner_br, cx, "layout-corner-br");
+        set_icon_lead(&fields.pad_h, cx, "layout-padding-individual");
+        set_icon_lead(&fields.pad_v, cx, "layout-padding-individual");
+        set_icon_lead(&fields.pad_t, cx, "layout-padding-top");
+        set_icon_lead(&fields.pad_r, cx, "layout-padding-right");
+        set_icon_lead(&fields.pad_b, cx, "layout-padding-bottom");
+        set_icon_lead(&fields.pad_l, cx, "layout-padding-left");
         // 点画布时统一失焦提交：收集所有缓存的编辑器实体（TextField 的内层 + 颜色行 + 行池）。
         let mut editors: Vec<Entity<TextEdit>> = [
             &fields.x,
@@ -1442,6 +1515,7 @@ impl RightFields {
         // scale_ctx / pad 同理保留共享（见上方注释），不重置。
         f.pad_individual = Default::default();
         f.corners_individual = Default::default();
+        f.constraints_open = Default::default();
         f.limit_open = Default::default();
         f.bind_hover = Default::default();
         f.blend_open = Default::default();
@@ -1815,6 +1889,10 @@ impl RightFields {
             &self.pad_l,
             &self.pad_h,
             &self.pad_v,
+            &self.stroke_side_t,
+            &self.stroke_side_r,
+            &self.stroke_side_b,
+            &self.stroke_side_l,
         ];
         for e in items {
             e.update(cx, |tf, _| tf.set_width(col));
@@ -1881,6 +1959,27 @@ impl RightFields {
         fmt(&self.corner_tr, radii.map(|r| r[1]));
         fmt(&self.corner_br, radii.map(|r| r[2]));
         fmt(&self.corner_bl, radii.map(|r| r[3]));
+    }
+
+    /// 描边逐边权重的回填（selection → panel）。`sides` 与 `StrokeProps::sides` 同序
+    /// `[top, right, bottom, left]`；`None` = All / 多选不一致 → Mixed（展开区不显示）。
+    pub(crate) fn set_stroke_side_values(&self, cx: &mut App, sides: Option<[f64; 4]>) {
+        let mut fmt = |e: &Entity<TextField>, v: Option<f64>| {
+            e.update(cx, |tf, _| match v {
+                Some(val) => {
+                    tf.set_placeholder("");
+                    tf.set_value(fmt_num(val));
+                }
+                None => {
+                    tf.set_value("");
+                    tf.set_placeholder(tr("Mixed"));
+                }
+            });
+        };
+        fmt(&self.stroke_side_t, sides.map(|s| s[0]));
+        fmt(&self.stroke_side_r, sides.map(|s| s[1]));
+        fmt(&self.stroke_side_b, sides.map(|s| s[2]));
+        fmt(&self.stroke_side_l, sides.map(|s| s[3]));
     }
 
     /// Dimensions 的 min/max 字段（`layout_panel.rs::limit_row_v`）。
@@ -2001,7 +2100,7 @@ pub(crate) fn blend_rows() -> Vec<MenuRow> {
     let mut rows: Vec<MenuRow> = Vec::new();
     let mut divider = false;
     for b in BlendMode::ALL {
-        let mut row = MenuRow::new(b.label());
+        let mut row = MenuRow::row(b.label());
         if divider {
             row = row.separator();
         }
@@ -2015,7 +2114,7 @@ pub(crate) fn blend_rows() -> Vec<MenuRow> {
 /// selection (`distribute.horizontal` / `distribute.vertical` / `arrange.tidy`), each with
 /// `{"ids": ids}`. Shown only when 3+ layers are selected, like the egui original.
 fn distribute_rows() -> Vec<MenuRow> {
-    vec![MenuRow::new(tr("Distribute horizontal spacing")), MenuRow::new(tr("Distribute vertical spacing")), MenuRow::new(tr("Tidy up"))]
+    vec![MenuRow::row(tr("Distribute horizontal spacing")), MenuRow::row(tr("Distribute vertical spacing")), MenuRow::row(tr("Tidy up"))]
 }
 
 /// Main-axis alignment options: `MainAlign` serde names → labels. egui's 3×3 picker sets
@@ -2033,7 +2132,7 @@ const CROSS_ALIGN: &[(&str, &str)] = &[("Packed", "min"), (tr_noop("Center"), "c
 
 fn align_rows(kind: &'static str) -> Vec<MenuRow> {
     let opts = if kind == "mainAlign" { MAIN_ALIGN } else { CROSS_ALIGN };
-    opts.iter().map(|(label, _)| MenuRow::new(*label)).collect()
+    opts.iter().map(|(label, _)| MenuRow::row(*label)).collect()
 }
 
 /// Look up the serde value for a picked alignment label (used by `right_panel`'s on_pick).
@@ -2396,15 +2495,50 @@ pub(crate) fn right_panel(
                         const C: [&str; 3] = ["object.rotateRight", "object.flipH", "object.flipV"];
                         rot_cmds.push(Cmd { id: C[i.min(2)], params: None });
                     });
-            let mut pos_sec = PanelSection::new(tr("Position"));
+            // egui `right.rs::position_row`: children of an auto layout frame can ignore the
+            // layout (absolute position). The command / active state are the same, but the
+            // button lives in the Position section's header slot, not in the X/Y field row.
+            let absolute_btn = data.parent_al.then(|| {
+                let abs_cmds = f.cmds.clone();
+                let on = data.absolute.unwrap_or(false);
+                IconButton::new(Icon::AbsolutePosition).size(24.0).active(on).on_click(move |_e, _w, _cx| {
+                    abs_cmds.push(Cmd { id: "node.set", params: Some(serde_json::json!({ "props": { "absolute": !on } })) });
+                })
+            });
+            // One trailing slot, so both optional header buttons share it.
+            let has_pos_trail = distribute_btn.is_some() || absolute_btn.is_some();
+            let mut pos_trail = div().flex().flex_row().items_center().gap(pt(4.0));
             if let Some(b) = distribute_btn {
-                pos_sec = pos_sec.header_trail(b);
+                pos_trail = pos_trail.child(b);
+            }
+            if let Some(b) = absolute_btn {
+                pos_trail = pos_trail.child(b);
+            }
+            let constraints_open = *f.constraints_open.borrow();
+            let constraints_toggle = {
+                let flag = f.constraints_open.clone();
+                let wake = f.cmds.clone();
+                IconButton::new(Icon::LayoutGrid)
+                    .size(24.0)
+                    .active(constraints_open)
+                    .on_click(move |_e, _w, _cx| {
+                        let next = !*flag.borrow();
+                        *flag.borrow_mut() = next;
+                        wake.wake();
+                    })
+            };
+            let mut pos_sec = PanelSection::new(tr("Position"));
+            if has_pos_trail {
+                pos_sec = pos_sec.header_trail(pos_trail);
             }
             let pos_sec = pos_sec
                 .child(sublabel_row(tr("Alignment")))
                 .child(field_row(vec![h.into_any_element(), v.into_any_element()], Vec::<IconButton>::new()))
                 .child(sublabel_row(tr("Position")))
-                .child(field_row(vec![f.x.clone().into_any_element(), f.y.clone().into_any_element()], Vec::<IconButton>::new()))
+                .child(field_row(
+                    vec![f.x.clone().into_any_element(), f.y.clone().into_any_element()],
+                    vec![constraints_toggle],
+                ))
                 .child(sublabel_row(tr("Rotation")))
                 .child(field_row(vec![f.rotation.clone().into_any_element(), rotate.into_any_element()], Vec::<IconButton>::new()));
 
@@ -2414,7 +2548,7 @@ pub(crate) fn right_panel(
             // 选中即 `node.set {"props":{"constraints":{"horizontal"/"vertical":v}}}`（等价于 egui 的
             // `app.set_props(&ids, json!({"constraints":{"horizontal": v}}))`，`node.set` 由 Cmd 通道附带
             // 选区 ids 执行）。`None` = Mixed，下拉显示 "Mixed"。
-            let pos_sec = if data.in_frame {
+            let pos_sec = if constraints_open {
                 let pretty_h = |v: Option<&'static str>| -> &'static str {
                     match v {
                         Some("leftRight") => tr("Left & right"),
@@ -2443,12 +2577,33 @@ pub(crate) fn right_panel(
                     (tr("Center").into(), "node.set", serde_json::json!({ "props": { "constraints": { "vertical": "center" } } })),
                     (tr("Scale").into(), "node.set", serde_json::json!({ "props": { "constraints": { "vertical": "scale" } } })),
                 ];
-                pos_sec.child(sublabel_row(tr("Constraints"))).child(field_row(
+                pos_sec.child(sublabel_row(tr("Constraints"))).child(crate::widgets::field_row_h(
                     vec![
-                        right::sections::pick_dropdown(f, pretty_h(data.constraints_h), col, h_opts),
-                        right::sections::pick_dropdown(f, pretty_v(data.constraints_v), col, v_opts),
+                        div()
+                            .w_full()
+                            .flex()
+                            .flex_col()
+                            .h_full()
+                            .gap(pt(8.0))
+                            .child(right::sections::pick_dropdown_lead(
+                                f,
+                                pretty_h(data.constraints_h),
+                                col,
+                                h_opts,
+                                Some(Icon::DistributeH),
+                            ))
+                            .child(right::sections::pick_dropdown_lead(
+                                f,
+                                pretty_v(data.constraints_v),
+                                col,
+                                v_opts,
+                                Some(Icon::AlignTop),
+                            ))
+                            .into_any_element(),
+                        right::sections::constraint_graphic(f, data, col),
                     ],
                     Vec::<IconButton>::new(),
+                    56.0,
                 ))
             } else {
                 pos_sec
@@ -2744,7 +2899,9 @@ pub(crate) fn auto_layout_section(
         let individual = *f.pad_individual.borrow();
         let toggle_cmds = f.cmds.clone();
         let pad_flag = f.pad_individual.clone();
-        let toggle = IconButton::new(Icon::AbsolutePosition).size(24.0).active(individual).on_click(move |_e, _w, _cx| {
+        // 独立内边距开关接上 layout-padding-individual 图标（田字格）。此前用的是
+        // Icon::AbsolutePosition 占位字形，与展开后的四边图标不是同一族。
+        let toggle = right::sections::named_icon_toggle("layout-padding-individual", individual, move || {
             let new_val = !*pad_flag.borrow();
             *pad_flag.borrow_mut() = new_val;
             // 翻转后必须唤醒视图重绘，否则右栏读到的还是旧 `pad_individual`，四个内边距字段不展开。

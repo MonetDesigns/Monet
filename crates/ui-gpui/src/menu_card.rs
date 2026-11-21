@@ -22,7 +22,7 @@ pub(crate) use crate::widgets::Width;
 use crate::widgets::icon::{Icon, paint as paint_icon};
 use crate::widgets::{MENU_TRAIL_GAP, pt, rgba, tokens};
 use gpui::prelude::*;
-use gpui::{AnyElement, App, MouseButton, MouseDownEvent, SharedString, TextRun, Window, div};
+use gpui::{AnyElement, App, Hsla, MouseButton, MouseDownEvent, SharedString, TextRun, Window, div, svg};
 use std::rc::Rc;
 
 /// The card's inset (egui `menu_frame`: `Margin::same(8)`). The fill, the 13 pt corners and the
@@ -32,12 +32,13 @@ const PAD: f32 = crate::menu_metrics::MENU_PAD;
 const ITEM_RADIUS: f32 = 5.0;
 /// 动作库行的字号（egui `MenuItem::show_palette` 的 `regular(13.0)`）。
 const PALETTE_TEXT_PT: f32 = 13.0;
-/// The check column: egui's label starts at `r.min.x + 28.0`.
-const CHECK_W: f32 = 28.0;
-/// The icon column's left edge and the label's, for a row that carries a tool mark.
-const ICON_X: f32 = 24.0;
+/// The check column: one whole 24 pt grid slot, centred.
+const CHECK_W: f32 = crate::menu_metrics::MENU_SLOT_W;
+/// The icon column's left edge and the label's, for a row that carries a mark.
+const ICON_X: f32 = crate::menu_metrics::MENU_SLOT_W;
 const ICON_SIZE: f32 = 16.0;
-const ICON_LABEL_X: f32 = 48.0;
+/// Check slot + icon slot; the two slots touch, so the label starts at 48.
+const ICON_LABEL_X: f32 = ICON_X + CHECK_W;
 /// A separator's height, shared by every menu: 4 + 1 + 4.
 const SEP_H: f32 = crate::menu_metrics::MENU_SEP_H;
 
@@ -50,6 +51,9 @@ pub struct Item {
     /// The value handed to `OnPick` (defaults to `id`). Dynamic rows — an Actions palette
     /// component, style, plugin or widget — carry a runtime key here instead of a static id.
     pub key: SharedString,
+    /// Distinguishes an explicitly-set key (even an empty one, e.g. `.key("")` to clear the
+    /// brush tip) from the row() default where an empty key means "fall back to the label".
+    pub key_explicit: bool,
     pub label: SharedString,
     pub checked: Option<bool>,
     /// 让这一行常亮 **hover 底色**（工具栏 flyout 用它标出当前工具）。默认 `false`：
@@ -57,6 +61,9 @@ pub struct Item {
     pub active_fill: bool,
     pub disabled: bool,
     pub icon: Option<Icon>,
+    /// 资源路径字形（`icons/<name>.svg`），给没有 `Icon` 枚举变体的字形用（如右栏 sides
+    /// 菜单的 `layout-padding-*` 方位图标）。与 `icon` 二选一，`glyph` 优先。
+    pub glyph: Option<SharedString>,
     pub trail: Option<SharedString>,
     pub separator_before: bool,
     pub sub: Vec<Item>,
@@ -67,19 +74,43 @@ impl Item {
         Self {
             id,
             key: SharedString::from(id),
+            key_explicit: true,
             label: label.into(),
             checked: None,
             active_fill: false,
             disabled: false,
             icon: None,
+            glyph: None,
             trail: None,
             separator_before: false,
             sub: Vec::new(),
         }
     }
+
+    /// 右栏下拉/主菜单的习惯构造：只要一个标签。`id` 留空、pick 值回落到标签（对齐旧
+    /// `MenuRow::new` 的语义）。统一后两侧菜单都调这里，项配置仍走同一套 builder。
+    pub fn row(label: impl Into<SharedString>) -> Self {
+        let mut r = Self::new("", label);
+        r.key_explicit = false;
+        r
+    }
+
+    /// 旧 `MenuRow::separator()` 的别名 —— 统一项模型后 `separator_before()` 保持原样，
+    /// 这里只加一个同义入口，不改任何行为。
+    pub fn separator(mut self) -> Self {
+        self.separator_before = true;
+        self
+    }
+
+    /// 资源路径字形（没有 `Icon` 枚举变体时用，如 `icons/layout-padding-top.svg`）。
+    pub fn glyph(mut self, path: impl Into<SharedString>) -> Self {
+        self.glyph = Some(path.into());
+        self
+    }
     /// Override the value handed to `OnPick` (defaults to `id`).
     pub fn key(mut self, k: impl Into<SharedString>) -> Self {
         self.key = k.into();
+        self.key_explicit = true;
         self
     }
     pub fn disabled(mut self, b: bool) -> Self {
@@ -119,12 +150,12 @@ pub type OnSub = Rc<dyn Fn(usize, &mut Window, &mut App)>;
 
 /// 标签的左内缩：无勾选列 8；有勾选列时普通行 28、带图标的工具行 48。
 fn label_x(item: &Item, has_check: bool) -> f32 {
-    if !has_check {
-        8.0
-    } else if item.icon.is_some() {
-        ICON_LABEL_X
-    } else {
-        CHECK_W
+    let marked = item.icon.is_some() || item.glyph.is_some();
+    match (has_check, marked) {
+        (true, true) => ICON_LABEL_X,
+        (true, false) => CHECK_W,
+        (false, true) => ICON_X,
+        (false, false) => 8.0,
     }
 }
 
@@ -245,15 +276,26 @@ pub(crate) fn rows(
         }
         // The check mark and the icon are absolutely placed so the label's own inset stays exact.
         if has_check {
-            row = row.child(div().absolute().left(pt(6.0)).top(pt(0.0)).h(pt(row_h)).flex().items_center().child(if item.checked == Some(true) {
-                "✓"
-            } else {
-                ""
-            }));
+            row = row.child(
+                div()
+                    .absolute()
+                    .left(pt(0.0))
+                    .w(pt(CHECK_W))
+                    .top(pt(0.0))
+                    .h(pt(row_h))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(if item.checked == Some(true) { "✓" } else { "" }),
+            );
         }
-        if let Some(icon) = item.icon {
-            // 与标签、勾号同色；.disabled 的变淡由行盒的 opacity(0.4) 统一负责。
-            let color = crate::menu_metrics::ink();
+        // 与标签、勾号同色；.disabled 的变淡由行盒的 opacity(0.4) 统一负责。
+        let color = crate::menu_metrics::ink();
+        if let Some(path) = item.glyph.clone() {
+            // 资源路径字形：没有 Icon 枚举变体的 SVG（16 网格原生尺寸）。
+            let mark = svg().path(path).w(pt(ICON_SIZE)).h(pt(ICON_SIZE)).flex_none().text_color(Hsla::from(color)).into_any_element();
+            row = row.child(div().absolute().left(pt(ICON_X)).w(pt(crate::menu_metrics::MENU_SLOT_W)).top(pt(0.0)).h(pt(row_h)).flex().items_center().justify_center().child(mark));
+        } else if let Some(icon) = item.icon {
             // A shape-tool mark is a 24 pt vector: the icon column is 24 pt wide, so let the
             // vector keep its own size instead of forcing it into ICON_SIZE (which would also
             // scale the shared 1 pt stroke).
@@ -262,7 +304,7 @@ pub(crate) fn rows(
             } else {
                 paint_icon(icon, color, ICON_SIZE).into_any_element()
             };
-            row = row.child(div().absolute().left(pt(ICON_X)).top(pt(0.0)).h(pt(row_h)).flex().items_center().child(mark));
+            row = row.child(div().absolute().left(pt(ICON_X)).w(pt(crate::menu_metrics::MENU_SLOT_W)).top(pt(0.0)).h(pt(row_h)).flex().items_center().justify_center().child(mark));
         }
         row = row.child(div().flex_1().min_w(pt(0.0)).overflow_hidden().whitespace_nowrap().child(item.label.clone()));
         if has_sub {
@@ -365,5 +407,23 @@ mod tests {
         let tool = Item::new("b", "B").icon(Icon::Move);
         assert_eq!(label_x(&tool, true), ICON_LABEL_X);
         assert_eq!(ICON_X + ICON_SIZE, 40.0);
+    }
+
+    /// 统一后：下拉 / 右键 / 工具栏 / 主菜单共用这一个 Item。`row()` 是旧 MenuRow::new 的
+    /// 兼容入口（pick 回落到 label），`glyph()` 承载没有 Icon 枚举变体的资源字形，
+    /// `checked()` / `separator()` 是单选勾选与分隔线 —— sides 菜单就靠这三项配置。
+    #[test]
+    fn one_item_model_carries_all_menu_config() {
+        let r = Item::row("Custom").key("custom").glyph("icons/typ-settings.svg").checked(Some(true)).separator();
+        assert_eq!(r.label, "Custom");
+        assert_eq!(r.key, "custom");
+        assert_eq!(r.glyph.clone().map(|s| s.to_string()), Some("icons/typ-settings.svg".to_string()));
+        assert_eq!(r.checked, Some(true));
+        assert!(r.separator_before);
+        assert_eq!(label_x(&r, true), ICON_LABEL_X, "带 glyph 的行也要给图标列留位");
+        // 普通 row() 的 pick key 为空 → 渲染器回落到 label，等价旧 None 语义。
+        let plain = Item::row("All");
+        assert!(plain.key.is_empty());
+        assert!(plain.glyph.is_none());
     }
 }

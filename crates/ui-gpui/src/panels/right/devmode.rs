@@ -477,7 +477,7 @@ fn measure_line(f: &RightFields, m: &MeasurementRow) -> Div {
 
 /// 勾选型下拉（`MenuRow::checked`）：钉属性菜单要看得出哪几条已经钉了。
 fn checked_dropdown(f: &RightFields, label: &'static str, rows: Vec<(String, bool, Value)>) -> Dropdown {
-    let menu: Vec<MenuRow> = rows.iter().map(|(l, on, _)| MenuRow::new(l.clone()).checked(Some(*on))).collect();
+    let menu: Vec<MenuRow> = rows.iter().map(|(l, on, _)| MenuRow::row(l.clone()).checked(Some(*on))).collect();
     let mut d = Dropdown::new(SharedString::from(label), 0.0, None).fill();
     if let Some(root) = f.root.clone() {
         let cmds = f.cmds.clone();

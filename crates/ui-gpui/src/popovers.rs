@@ -66,6 +66,18 @@ pub(crate) fn anchored_top(key: &str, window: &Window) -> Pixels {
     window_trigger_top(key).get().map(|b| b.origin.y).unwrap_or_else(|| window.mouse_position().y - px(BUTTON_HALF))
 }
 
+/// A menu that opens below a button: its left edge on the button's left, its top 4 pt below the
+/// button's bottom. Used where the generic right-edge anchor would put the card over the panel.
+pub(crate) fn anchored_left_below(key: &str, window: &Window) -> Point<Pixels> {
+    window_trigger_top(key)
+        .get()
+        .map(|b| Point { x: b.origin.x, y: b.origin.y + b.size.height + px(4.0) })
+        .unwrap_or_else(|| {
+            let p = window.mouse_position();
+            Point { x: p.x - px(BUTTON_HALF), y: p.y + px(BUTTON_HALF + 4.0) }
+        })
+}
+
 /// 变量 / 文本样式列表的最大可见高度（超出滚动）。必须是常量：从 `body_h` 派生会被
 /// `measured_h` 的「量到多少就多高」反馈放大，每帧长一截。
 const LIST_MAX_H: f32 = 320.0;
@@ -98,6 +110,10 @@ pub(crate) enum WindowKind {
     /// 本地样式编辑器（egui `style_picker::editor`）：与上面几个设置窗共用
     /// `WindowState` 通用弹窗卡 + `Setting` 通用行，只是分派标识不同，不是另一套弹窗实现。
     StyleEditor,
+    /// 组件属性设置弹窗：右栏 Properties 每个属性行的设置按钮打开，正文用通用 `Setting`
+    /// 行编辑属性名 / 默认值 / 变体值（抄 lizard `component_panel.rs::properties_ui` 的属性设置，
+    /// 但按用户 2026-11-20 要求从「行下内联框」改成通用弹窗卡）。
+    ComponentProperty,
     /// 平滑圆角小窗：右栏 Appearance 圆角行旁的小按钮打开，正文只有一条通用滑条。
     CornerSmoothing,
     /// 字体选择窗：Typography 的字体族控件打开，列表每项用它自己的字体渲染名称做预览。
@@ -910,6 +926,11 @@ impl WindowState {
     /// point is then used only to decide *which* button was pressed, never to place the card.
     pub(crate) fn anchor_to_button_top(&mut self, top: Pixels) {
         self.exact_top = Some(top);
+    }
+
+    /// Pin the card's top-left exactly at a point (no right-edge anchoring, no lift).
+    pub(crate) fn anchor_at(&mut self, at: Point<Pixels>) {
+        self.open = Open::At(at);
     }
 
     /// 供根视图判断当前是否是某个特定窗口（例如变量面板已开时再点按钮就不要二次弹出）。
@@ -1775,6 +1796,108 @@ impl WindowState {
 
     /// 打开「Corner smoothing」小窗：一条 0..100% 的通用滑条，拖动写回 `node.set`。
     ///
+    /// 组件属性设置弹窗（抄 lizard `component_panel.rs` 的 `property_create_dialog` / 属性设置，
+    /// 但按用户 2026-11-20 要求：不是行下内联框，而是通用 `WindowState` 弹窗卡）。
+    ///
+    /// `owner` = 组件 / 组件集 id，`name` = 属性名，`kind` = boolean/text/variant/instanceSwap/slot，
+    /// `default` = 当前默认值显示串，`options` = variant 值 / swap 候选显示串。
+    /// 正文全部用通用 `Setting` 行：Name 与 Default 是 `Setting::Field`（TextField），
+    /// variant 值用 `Setting::Dropdown` 选；提交走 `component.editProperty`。
+    pub(crate) fn component_property(
+        cmds: Cmds,
+        cx: &mut App,
+        owner: u64,
+        name: String,
+        kind: &'static str,
+        default: String,
+        options: Vec<(String, u64)>,
+        anchor: Point<Pixels>,
+    ) -> Self {
+        let mut w = Self::base(WindowKind::ComponentProperty, tr("Edit property"), cmds, Open::Anchor(anchor));
+        w.width = 300.0;
+        w.pad = 12.0;
+        // Name + 一行默认值/下拉 + 类型说明；variant 多一行（默认值下拉）。
+        w.height = HEADER_H + 3.0 * 32.0 + 24.0;
+        let mut settings = Vec::new();
+        // Name：改名用 newName；owner + 原 name 定位属性。
+        let nc = w.cmds.clone();
+        let n_old = name.clone();
+        let name_field = TextField::build(cx, 176.0, move |tf, _| {
+            tf.set_value(n_old.clone());
+            let nc = nc.clone();
+            let n_old = n_old.clone();
+            tf.set_on_commit(move |text, _w, _cx| {
+                let next = text.trim();
+                if !next.is_empty() && next != n_old {
+                    nc.push(Cmd {
+                        id: "component.editProperty",
+                        params: Some(json!({ "id": owner, "name": n_old, "newName": next })),
+                    });
+                }
+            });
+        });
+        settings.push(Setting::Field { tab: 0, label: tr("Name").into(), field: name_field });
+        // 默认值：按引擎 coerce 契约分别渲染（见 engine cmd/component/props.rs::coerce）。
+        // - boolean: 文本 true/false（coerce 认）→ 通用 Field
+        // - text: 字符串 → 通用 Field
+        // - variant: 候选值下拉 → Dropdown（default 是字符串值）
+        // - instanceSwap: 必须是 component id → Dropdown（Opt 的 params 用 id 数字）
+        // - slot: 引擎不接受 default → 不画这一行，只提示
+        match kind {
+            "variant" => {
+                settings.push(Setting::Dropdown {
+                    tab: 0,
+                    label: tr("Default value").into(),
+                    current: Rc::new(RefCell::new(SharedString::from(default.clone()))),
+                    options: options
+                        .into_iter()
+                        .map(|(label, _)| Opt::new(label.clone(), "component.editProperty", json!({ "id": owner, "name": name, "default": label })))
+                        .collect(),
+                    anchor: Rc::new(RefCell::new(None)),
+                });
+            }
+            "instanceSwap" => {
+                settings.push(Setting::Dropdown {
+                    tab: 0,
+                    label: tr("Default instance").into(),
+                    current: Rc::new(RefCell::new(SharedString::from(default.clone()))),
+                    options: options
+                        .into_iter()
+                        .map(|(label, id)| Opt::new(label, "component.editProperty", json!({ "id": owner, "name": name, "default": id })))
+                        .collect(),
+                    anchor: Rc::new(RefCell::new(None)),
+                });
+            }
+            "slot" => {
+                settings.push(Setting::Caption { tab: 0, text: tr("Fill this slot in an instance").into() });
+            }
+            _ => {
+                let dc = w.cmds.clone();
+                let d_name = name.clone();
+                let d_kind = kind;
+                let default_field = TextField::build(cx, 176.0, move |tf, _| {
+                    tf.set_value(default.clone());
+                    let dc = dc.clone();
+                    let d_name = d_name.clone();
+                    tf.set_on_commit(move |text, _w, _cx| {
+                        // Boolean parses trimmed text; Text properties preserve whitespace —
+                        // the engine's Text coercion keeps the string verbatim, so trimming here
+                        // would silently change the saved default (" Label " / blank defaults).
+                        let value: Value = if d_kind == "boolean" { json!(text.trim().eq_ignore_ascii_case("true")) } else { json!(text) };
+                        dc.push(Cmd {
+                            id: "component.editProperty",
+                            params: Some(json!({ "id": owner, "name": d_name, "default": value })),
+                        });
+                    });
+                });
+                settings.push(Setting::Field { tab: 0, label: tr("Default").into(), field: default_field });
+            }
+        }
+        settings.push(Setting::Caption { tab: 0, text: SharedString::from(format!("{} · {}", tr("Type"), kind)) });
+        *w.settings.borrow_mut() = settings;
+        w
+    }
+
     /// 与 Layout / 描边 / 效果设置共用同一张 `WindowState` 通用弹窗卡（header + 关闭 + 拖动），
     /// 只是正文换成滑条，没有另造一套窗口框架。
     pub(crate) fn corner_smoothing(cmds: Cmds, value: f32, anchor: Point<Pixels>) -> Self {
@@ -2896,6 +3019,7 @@ impl WindowState {
             | WindowKind::EffectSettings
             | WindowKind::StyleEditor
             | WindowKind::CornerSmoothing
+            | WindowKind::ComponentProperty
             | WindowKind::ExportSettings
             | WindowKind::FontPicker => title_text(self.title.clone()).into_any_element(),
             // Type settings 的标题栏就是三页签（截图顶部没有单独的 "Type settings" 标题文字），
@@ -2982,7 +3106,8 @@ impl WindowState {
             | WindowKind::TypeSettings
             | WindowKind::EffectSettings
             | WindowKind::ExportSettings
-            | WindowKind::StyleEditor => self.settings_element(cx),
+            | WindowKind::StyleEditor
+            | WindowKind::ComponentProperty => self.settings_element(cx),
             WindowKind::Variables | WindowKind::TextStyles => self.list_element(cx, body_h),
             WindowKind::VariablesTable => {
                 if self.editor.is_none() {
@@ -3463,42 +3588,12 @@ impl WindowState {
             let sel_cat = *c.aa_category.borrow();
             let sel_lvl = *c.aa_level.borrow();
             let rows = vec![
-                MenuRow { label: row_auto, trail: None, key: None, checked: Some(sel_cat.is_none()), separator_before: false },
-                MenuRow {
-                    label: row_large,
-                    trail: None,
-                    key: None,
-                    checked: Some(sel_cat == Some(figcraft_color::ContrastCategory::LargeText)),
-                    separator_before: false,
-                },
-                MenuRow {
-                    label: row_normal,
-                    trail: None,
-                    key: None,
-                    checked: Some(sel_cat == Some(figcraft_color::ContrastCategory::NormalText)),
-                    separator_before: false,
-                },
-                MenuRow {
-                    label: row_graphics,
-                    trail: None,
-                    key: None,
-                    checked: Some(sel_cat == Some(figcraft_color::ContrastCategory::Graphics)),
-                    separator_before: false,
-                },
-                MenuRow {
-                    label: row_aa,
-                    trail: None,
-                    key: None,
-                    checked: Some(sel_lvl == figcraft_color::ContrastLevel::AA),
-                    separator_before: true,
-                },
-                MenuRow {
-                    label: row_aaa,
-                    trail: None,
-                    key: None,
-                    checked: Some(sel_lvl == figcraft_color::ContrastLevel::AAA),
-                    separator_before: false,
-                },
+                MenuRow::row(row_auto).checked(Some(sel_cat.is_none())),
+                MenuRow::row(row_large).checked(Some(sel_cat == Some(figcraft_color::ContrastCategory::LargeText))),
+                MenuRow::row(row_normal).checked(Some(sel_cat == Some(figcraft_color::ContrastCategory::NormalText))),
+                MenuRow::row(row_graphics).checked(Some(sel_cat == Some(figcraft_color::ContrastCategory::Graphics))),
+                MenuRow::row(row_aa).checked(Some(sel_lvl == figcraft_color::ContrastLevel::AA)).separator(),
+                MenuRow::row(row_aaa).checked(Some(sel_lvl == figcraft_color::ContrastLevel::AAA)),
             ];
             // 通用菜单 + **宽度自适应**（None，不再硬编码 180）；与按钮**中心对齐**、
             // 顶部在按钮底部下方 4pt（BottomCenter 的默认 gap 就是 4）。
@@ -3581,7 +3676,7 @@ impl WindowState {
         if let Some(anchor) = c.model_anchor.get() {
             let rows: Vec<MenuRow> = COLOR_MODELS
                 .iter()
-                .map(|n| MenuRow { label: (*n).into(), trail: None, checked: Some(*n == model_name), separator_before: false, key: None })
+                .map(|n| MenuRow::row(SharedString::from(*n)).checked(Some(*n == model_name)))
                 .collect();
             let set_model = c.model.clone();
             let close = c.model_anchor.clone();
@@ -3607,7 +3702,7 @@ impl WindowState {
             let current_blend = state.borrow().blend;
             let rows: Vec<MenuRow> = figcraft_color::BlendMode::ALL
                 .iter()
-                .map(|m| MenuRow { label: m.label().into(), trail: None, checked: Some(*m == current_blend), separator_before: false, key: None })
+                .map(|m| MenuRow::row(SharedString::from(m.label())).checked(Some(*m == current_blend)))
                 .collect();
             let write = p.on_write.clone();
             let st = state.clone();
@@ -3635,7 +3730,7 @@ impl WindowState {
         if let Some(anchor) = c.swatch_anchor.get() {
             let rows: Vec<MenuRow> = [("On this page", 0u8), ("Recent", 1u8)]
                 .into_iter()
-                .map(|(name, i)| MenuRow { label: tr(name).into(), trail: None, checked: Some(i == set), separator_before: false, key: None })
+                .map(|(name, i)| MenuRow::row(SharedString::from(tr(name))).checked(Some(i == set)))
                 .collect();
             let set_cell = c.swatch_set.clone();
             let close = c.swatch_anchor.clone();
@@ -3670,7 +3765,7 @@ impl WindowState {
             let rows: Vec<MenuRow> = labels
                 .iter()
                 .enumerate()
-                .map(|(i, l)| MenuRow { label: (*l).into(), trail: None, checked: Some(i == active), separator_before: false, key: None })
+                .map(|(i, l)| MenuRow::row(SharedString::from(*l)).checked(Some(i == active)))
                 .collect();
             let write = p.on_write.clone();
             let st = state.clone();
@@ -4871,7 +4966,7 @@ impl WindowState {
                 let shown = *anchor.borrow();
                 if let Some(rect) = shown {
                     let rows: Vec<MenuRow> =
-                        options.iter().map(|o| MenuRow::new(o.label.clone()).checked(Some(o.label == *current.borrow()))).collect();
+                        options.iter().map(|o| MenuRow::row(o.label.clone()).checked(Some(o.label == *current.borrow()))).collect();
                     let opts = options.clone();
                     let cmds = self.cmds.clone();
                     let cur_state = current.clone();
@@ -5338,7 +5433,7 @@ impl WindowState {
                         }
                     };
                     if let Some(rect) = *anchor.borrow() {
-                        let rows: Vec<MenuRow> = menu.iter().map(|(l, _)| MenuRow::new(l.clone())).collect();
+                        let rows: Vec<MenuRow> = menu.iter().map(|(l, _)| MenuRow::row(l.clone())).collect();
                         let items = menu.clone();
                         let w = write.clone();
                         let at2 = anchor.clone();
@@ -5418,7 +5513,7 @@ impl WindowState {
                         wake.wake();
                     });
                     if let Some(rect) = *anchor.borrow() {
-                        let rows: Vec<MenuRow> = options.iter().map(|o| MenuRow::new(o.clone()).checked(Some(*o == *current.borrow()))).collect();
+                        let rows: Vec<MenuRow> = options.iter().map(|o| MenuRow::row(o.clone()).checked(Some(*o == *current.borrow()))).collect();
                         let sid = style_id.clone();
                         let ts = text.clone();
                         let cmds = self.cmds.clone();
@@ -5568,7 +5663,7 @@ impl WindowState {
                 });
                 if let Some(rect) = *anchor.borrow() {
                     let rows: Vec<MenuRow> =
-                        figcraft_doc::Effect::TYPES.iter().map(|(l, _)| MenuRow::new(tr(l)).checked(Some(tr(l) == label.as_ref()))).collect();
+                        figcraft_doc::Effect::TYPES.iter().map(|(l, _)| MenuRow::row(tr(l)).checked(Some(tr(l) == label.as_ref()))).collect();
                     let arr2 = arr.clone();
                     let cmds2 = cmds.clone();
                     let sid2 = sid.clone();
@@ -5657,7 +5752,7 @@ impl WindowState {
                         ("Columns", figcraft_doc::LayoutGrid::columns()),
                         ("Rows", figcraft_doc::LayoutGrid::rows()),
                     ];
-                    let rows: Vec<MenuRow> = kinds.iter().map(|(l, _)| MenuRow::new(tr(l))).collect();
+                    let rows: Vec<MenuRow> = kinds.iter().map(|(l, _)| MenuRow::row(tr(l))).collect();
                     let arr2 = arr.clone();
                     let cmds2 = cmds.clone();
                     let sid2 = sid.clone();

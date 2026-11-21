@@ -9,6 +9,7 @@ use figcraft_geom::Point;
 use serde_json::json;
 
 use super::geom::*;
+use super::outline::crisp_line;
 use super::painter::Painter;
 use crate::app::CanvasApp;
 
@@ -294,13 +295,15 @@ pub(super) fn draw(app: &CanvasApp, painter: &mut Painter, st: &State) {
             continue;
         }
         let hovered = hover == Some(g) || selected == Some((g.owner, g.index));
-        painter.line_segment(segment(app, &g, r), Stroke::new(if hovered { 2.0 } else { 1.0 }, GUIDE));
+        let [a, b] = segment(app, &g, r);
+        crisp_line(painter, a, b, if hovered { 2.0 } else { 1.0 }, app.ppp, GUIDE);
         if hovered {
             label(app, painter, r, &g);
         }
     }
     if let Some(g) = st.preview {
-        painter.line_segment(segment(app, &g, r), Stroke::new(1.0, GUIDE));
+        let [a, b] = segment(app, &g, r);
+        crisp_line(painter, a, b, 1.0, app.ppp, GUIDE);
         label(app, painter, r, &g);
     }
 }

@@ -116,7 +116,7 @@ pub(crate) const GROUPS: &[Group] = &[
         tools: &[(ToolId::Pen, Icon::Pen), (ToolId::Brush, Icon::Marker), (ToolId::Pencil, Icon::Pencil), (ToolId::ShapeBuilder, Icon::ShapeBuilder)],
         options: Options::None,
     },
-    Group { key: "text", name: "Text", tools: &[(ToolId::Text, Icon::Text), (ToolId::TextOnPath, Icon::TextOnPath)], options: Options::None },
+    Group { key: "text", name: "Text", tools: &[(ToolId::Text, Icon::ToolText), (ToolId::TextOnPath, Icon::TextOnPath)], options: Options::None },
     Group { key: "comment", name: "Comment", tools: &[(ToolId::Comment, Icon::Comment)], options: Options::None },
 ];
 
@@ -133,7 +133,7 @@ pub(crate) const BOARD_GROUPS: &[Group] = &[
     Group { key: "sticky", name: "Sticky note colors", tools: &[(ToolId::Sticky, Icon::Board)], options: Options::Colors },
     Group { key: "bshape", name: "Shapes", tools: &[(ToolId::BoardShape, Icon::Shapes)], options: Options::Shapes },
     Group { key: "connector", name: "Connector", tools: &[(ToolId::Connector, Icon::Connector)], options: Options::None },
-    Group { key: "text", name: "Text", tools: &[(ToolId::Text, Icon::Text)], options: Options::None },
+    Group { key: "text", name: "Text", tools: &[(ToolId::Text, Icon::ToolText)], options: Options::None },
     Group { key: "section", name: "Section", tools: &[(ToolId::Section, Icon::Section)], options: Options::None },
     Group { key: "stamp", name: "Stamps", tools: &[(ToolId::Stamp, Icon::Stamp)], options: Options::Stamps },
     Group { key: "comment", name: "Comment", tools: &[(ToolId::Comment, Icon::Comment)], options: Options::None },

@@ -6,6 +6,7 @@
 use figcraft_doc::{Document, Node, NodeId, NodeKind};
 
 use super::geom::*;
+use super::outline::crisp_line;
 use super::painter::{Galley, Label, Painter, text_size};
 use crate::app::CanvasApp;
 use crate::theme::{DEV_CHANGED, DEV_COMPLETED, DEV_READY, Tokens, stroke};
@@ -159,7 +160,7 @@ pub(super) fn rulers(app: &CanvasApp, painter: &mut Painter, t: &Tokens, doc: &D
             let rect = Rect::from_min_size(pos2(x, top.top() + 2.0), galley.size());
             top_edges.push((rect, galley));
             if at >= top.left() && at <= top.right() {
-                painter.line_segment([pos2(at, top.bottom() - 7.0), pos2(at, top.bottom())], stroke(selected_label_color, 1.0));
+                crisp_line(painter, pos2(at, top.bottom() - 7.0), pos2(at, top.bottom()), 1.0, app.ppp, selected_label_color);
             }
         }
         // 左标尺：同样的两端坐标，文字竖排。
@@ -169,7 +170,7 @@ pub(super) fn rulers(app: &CanvasApp, painter: &mut Painter, t: &Tokens, doc: &D
             let center_y = if before { at - 5.0 - length / 2.0 } else { at + 5.0 + length / 2.0 };
             side_edges.push(VLabel::new(pos2(side.left() + 7.5, center_y), text, regular(9.0), selected_label_color));
             if at >= side.top() && at <= side.bottom() {
-                painter.line_segment([pos2(side.right() - 7.0, at), pos2(side.right(), at)], stroke(selected_label_color, 1.0));
+                crisp_line(painter, pos2(side.right() - 7.0, at), pos2(side.right(), at), 1.0, app.ppp, selected_label_color);
             }
         }
     }
@@ -187,7 +188,7 @@ pub(super) fn rulers(app: &CanvasApp, painter: &mut Painter, t: &Tokens, doc: &D
         let major = index.rem_euclid(5) == 0;
         let tick = if major { 6.0 } else { 3.0 };
         if x >= top.left() && x <= top.right() {
-            painter.line_segment([pos2(x, top.bottom() - tick), pos2(x, top.bottom())], stroke(tick_color, 1.0));
+            crisp_line(painter, pos2(x, top.bottom() - tick), pos2(x, top.bottom()), 1.0, app.ppp, tick_color);
         }
         if major {
             let color = if selected.is_some_and(|(_, _, a, b)| (a.x..b.x).contains(&x)) { muted_number_color } else { number_color };
@@ -215,7 +216,7 @@ pub(super) fn rulers(app: &CanvasApp, painter: &mut Painter, t: &Tokens, doc: &D
         let major = index.rem_euclid(5) == 0;
         let tick = if major { 6.0 } else { 3.0 };
         if y >= side.top() && y <= side.bottom() {
-            painter.line_segment([pos2(side.right() - tick, y), pos2(side.right(), y)], stroke(tick_color, 1.0));
+            crisp_line(painter, pos2(side.right() - tick, y), pos2(side.right(), y), 1.0, app.ppp, tick_color);
         }
         if major {
             let color = if selected.is_some_and(|(_, _, a, b)| (a.y..b.y).contains(&y)) { muted_number_color } else { number_color };
@@ -243,8 +244,8 @@ pub(super) fn rulers(app: &CanvasApp, painter: &mut Painter, t: &Tokens, doc: &D
         }
     }
 
-    painter.line_segment([pos2(r.min.x, r.min.y + size), pos2(r.max.x, r.min.y + size)], stroke(t.border, 1.0));
-    painter.line_segment([pos2(r.min.x + size, r.min.y), pos2(r.min.x + size, r.max.y)], stroke(t.border, 1.0));
+    crisp_line(painter, pos2(r.min.x, r.min.y + size), pos2(r.max.x, r.min.y + size), 1.0, app.ppp, t.border);
+    crisp_line(painter, pos2(r.min.x + size, r.min.y), pos2(r.min.x + size, r.max.y), 1.0, app.ppp, t.border);
 }
 
 #[cfg(test)]
