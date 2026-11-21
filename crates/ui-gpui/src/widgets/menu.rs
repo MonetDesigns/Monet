@@ -93,7 +93,15 @@ pub fn menu_popup_in(
     menu_popup_in_aligned(anchor, width_override, rows, on_pick, dismiss, vw, vh, crate::widgets::RectAlign::BottomStart)
 }
 
-/// 与 [`menu_popup_in`] 相同，但可指定相对锚点的对齐方式（右对齐的按钮用 `BottomEnd`）。
+/// 带视口 + 可指定对齐的菜单入口（全项目唯一的弹出菜单渲染路径）。
+///
+/// 位置/防溢出/间距全部由通用 [`crate::widgets::menu_popup::Menu`] 处理，调用方只需：
+/// - `anchor`：触发按钮的真实 `Bounds`（用 `dropdown::menu_anchor` 的跨帧探针，滚动/resize 时跟随）；
+/// - `align`：相对按钮的对齐方式——`BottomStart` 左对齐、`BottomEnd` 右对齐、`BottomCenter` 居中；
+/// - `width_override`：`None` 按内容宽，或给一个下限。
+///
+/// **不要再自己算 left/top/gap**：`End`/`Center` 会自动减卡片尺寸，gap 默认 4pt，超出视口自动贴边/滚动。
+/// 旧代码里手工拼坐标的地方出现过菜单飞到屏幕角落、按钮移动后菜单不跟随等问题，统一走这里。
 pub fn menu_popup_in_aligned(
     anchor: Bounds<Pixels>,
     width_override: Option<f32>,
@@ -105,6 +113,32 @@ pub fn menu_popup_in_aligned(
     align: crate::widgets::RectAlign,
 ) -> AnyElement {
     menu_popup_impl(anchor, width_override, false, rows, on_pick, dismiss, vw, vh, align)
+}
+
+/// 通用能力：菜单开在触发按钮**下方**，顶边距按钮底 4pt、右缘与按钮右缘对齐
+/// （`RectAlign::BottomEnd` 内置 4pt 间距）。右栏顶部操作行、Effects 加号、描边方位下拉都用它。
+pub fn menu_popup_below_end(
+    anchor: Bounds<Pixels>,
+    width_override: Option<f32>,
+    rows: Vec<MenuRow>,
+    on_pick: Rc<dyn Fn(&str, &mut Window, &mut App)>,
+    dismiss: Rc<dyn Fn(&mut Window, &mut App)>,
+    vw: f32,
+    vh: f32,
+) -> AnyElement {
+    menu_popup_in_aligned(anchor, width_override, rows, on_pick, dismiss, vw, vh, crate::widgets::RectAlign::BottomEnd)
+}
+
+/// [`menu_popup_below_end`] 的宽度按最宽内容（`Width::Fit`）版，给紧凑图标按钮用。
+pub fn menu_popup_fit_end(
+    anchor: Bounds<Pixels>,
+    rows: Vec<MenuRow>,
+    on_pick: Rc<dyn Fn(&str, &mut Window, &mut App)>,
+    dismiss: Rc<dyn Fn(&mut Window, &mut App)>,
+    vw: f32,
+    vh: f32,
+) -> AnyElement {
+    menu_popup_impl(anchor, None, true, rows, on_pick, dismiss, vw, vh, crate::widgets::RectAlign::BottomEnd)
 }
 
 /// 与 [`menu_popup_in`] 同款，但宽度走 `Width::Fit` —— 卡片宽度完全由最宽那一行决定，不设

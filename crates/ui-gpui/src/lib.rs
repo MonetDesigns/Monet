@@ -192,7 +192,7 @@ use std::sync::Arc;
 
 use std::time::{Duration, Instant};
 
-use crate::widgets::menu::{MenuRow, menu_popup_fit, menu_popup_in, popup_backdrop};
+use crate::widgets::menu::{MenuRow, menu_popup_below_end, menu_popup_fit, menu_popup_fit_end, menu_popup_in, popup_backdrop};
 
 use figcraft_doc::{CrossAlign, Document, MainAlign, Node, NodeId, NodeKind};
 
@@ -370,6 +370,10 @@ enum Popup {
         /// `true` = 宽度按最宽内容（`Width::Fit`），不设「不小于触发按钮」的下限。
         /// 右栏 sides 下拉用（用户 2026-11-20：左对齐按钮 / 上距 4 / 按最宽内容）。
         fit_width: bool,
+
+        /// `true` = 菜单右缘对齐触发按钮右缘（顶边仍在按钮底 + 4），即 `BottomEnd`；
+        /// 默认 `false` 保持原来的左缘对齐（`BottomStart`）。
+        align_end: bool,
     },
 
     /// 主菜单：多级、悬停展开。`menu.rs::menu_popup` 是单层菜单、没有悬停回调，
@@ -3459,6 +3463,7 @@ impl CanvasView {
             probe: anchor.map(|a| a.cell()),
 
             fit_width: false,
+            align_end: false,
         });
 
         cx.notify();
@@ -3483,6 +3488,7 @@ impl CanvasView {
             on_pick,
             probe: Some(anchor.cell()),
             fit_width: true,
+            align_end: false,
         });
         cx.notify();
     }
@@ -3503,6 +3509,50 @@ impl CanvasView {
         cx: &mut Context<Self>,
     ) {
         self.open_dropdown_menu(None, anchor, width, rows, on_pick, cx);
+    }
+
+    /// 通用能力：菜单开在触发按钮下方，右缘对齐按钮右缘，顶边距按钮底 4pt。
+    /// 静态锚点（和右键菜单 `open_menu` 同款）：点击那一刻定死，不用跟随探针。
+    /// 跟随探针会在鼠标移开、按钮 hover 态消失后改写矩形，菜单位置就会跳回去。
+    fn open_menu_end(
+        &mut self,
+        anchor: Bounds<Pixels>,
+        width: Option<f32>,
+        rows: Vec<MenuRow>,
+        on_pick: std::rc::Rc<dyn Fn(&str, &mut Window, &mut App)>,
+        cx: &mut Context<Self>,
+    ) {
+        self.popup = Some(Popup::Menu {
+            anchor,
+            width,
+            rows,
+            on_pick,
+            probe: None,
+            fit_width: false,
+            align_end: true,
+        });
+        cx.notify();
+    }
+
+    /// [`Self::open_menu_end`] 的宽度按最宽内容版。
+    /// [`Self::open_menu_end`] 的宽度按最宽内容版，同为静态锚点。
+    fn open_menu_fit_end(
+        &mut self,
+        anchor: Bounds<Pixels>,
+        rows: Vec<MenuRow>,
+        on_pick: std::rc::Rc<dyn Fn(&str, &mut Window, &mut App)>,
+        cx: &mut Context<Self>,
+    ) {
+        self.popup = Some(Popup::Menu {
+            anchor,
+            width: None,
+            rows,
+            on_pick,
+            probe: None,
+            fit_width: true,
+            align_end: true,
+        });
+        cx.notify();
     }
 
     /// 打开 Share 弹层（右栏顶栏的 Share 按钮；内容在 render 里按 live 状态重建）。
@@ -7532,20 +7582,33 @@ impl Render for CanvasView {
             let mut els: Vec<AnyElement> = Vec::new();
 
             match p {
-                Popup::Menu { anchor, width, rows, on_pick, probe, fit_width } => {
+                Popup::Menu { anchor, width, rows, on_pick, probe, fit_width, align_end } => {
                     // 每帧取触发按钮的当前矩形（滚动 / resize / 弹窗拖动后仍跟着按钮走）。
-
                     let live = probe.as_ref().and_then(|p| p.get()).unwrap_or(*anchor);
 
-                    // 位置与防溢出全部交给通用 `Menu`：它自带「按钮底 + 4」、上下防溢出、
-                    // 内部滚动、水平贴边。fit_width 的菜单（sides 下拉）走 Width::Fit，
-                    // 宽度只由最宽行决定；其余菜单保持「下限 = 按钮宽」不变。
+                    // 右对齐弹窗用一个**点锚点**（工具栏同款）：x = 按钮右缘、y = 按钮底部，
+                    // 尺寸 0。通用 Menu 的 BottomEnd 算 `left = ax - 卡片宽`、`top = ay + gap`，
+                    // 于是卡片右缘贴按钮右缘、顶部正好在按钮底部 + 4pt。
+                    // 若把整个按钮矩形当锚点，ah=按钮高 会被重复计入 top（菜单弹到按钮下方很远），
+                    // 这就是之前"位置不对"的根因。
+                    let end_anchor = crate::widgets::at_point(
+                        f32::from(live.origin.x) + f32::from(live.size.width),
+                        f32::from(live.origin.y) + f32::from(live.size.height),
+                    );
 
                     if *fit_width {
-                        els.push(menu_popup_fit(live, rows.clone(), on_pick.clone(), dismiss.clone(), vw, vh));
+                        if *align_end {
+                            els.push(menu_popup_fit_end(end_anchor, rows.clone(), on_pick.clone(), dismiss.clone(), vw, vh));
+                        } else {
+                            els.push(menu_popup_fit(live, rows.clone(), on_pick.clone(), dismiss.clone(), vw, vh));
+                        }
                     } else {
                         let w = f32::from(live.size.width).max(width.unwrap_or(0.0)).max(48.0);
-                        els.push(menu_popup_in(live, Some(w), rows.clone(), on_pick.clone(), dismiss.clone(), vw, vh));
+                        if *align_end {
+                            els.push(menu_popup_below_end(end_anchor, Some(w), rows.clone(), on_pick.clone(), dismiss.clone(), vw, vh));
+                        } else {
+                            els.push(menu_popup_in(live, Some(w), rows.clone(), on_pick.clone(), dismiss.clone(), vw, vh));
+                        }
                     }
                 }
 

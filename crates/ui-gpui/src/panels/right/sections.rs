@@ -945,6 +945,39 @@ fn named_icon_menu(
     crate::popovers::with_button_bounds(btn, anchor.cell())
 }
 
+/// 与 [`named_icon_menu`] 同款，但菜单开在按钮下方：顶边距底 4pt、右缘对齐按钮右缘。
+fn named_icon_menu_end(
+    f: &RightFields,
+    key: &'static str,
+    trigger: Icon,
+    menu: Vec<MenuRow>,
+    active: bool,
+    on_pick: Rc<dyn Fn(&str, &mut Window, &mut App)>,
+) -> gpui::AnyElement {
+    let root = f.root.clone();
+    let t = tokens();
+    let ink = if active { rgba(t.accent) } else { rgba(t.icon) };
+    let _ = key;
+    let btn = div()
+        .size(pt(24.0))
+        .rounded(pt(5.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .when(active, |d| d.bg(rgba(t.selected_row)))
+        .when(!active, |d| d.hover(|s| s.bg(rgba(t.hover))))
+        .child(crate::widgets::icon::paint_in_slot(trigger, 24.0, Some(ink)))
+        .on_mouse_down(MouseButton::Left, move |e, _window, cx: &mut App| {
+            let Some(root) = root.clone() else { return };
+            // 固定锚点（工具栏/右键菜单同款）：点击位置 + 半个 24pt 按钮 = 按钮右缘/底部，
+            // 交给通用 Menu 的 BottomEnd 算出「顶边在按钮底 +4、右缘对齐按钮右缘」。
+            let at = crate::widgets::at_point(f32::from(e.position.x) + 12.0, f32::from(e.position.y) + 12.0);
+            root.update(cx, |cv, cx| cv.open_menu_fit_end(at, menu.clone(), on_pick.clone(), cx));
+        });
+    btn.into_any_element()
+}
+
 /// 带勾选 / 单选列的菜单按钮：`MenuRow::checked` 是通用的「勾选列」（egui `ui.selectable_label`）。
 /// `rows` = (标签, 勾选态, 命令, 参数, 是否在此行前画分隔线)。行用下标当 key，保证同一命令的
 /// 多行（size / 单选组）不会互相串参数。
@@ -1619,7 +1652,7 @@ pub(crate) fn paints(
             };
             let sides = {
                 let cmds = f.cmds.clone();
-                named_icon_menu(
+                named_icon_menu_end(
                     f,
                     "stroke-sides",
                     trigger_icon,
@@ -1643,12 +1676,13 @@ pub(crate) fn paints(
             let popups = f.popups();
             let stroke_queue = f.queue();
             let stroke_data = d.clone();
+            // 高级描边小窗：开窗行为与自动布局 dots 完全一致（同一套 window_open_button +
+            // anchored_top + open_detached_with）。commit 94616c11 曾误改成 anchored_left_below
+            // + Open::At，导致卡片不再贴 Design 面板左缘、位置漂移，这里恢复。
             let dots = window_open_button("stroke", Icon::Menu, popups.is_open("stroke"), move |window, cx| {
-                let at = crate::popovers::anchored_left_below("stroke", window);
-                open_detached_with(popups.clone(), "stroke", None, cx, |_anchor, cx| {
-                    let mut w = crate::popovers::WindowState::stroke(stroke_queue.clone(), &stroke_data, cx, at);
-                    w.anchor_at(at);
-                    w
+                let top = crate::popovers::anchored_top("stroke", window);
+                open_detached_with(popups.clone(), "stroke", Some(top), cx, |anchor, cx| {
+                    crate::popovers::WindowState::stroke(stroke_queue.clone(), &stroke_data, cx, anchor)
                 });
             });
             // 第二行 = 描边对齐下拉 + **线宽字段** + 独立边宽 + 高级描边（egui `paints.rs`:
@@ -1665,7 +1699,8 @@ pub(crate) fn paints(
                         f.stroke_weight.clone().into_any_element(),
                     ),
                 ],
-                vec![sides.into_any_element(), dots],
+                // 用户：左边是打开描边弹窗的 dots，右边是设置描边位置的 sides（二者交换）。
+                vec![dots, sides.into_any_element()],
             ));
             // Custom 展开：egui `paints.rs::stroke` 的
             // `if let Some(sides) = common(doc, sel, |n| n.stroke.sides).flatten()` ——
@@ -1746,11 +1781,11 @@ fn wgsl_material_rows(f: &RightFields, d: &PanelData, col: f32, cx: &mut App) ->
 /// 这是用户定的交互：WGSL 不另起一行下拉，而是**和内置效果同处一个菜单**，有多少个文件就
 /// 有多少个菜单项；选中文件后其参数才在下方就地展开（由 `d.wgsl.path` 驱动，见 `effects()`）。
 /// 菜单项每次点开时现扫固定目录，增删文件立刻反映，无需重编译。
-fn add_effect_menu(f: &RightFields) -> IconButton {
+fn add_effect_menu(f: &RightFields) -> gpui::AnyElement {
     let mut b = IconButton::new(Icon::Plus).size(24.0);
     if let Some(root) = f.root.clone() {
         let cmds = f.cmds.clone();
-        b = b.on_click(move |_e, window, cx: &mut App| {
+        b = b.on_click(move |e, _window, cx: &mut App| {
             // `on_click` 是 `Fn`，每次点击都要给 on_pick 一份独立的队列句柄，故这里重新 clone
             // （不能直接把外层的 `cmds` 移进内层闭包）。与 `pick_dropdown` 同构。
             let cmds = cmds.clone();
@@ -1779,12 +1814,12 @@ fn add_effect_menu(f: &RightFields) -> IconButton {
                     cmds.push(Cmd { id: cmd, params: Some(params.clone()) });
                 }
             });
-            let p = window.mouse_position();
-            let anchor = Bounds { origin: p, size: size(px(1.0), px(0.0)) };
-            root.update(cx, |cv, cx| cv.open_menu(anchor, Some(180.0), rows, on_pick, cx));
+            // 固定锚点（右键菜单同款）：点击位置 + 半个 24pt 按钮 = 按钮右缘/底部。
+            let at = crate::widgets::at_point(f32::from(e.position().x) + 12.0, f32::from(e.position().y) + 12.0);
+            root.update(cx, |cv, cx| cv.open_menu_end(at, Some(180.0), rows, on_pick, cx));
         });
     }
-    b
+    b.into_any_element()
 }
 
 /// 效果行的方框：点开弹出「效果设置」小窗（egui `effect_settings` 的设置项搬进浮层），
@@ -3404,6 +3439,31 @@ fn head_menu_button(f: &RightFields, icon: Icon, side: f32, width: f32, rows: Ve
     })
 }
 
+/// 与 [`head_menu_button`] 同款，但菜单开在按钮下方：顶边距按钮底 4pt、右缘对齐按钮右缘。
+/// 用按钮真实矩形（跨帧探针）定位，滚动 / resize 后菜单仍跟着按钮。
+fn head_menu_button_end(
+    f: &RightFields,
+    key: &'static str,
+    icon: Icon,
+    side: f32,
+    width: f32,
+    rows: Vec<HeadRow>,
+) -> gpui::AnyElement {
+    use gpui::prelude::*;
+    let menu = head_menu(&rows);
+    let cmds = f.cmds.clone();
+    let root = f.root.clone();
+    let _ = key;
+    let btn = IconButton::new(icon).size(side).on_click(move |e, _window, cx: &mut App| {
+        let Some(root) = root.clone() else { return };
+        // 固定锚点：点击位置 + 半个按钮 = 右缘/底部（size 0 的点锚点）。
+        let at = crate::widgets::at_point(f32::from(e.position().x) + 12.0, f32::from(e.position().y) + 12.0);
+        let on_pick = head_pick(rows.clone(), cmds.clone());
+        root.update(cx, |cv, cx| cv.open_menu_end(at, Some(width), menu.clone(), on_pick, cx));
+    });
+    btn.into_any_element()
+}
+
 /// 「Create link」：参考实现 `menus::invoke("text.link")` 先弹输入框拿 URL，再执行 `text.link`。
 /// GPUI 的通用单值对话框（A8/A17 同款）就是那个输入框。
 fn link_button(f: &RightFields) -> IconButton {
@@ -3508,11 +3568,15 @@ pub(crate) fn header(f: &RightFields, d: &PanelData, col: f32) -> Option<gpui::D
             Some(figcraft_doc::BoolOp::Exclude) => Icon::Exclude,
             _ => Icon::Union,
         };
+        // 布尔运算按钮宽 16（原来的 24 太宽，和右边的下拉箭头不成组）。
         let bool_button = if visibility::bool_union_enabled(h.count) {
-            icon_cmd(bool_icon, "bool.union", json!({}), f, false)
+            IconButton::new(bool_icon).size(16.0).active(false).on_click({
+                let cmds = f.cmds.clone();
+                move |_e, _w, _cx| cmds.push(crate::panels::Cmd { id: "bool.union", params: Some(json!({})) })
+            })
         } else {
             // 参考实现：少于两个图层时点了也不执行，按钮只是当前运算的状态图标。
-            IconButton::new(bool_icon)
+            IconButton::new(bool_icon).size(16.0)
         };
         let cur = h.bool_op.map(|o| o.label());
         let mut bool_rows: Vec<HeadRow> = Vec::new();
@@ -3534,7 +3598,7 @@ pub(crate) fn header(f: &RightFields, d: &PanelData, col: f32) -> Option<gpui::D
         bool_rows.push(flatten.sep());
         // 布尔方式 = 通用 24 图标 + 16 宽下拉箭头、两者间距 0（用户规则）。
         // 下拉箭头宽 16（不是图标 size16），高 24；整体 40 宽作为一个 action。
-        let bool_menu = head_menu_button(f, Icon::ChevronDown, 24.0, 180.0, bool_rows);
+        let bool_menu = head_menu_button_end(f, "header-bool", Icon::ChevronDown, 16.0, 180.0, bool_rows);
         actions.push(
             div()
                 .flex()
