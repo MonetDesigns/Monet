@@ -11,10 +11,11 @@ use figcraft_geom::Point;
 use figcraft_i18n::tr;
 
 use super::geom::*;
-use super::painter::Painter;
+use super::painter::{Painter, text_size};
 use super::rulers::status_badge;
 use crate::app::CanvasApp;
-use crate::theme::{COMPONENT, Tokens};
+use crate::bidi::fit_with;
+use crate::theme::{COMPONENT_TEXT, SLOT, Tokens};
 
 /// 文字身份色（图标层用橙色；这里先留接口）。
 pub const ICON: Color32 = Color32::from_rgb(0xFF, 0xB3, 0x4D);
@@ -64,9 +65,9 @@ pub fn draw(
     let edge = label_edge(p00, at(n.width, 0.0), p01);
     let tl = edge.corner;
     let mark = match n.kind {
-        NodeKind::Component { .. } | NodeKind::ComponentSet { .. } => Some(COMPONENT),
+        NodeKind::Component { .. } | NodeKind::ComponentSet { .. } => Some(COMPONENT_TEXT),
         NodeKind::Icon { .. } => Some(ICON),
-        _ => None,
+        _ => figcraft_engine::components::is_slot(doc, id).then_some(SLOT),
     };
     let col = if let Some(m) = mark {
         m
@@ -80,7 +81,9 @@ pub fn draw(
         // section 标题是左上角内部的 pill。
         let hidden = n.hides_contents();
         let fg = if selected { Color32::WHITE } else { t.text };
-        let galley = painter.layout_no_wrap(n.name.clone(), semibold(11.0), fg);
+        let font = semibold(11.0);
+        let shown = fit_with(&n.name, (edge.len - 16.0).clamp(40.0, 480.0), |s| text_size(s, font).x);
+        let galley = painter.layout_no_wrap(shown, font, fg);
         let r = Rect::from_min_size(tl, galley.size() + vec2(16.0, 8.0));
         painter.rect_filled(r, CornerRadius::same(4), if selected { t.accent } else { t.hover });
         // 改名期间不画旧名字（内联输入框是透明的），pill 与矩形照旧。
@@ -93,7 +96,11 @@ pub fn draw(
     } else {
         let x = tl.x;
         // 名字画在帧上边缘之上。
-        let galley = painter.layout_no_wrap(n.name.clone(), regular(11.0), col);
+        let font = regular(11.0);
+        // The egui reference reserves no icon width for an ordinary frame name (x == tl.x),
+        // so it may use the whole edge; the 16pt reservation belongs to the selected badge path.
+        let shown = fit_with(&n.name, (edge.len - (x - tl.x)).max(20.0), |s| text_size(s, font).x);
+        let galley = painter.layout_no_wrap(shown, font, col);
         let size = galley.size();
         let end = x + size.x;
         // 同上：几何（`area`）仍按 galley 量出来的宽度算，只是不落笔。

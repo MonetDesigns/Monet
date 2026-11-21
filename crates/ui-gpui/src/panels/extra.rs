@@ -666,10 +666,10 @@ fn versions_body(
                 let duplicate = tr("Duplicate");
                 let delete = tr("Delete");
                 let rows = vec![
-                    MenuRow::new(restore),
-                    MenuRow::new(rename),
-                    MenuRow::new(duplicate),
-                    MenuRow::new(delete),
+                    MenuRow::row(restore),
+                    MenuRow::row(rename),
+                    MenuRow::row(duplicate),
+                    MenuRow::row(delete),
                 ];
                 let anchor = Bounds::new(e.position, gpui::size(px(0.0), px(0.0)));
                 let cmds = cmds.clone();
@@ -1182,7 +1182,7 @@ fn component_tile(
         let label = tr("Hide when publishing");
         let on = !hidden;
         tile = tile.on_mouse_down(MouseButton::Right, move |e, _, cx: &mut App| {
-            let rows = vec![MenuRow::new(label).checked(Some(hidden))];
+            let rows = vec![MenuRow::row(label).checked(Some(hidden))];
             let anchor = Bounds::new(e.position, gpui::size(px(0.0), px(0.0)));
             let cmds = c.clone();
             let on_pick = Rc::new(move |_: &str, _: &mut Window, _: &mut App| {

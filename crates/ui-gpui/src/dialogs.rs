@@ -1591,7 +1591,7 @@ fn dropdown_field(
     dropdown(current, 0.0, None)
         .fill()
         .on_click(move |anchor: Bounds<Pixels>, _w: &mut Window, cx: &mut App| {
-            let rows: Vec<MenuRow> = opts.iter().enumerate().map(|(i, o)| MenuRow::new(o.clone()).checked(Some(i == *active.borrow()))).collect();
+            let rows: Vec<MenuRow> = opts.iter().enumerate().map(|(i, o)| MenuRow::row(o.clone()).checked(Some(i == *active.borrow()))).collect();
             let act = active.clone();
             let opts = opts.clone();
             let cmd_list = cmd_list.clone();

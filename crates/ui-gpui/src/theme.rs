@@ -158,14 +158,35 @@ pub struct Tokens {
     pub selected_row: Color32,
     /// 选中行及其后代组成的整块底色（egui `selected_row_child`）。
     pub selected_row_child: Color32,
-    /// 整块全是组件时的 band 色（egui `component_row`）。
+    /// 整块全是组件时的 band 色。
     pub component_row: Color32,
+    /// 组件选中块的后代行：同色系更浅一档（父子深浅必须同源）。
+    pub component_row_child: Color32,
+    /// 整块全是插槽时的 band 色。
+    pub slot_row: Color32,
+    pub slot_row_child: Color32,
     /// 整块全是图标时的 band 色（egui `icon_layer_row`）。
     pub icon_layer_row: Color32,
-    /// 组件层前景紫色（egui `component`：row 的 icon 与 name 都画成它）。
+    /// 组件层前景紫色。
     pub component: Color32,
     /// 图标层前景橙色（egui `icon_layer`：图标类 row 的 icon 与 name 画成它）。
     pub icon_layer: Color32,
+    /// 未选中的组件行浅紫。
+    pub component_secondary: Color32,
+    /// 不可见组件行的中紫，与浅紫区分开。
+    pub component_dim: Color32,
+    /// 插槽的粉红（选中态）。
+    pub slot: Color32,
+    /// 未选中插槽的淡粉。
+    pub slot_secondary: Color32,
+    /// 不可见插槽行更暗一档的粉。
+    pub slot_dim: Color32,
+    /// 不可见层的文字与类型图标。
+    pub layer_muted: Color32,
+    /// 选中普通层的文字。
+    pub layer_text_selected: Color32,
+    /// 选中普通层的类型图标。
+    pub layer_icon_selected: Color32,
     pub guide: Color32,
     pub danger: Color32,
     pub success: Color32,
@@ -208,6 +229,8 @@ impl Tokens {
         let accent_on = ink_on(color);
         // Green 沿用 egui 的 ACCENT（0x00875F）；其余品牌色按对比度压暗（菜单悬停行上是白字）。
         let menu_hover = if matches!(accent, Accent::Green) { c(0x00, 0x87, 0x5F) } else { darken_to_contrast(color, Color32::WHITE, 4.5) };
+        let component_row = if dark { c(0x47, 0x39, 0x56) } else { c(0xF1, 0xE5, 0xFF) };
+        let slot_row = if dark { c(0x72, 0x46, 0x67) } else { c(0xFF, 0xBD, 0xF2) };
         Self {
             dark,
             bg: panel,
@@ -231,11 +254,24 @@ impl Tokens {
             // 父集（Selected）深、子集（Child）浅，必须是**同一主题色派生的深浅**；
             // 之前 child 写死浅绿，换品牌色后父子变成两种颜色而不是深浅（用户 2026-11-11）。
             selected_row_child: if dark { toward(color, Color32::BLACK, 0.90) } else { toward(color, Color32::WHITE, 0.93) },
-            component_row: if dark { c(0x3E, 0x30, 0x52) } else { c(0xF1, 0xE9, 0xFF) },
+            component_row,
+            // 同一粉/紫色系向面板色靠拢一档，父子仍是深浅关系而不是两种颜色。
+            component_row_child: toward(component_row, panel, 0.55),
+            slot_row,
+            slot_row_child: toward(slot_row, panel, 0.55),
             icon_layer_row: if dark { c(0x4A, 0x38, 0x1C) } else { c(0xFD, 0xF0, 0xDD) },
-            // 前景紫 / 橙：亮主题与 egui 的 `COMPONENT` / `ICON` 一致；暗主题取 egui 的减淡版。
-            component: if dark { c(0xD2, 0x7C, 0xFF) } else { c(0x97, 0x47, 0xFF) },
+            // 前景紫 / 橙：组件与图标层的固定产品色。
+            component: if dark { c(0xD1, 0xA8, 0xFF) } else { c(0x86, 0x38, 0xE5) },
             icon_layer: if dark { c(0xFF, 0xB3, 0x4D) } else { c(0xD9, 0x7A, 0x06) },
+            // 图层行专用色，明暗两套按同一色阶对应。
+            component_secondary: if dark { c(0x7F, 0x69, 0x9B) } else { c(0xC5, 0xB2, 0xDC) },
+            component_dim: if dark { c(0x7F, 0x69, 0x9B) } else { c(0xA3, 0x8C, 0xC0) },
+            slot: if dark { c(0xFC, 0x9C, 0xE0) } else { c(0xEA, 0x10, 0xAC) },
+            slot_secondary: if dark { c(0xAB, 0x59, 0x98) } else { c(0xDA, 0xAA, 0xCE) },
+            slot_dim: c(0xAB, 0x59, 0x98),
+            layer_muted: if dark { Color32::from_white_alpha(0x66) } else { Color32::from_black_alpha(0x4D) },
+            layer_text_selected: if dark { Color32::from_white_alpha(0xE5) } else { Color32::from_black_alpha(0xE5) },
+            layer_icon_selected: if dark { Color32::WHITE } else { Color32::from_black_alpha(0xE5) },
             guide: c(0xF2, 0x48, 0x22),
             danger: c(0xF2, 0x48, 0x22),
             success: DEV_READY,
@@ -276,6 +312,10 @@ pub fn accent_on(t: &Tokens) -> Color32 {
 
 /// 组件层紫色。它是产品层色，不属于可换主题的品牌轴，故固定。
 pub const COMPONENT: Color32 = Color32::from_rgb(0x97, 0x47, 0xFF);
+/// 组件名称文本色。
+pub const COMPONENT_TEXT: Color32 = Color32::from_rgb(0x86, 0x38, 0xE5);
+/// 插槽层粉红色。
+pub const SLOT: Color32 = Color32::from_rgb(0xFF, 0x24, 0xBD);
 /// Handoff 状态徽标（其上白字，两主题皆然）。
 pub const DEV_READY: Color32 = Color32::from_rgb(0x08, 0x7D, 0x4F);
 pub const DEV_CHANGED: Color32 = Color32::from_rgb(0xA7, 0x5B, 0x00);

@@ -19,8 +19,8 @@ use figcraft_engine::booleans::distinct_op;
 use figcraft_engine::components::is_slot;
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Bounds, Context, Div, ElementId, Entity, Modifiers, MouseButton, MouseDownEvent, Pixels, Point, Render, SharedString, Size,
-    Stateful, StatefulInteractiveElement, Window, div, px,
+    AnyElement, App, Bounds, Context, Div, ElementId, Entity, Modifiers, MouseButton, MouseDownEvent, Pixels, Point, Render, ScrollStrategy,
+    SharedString, Size, Stateful, StatefulInteractiveElement, Window, div, px,
 };
 use serde_json::json;
 
@@ -95,6 +95,13 @@ pub struct LayerRow {
     pub selected: bool,
     /// 0 plain / 1 component family / 2 icon (drives the row's colour).
     pub mark_kind: u8,
+    /// The node itself is a component / instance (as opposed to a child inside one).
+    /// A parent's type icon uses the full component purple, its children in
+    /// the tertiary purple (`object_row--symbol.topLevel` vs `object_row--layerIcon.symbolChild`).
+    pub component_root: bool,
+    /// A selected row with no selected ancestor; descendants use the lighter shade.
+    /// while selected descendants get `--color-bg-selected-secondary`.
+    pub selected_root: bool,
     pub visible: bool,
     pub locked: bool,
 }
@@ -155,17 +162,60 @@ fn selection_runs(m: &[Mark]) -> (Vec<usize>, Vec<usize>) {
     (first, last)
 }
 
-/// An all-icon band takes `icon_layer_row`, an all-component band `component_row`, else
-/// `selected_row`. The range is this band (`start..=end`), not the whole run, so in a
-/// "selected parent + plain children" run the parent's band keeps the ordinary selected colour.
-fn run_color(rows: &[LayerRow], from: usize, to: usize) -> gpui::Rgba {
-    let t = tokens();
-    let all_icon = rows[from..=to].iter().all(|r| r.mark_kind == 2);
-    let all_comp = rows[from..=to].iter().all(|r| r.mark_kind == 1);
-    if all_icon {
+/// The row's two inks: the type glyph (`--fpl-icon-color`) and the name (`color`).
+/// Selection is the *saturated* end of each ramp and the idle row the pale end — a selected
+/// component/slot must not look washed out. The axes are selected / idle, visible / hidden,
+/// selected parent / descendant, component / slot, and glyph / text.
+fn row_ink(t: &crate::theme::Tokens, r: &LayerRow, mark: Mark) -> (gpui::Rgba, gpui::Rgba) {
+    let slot = r.icon == Icon::Slot;
+    let component = r.mark_kind == 1;
+    let icon_layer = r.mark_kind == 2;
+    let selected = mark == Mark::Selected;
+    let child = mark == Mark::Child;
+
+    let name = if slot {
+        if selected { t.slot } else if r.visible { t.slot_secondary } else { t.slot_dim }
+    } else if component {
+        if selected { t.component } else if r.visible { t.component_secondary } else { t.component_dim }
+    } else if icon_layer {
+        if selected { t.icon_layer } else if r.visible { t.layer_muted } else { t.layer_muted }
+    } else if selected {
+        t.layer_text_selected
+    } else if r.visible && !child {
+        t.text
+    } else {
+        t.layer_muted
+    };
+
+    let icon = if slot {
+        if selected { t.slot } else if r.visible && r.component_root { t.slot_secondary } else { t.slot_dim }
+    } else if component {
+        if selected { t.component } else if r.visible && r.component_root { t.component_secondary } else { t.component_dim }
+    } else if icon_layer {
+        if selected { t.icon_layer } else { t.layer_muted }
+    } else if selected {
+        t.layer_icon_selected
+    } else {
+        // A visible frame's glyph (`--color-icon-tertiary`) and a hidden row's
+        // (`--color-icon-disabled`) both resolve to the same muted ink.
+        t.layer_muted
+    };
+    (rgba(name), rgba(icon))
+}
+
+/// The coloured band behind a run of selected rows. The *brand* stays in charge of plain
+/// layers (`selected_row` / `selected_row_child`); components and slots take their own ramp
+/// from the component and slot ramps.
+fn run_color(t: &crate::theme::Tokens, rows: &[LayerRow], from: usize, to: usize, child: bool) -> gpui::Rgba {
+    let run = &rows[from..=to];
+    if run.iter().all(|r| r.icon == Icon::Slot) {
+        rgba(if child { t.slot_row_child } else { t.slot_row })
+    } else if run.iter().all(|r| r.mark_kind == 1) {
+        rgba(if child { t.component_row_child } else { t.component_row })
+    } else if run.iter().all(|r| r.mark_kind == 2) {
         rgba(t.icon_layer_row)
-    } else if all_comp {
-        rgba(t.component_row)
+    } else if child {
+        rgba(t.selected_row_child)
     } else {
         rgba(t.selected_row)
     }
@@ -193,6 +243,12 @@ pub struct LayerTreeState {
     pub pointer: Point<Pixels>,
     /// Scroll handle of the virtual list, kept across frames.
     pub scroll: VirtualListScrollHandle,
+    /// Selection seen on the previous frame; a change reveals the selected row.
+    pub last_selection: Vec<NodeId>,
+    /// Identity of the document that `last_selection` belongs to (its in-memory address).
+    pub last_doc: Option<usize>,
+    /// A row press in the list owns its own viewport position; skip the reveal on that change.
+    pub suppress_reveal: bool,
     clock: Instant,
 }
 
@@ -208,6 +264,9 @@ impl Default for LayerTreeState {
             calibrated: None,
             pointer: Point::new(px(0.0), px(0.0)),
             scroll: VirtualListScrollHandle::new(),
+            last_selection: Vec::new(),
+            last_doc: None,
+            suppress_reveal: false,
             clock: Instant::now(),
         }
     }
@@ -426,7 +485,7 @@ impl CanvasView {
         // 参考实现 `pages()`: `resp.double_clicked()` starts an inline rename of that page row.
         let renaming_page = self.inline_rename.as_ref().filter(|r| r.target == crate::InlineRenameTarget::Page).and_then(|r| r.ids.first().copied());
         let rename_editor = self.inline_rename_field.clone();
-        // Figma: 列表高度 = 页数 * 32 + 8，夹到 40..232；空表用 104 的默认高度。
+        // 列表高度 = 页数 * 32 + 8，夹到 40..232；空表用 104 的默认高度。
         let pages_h = if pages.is_empty() { PAGES_DEFAULT_H } else { (pages.len() as f32 * ROW_H + 8.0).clamp(PAGES_MIN_H, PAGES_MAX_H) };
         let mut list = div()
             .id("pages-list")
@@ -533,6 +592,7 @@ impl CanvasView {
     }
 
     fn render_layer_tree(&mut self, cx: &mut Context<Self>) -> VirtualList {
+        let t = tokens();
         let (rows, drag_rows) = self.collect_layer_rows();
         // Keep the full row list for dragging and hit testing; only the viewport is rendered.
         // `drag::calibrate` rebuilds the column from a hit row plus the fixed pitch, so virtualisation does not change drop resolution.
@@ -554,9 +614,25 @@ impl CanvasView {
                 k += 1;
             }
             let end = k - 1;
-            let color = run_color(&rows, start, end);
+            // Classify the whole run once (run_color scans every row in [start, end]); doing it
+            // per selected row is O(n^2) for a large selected block. The root/child shades differ
+            // only in which ramp slot they take, from the same single classification.
+            let root_band = run_color(&t, &rows, start, end, false);
+            let child_band = run_color(&t, &rows, start, end, true);
             for j in start..=end {
-                band[j] = Some(color);
+                band[j] = Some(if rows[j].selected_root { root_band } else { child_band });
+            }
+        }
+        // Unselected descendants of a selected hierarchy root (Mark::Child) also sit on the
+        // hierarchy band. Use the child shade of their own type so a component's child is tinted
+        // with the component ramp, not the brand fallback (egui derives this from the root).
+        for (j, m) in marked.iter().enumerate() {
+            if *m == Mark::Child {
+                band[j] = Some(match rows[j].mark_kind {
+                    1 => rgba(t.component_row_child),
+                    _ if rows[j].icon == Icon::Slot => rgba(t.slot_row_child),
+                    _ => rgba(t.selected_row_child),
+                });
             }
         }
         // The per-row render snapshot (`'static` closures only get `&mut App`).
@@ -611,14 +687,14 @@ impl CanvasView {
     /// One 16 pt glyph: 参考实现's original SVG when there is a LayerIcon, otherwise the
     /// generic Icon painter. An absolutely-positioned child in an auto-layout parent gets
     /// the Absolute glyph layered underneath, exactly as `layers()` does.
-    fn layer_glyph_element(r: &LayerRow) -> gpui::AnyElement {
+    fn layer_glyph_element(r: &LayerRow, icon_color: gpui::Rgba) -> gpui::AnyElement {
         use crate::widgets::layer_icons::{self, LayerIcon};
         let main = if let Some(s) = &r.shape {
-            shape_glyph::paint(s, ink(), ICON_GLYPH)
+            shape_glyph::paint(s, icon_color, ICON_GLYPH)
         } else {
             match r.glyph {
-                Some(g) => layer_icons::paint(g, ink()).into_any_element(),
-                None => paint_icon(r.icon, ink(), ICON_GLYPH).into_any_element(),
+                Some(g) => layer_icons::paint(g, icon_color).into_any_element(),
+                None => paint_icon(r.icon, icon_color, ICON_GLYPH).into_any_element(),
             }
         };
         if !r.absolute {
@@ -628,7 +704,7 @@ impl CanvasView {
             .relative()
             .w(px(ICON_GLYPH))
             .h(px(ICON_GLYPH))
-            .child(div().absolute().top_0().left_0().size_full().child(layer_icons::paint(LayerIcon::Absolute, ink())))
+            .child(div().absolute().top_0().left_0().size_full().child(layer_icons::paint(LayerIcon::Absolute, icon_color)))
             .child(div().absolute().top_0().left_0().size_full().child(main))
             .into_any_element()
     }
@@ -655,26 +731,10 @@ impl CanvasView {
         // Hover comes from the whole row's hitbox, so it is bound to the group.
         let group: SharedString = format!("layer-row-{}", r.id.0).into();
 
-        // Row colours: component members and slots use the component colour, selected rows use
-        // `text`, ordinary rows the theme's 90% black, hidden rows `text_tertiary`.
-        // The theme's 90% black is `t.icon`; hidden rows fall back to `text_tertiary`.
-        let component_member = r.mark_kind != 0;
-        let mark_col = if r.mark_kind == 2 { t.icon_layer } else { t.component };
-        let layer_secondary = ink();
-        let name_color = if component_member {
-            rgba(mark_col)
-        } else if r.visible {
-            rgba(t.text)
-        } else {
-            rgba(t.text_tertiary)
-        };
-        let icon_color = if component_member || r.icon == Icon::Slot {
-            rgba(mark_col)
-        } else if r.visible {
-            layer_secondary
-        } else {
-            rgba(t.text_tertiary)
-        };
+        // Row colours: the name uses `color`, the type
+        // glyph uses `--fpl-icon-color`. They are different tokens (the frame glyph is 30% black
+        // while its name is 90%), and a component/slot switches to the purple/pink ramp.
+        let (name_color, icon_color) = row_ink(&t, r, mark);
         let id = r.id;
         let name = r.name.clone();
         let has_children = r.has_children;
@@ -686,6 +746,9 @@ impl CanvasView {
         let row_id = ElementId::from(SharedString::from(format!("layer-row-{}", id.0)));
         let me = entity.clone();
 
+        // The expand caret is a plain icon, not the layer's type glyph: muted when the
+        // row is idle, `--color-icon-onselected` (90% black) when it is selected.
+        let chevron_color = if mark == Mark::Selected { rgba(t.layer_icon_selected) } else { rgba(t.layer_muted) };
         let chevron = if has_children {
             div()
                 .w(px(ICON_BOX))
@@ -705,7 +768,7 @@ impl CanvasView {
                         cx.stop_propagation();
                     }
                 })
-                .child(paint_icon(if expanded { Icon::ChevronDown } else { Icon::ChevronRight }, ink(), ICON_GLYPH))
+                .child(paint_icon(if expanded { Icon::ChevronDown } else { Icon::ChevronRight }, chevron_color, ICON_GLYPH))
         } else {
             div().w(px(ICON_BOX))
         };
@@ -763,8 +826,9 @@ impl CanvasView {
             (if run_top { BLOCK_PAD } else { 0.0 }, if run_bottom { BLOCK_PAD } else { 0.0 })
         };
         let highlight = if mark == Mark::None {
-            // Hover is the theme's light accent tint, not a neutral grey.
-            div().size_full().rounded(pt(5.0)).group_hover(group.clone(), |s| s.bg(rgba(t.selected_row_child)))
+            // Hover is `--color-bg-hover` (F5F5F5), not the brand's selected tint: the
+            // brand colour belongs to the *selection* band of plain layers.
+            div().size_full().rounded(pt(5.0)).group_hover(group.clone(), |s| s.bg(rgba(t.hover)))
         } else {
             let mut h = div().size_full().bg(band_color.unwrap_or(rgba(t.selected_row_child)));
             if run_top {
@@ -883,7 +947,7 @@ impl CanvasView {
             })
             .child(div().w(px(indent)))
             .child(chevron)
-            .child(div().w(px(ICON_BOX)).h(px(ICON_BOX)).flex().items_center().justify_start().child(Self::layer_glyph_element(r)))
+            .child(div().w(px(ICON_BOX)).h(px(ICON_BOX)).flex().items_center().justify_start().child(Self::layer_glyph_element(r, icon_color)))
             .child(name_cell)
             // Eye (left) and lock (right) in one horizontal box: both 16 pt glyphs, zero gap,
             // sitting at the row's right edge inside the flex flow.
@@ -906,17 +970,37 @@ impl CanvasView {
     /// insertion line and the dropped node ended up at opposite ends.
     /// The same pass produces the kit's `drag::Row`s, keyed by the ancestor-id path.
     fn collect_layer_rows(&mut self) -> (Vec<LayerRow>, Vec<drag::Row>) {
+        let suppress_reveal = std::mem::take(&mut self.layer_tree.suppress_reveal);
         let Ok(ds) = self.app.session.ds() else { return (Vec::new(), Vec::new()) };
         let doc = &ds.doc;
         let page = ds.page;
         let Some(page_n) = doc.node(page) else { return (Vec::new(), Vec::new()) };
+        // A selection made on the canvas must be revealed here: expand its ancestors and
+        // defer a scroll to the first selected row once the virtual list has been laid out.
+        let selection: Vec<NodeId> = ds.selection.iter().copied().collect();
+        // NodeIds restart at 1 in every document: a stale snapshot from a previous document can
+        // equal the new selection and wrongly suppress the reveal. Compare against an empty
+        // snapshot on a document switch (write-back at the end records the new doc identity).
+        let doc_identity = std::sync::Arc::as_ptr(doc) as usize;
+        let doc_switched = self.layer_tree.last_doc != Some(doc_identity);
+        let effective_last: &[NodeId] = if doc_switched { &[] } else { &self.layer_tree.last_selection };
+        let selection_changed = selection.as_slice() != effective_last;
+        let reveal = selection_changed && !suppress_reveal;
+        let mut reveal_ancestors = Vec::new();
+        if reveal {
+            for id in &selection {
+                reveal_ancestors.extend(doc.ancestors(*id));
+            }
+        }
+        let mut expanded_set = self.layer_tree.expanded.clone();
+        expanded_set.extend(reveal_ancestors);
         let mut visual = Vec::new();
         let mut drag_rows: Vec<drag::Row> = Vec::new();
         let mut stack: Vec<(NodeId, usize, String)> = page_n.children.iter().map(|&c| (c, 0, String::new())).collect();
         while let Some((id, depth, parent_path)) = stack.pop() {
             let Some(n) = doc.node(id) else { continue };
             let has_children = !n.children.is_empty();
-            let expanded = self.layer_tree.expanded.contains(&id);
+            let expanded = expanded_set.contains(&id);
             let path = if parent_path.is_empty() { id.0.to_string() } else { format!("{parent_path}/{}", id.0) };
             let can_into = n.kind.is_container() && !matches!(n.kind, NodeKind::Instance { .. });
             // Component members keep the component colour all the way down the tree: a child
@@ -933,6 +1017,11 @@ impl CanvasView {
                 0
             };
             let icon = Self::node_icon(doc, id);
+            let selected = ds.selection.contains(&id);
+            // A selected row whose ancestors are not selected.
+            // It gets the deeper `--color-bg-selected`; descendants get `-secondary`.
+            let selected_root = selected && !doc.ancestors(id).iter().any(|a| ds.selection.contains(a));
+            let component_root = matches!(n.kind, NodeKind::Component { .. } | NodeKind::ComponentSet { .. } | NodeKind::Instance { .. });
             visual.push(LayerRow {
                 id,
                 depth,
@@ -945,8 +1034,10 @@ impl CanvasView {
                 has_children,
                 can_into,
                 expanded,
-                selected: ds.selection.contains(&id),
+                selected,
                 mark_kind,
+                component_root,
+                selected_root,
                 visible: n.visible,
                 locked: n.locked,
             });
@@ -968,6 +1059,16 @@ impl CanvasView {
         if let Some((hit, b)) = self.layer_tree.calibrated {
             drag::calibrate(&mut drag_rows, hit, b);
         }
+        if selection_changed {
+            self.layer_tree.last_selection = selection;
+            self.layer_tree.last_doc = Some(doc_identity);
+            if reveal {
+                self.layer_tree.expanded = expanded_set;
+                if let Some(ix) = visual.iter().position(|r| r.selected) {
+                    self.layer_tree.scroll.scroll_to_item(ix, ScrollStrategy::Center);
+                }
+            }
+        }
         (visual, drag_rows)
     }
 
@@ -986,6 +1087,13 @@ impl CanvasView {
         use crate::widgets::layer_icons::LayerIcon as L;
         let Some(n) = doc.node(id) else { return (None, false) };
         let absolute = n.child_layout.absolute && n.parent.and_then(|p| doc.node(p)).is_some_and(|p| p.layout.is_some());
+        // A variant inside a component set is a single solid diamond; leave the glyph to the
+        // generic icon painter (`Icon::Component`, filled diamond).
+        let variant = matches!(n.kind, NodeKind::Component { .. })
+            && n.parent.and_then(|p| doc.node(p)).is_some_and(|p| matches!(p.kind, NodeKind::ComponentSet { .. }));
+        if variant {
+            return (None, absolute);
+        }
         let mask_group = matches!(n.kind, NodeKind::Group) && n.children.iter().any(|c| doc.node(*c).is_some_and(|node| node.is_mask));
         let glyph = if mask_group {
             Some(L::Mask)
@@ -995,7 +1103,7 @@ impl CanvasView {
             Some(L::Mask)
         } else {
             // Auto-layout frames pick their layer glyph from the mode *and* the cross-axis
-            // alignment (the same six glyphs Figma shows): H -> top/centre/bottom,
+            // alignment: H -> top/centre/bottom,
             // V -> left/centre/right. Baseline has no glyph and falls back to the start.
             let auto_glyph = || {
                 let align = n.layout.as_ref().map(|l| l.cross_align).unwrap_or_default();
@@ -1215,6 +1323,8 @@ impl CanvasView {
         if new_sel == sel {
             return;
         }
+        // A click inside the list already has the row under the pointer: don't recenter it.
+        self.layer_tree.suppress_reveal = true;
         let _ = self.app.session.execute("select.set", &json!({ "ids": new_sel }));
         cx.notify();
     }
@@ -1683,5 +1793,97 @@ mod shape_glyph {
             assert_eq!(next, ids(&[3]));
             assert!(anchor);
         }
+    }
+}
+
+/// The colour matrix locks the glyph / name ink pair for every row state
+/// inline styles, so it is worth locking against a future "simplification" back to one ink.
+#[cfg(test)]
+mod color_tests {
+    use super::*;
+    use crate::canvas::geom::Color32;
+    use crate::theme::{Accent, Tokens};
+
+    fn row(icon: Icon, mark_kind: u8, component_root: bool, visible: bool) -> LayerRow {
+        LayerRow {
+            id: NodeId(1),
+            depth: 0,
+            name: "row".into(),
+            icon,
+            glyph: None,
+            absolute: false,
+            shape: None,
+            has_children: false,
+            can_into: false,
+            expanded: false,
+            selected: false,
+            mark_kind,
+            component_root,
+            selected_root: false,
+            visible,
+            locked: false,
+        }
+    }
+
+    #[test]
+    fn layer_tokens_match_the_spec() {
+        let t = Tokens::new(false, Accent::Green);
+        assert_eq!(t.slot, Color32::from_rgb(0xEA, 0x10, 0xAC)); // --ramp-pink-600
+        assert_eq!(t.slot_secondary, Color32::from_rgb(0xDA, 0xAA, 0xCE)); // --ramp-pale-pink-400
+        assert_eq!(t.component, Color32::from_rgb(0x86, 0x38, 0xE5)); // --ramp-purple-600
+        assert_eq!(t.component_secondary, Color32::from_rgb(0xC5, 0xB2, 0xDC)); // --ramp-pale-purple-400
+        assert_eq!(t.component_row, Color32::from_rgb(0xF1, 0xE5, 0xFF)); // --color-bg-component-tertiary
+        assert_eq!(t.slot_row, Color32::from_rgb(0xFF, 0xBD, 0xF2)); // --color-template-slot
+        assert_eq!(t.hover, Color32::from_rgb(0xF5, 0xF5, 0xF5)); // --color-bg-hover
+    }
+
+    #[test]
+    fn selection_is_the_saturated_end_and_idle_is_pale() {
+        let t = Tokens::new(false, Accent::Green);
+        let (name, glyph) = row_ink(&t, &row(Icon::Slot, 0, false, true), Mark::Selected);
+        assert_eq!(name, rgba(t.slot), "a selected slot's name is the full pink");
+        assert_eq!(glyph, rgba(t.slot), "a selected slot's glyph is the full pink too");
+
+        let (name, glyph) = row_ink(&t, &row(Icon::Component, 1, true, true), Mark::None);
+        assert_eq!(name, rgba(t.component_secondary), "an idle component is pale purple");
+        assert_eq!(glyph, rgba(t.component_secondary));
+
+        let (name, glyph) = row_ink(&t, &row(Icon::Component, 1, true, true), Mark::Selected);
+        assert_eq!(name, rgba(t.component), "a selected component is full purple");
+        assert_eq!(glyph, rgba(t.component));
+
+        let (_, glyph) = row_ink(&t, &row(Icon::Component, 1, false, true), Mark::None);
+        assert_eq!(glyph, rgba(t.component_dim), "a component child is a shade deeper than the parent");
+    }
+
+    #[test]
+    fn visibility_parent_child_and_band_keep_their_own_axes() {
+        let t = Tokens::new(false, Accent::Green);
+        let plain = row(Icon::Frame, 0, false, true);
+        let (name, glyph) = row_ink(&t, &plain, Mark::None);
+        assert_eq!(name, rgba(t.text));
+        assert_eq!(glyph, rgba(t.layer_muted), "a frame's glyph is 30% black, not its text colour");
+        let (name, _) = row_ink(&t, &plain, Mark::Selected);
+        assert_eq!(name, rgba(t.layer_text_selected));
+        let (name, _) = row_ink(&t, &plain, Mark::Child);
+        assert_eq!(name, rgba(t.layer_muted));
+
+        let hidden = row(Icon::Frame, 0, false, false);
+        let (name, glyph) = row_ink(&t, &hidden, Mark::None);
+        assert_eq!(name, rgba(t.layer_muted), "an invisible layer uses --color-text-disabled");
+        assert_eq!(glyph, rgba(t.layer_muted));
+
+        let hidden_comp = row(Icon::Component, 1, true, false);
+        let (name, glyph) = row_ink(&t, &hidden_comp, Mark::None);
+        assert_eq!(name, rgba(t.component_dim), "a hidden idle component is a shade deeper");
+        assert_eq!(glyph, rgba(t.component_dim));
+        let (_, glyph) = row_ink(&t, &hidden_comp, Mark::Selected);
+        assert_eq!(glyph, rgba(t.component), "hidden but selected stays saturated");
+
+        // Plain layers must keep the brand-derived selection band; only typed runs take a ramp.
+        assert_eq!(run_color(&t, &[plain.clone()], 0, 0, false), rgba(t.selected_row));
+        assert_eq!(run_color(&t, &[plain], 0, 0, true), rgba(t.selected_row_child));
+        assert_eq!(run_color(&t, &[row(Icon::Slot, 0, false, true)], 0, 0, false), rgba(t.slot_row));
+        assert_eq!(run_color(&t, &[row(Icon::Component, 1, true, true)], 0, 0, false), rgba(t.component_row));
     }
 }

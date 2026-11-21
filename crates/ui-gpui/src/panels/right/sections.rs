@@ -23,8 +23,8 @@ use figcraft_color::PaintKind;
 use figcraft_doc::NodeId;
 use figcraft_doc::anim::motion::AnimProperty;
 use gpui::{
-    App, Bounds, Div, ImageSource, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, SharedString, Window, canvas, div, img,
-    prelude::*, px, size,
+    App, Bounds, Div, Hsla, ImageSource, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, SharedString, Window, canvas, div,
+    img, prelude::*, px, size, svg,
 };
 use serde_json::{Value, json};
 use std::cell::{Cell, RefCell};
@@ -39,12 +39,30 @@ fn push(f: &RightFields, id: &'static str, params: Value) {
     f.cmds.push(Cmd { id, params: Some(params) });
 }
 
+/// 24 pt 切换按钮：与通用 `IconButton` 同外观，字形走统一图标枚举入口。
+pub(crate) fn named_icon_toggle(icon: Icon, active: bool, on_click: impl Fn() + 'static) -> gpui::AnyElement {
+    let t = tokens();
+    let ink = if active { rgba(t.accent) } else { rgba(t.icon) };
+    div()
+        .size(pt(24.0))
+        .rounded(pt(5.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .when(active, |d| d.bg(rgba(t.selected_row)))
+        .when(!active, |d| d.hover(|s| s.bg(rgba(t.hover))))
+        .child(crate::widgets::icon::paint_in_slot(icon, 24.0, Some(ink)))
+        .on_mouse_down(MouseButton::Left, move |_e, _w, _cx| on_click())
+        .into_any_element()
+}
+
 /// 右键菜单入口：与 `pick_dropdown` 共用 `MenuRow` + 根视图 `open_menu` 这套通用控件，
 /// 只是锚点取当前指针而不是触发按钮（`ui-egui/right/menu.rs::context_popup`）。
 /// `entries` 是 (显示名, 命令, 参数)；`extra` 由调用方先把「剪贴板里有没有可粘贴项」算进去。
 fn context_menu_at(f: &RightFields, at: Point<Pixels>, width: f32, entries: Vec<(String, &'static str, Value)>, cx: &mut App) {
     let Some(root) = f.root.clone() else { return };
-    let rows: Vec<MenuRow> = entries.iter().map(|(label, _, _)| MenuRow::new(label.clone())).collect();
+    let rows: Vec<MenuRow> = entries.iter().map(|(label, _, _)| MenuRow::row(label.clone())).collect();
     let cmds = f.cmds.clone();
     let on_pick = Rc::new(move |label: &str, _w: &mut Window, _cx: &mut App| {
         if let Some((_, cmd, params)) = entries.iter().find(|(l, _, _)| l == label) {
@@ -124,9 +142,15 @@ pub(crate) fn slot(n: &mut usize) -> usize {
 
 /// 一个「点开菜单选中即推命令」的下拉（egui `menu_popup` + `menu_item`）。
 /// `rows`: (显示名, 选中后推的命令 id, 命令额外参数)。`cmds` 句柄 clone 进 `on_pick`。
-pub(crate) fn pick_dropdown(f: &RightFields, label: impl Into<SharedString>, width: f32, rows: Vec<(String, &'static str, Value)>) -> Dropdown {
-    let menu: Vec<MenuRow> = rows.iter().map(|(l, _, _)| MenuRow::new(l.clone())).collect();
-    let mut d = Dropdown::new(label, width, None).fill();
+pub(crate) fn pick_dropdown_lead(
+    f: &RightFields,
+    label: impl Into<SharedString>,
+    width: f32,
+    rows: Vec<(String, &'static str, Value)>,
+    lead: Option<Icon>,
+) -> Dropdown {
+    let menu: Vec<MenuRow> = rows.iter().map(|(l, _, _)| MenuRow::row(l.clone())).collect();
+    let mut d = Dropdown::new(label, width, lead.map(crate::widgets::dropdown::DropLead::Icon)).fill();
     if let Some(root) = f.root.clone() {
         let cmds = f.cmds.clone();
         d = d.on_click(move |anchor, _window, cx: &mut App| {
@@ -141,6 +165,189 @@ pub(crate) fn pick_dropdown(f: &RightFields, label: impl Into<SharedString>, wid
         });
     }
     d
+}
+
+pub(crate) fn pick_dropdown(f: &RightFields, label: impl Into<SharedString>, width: f32, rows: Vec<(String, &'static str, Value)>) -> Dropdown {
+    pick_dropdown_lead(f, label, width, rows, None)
+}
+
+/// Same dropdown, with a leading glyph in the field's lead slot.
+
+/// 约束图形选择器：外框里的子层与四条边的 pin，中间十字设居中。
+fn constraint_rect(window: &mut Window, x: f32, y: f32, w: f32, h: f32, color: gpui::Rgba, radius: f32) {
+    if w <= 0.0 || h <= 0.0 {
+        return;
+    }
+    let corners = gpui::Corners {
+        top_left: px(radius),
+        top_right: px(radius),
+        bottom_right: px(radius),
+        bottom_left: px(radius),
+    };
+    window.paint_quad(
+        gpui::fill(
+            gpui::Bounds { origin: gpui::point(px(x), px(y)), size: gpui::size(px(w), px(h)) },
+            color,
+        )
+        .corner_radii(corners),
+    );
+}
+
+/// 约束图里的一根 pin / 居中标记：横竖都按整设备像素落位、取整厚度，
+/// 避免同一条线在不同位置被 AA 摊成一粗一细。选中 3pt、未选中 1.5pt，四边与中心一致。
+fn constraint_bar(window: &mut Window, cx: f32, cy: f32, horizontal: bool, active: bool, color: gpui::Rgba, len: f32) {
+    let ppp = window.scale_factor().max(1.0);
+    let snap = |v: f32| (v * ppp).round() / ppp;
+    let thick = snap(if active { 3.0 } else { 1.5 });
+    if horizontal {
+        constraint_rect(window, snap(cx - len / 2.0), snap(cy - thick / 2.0), snap(len), thick, color, 0.0);
+    } else {
+        constraint_rect(window, snap(cx - thick / 2.0), snap(cy - len / 2.0), thick, snap(len), color, 0.0);
+    }
+}
+
+/// 约束图形选择器：与其余右栏控件同一套 1fr 网格；图形本身在 canvas 上绘制，
+/// 上层只叠 5 个 22×22 的命中盒。
+///
+/// 宽度**必须由网格给**：右栏统一传 `col = 0` 哨兵，旧版拿它当 `w(px(0))`，
+/// 于是图形和命中盒全被挤在零宽列里。这里改成 `w_full()`，命中盒用
+/// 「左 / 中 / 右」三段布局按真实列宽摆位，与参考实现 `constraint_preview` 的
+/// `rect.left()+8 / rect.center().x / rect.right()-8` 完全一致。
+pub(crate) fn constraint_graphic(f: &RightFields, d: &PanelData) -> gpui::AnyElement {
+    let t = tokens();
+    let h = d.constraints_h;
+    let v = d.constraints_v;
+    let accent = t.accent;
+    let field = t.field;
+    let secondary = t.text_secondary;
+    let border = gpui::Rgba { a: 0.4, ..rgba(secondary) };
+    let height = 56.0f32;
+
+    let draw = canvas(
+        move |_, _, _| {},
+        move |bounds: Bounds<Pixels>, _, window: &mut Window, _| {
+            let x = f32::from(bounds.origin.x);
+            let y = f32::from(bounds.origin.y);
+            let w = f32::from(bounds.size.width).max(1.0);
+            constraint_rect(window, x, y, w, height, rgba(field), 5.0);
+            // 子层矩形：1pt 边框由「边框色底 + 内缩 1pt 的底色」画出，避免透明路径叠加。
+            constraint_rect(window, x + 16.0, y + 16.0, w - 32.0, height - 32.0, border, 5.0);
+            constraint_rect(window, x + 17.0, y + 17.0, w - 34.0, height - 34.0, rgba(field), 4.0);
+
+            let cy = y + height / 2.0;
+            let cx = x + w / 2.0;
+            let pins = [
+                (x + 8.0, cy, true, matches!(h, Some("left" | "leftRight"))),
+                (x + w - 8.0, cy, true, matches!(h, Some("right" | "leftRight"))),
+                (cx, y + 8.0, false, matches!(v, Some("top" | "topBottom"))),
+                (cx, y + height - 8.0, false, matches!(v, Some("bottom" | "topBottom"))),
+            ];
+            for (px, py, horizontal, active) in pins {
+                constraint_bar(window, px, py, horizontal, active, if active { rgba(accent) } else { rgba(secondary) }, 10.0);
+            }
+            // 中间十字的两条**分别**着色、同一套像素吸附粗细：横条只反映水平居中，竖条只反映垂直居中。
+            let h_center = matches!(h, Some("center"));
+            let v_center = matches!(v, Some("center"));
+            constraint_bar(window, cx, cy, true, h_center, if h_center { rgba(accent) } else { rgba(secondary) }, 14.0);
+            constraint_bar(window, cx, cy, false, v_center, if v_center { rgba(accent) } else { rgba(secondary) }, 14.0);
+        },
+    );
+
+    let root = div().relative().w_full().h(px(height)).child(draw.absolute().inset_0());
+
+    // 命中层：左右两颗贴边（盒心在 8 / w-8），中间三颗共用一个 22 pt 宽的列（盒心在 w/2）。
+    // 这样不用知道列的像素宽，也与参考实现的 22×22 命中盒一一对应。
+    let hit = |f: &RightFields, label: &'static str, pair: &'static str, other: &'static str, current: Option<&'static str>, horizontal: bool| {
+        let cmds = f.cmds.clone();
+        let key = if horizontal { "horizontal" } else { "vertical" };
+        let fallback = if horizontal { "left" } else { "top" };
+        div()
+            .w(px(22.0))
+            .h(px(22.0))
+            .cursor_pointer()
+            .on_mouse_down(MouseButton::Left, move |e: &MouseDownEvent, _w, _cx| {
+                // Shift 把同轴两端做成可反复切换的组合态：不在组合里就加进来（leftRight /
+                // topBottom），已在组合里再 Shift 点同一端就把它摘掉、只留对端。
+                // 普通点仍是单端；点已生效的单端则回到该轴默认值，避免选上去解不掉。
+                let value = if e.modifiers.shift {
+                    if current == Some(pair) { other } else { pair }
+                } else if current == Some(label) {
+                    fallback
+                } else {
+                    label
+                };
+                cmds.push(Cmd { id: "node.set", params: Some(json!({ "props": { "constraints": { key: value } } })) });
+            })
+    };
+    // 上下 pin 仍是一个 22×22 命中盒；Shift 在 topBottom 与单端间切换。
+    let middle_hit = |y: f32, current: Option<&'static str>| {
+        let cmds = f.cmds.clone();
+        let label = y_to_constraint(y);
+        let fallback = "top";
+        let other = if label == "top" { "bottom" } else { "top" };
+        div()
+            .absolute()
+            .left(px(0.0))
+            .top(px(y - 11.0))
+            .w(px(22.0))
+            .h(px(22.0))
+            .cursor_pointer()
+            .on_mouse_down(MouseButton::Left, move |e: &MouseDownEvent, _w, _cx| {
+                let value = if e.modifiers.shift {
+                    if current == Some("topBottom") { other } else { "topBottom" }
+                } else if current == Some(label) {
+                    fallback
+                } else {
+                    label
+                };
+                cmds.push(Cmd { id: "node.set", params: Some(json!({ "props": { "constraints": { "vertical": value } } })) });
+            })
+    };
+    // 中间十字拆成两条独立命中区：横条只设 horizontal=center，竖条只设 vertical=center。
+    // 两者各占 14×4 / 4×14，在正中有 4×4 重叠——后绘制的竖条拿到中心点，横条仍可在两端点到。
+    let center_hit = |f: &RightFields, horizontal: bool| {
+        let cmds = f.cmds.clone();
+        let (w, hh, top, left) = if horizontal { (14.0, 4.0, -2.0, 4.0) } else { (4.0, 14.0, -7.0, 9.0) };
+        div()
+            .absolute()
+            .left(px(left))
+            .top(px(height / 2.0 + top))
+            .w(px(w))
+            .h(px(hh))
+            .cursor_pointer()
+            .on_mouse_down(MouseButton::Left, move |_e: &MouseDownEvent, _w, _cx| {
+                let key = if horizontal { "horizontal" } else { "vertical" };
+                let current = if horizontal { h } else { v };
+                let value = if current == Some("center") { if horizontal { "left" } else { "top" } } else { "center" };
+                cmds.push(Cmd { id: "node.set", params: Some(json!({ "props": { "constraints": { key: value } } })) });
+            })
+    };
+    let middle = div()
+        .relative()
+        .flex_none()
+        .w(px(22.0))
+        .h(px(height))
+        .child(middle_hit(8.0, v))
+        .child(middle_hit(height - 8.0, v))
+        .child(center_hit(f, true))
+        .child(center_hit(f, false));
+    root.child(
+        div()
+            .absolute()
+            .inset_0()
+            .flex()
+            .flex_row()
+            .items_center()
+            .child(hit(f, "left", "leftRight", "right", h, true).flex_none().ml(px(-3.0)))
+            .child(div().flex_1().min_w(px(0.0)).h_full().flex().items_center().justify_center().child(middle))
+            .child(hit(f, "right", "leftRight", "left", h, true).flex_none().mr(px(-3.0))),
+    )
+    .into_any_element()
+}
+
+/// 中间列的 y 坐标 → 垂直约束名（8 / 48 → top / bottom）。
+fn y_to_constraint(y: f32) -> &'static str {
+    if y < 28.0 { "top" } else { "bottom" }
 }
 
 /// 字体族选择按钮：外观沿用 `Dropdown`，但点击打开一个带字体预览的窗口（每项用它自己的
@@ -186,7 +393,7 @@ fn zoom_button(f: &RightFields, label: String, rows: Vec<ViewMenuRow>) -> gpui::
     let menu: Vec<MenuRow> = rows
         .iter()
         .map(|r| {
-            let mut m = MenuRow::new(r.label.clone());
+            let mut m = MenuRow::row(r.label.clone());
             if r.separator {
                 m = m.separator();
             }
@@ -232,7 +439,7 @@ fn checked_dropdown(f: &RightFields, label: impl Into<SharedString>, width: f32,
     let menu: Vec<MenuRow> = rows
         .iter()
         .map(|r| {
-            let mut m = MenuRow::new(r.label.clone());
+            let mut m = MenuRow::row(r.label.clone());
             if r.separator {
                 m = m.separator();
             }
@@ -602,25 +809,25 @@ pub(crate) fn dim_trail_menu(
         tf.set_on_trail(move |pos: Point<Pixels>, _w, cx: &mut App| {
             let Some(root) = root.clone() else { return };
             // 菜单项照 egui `dimensions`：自己能不能 Hug / Fill / 加限值决定列哪些。
-            let mut rows: Vec<MenuRow> = vec![MenuRow::new(tr("Fixed"))];
+            let mut rows: Vec<MenuRow> = vec![MenuRow::row(tr("Fixed"))];
             if can_hug {
-                rows.push(MenuRow::new(tr("Hug contents")));
+                rows.push(MenuRow::row(tr("Hug contents")));
             }
             if can_fill {
-                rows.push(MenuRow::new(tr("Fill container")));
+                rows.push(MenuRow::row(tr("Fill container")));
             }
             if can_limit {
                 let mut grouped = false;
                 if !has_min {
-                    rows.push(MenuRow::new(tr("Add min")).separator());
+                    rows.push(MenuRow::row(tr("Add min")).separator());
                     grouped = true;
                 }
                 if !has_max {
-                    let row = MenuRow::new(tr("Add max"));
+                    let row = MenuRow::row(tr("Add max"));
                     rows.push(if grouped { row } else { row.separator() });
                 }
                 if any_limit {
-                    rows.push(MenuRow::new(tr("Remove min and max")).separator());
+                    rows.push(MenuRow::row(tr("Remove min and max")).separator());
                 }
             }
             let cmds = cmds.clone();
@@ -678,7 +885,7 @@ pub(crate) fn dim_trail_off(cx: &mut App, field: &gpui::Entity<crate::widgets::T
 
 /// 一个图标按钮，点击打开菜单，选中项推对应命令（egui `icons::button` + `menu_popup`）。
 fn menu_icon(f: &RightFields, icon: Icon, width: f32, rows: Vec<(String, &'static str, Value)>, active: bool) -> IconButton {
-    let menu: Vec<MenuRow> = rows.iter().map(|(l, _, _)| MenuRow::new(l.clone())).collect();
+    let menu: Vec<MenuRow> = rows.iter().map(|(l, _, _)| MenuRow::row(l.clone())).collect();
     let cmds = f.cmds.clone();
     let root = f.root.clone();
     IconButton::new(icon).size(24.0).active(active).on_click(move |_e, window, cx: &mut App| {
@@ -696,6 +903,48 @@ fn menu_icon(f: &RightFields, icon: Icon, width: f32, rows: Vec<(String, &'stati
     })
 }
 
+/// 一颗「常驻图标 + 点开通用悬浮菜单」的按钮。触发字形走资源名（`typ-settings` 这类没有
+/// `Icon` 枚举变体的字形也能用），菜单行的 icon / checked / separator 全部由统一的
+/// [`MenuRow`]（= [`crate::menu_card::Item`]) 配置 —— 与右键菜单、工具栏飞出、主菜单同一套项模型。
+///
+/// `on_pick` 收到的是行的 key（调用方用 `.key()` 指定稳定键），不依赖显示文案，翻译后仍准。
+///
+/// 锚点：`key` 要跨帧稳定，`MenuAnchor` 持一个跨帧 cell，按钮每帧把真实矩形写进去。点击时
+/// 用同一个 cell 播种 `open_menu_fit`，于是菜单左缘对齐按钮左缘、顶边在按钮底 + 4pt、
+/// 宽度按最宽行（用户 2026-11-20）。不再用 `mouse_position()` —— 那是点击点，不是按钮框。
+fn named_icon_menu(
+    f: &RightFields,
+    key: &'static str,
+    trigger: Icon,
+    menu: Vec<MenuRow>,
+    active: bool,
+    on_pick: Rc<dyn Fn(&str, &mut Window, &mut App)>,
+) -> gpui::AnyElement {
+    let root = f.root.clone();
+    let t = tokens();
+    let ink = if active { rgba(t.accent) } else { rgba(t.icon) };
+    let anchor = crate::widgets::dropdown::menu_anchor(key);
+    let cell = anchor.cell();
+    let click_anchor = anchor.clone(); // 闭包要拥有，探针用另一个 clone
+    let btn = div()
+        .size(pt(24.0))
+        .rounded(pt(5.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .when(active, |d| d.bg(rgba(t.selected_row)))
+        .when(!active, |d| d.hover(|s| s.bg(rgba(t.hover))))
+        .child(crate::widgets::icon::paint_in_slot(trigger, 24.0, Some(ink)))
+        .on_mouse_down(MouseButton::Left, move |_e, _window, cx: &mut App| {
+            let Some(root) = root.clone() else { return };
+            // 探针 cell 已被按钮每帧写入真实矩形；首帧还没量到才回落到空，由 open 端播种。
+            let rect = cell.get().unwrap_or_else(|| Bounds { origin: Point::new(px(0.0), px(0.0)), size: size(px(24.0), px(24.0)) });
+            root.update(cx, |cv, cx| cv.open_menu_fit(click_anchor.clone(), rect, menu.clone(), on_pick.clone(), cx));
+        });
+    crate::popovers::with_button_bounds(btn, anchor.cell())
+}
+
 /// 带勾选 / 单选列的菜单按钮：`MenuRow::checked` 是通用的「勾选列」（egui `ui.selectable_label`）。
 /// `rows` = (标签, 勾选态, 命令, 参数, 是否在此行前画分隔线)。行用下标当 key，保证同一命令的
 /// 多行（size / 单选组）不会互相串参数。
@@ -710,7 +959,7 @@ fn checked_menu_icon(
         .iter()
         .enumerate()
         .map(|(i, (label, on, _, _, sep))| {
-            let row = MenuRow::new(label.clone()).key(i.to_string()).checked(*on);
+            let row = MenuRow::row(label.clone()).key(i.to_string()).checked(*on);
             if *sep { row.separator() } else { row }
         })
         .collect();
@@ -1338,33 +1587,68 @@ pub(crate) fn paints(
             .into_iter()
             .map(|(l, c, p)| (l.to_string(), c, p))
             .collect();
-            // `IndependentCorners`（独立边宽，`strokeSides`）+ `Dots`（高级描边样式）。
-            // egui `paints.rs`: `let w = weight.unwrap_or(1.0)` —— 每条边的权重来自当前
-            // 描边宽度，硬编码 1.0 会把一条 8pt 的描边点一下就变成 1pt。
+            // 独立边宽（`strokeSides`）+ 高级描边。egui `paints.rs`: `let w = weight.unwrap_or(1.0)`
+            // —— 每条边的权重来自当前描边宽度，硬编码 1.0 会把一条 8pt 描边点一下变成 1pt。
+            //
+            // 当前模式从文档 `stroke.sides` 反推（不是本地标记）：None = All；单条边非零 =
+            // 对应方位；其它（含 [w,w,w,w]）= Custom。菜单项据此带勾选态，只有 Custom 才展开
+            // 四边输入框 —— 用户 2026-11-20：选 Top/Left 等只是把一条边设宽，不该展开四个框。
             let w = d.stroke_weight.unwrap_or(1.0);
-            let sides = menu_icon(
-                f,
-                Icon::AbsolutePosition,
-                200.0,
-                vec![
-                    (tr("All").into(), "node.set", json!({ "props": { "strokeSides": Value::Null } })),
-                    (tr("Top").into(), "node.set", json!({ "props": { "strokeSides": [w, 0.0, 0.0, 0.0] } })),
-                    (tr("Right").into(), "node.set", json!({ "props": { "strokeSides": [0.0, w, 0.0, 0.0] } })),
-                    (tr("Bottom").into(), "node.set", json!({ "props": { "strokeSides": [0.0, 0.0, w, 0.0] } })),
-                    (tr("Left").into(), "node.set", json!({ "props": { "strokeSides": [0.0, 0.0, 0.0, w] } })),
-                    (tr("Custom").into(), "node.set", json!({ "props": { "strokeSides": [w, w, w, w] } })),
-                ],
-                false,
-            );
+            let sides_mode = stroke_sides_mode(d.stroke_sides);
+            let row = |key: &'static str, label: SharedString, icon: Icon, sel: bool, sep: bool| {
+                let mut r = MenuRow::row(label).key(key).icon(icon).checked(Some(sel));
+                if sep { r = r.separator(); }
+                r
+            };
+            let menu = vec![
+                row("all", tr("All").into(), Icon::StrokeSides, sides_mode == "all", false),
+                row("top", tr("Top").into(), Icon::StrokeSideTop, sides_mode == "top", false),
+                row("right", tr("Right").into(), Icon::StrokeSideRight, sides_mode == "right", false),
+                row("bottom", tr("Bottom").into(), Icon::StrokeSideBottom, sides_mode == "bottom", false),
+                row("left", tr("Left").into(), Icon::StrokeSideLeft, sides_mode == "left", false),
+                // 用户：Custom 放在分隔线下面，跟上面 5 个方位分开。
+                row("custom", tr("Custom").into(), Icon::StrokeSideCheck, sides_mode == "custom", true),
+            ];
+            let trigger_icon = match sides_mode {
+                "top" => Icon::StrokeSideTop,
+                "right" => Icon::StrokeSideRight,
+                "bottom" => Icon::StrokeSideBottom,
+                "left" => Icon::StrokeSideLeft,
+                "all" => Icon::StrokeSides,
+                _ => Icon::StrokeSideCheck,
+            };
+            let sides = {
+                let cmds = f.cmds.clone();
+                named_icon_menu(
+                    f,
+                    "stroke-sides",
+                    trigger_icon,
+                    menu,
+                    false,
+                    Rc::new(move |key: &str, _w, _cx| {
+                        let sides_value = match key {
+                            "top" => json!([w, 0.0, 0.0, 0.0]),
+                            "right" => json!([0.0, w, 0.0, 0.0]),
+                            "bottom" => json!([0.0, 0.0, w, 0.0]),
+                            "left" => json!([0.0, 0.0, 0.0, w]),
+                            "custom" => json!([w, w, w, w]),
+                            _ => Value::Null, // all
+                        };
+                        cmds.push(Cmd { id: "node.set", params: Some(json!({ "props": { "strokeSides": sides_value } })) });
+                    }),
+                )
+            };
             // Advanced stroke (egui `right/stroke.rs::show_stroke_settings`)：线宽线形、
             // dash/gap、端帽、连接、宽度配置与 Brush，恢复成带标题栏的「Stroke」通用窗口。
             let popups = f.popups();
             let stroke_queue = f.queue();
             let stroke_data = d.clone();
             let dots = window_open_button("stroke", Icon::Menu, popups.is_open("stroke"), move |window, cx| {
-                let top = crate::popovers::anchored_top("stroke", window);
-                open_detached_with(popups.clone(), "stroke", Some(top), cx, |anchor, cx| {
-                    crate::popovers::WindowState::stroke(stroke_queue.clone(), &stroke_data, cx, anchor)
+                let at = crate::popovers::anchored_left_below("stroke", window);
+                open_detached_with(popups.clone(), "stroke", None, cx, |_anchor, cx| {
+                    let mut w = crate::popovers::WindowState::stroke(stroke_queue.clone(), &stroke_data, cx, at);
+                    w.anchor_at(at);
+                    w
                 });
             });
             // 第二行 = 描边对齐下拉 + **线宽字段** + 独立边宽 + 高级描边（egui `paints.rs`:
@@ -1383,6 +1667,16 @@ pub(crate) fn paints(
                 ],
                 vec![sides.into_any_element(), dots],
             ));
+            // Custom 展开：egui `paints.rs::stroke` 的
+            // `if let Some(sides) = common(doc, sel, |n| n.stroke.sides).flatten()` ——
+            // 文档有逐边权重就画两行 T/R、B/L 输入框（顺序 [top,right,bottom,left]）。
+            // 选 Custom 写入 `[w,w,w,w]` → 下帧 `d.stroke_sides` 命中 → 这里出现四个字段，
+            // 原有的 bug 正是漏了这一块（只写了菜单命令，面板从不响应）。
+            if sides_mode == "custom" && d.stroke_sides.is_some() {
+                sec = sec
+                    .child(field_row(vec![f.stroke_side_t.clone(), f.stroke_side_r.clone()], Vec::<IconButton>::new()))
+                    .child(field_row(vec![f.stroke_side_b.clone(), f.stroke_side_l.clone()], Vec::<IconButton>::new()));
+            }
         }
     }
     Section::Full(sec)
@@ -1476,7 +1770,7 @@ fn add_effect_menu(f: &RightFields) -> IconButton {
                 .iter()
                 .enumerate()
                 .map(|(i, (l, _, _))| {
-                    let r = MenuRow::new(l.clone());
+                    let r = MenuRow::row(l.clone());
                     if i == types_len { r.separator() } else { r }
                 })
                 .collect();
@@ -2001,7 +2295,7 @@ pub(crate) fn export(f: &RightFields, d: &PanelData, col: f32, _n: &mut usize, c
         let trigger = format!("export-options-{index}");
         let popups = f.popups();
         let queue = f.queue();
-        let export_rows = export_setting_rows(row, &d.doc_profile, &target);
+        let export_rows = export_setting_rows(row, &d.doc_profile, &target, &queue, cx);
         let btn_key = trigger.clone();
         let dots = window_open_button(&btn_key, Icon::Menu, popups.is_open(&trigger), move |window, cx| {
             let top = crate::popovers::anchored_top(&trigger, window);
@@ -2110,7 +2404,13 @@ pub(crate) fn export(f: &RightFields, d: &PanelData, col: f32, _n: &mut usize, c
 /// 勾选项用通用 Toggle，VD_COMPAT / Color profile 两组用 Radio（egui `widgets::radio`）；
 /// 每组前一条 SubLabel 就是 egui 的 `widgets::label(..., text_secondary)`。egui 里这些住在
 /// `menu_popup` 下拉中，但单选器在下拉里不好放，用户要求改用通用弹窗，内容一行不差。
-fn export_setting_rows(row: &ExportRow, doc_profile: &str, target: &[figcraft_doc::NodeId]) -> Vec<crate::popovers::Setting> {
+fn export_setting_rows(
+    row: &ExportRow,
+    doc_profile: &str,
+    target: &[figcraft_doc::NodeId],
+    cmds: &crate::panels::Cmds,
+    cx: &mut App,
+) -> Vec<crate::popovers::Setting> {
     use crate::popovers::{Opt, Setting};
     let index = row.index;
     // Every advanced-option command must carry the target ids: in page mode the selection is
@@ -2123,6 +2423,25 @@ fn export_setting_rows(row: &ExportRow, doc_profile: &str, target: &[figcraft_do
         v
     };
     let mut out: Vec<Setting> = Vec::new();
+    // Per-setting Suffix editor (egui `setting_row`). It always shows with its "Suffix" label
+    // even when empty, and edits go through `export.update` with this row's ids/index/suffix.
+    {
+        let field = crate::widgets::input::field::text_field(cx, 176.0, &row.suffix, "", crate::widgets::Slot::None, crate::widgets::Slot::None);
+        let queue = cmds.clone();
+        let ids = target.to_vec();
+        field.update(cx, move |tf, _| {
+            let queue = queue.clone();
+            let ids = ids.clone();
+            tf.set_on_commit(move |typed, _, _| {
+                let mut params = json!({ "index": index, "suffix": typed.to_string() });
+                if let Some(o) = params.as_object_mut() {
+                    o.insert("ids".into(), json!(&ids));
+                }
+                queue.push(crate::panels::Cmd { id: "export.update", params: Some(params) });
+            });
+        });
+        out.push(Setting::Field { tab: 0, label: tr("Suffix").into(), field });
+    }
     let toggle = |label: String, on: bool, key: &'static str| Setting::Toggle {
         tab: 0,
         label: label.into(),
@@ -2132,9 +2451,8 @@ fn export_setting_rows(row: &ExportRow, doc_profile: &str, target: &[figcraft_do
         off_cmd: Opt::new(String::new(), "export.update", with_ids(json!({ "index": index, key: false }))),
     };
     out.push(toggle(tr("Ignore overlapping layers").to_string(), row.contents_only, "contentsOnly"));
-    if row.format == "svg" || row.include_bounding_box {
-        out.push(toggle(tr("Include bounding box").to_string(), row.include_bounding_box, "includeBoundingBox"));
-    }
+    // Always offer the toggle: hiding it when a PNG has it off leaves no way to enable it.
+    out.push(toggle(tr("Include bounding box").to_string(), row.include_bounding_box, "includeBoundingBox"));
     if row.format == "svg" {
         out.push(toggle(tr("Outline text").to_string(), row.svg_outline_text, "svgOutlineText"));
         out.push(toggle(tr("Include id attribute").to_string(), row.svg_id_attribute, "svgIdAttribute"));
@@ -2251,6 +2569,21 @@ pub(crate) fn clip_content(f: &RightFields, d: &PanelData) -> crate::widgets::pa
     field_row_full(cb)
 }
 
+/// 从文档的逐边描边权重反推当前选中的模式，用来给 sides 菜单打勾选、并决定展开区显隐。
+/// `[top, right, bottom, left]`；`None` = All。单条边非零 = 那个方位；其余 = Custom。
+/// 这样模式随文档走（切选择、撤销、命令回推都自动同步），不需要额外的本地状态。
+pub(crate) fn stroke_sides_mode(sides: Option<[f64; 4]>) -> &'static str {
+    let Some([t, r, b, l]) = sides else { return "all" };
+    let nz = |v: f64| v > 0.0;
+    match (nz(t), nz(r), nz(b), nz(l)) {
+        (true, false, false, false) => "top",
+        (false, true, false, false) => "right",
+        (false, false, true, false) => "bottom",
+        (false, false, false, true) => "left",
+        _ => "custom",
+    }
+}
+
 /// 圆角展开区的显隐规则（egui `paints.rs::appearance`：`smooth_ok && indep_corners_open`）：
 /// 只看类型是否支持平滑圆角（`smooth_ok`），与半径数值无关 —— 半径为 0 也能先设平滑值。
 /// 注意**折叠态不显示展开区**——这正是「圆角折叠时不该显示平滑按钮」的修复点。
@@ -2326,7 +2659,7 @@ pub(crate) fn appearance(
     let indep_toggle = if smooth_ok {
         let flag = f.corners_individual.clone();
         let cmds = f.cmds.clone();
-        Some(IconButton::new(Icon::AbsolutePosition).size(24.0).active(indep_open).on_click(move |_e, _w, _cx| {
+        Some(named_icon_toggle(Icon::CornerIndividual, indep_open, move || {
             // ⛔ 不能写成 `*flag.borrow_mut() = !*flag.borrow()`：同一表达式里先可变借用再借用，
             // RefCell 会直接 panic（点一下卡死）。与 padding 的 `pad_individual` 同样拆两句。
             let next = !*flag.borrow();
@@ -2337,16 +2670,33 @@ pub(crate) fn appearance(
         None
     };
     let mut sec = PanelSection::new(tr("Appearance")).header_trail(icon_row(vec![eye.into_any_element(), blend.into_any_element()]));
-    let corner_row_trail: Vec<gpui::AnyElement> = indep_toggle.map(|b| b.into_any_element()).into_iter().collect();
-    sec = sec.child(sublabel_row2(tr("Opacity"), tr("Corner radius"))).child(field_row(
-        vec![
-            // Opacity / corner radius 都是原版白名单里可绑定的数值字段
-            // （`paints.rs::appearance` 用 `variable_ui::number_field_mixed`）。
-            bindable(f, "opacity", d.bound.get("opacity").map(String::as_str), &d.number_variables, opacity.clone().into_any_element()),
-            bindable(f, "cornerRadius", d.bound.get("cornerRadius").map(String::as_str), &d.number_variables, corner.clone().into_any_element()),
-        ],
-        corner_row_trail,
-    ));
+    let corner_row_trail: Vec<gpui::AnyElement> = indep_toggle.into_iter().collect();
+    // 参考实现 `right.rs::appearance`：`radius_ok` 管的是**整个第二列** —— 圆角 caption、
+    // 圆角输入框、展开按钮一起出现 / 一起消失；不支持圆角的层（如纯矢量路径）该列不存在，
+    // Opacity 占满整行。之前只把 `radius_ok` 作用在展开按钮上，输入框和 caption 照旧画着，
+    // 于是出现「展开按钮没了、圆角输入框还在」的错位。
+    if d.corner_radius_ok {
+        sec = sec.child(sublabel_row2(tr("Opacity"), tr("Corner radius")));
+    } else {
+        sec = sec.child(sublabel_row(tr("Opacity")));
+    }
+    let mut fields: Vec<gpui::AnyElement> = vec![bindable(
+        f,
+        "opacity",
+        d.bound.get("opacity").map(String::as_str),
+        &d.number_variables,
+        opacity.clone().into_any_element(),
+    )];
+    if d.corner_radius_ok {
+        fields.push(bindable(
+            f,
+            "cornerRadius",
+            d.bound.get("cornerRadius").map(String::as_str),
+            &d.number_variables,
+            corner.clone().into_any_element(),
+        ));
+    }
+    sec = sec.child(field_row(fields, corner_row_trail));
     // 展开区（egui 同序）：四个独立圆角字段（仅 indep_ok 的类型画，egui 的
     // `chunks(2).filter(|_| indep_ok)`）+ 平滑圆角按钮。折叠时整块不画——平滑按钮随之隐藏。
     if indep_open && smooth_ok {
@@ -2390,6 +2740,21 @@ mod corner_smoothing_tests {
         assert!(!shows_corner_smoothing(false, 8.0));
         assert!(shows_corner_smoothing(true, 0.0));
         assert!(shows_corner_smoothing(true, 8.0));
+    }
+
+    /// 用户 2026-11-20：只有选 Custom 才展开四边输入框。Top/Left 等单边也有 `sides`，
+    /// 但它们是单方位模式，不该展开；All（None）同理。
+    #[test]
+    fn only_custom_mode_expands_the_four_side_fields() {
+        use super::stroke_sides_mode;
+        assert_eq!(stroke_sides_mode(None), "all");
+        assert_eq!(stroke_sides_mode(Some([5.0, 0.0, 0.0, 0.0])), "top");
+        assert_eq!(stroke_sides_mode(Some([0.0, 5.0, 0.0, 0.0])), "right");
+        assert_eq!(stroke_sides_mode(Some([0.0, 0.0, 5.0, 0.0])), "bottom");
+        assert_eq!(stroke_sides_mode(Some([0.0, 0.0, 0.0, 5.0])), "left");
+        assert_eq!(stroke_sides_mode(Some([5.0, 5.0, 5.0, 5.0])), "custom");
+        // 用户手改过其中一边（不再清一色）也仍是 Custom。
+        assert_eq!(stroke_sides_mode(Some([2.0, 5.0, 3.0, 1.0])), "custom");
     }
 }
 
@@ -2988,7 +3353,7 @@ impl HeadRow {
 fn head_menu(rows: &[HeadRow]) -> Vec<MenuRow> {
     rows.iter()
         .map(|r| {
-            let mut m = MenuRow::new(r.label.clone());
+            let mut m = MenuRow::row(r.label.clone());
             if let Some(on) = r.checked {
                 m = m.checked(Some(on));
             }
@@ -3916,7 +4281,7 @@ fn local_style_folder(
                     let rename_style_slot = rename_style_slot.clone();
                     let cmds_r = cmds_r.clone();
                     let wake = wake.clone();
-                    let rows = vec![MenuRow::new("Rename folder")];
+                    let rows = vec![MenuRow::row("Rename folder")];
                     let Some(root) = root else { return };
                     let anchor = gpui::Bounds::new(e.position, gpui::size(px(0.0), px(0.0)));
                     root.update(cx, move |cv, cx| {
@@ -4068,7 +4433,7 @@ fn local_styles_add_button(f: &RightFields, d: &PanelData) -> IconButton {
     let root = f.root.clone();
     let cmds = f.cmds.clone();
     IconButton::new(Icon::Plus).size(24.0).on_click(move |_e, window, cx: &mut App| {
-        let rows: Vec<MenuRow> = ITEMS.iter().map(|r| MenuRow::new(r.0)).collect();
+        let rows: Vec<MenuRow> = ITEMS.iter().map(|r| MenuRow::row(r.0)).collect();
         let Some(root) = root.clone() else { return };
         let anchor = Bounds { origin: window.mouse_position(), size: size(px(0.0), px(0.0)) };
         // `on_click` 是 `Fn`，捕获的 `cmds` 不能直接 move 进内层回调，先克隆一份。
@@ -4347,7 +4712,7 @@ fn local_style_row(
         let dup = dup_label.clone();
         let del = del_label.clone();
         let dup_trail = if cfg!(target_os = "windows") { "Ctrl+D" } else { "⌘D" };
-        let rows = vec![MenuRow::new(edit.clone()), MenuRow::new(dup.clone()).trail(dup_trail), MenuRow::new(del.clone()).trail("Del")];
+        let rows = vec![MenuRow::row(edit.clone()), MenuRow::row(dup.clone()).trail(dup_trail), MenuRow::row(del.clone()).trail("Del")];
         let Some(root) = root.clone() else { return };
         let anchor = gpui::Bounds::new(e.position, gpui::size(px(0.0), px(0.0)));
         root.update(cx, move |cv, cx| {

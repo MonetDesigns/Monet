@@ -32,7 +32,7 @@
 //! lead slot, the value's inset and the chevron all sit on the design's 24 pt rhythm instead of
 //! being hand-positioned. Metrics (`ui-egui`'s `widgets::dropdown`):
 //!
-//! * **lead** — a 16 pt glyph or a 9 pt colour dot, in the template's 24 pt lead slot;
+//! * **lead** — a glyph at its natural size or a 9 pt colour dot, in the template's 24 pt lead slot;
 //! * **label** — the editable middle, elided when the dropdown is narrower than its text;
 //! * **chevron** — 12 pt, in the template's 24 pt trail slot (flush with the field's right edge).
 
@@ -168,7 +168,7 @@ impl IntoElement for Dropdown {
         let frame = input.layout(lead_w, SLOT);
 
         let lead = self.lead.map(|lead| match lead {
-            DropLead::Icon(i) => div().flex_none().size(pt(16.0)).child(paint_icon(i, rgba(t.text_secondary), 16.0)).into_any_element(),
+            DropLead::Icon(i) => div().flex_none().size(pt(SLOT)).child(paint_icon(i, rgba(t.text_secondary), crate::widgets::icon::default_glyph(i))).into_any_element(),
             // A 9 pt dot centred in the 24 pt slot, as the original draws it.
             DropLead::Dot(c) => div().flex_none().size(pt(9.0)).rounded(pt(5.0)).bg(rgba(c)).into_any_element(),
         });

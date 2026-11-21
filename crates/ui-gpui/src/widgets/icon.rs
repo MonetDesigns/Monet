@@ -47,6 +47,8 @@ pub enum Icon {
     Frame,
     /// The letter "T" (a `Text` node kind).
     Text,
+    /// The bottom toolbar's dedicated text tool glyph.
+    ToolText,
     /// Filled diamond (a `Component` / `ComponentSet` node kind).
     Component,
     /// Outlined diamond (an `Instance` node kind).
@@ -176,6 +178,25 @@ pub enum Icon {
     LayoutH,
     LayoutV,
     LayoutGrid,
+    // ── 右栏属性字段（此前走命名路径绕过枚举，统一收编）────────────────────────────────
+    CornerIndividual,
+    CornerTopLeft,
+    CornerTopRight,
+    CornerBottomLeft,
+    CornerBottomRight,
+    PaddingIndividual,
+    PaddingTop,
+    PaddingRight,
+    PaddingBottom,
+    PaddingLeft,
+    StrokeSides,
+    StrokeSideTop,
+    StrokeSideRight,
+    StrokeSideBottom,
+    StrokeSideLeft,
+    StrokeSideCheck,
+    ConstraintHorizontal,
+    ConstraintVertical,
 }
 
 impl Icon {
@@ -200,13 +221,14 @@ impl Icon {
         Icon::Panel,
         Icon::Menu,
         Icon::Settings,
-        /// 四圆点：Fill / Stroke / 样式 / 网格行的「打开样式编辑器」按钮（24 网格）。
+        // 四圆点：Fill / Stroke / 样式 / 网格行的「打开样式编辑器」按钮（24 网格）。
         Icon::StyleSettings,
         Icon::Trash,
         Icon::Rectangle,
         Icon::Ellipse,
         Icon::Frame,
         Icon::Text,
+        Icon::ToolText,
         Icon::Component,
         Icon::Instance,
         Icon::Page,
@@ -274,6 +296,24 @@ impl Icon {
         Icon::LayoutH,
         Icon::LayoutV,
         Icon::LayoutGrid,
+        Icon::CornerIndividual,
+        Icon::CornerTopLeft,
+        Icon::CornerTopRight,
+        Icon::CornerBottomLeft,
+        Icon::CornerBottomRight,
+        Icon::PaddingIndividual,
+        Icon::PaddingTop,
+        Icon::PaddingRight,
+        Icon::PaddingBottom,
+        Icon::PaddingLeft,
+        Icon::StrokeSides,
+        Icon::StrokeSideTop,
+        Icon::StrokeSideRight,
+        Icon::StrokeSideBottom,
+        Icon::StrokeSideLeft,
+        Icon::StrokeSideCheck,
+        Icon::ConstraintHorizontal,
+        Icon::ConstraintVertical,
     ];
 
     /// Stable file stem (kebab-case).
@@ -307,6 +347,7 @@ impl Icon {
             Icon::Ellipse => "shape-ellipse",
             Icon::Frame => "shape-frame",
             Icon::Text => "shape-text",
+            Icon::ToolText => "tool-text",
             Icon::Component => "shape-component",
             Icon::Instance => "shape-instance",
             Icon::Page => "shape-page",
@@ -371,6 +412,24 @@ impl Icon {
             Icon::LayoutH => "layout-h",
             Icon::LayoutV => "layout-v",
             Icon::LayoutGrid => "layout-grid",
+            Icon::CornerIndividual => "layout-corner-individual",
+            Icon::CornerTopLeft => "layout-corner-tl",
+            Icon::CornerTopRight => "layout-corner-tr",
+            Icon::CornerBottomLeft => "layout-corner-bl",
+            Icon::CornerBottomRight => "layout-corner-br",
+            Icon::PaddingIndividual => "layout-padding-individual",
+            Icon::PaddingTop => "layout-padding-top",
+            Icon::PaddingRight => "layout-padding-right",
+            Icon::PaddingBottom => "layout-padding-bottom",
+            Icon::PaddingLeft => "layout-padding-left",
+            Icon::StrokeSides => "property-stroke-sides",
+            Icon::StrokeSideTop => "stroke-side-top",
+            Icon::StrokeSideRight => "stroke-side-right",
+            Icon::StrokeSideBottom => "stroke-side-bottom",
+            Icon::StrokeSideLeft => "stroke-side-left",
+            Icon::StrokeSideCheck => "stroke-side-check",
+            Icon::ConstraintHorizontal => "constraint-horizontal",
+            Icon::ConstraintVertical => "constraint-vertical",
         }
     }
 
@@ -405,6 +464,7 @@ impl Icon {
             Icon::Ellipse => "shape-ellipse",
             Icon::Frame => "shape-frame",
             Icon::Text => "shape-text",
+            Icon::ToolText => "tool-text",
             Icon::Component => "shape-component",
             Icon::Instance => "shape-instance",
             Icon::Page => "shape-page",
@@ -469,6 +529,24 @@ impl Icon {
             Icon::LayoutH => "layout-h",
             Icon::LayoutV => "layout-v",
             Icon::LayoutGrid => "layout-grid",
+            Icon::CornerIndividual => "layout-corner-individual",
+            Icon::CornerTopLeft => "layout-corner-tl",
+            Icon::CornerTopRight => "layout-corner-tr",
+            Icon::CornerBottomLeft => "layout-corner-bl",
+            Icon::CornerBottomRight => "layout-corner-br",
+            Icon::PaddingIndividual => "layout-padding-individual",
+            Icon::PaddingTop => "layout-padding-top",
+            Icon::PaddingRight => "layout-padding-right",
+            Icon::PaddingBottom => "layout-padding-bottom",
+            Icon::PaddingLeft => "layout-padding-left",
+            Icon::StrokeSides => "property-stroke-sides",
+            Icon::StrokeSideTop => "stroke-side-top",
+            Icon::StrokeSideRight => "stroke-side-right",
+            Icon::StrokeSideBottom => "stroke-side-bottom",
+            Icon::StrokeSideLeft => "stroke-side-left",
+            Icon::StrokeSideCheck => "stroke-side-check",
+            Icon::ConstraintHorizontal => "constraint-horizontal",
+            Icon::ConstraintVertical => "constraint-vertical",
         }
     }
 
@@ -530,6 +608,12 @@ static ICON_FILES: &[(&str, &[u8])] = &[
     ("shape-text", include_bytes!("../../assets/icons/shape-text.svg")),
     ("shape-union", include_bytes!("../../assets/icons/shape-union.svg")),
     ("shape-vector", include_bytes!("../../assets/icons/shape-vector.svg")),
+    ("property-stroke-sides", include_bytes!("../../assets/icons/property-stroke-sides.svg")),
+    ("stroke-side-check", include_bytes!("../../assets/icons/stroke-side-check.svg")),
+    ("stroke-side-top", include_bytes!("../../assets/icons/stroke-side-top.svg")),
+    ("stroke-side-right", include_bytes!("../../assets/icons/stroke-side-right.svg")),
+    ("stroke-side-bottom", include_bytes!("../../assets/icons/stroke-side-bottom.svg")),
+    ("stroke-side-left", include_bytes!("../../assets/icons/stroke-side-left.svg")),
     ("tool-comment", include_bytes!("../../assets/icons/tool-comment.svg")),
     ("tool-connector", include_bytes!("../../assets/icons/tool-connector.svg")),
     ("tool-eraser", include_bytes!("../../assets/icons/tool-eraser.svg")),
@@ -541,6 +625,7 @@ static ICON_FILES: &[(&str, &[u8])] = &[
     ("tool-scale", include_bytes!("../../assets/icons/tool-scale.svg")),
     ("tool-shape-builder", include_bytes!("../../assets/icons/shape-intersect.svg")),
     ("tool-text-on-path", include_bytes!("../../assets/icons/tool-text-on-path.svg")),
+    ("tool-text", include_bytes!("../../assets/icons/tool-text.svg")),
     ("ui-actions", include_bytes!("../../assets/icons/ui-actions.svg")),
     ("ui-animation", include_bytes!("../../assets/icons/ui-animation.svg")),
     ("ui-assets", include_bytes!("../../assets/icons/ui-assets.svg")),
@@ -587,6 +672,8 @@ static ICON_FILES: &[(&str, &[u8])] = &[
     ("layout-padding-left", include_bytes!("../../assets/icons/layout-padding-left.svg")),
     ("layout-padding-right", include_bytes!("../../assets/icons/layout-padding-right.svg")),
     ("layout-padding-top", include_bytes!("../../assets/icons/layout-padding-top.svg")),
+    ("constraint-horizontal", include_bytes!("../../assets/icons/constraint-horizontal.svg")),
+    ("constraint-vertical", include_bytes!("../../assets/icons/constraint-vertical.svg")),
 ];
 
 fn file_bytes(rel: &str) -> Option<&'static [u8]> {
@@ -680,6 +767,31 @@ pub fn default_glyph(icon: Icon) -> f32 {
     natural_size(icon)
 }
 
+/// 槽位尺寸 → 该图标在这里该画多大。
+///
+/// 规则：24pt 槽画原生尺寸；其余槽位（16 / 32）就把图标缩放到槽大小，线宽由
+/// `rescale_strokes` 反比补偿，视觉上始终是 `ICON_STROKE`。
+/// 将来若某个图标要出专门的 16 / 32 变体，在 `ICON_FILES` 里登记
+/// `<stem>@<size>` 资源并在这里优先命中即可，调用处不需改动。
+pub fn slot_glyph(icon: Icon, slot: f32) -> f32 {
+    let dedicated = format!("{}@{}", icon.asset_rel(), slot as i32);
+    if file_bytes(&dedicated).is_some() {
+        return slot;
+    }
+    if slot == 24.0 {
+        natural_size(icon)
+    } else {
+        slot
+    }
+}
+
+/// 按槽位画图标，颜色缺省取 `tokens().icon`。这是业务代码唯一需要记的入口：
+/// 传 `Icon` 和槽位大小即可，尺寸换算、线宽补偿、默认墨色全在通用层。
+pub fn paint_in_slot(icon: Icon, slot: f32, color: Option<gpui::Rgba>) -> impl IntoElement {
+    let rgba = color.unwrap_or_else(|| crate::widgets::rgba(crate::widgets::tokens().icon));
+    paint(icon, rgba, slot_glyph(icon, slot))
+}
+
 /// Paint `icon` centred in `bounds`, scaled to the shorter side, through `Window::paint_svg`.
 pub(crate) fn draw_centred(window: &mut Window, bounds: Bounds<Pixels>, icon: Icon, color: gpui::Rgba, cx: &App) {
     let w: f32 = bounds.size.width.into();
@@ -734,7 +846,7 @@ mod tests {
 
     #[test]
     fn every_icon_has_an_external_svg_with_the_shared_stroke() {
-        assert_eq!(Icon::ALL.len(), 92, "Icon 变体数变了：请同步 ALL / asset_name / 本断言");
+        assert_eq!(Icon::ALL.len(), 111, "Icon 变体数变了：请同步 ALL / asset_name / asset_rel / 本断言");
         let mut names = HashSet::new();
         for &icon in Icon::ALL {
             let rel = icon.asset_rel();
@@ -752,6 +864,59 @@ mod tests {
     }
 
     #[test]
+    fn slot_glyph_scales_to_the_slot_and_keeps_native_at_24() {
+        // 24 槽取原生（无论资源是 16 还是 24 网格）；16 / 32 槽直接按槽位画，
+        // 线宽由 rescale_strokes 补偿，视觉恒为 1pt。
+        assert_eq!(slot_glyph(Icon::Plus, 24.0), natural_size(Icon::Plus));
+        assert_eq!(slot_glyph(Icon::Plus, 16.0), 16.0);
+        assert_eq!(slot_glyph(Icon::Plus, 32.0), 32.0);
+        assert_eq!(slot_glyph(Icon::CornerTopLeft, 24.0), 24.0);
+        assert_eq!(slot_glyph(Icon::CornerTopLeft, 16.0), 16.0);
+    }
+
+    #[test]
+    fn every_registered_asset_has_an_enum_variant() {
+        // 规范：只往 ICON_FILES 加资源、不进枚举 = 图标不存在。这条断言把老路彻底堵死。
+        let mapped: HashSet<&str> = Icon::ALL.iter().map(|i| i.asset_rel()).collect();
+        for (rel, _) in ICON_FILES {
+            assert!(mapped.contains(rel), "{rel} 只注册了资源、没有 Icon 枚举变体");
+        }
+    }
+
+    #[test]
+    fn the_icon_usage_contract_is_documented() {
+        let doc = include_str!("../../assets/icons/README.md");
+        for clause in [
+            "## 使用流程（强制，唯一合法路径）",
+            "没有枚举变体的图标等于不存在",
+            "icon::paint_in_slot",
+            "slot_glyph",
+            "rescale_strokes",
+            "❌ `svg().path(\"icons/…\")`",
+        ] {
+            assert!(doc.contains(clause), "图标使用规范缺少条款：{clause}");
+        }
+    }
+
+    #[test]
+    fn layout_property_icons_fill_their_twenty_four_point_slot() {
+        for rel in [
+            "layout-corner-tl",
+            "layout-corner-tr",
+            "layout-corner-bl",
+            "layout-corner-individual",
+            "layout-padding-top",
+            "layout-padding-individual",
+            "ui-code",
+            "constraint-horizontal",
+            "constraint-vertical",
+        ] {
+            let bytes = file_bytes(rel).unwrap_or_else(|| panic!("missing {rel}.svg"));
+            assert_eq!(view_box_size(bytes), 24.0, "{rel} must be drawn at its 24 pt slot size");
+        }
+    }
+
+    #[test]
     fn asset_source_resolves_every_icon_path() {
         let assets = IconAssets;
         for &icon in Icon::ALL {
@@ -763,6 +928,30 @@ mod tests {
         }
         assert!(assets.load("icons/not-a-real-icon.svg").unwrap().is_none());
         assert_eq!(assets.list("icons").unwrap().len(), Icon::ALL.len());
+    }
+
+    /// 右栏圆角 / 间距 / sides 下拉引用的 16 网格图标虽无 `Icon` 枚举变体（冻结文件不能加），
+    /// 但都已注册进 `ICON_FILES`，必须能从 `icons/<name>.svg` 解析出来 —— 否则字段 lead /
+    /// 菜单行画出的是空白方块。
+    #[test]
+    fn layout_glyphs_resolve_through_the_shared_prefix() {
+        let assets = IconAssets;
+        for name in [
+            "layout-corner-individual",
+            "layout-corner-tl",
+            "layout-corner-tr",
+            "layout-corner-bl",
+            "layout-corner-br",
+            "layout-padding-individual",
+            "layout-padding-top",
+            "layout-padding-right",
+            "layout-padding-bottom",
+            "layout-padding-left",
+        ] {
+            assert!(file_bytes(name).is_some(), "{name} 没进 ICON_FILES");
+            let path = format!("icons/{name}.svg");
+            assert!(assets.load(&path).unwrap().is_some(), "{path} 无法解析");
+        }
     }
 
     #[test]

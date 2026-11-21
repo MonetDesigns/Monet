@@ -274,9 +274,10 @@ fn panning_with_the_hand_tool_and_the_wheel() {
 fn pixel_grid_and_pixel_preview_show_from_their_zooms() {
     // (pixel grid on, zoom, shown, derivation)
     let grid: Vec<(bool, f64, bool, &str)> = vec![
-        (true, 4.0, true, "the pixel grid shows at 400%"),
-        (true, 3.99, false, "the pixel grid doesn't show below 400%"),
-        (true, 64.0, true, "the pixel grid shows at any zoom above 400%"),
+        (true, 5.07, false, "the pixel grid doesn't show at 507%"),
+        (true, 5.08, true, "the pixel grid shows past 507%"),
+        (true, 4.99, false, "the pixel grid doesn't show below 507%"),
+        (true, 64.0, true, "the pixel grid shows at any zoom above 507%"),
         (false, 64.0, false, "the pixel grid can be turned off"),
     ];
     for (on, zoom, shown, why) in grid {

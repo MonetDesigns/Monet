@@ -84,7 +84,7 @@ fn people(f: &RightFields, live: &LiveData) -> Div {
                     let p = window.mouse_position();
                     let anchor = Bounds { origin: p, size: gpui::size(px(1.0), px(0.0)) };
                     let label = if spotlighting { tr("Stop spotlighting") } else { tr("Spotlight me") };
-                    let rows = vec![crate::widgets::MenuRow::new(label)];
+                    let rows = vec![crate::widgets::MenuRow::row(label)];
                     let cmds = cmds.clone();
                     let on = !spotlighting;
                     let on_pick = Rc::new(move |_: &str, _w: &mut Window, _cx: &mut App| {
@@ -123,9 +123,9 @@ fn people(f: &RightFields, live: &LiveData) -> Div {
     // 人数菜单：你 + 每个人（点一行 = 跟随 / 取消跟随）。
     // 名字是兜底占位（"You"）时不再拼「(you)」，否则读起来是「You (you)」。
     let me_label = if live.me_name == "You" { "You".to_string() } else { format!("{} (you)", live.me_name) };
-    let rows: Vec<crate::widgets::MenuRow> = std::iter::once(crate::widgets::MenuRow::new(me_label))
+    let rows: Vec<crate::widgets::MenuRow> = std::iter::once(crate::widgets::MenuRow::row(me_label))
         .chain(live.peers.iter().map(|(id, name, _)| {
-            let mut r = crate::widgets::MenuRow::new(name.clone());
+            let mut r = crate::widgets::MenuRow::row(name.clone());
             if live.follow == Some(*id) {
                 r = r.trail(tr("Following"));
             }
@@ -201,9 +201,9 @@ fn present(f: &RightFields) -> AnyElement {
             // `widgets::menu` 对零尺寸锚点直接不画，所以给 1×0 的锚点（贴在指针下方 4 pt）。
             let anchor = Bounds { origin: p, size: gpui::size(px(1.0), px(0.0)) };
             let rows = vec![
-                crate::widgets::MenuRow::new(tr("Present")).trail(crate::main_menu::shortcut_text("proto.present").unwrap_or_default()),
-                crate::widgets::MenuRow::new(tr("Preview")),
-                crate::widgets::MenuRow::new(tr("Close preview")),
+                crate::widgets::MenuRow::row(tr("Present")).trail(crate::main_menu::shortcut_text("proto.present").unwrap_or_default()),
+                crate::widgets::MenuRow::row(tr("Preview")),
+                crate::widgets::MenuRow::row(tr("Close preview")),
             ];
             let cmds = menu_cmds.clone();
             let on_pick = Rc::new(move |label: &str, _w: &mut Window, _cx: &mut App| {

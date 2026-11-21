@@ -187,9 +187,9 @@ fn avatar(name: &str) -> Div {
 /// (egui's `Adjust` icon + `menu_popup` with `Filter::ALL`, `Sort::ALL`, "Mark all as read").
 fn filter_button(f: &RightFields, filter: Filter, sort: Sort) -> Dropdown {
     let rows: Vec<MenuRow> = {
-        let mut v: Vec<MenuRow> = Filter::ALL.iter().map(|x| MenuRow::new(tr(x.label())).checked(Some(*x == filter))).collect();
-        v.extend(Sort::ALL.iter().map(|x| MenuRow::new(tr(x.label())).separator().checked(Some(*x == sort))));
-        v.push(MenuRow::new(tr("Mark all as read")));
+        let mut v: Vec<MenuRow> = Filter::ALL.iter().map(|x| MenuRow::row(tr(x.label())).checked(Some(*x == filter))).collect();
+        v.extend(Sort::ALL.iter().map(|x| MenuRow::row(tr(x.label())).separator().checked(Some(*x == sort))));
+        v.push(MenuRow::row(tr("Mark all as read")));
         v
     };
     let mut d = Dropdown::new(tr(filter.label()), 0.0, None).fill();

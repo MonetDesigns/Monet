@@ -192,7 +192,7 @@ use std::sync::Arc;
 
 use std::time::{Duration, Instant};
 
-use crate::widgets::menu::{MenuRow, menu_popup_in, popup_backdrop};
+use crate::widgets::menu::{MenuRow, menu_popup_fit, menu_popup_in, popup_backdrop};
 
 use figcraft_doc::{CrossAlign, Document, MainAlign, Node, NodeId, NodeKind};
 
@@ -366,6 +366,10 @@ enum Popup {
 
         /// 不能停在点击那一帧的坐标（用户 2026-11-08）。`None` = 静态锚点（旧调用点）。
         probe: Option<std::rc::Rc<std::cell::Cell<Option<Bounds<Pixels>>>>>,
+
+        /// `true` = 宽度按最宽内容（`Width::Fit`），不设「不小于触发按钮」的下限。
+        /// 右栏 sides 下拉用（用户 2026-11-20：左对齐按钮 / 上距 4 / 按最宽内容）。
+        fit_width: bool,
     },
 
     /// 主菜单：多级、悬停展开。`menu.rs::menu_popup` 是单层菜单、没有悬停回调，
@@ -3008,6 +3012,10 @@ impl CanvasView {
 
         self.fields.set_corner_values(cx, data.corner_radii);
 
+        // 描边逐边权重（选 Custom 后展开的 T/R/B/L 四字段）。
+
+        self.fields.set_stroke_side_values(cx, data.stroke_sides);
+
         // 排版数值字段（字号 / 行高 / 字距 / 段落间距）：仅全选文本时回填。
 
         if let Some(t) = &data.text {
@@ -3449,8 +3457,33 @@ impl CanvasView {
             on_pick,
 
             probe: anchor.map(|a| a.cell()),
+
+            fit_width: false,
         });
 
+        cx.notify();
+    }
+
+    /// 与 [`Self::open_dropdown_menu`] 同款，但宽度按**最宽内容**（`Width::Fit`），不设按钮宽
+    /// 下限；锚点跟随传入的按钮探针。左缘对齐按钮、顶边在按钮底 + 4pt 由 `BottomStart` 保证。
+    fn open_menu_fit(
+        &mut self,
+        anchor: crate::widgets::dropdown::MenuAnchor,
+        rect: Bounds<Pixels>,
+        rows: Vec<MenuRow>,
+        on_pick: std::rc::Rc<dyn Fn(&str, &mut Window, &mut App)>,
+        cx: &mut Context<Self>,
+    ) {
+        anchor.seed(rect);
+        crate::widgets::dropdown::set_active_menu(Some((anchor.key().to_string(), f32::from(rect.origin.x))));
+        self.popup = Some(Popup::Menu {
+            anchor: rect,
+            width: None,
+            rows,
+            on_pick,
+            probe: Some(anchor.cell()),
+            fit_width: true,
+        });
         cx.notify();
     }
 
@@ -4024,14 +4057,14 @@ impl CanvasView {
                 // but the engine needs the full ABR id, and matching on the label text silently
                 // missed — the preset stayed on Plain, so any non-Plain tip fell back to a plain
                 // outline ("only Plain draws").
-                rows.push(MenuRow::new(plain).key("").checked(Some(current.is_none())));
+                rows.push(MenuRow::row(plain).key("").checked(Some(current.is_none())));
                 for b in figcraft_abr::infos() {
                     let label = if b.folder.is_empty() {
                         format!("{} / {}", b.group, b.name)
                     } else {
                         format!("{} / {} / {}", b.group, b.folder.join(" / "), b.name)
                     };
-                    rows.push(MenuRow::new(label).key(b.id.clone()).checked(Some(current.as_deref() == Some(b.id.as_str()))));
+                    rows.push(MenuRow::row(label).key(b.id.clone()).checked(Some(current.as_deref() == Some(b.id.as_str()))));
                 }
                 let cmds = self.fields.queue();
                 let sel: Vec<figcraft_doc::NodeId> = self.app.session.selection();
@@ -4246,6 +4279,8 @@ impl CanvasView {
     /// `session.selection()` for Combine / Crop.
     fn open_layer_context_menu(&mut self, id: NodeId, pointer: Point<Pixels>, cx: &mut Context<Self>) {
         if !self.app.session.selection().contains(&id) {
+            // The row under the pointer is already visible: don't recenter the tree under it.
+            self.layer_tree.suppress_reveal = true;
             self.app.session.set_selection(vec![id]);
         }
         let ids = vec![id];
@@ -4271,12 +4306,12 @@ impl CanvasView {
         let opening = tr("Set as opening page");
         let delete = tr("Delete page");
         // A divider has no inline rename editor, so offering Rename would open nothing.
-        let mut rows = vec![MenuRow::new(duplicate)];
+        let mut rows = vec![MenuRow::row(duplicate)];
         if !divider {
-            rows.insert(0, MenuRow::new(rename));
-            rows.push(MenuRow::new(opening));
+            rows.insert(0, MenuRow::row(rename));
+            rows.push(MenuRow::row(opening));
         }
-        rows.push(MenuRow::new(delete));
+        rows.push(MenuRow::row(delete));
 
         let me = cx.entity();
         let on_pick = std::rc::Rc::new(move |label: &str, _w: &mut Window, cx: &mut App| {
@@ -5940,6 +5975,8 @@ impl Render for CanvasView {
         // A27：画板计时器在走，每秒续一帧。
         let fac_ticking = board_facilitate::ticking(&self.app);
 
+        // Snapping the canvas origin needs the scale factor; capture it before the move closure.
+        let paint_ppp = self.app.ppp;
         let shapes = gpui::canvas(
             |_, _, _| (),
             move |b, _, window, cx| {
@@ -5967,7 +6004,12 @@ impl Render for CanvasView {
 
                 let p = Painter { clip: Rect::NOTHING, ops: ops.clone(), labels: Vec::new() };
 
-                p.paint(window, pos2(f32::from(b.origin.x), f32::from(b.origin.y)));
+                // crisp_rect/crisp_line snap in canvas-local space; the painter then adds the
+                // canvas origin. Snap that origin too (same rule as the presented image rect)
+                // so guides/grid/ruler edges land on whole device pixels after a divider drag
+                // leaves `b.origin` fractional.
+                let (ox, oy) = crate::canvas::snap_origin(f32::from(b.origin.x), f32::from(b.origin.y), paint_ppp, false);
+                p.paint(window, pos2(ox, oy));
 
                 // 续帧只能在 request_layout/prepaint/paint 里调，所以放这里。
 
@@ -7490,24 +7532,21 @@ impl Render for CanvasView {
             let mut els: Vec<AnyElement> = Vec::new();
 
             match p {
-                Popup::Menu { anchor, width, rows, on_pick, probe } => {
+                Popup::Menu { anchor, width, rows, on_pick, probe, fit_width } => {
                     // 每帧取触发按钮的当前矩形（滚动 / resize / 弹窗拖动后仍跟着按钮走）。
 
                     let live = probe.as_ref().and_then(|p| p.get()).unwrap_or(*anchor);
 
-                    // 宽度下限 = 按钮真实宽度（旧代码把调用方传的 0 → 120 当菜单宽，
-
-                    // 而按钮是网格铺满的 160/200，菜单与下拉框不齐）。
-
-                    let w = f32::from(live.size.width).max(width.unwrap_or(0.0)).max(48.0);
-
                     // 位置与防溢出全部交给通用 `Menu`：它自带「按钮底 + 4」、上下防溢出、
+                    // 内部滚动、水平贴边。fit_width 的菜单（sides 下拉）走 Width::Fit，
+                    // 宽度只由最宽行决定；其余菜单保持「下限 = 按钮宽」不变。
 
-                    // 内部滚动、水平贴边。以前在这里手工夹 x/y 用的是估计高度，
-
-                    // 漏了分隔符和 8pt 内边距，项多 / 贴屏幕底部时照样溢出。
-
-                    els.push(menu_popup_in(live, Some(w), rows.clone(), on_pick.clone(), dismiss.clone(), vw, vh));
+                    if *fit_width {
+                        els.push(menu_popup_fit(live, rows.clone(), on_pick.clone(), dismiss.clone(), vw, vh));
+                    } else {
+                        let w = f32::from(live.size.width).max(width.unwrap_or(0.0)).max(48.0);
+                        els.push(menu_popup_in(live, Some(w), rows.clone(), on_pick.clone(), dismiss.clone(), vw, vh));
+                    }
                 }
 
                 Popup::MainMenu(mm) => {
