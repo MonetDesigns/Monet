@@ -61,7 +61,10 @@ pub(crate) fn section(f: &RightFields, d: &PanelData, cx: &mut App, n: &mut usiz
 fn property_rows(f: &RightFields, c: &ComponentData, cx: &mut App) -> Vec<crate::widgets::FieldRow> {
     let owner = c.main_id.unwrap_or(NodeId(0));
     let mut out: Vec<crate::widgets::FieldRow> = Vec::new();
-    out.push(field_row_full(div().text_size(pt(11.0)).text_color(rgba(tokens().text)).child(tr("Properties"))));
+    out.push(field_row_full_trailing(
+        div().text_size(pt(11.0)).text_color(rgba(tokens().text)).child(tr("Properties")),
+        vec![add_property_button(f, c)],
+    ));
     for def in &c.defs {
         let trigger: String = format!("component-prop-{}", def.name);
         let is_open = f.popups().is_open(&trigger);
@@ -84,7 +87,7 @@ fn property_rows(f: &RightFields, c: &ComponentData, cx: &mut App) -> Vec<crate:
                     def.name.clone(),
                     def.kind,
                     def.default.clone(),
-                    def.options.iter().map(|(label, _)| label.clone()).collect(),
+                    def.options.clone(),
                     anchor,
                 )
             });
@@ -107,13 +110,32 @@ fn property_rows(f: &RightFields, c: &ComponentData, cx: &mut App) -> Vec<crate:
 }
 
 
+/// 生成一个不与现有属性重名的名字（引擎 `component.addProperty` 拒绝重名）。
+fn unique_prop_name(used: &[String]) -> String {
+    let base = tr("Property");
+    if !used.iter().any(|n| n == &base) {
+        return base.to_string();
+    }
+    let mut i = 2;
+    loop {
+        let name = format!("{} {}", base, i);
+        if !used.iter().any(|n| n == &name) {
+            return name;
+        }
+        i += 1;
+    }
+}
+
 /// + 按钮：弹菜单选属性类型，推 `component.addProperty`（引擎已有命令）。
-fn add_property_button(f: &RightFields, c: &ComponentData, _cx: &mut App) -> gpui::AnyElement {
+fn add_property_button(f: &RightFields, c: &ComponentData) -> gpui::AnyElement {
     let owner = c.main_id.unwrap_or(NodeId(0));
     let cmds = f.cmds.clone();
     let key = "component-add-property";
     let root = f.root.clone();
     let t = tokens();
+    let candidates = c.component_candidates.clone();
+    let slot_layer = c.slot_layer;
+    let used_names: Vec<String> = c.defs.iter().map(|d| d.name.clone()).chain(c.variants.iter().map(|(n, _)| n.clone())).collect();
     div()
         .id(SharedString::from(format!("window-open-{key}")))
         .size(pt(24.0))
@@ -126,6 +148,9 @@ fn add_property_button(f: &RightFields, c: &ComponentData, _cx: &mut App) -> gpu
         .child(crate::widgets::icon::paint(Icon::Plus, rgba(t.icon), 16.0))
         .on_mouse_down(gpui::MouseButton::Left, move |_e, window, cx: &mut App| {
             let Some(root) = root.clone() else { return };
+            let candidates = candidates.clone();
+            let used_names = used_names.clone();
+            let slot_layer = slot_layer.clone();
             let p = window.mouse_position();
             let anchor = gpui::Bounds { origin: p, size: gpui::size(px(0.0), px(0.0)) };
             let rows: Vec<crate::widgets::menu::MenuRow> = [("Variant", "variant"), ("Text", "text"), ("Boolean", "boolean"), ("Instance swap", "instanceSwap"), ("Slot", "slot")]
@@ -134,15 +159,22 @@ fn add_property_button(f: &RightFields, c: &ComponentData, _cx: &mut App) -> gpu
                 .collect();
             let cmds = cmds.clone();
             let on_pick = std::rc::Rc::new(move |ty: &str, _w: &mut gpui::Window, _cx: &mut App| {
+                // 唯一名字：引擎拒绝重名。
+                let name = unique_prop_name(&used_names);
                 let default = match ty {
                     "boolean" => json!(true),
                     "variant" => json!("Default"),
+                    "instanceSwap" => candidates.first().map(|(id, _)| json!(id.0)).unwrap_or(Value::Null),
                     _ => Value::Null,
                 };
-                cmds.push(crate::panels::Cmd {
-                    id: "component.addProperty",
-                    params: Some(json!({ "id": owner.0, "name": tr("Property"), "type": ty, "default": default })),
-                });
+                let mut params = json!({ "id": owner.0, "name": name, "type": ty, "default": default });
+                // Slot 必须绑定一个 frame（引擎 add_prop 要求 layer），取组件子树里第一个 Frame。
+                if ty == "slot" {
+                    if let Some(layer) = slot_layer {
+                        params["layer"] = json!(layer.0);
+                    }
+                }
+                cmds.push(crate::panels::Cmd { id: "component.addProperty", params: Some(params) });
             });
             root.update(cx, |cv, cx| cv.open_menu(anchor, Some(180.0), rows, on_pick, cx));
         })
@@ -151,6 +183,7 @@ fn add_property_button(f: &RightFields, c: &ComponentData, _cx: &mut App) -> gpu
 
 /// 属性下面的「当前变体」：组件/组件集列出了变体属性 → 每个属性的默认值/候选。
 fn current_variant_rows(f: &RightFields, c: &ComponentData) -> Vec<crate::widgets::FieldRow> {
+    let owner = c.main_id.unwrap_or(NodeId(0));
     let mut out: Vec<crate::widgets::FieldRow> = Vec::new();
     out.push(field_row_full(div().text_size(pt(11.0)).text_color(rgba(tokens().text_secondary)).child(tr("Current variant"))));
     for (name, values) in &c.variants {
@@ -163,7 +196,7 @@ fn current_variant_rows(f: &RightFields, c: &ComponentData) -> Vec<crate::widget
         let current = values.first().cloned().unwrap_or_default();
         let rows: Vec<(String, &'static str, Value)> = values
             .iter()
-            .map(|v| (v.clone(), "component.editProperty", json!({ "name": name, "default": v })))
+            .map(|v| (v.clone(), "component.editProperty", json!({ "id": owner.0, "name": name, "default": v })))
             .collect();
         let dd = pick_dropdown(f, current, 0.0, rows);
         out.push(field_row_full(div().flex().flex_row().items_center().gap(pt(8.0)).child(label).child(dd)));
@@ -256,4 +289,19 @@ fn instance_section(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut us
 fn plain_label(text: &'static str) -> Div {
     let t = tokens();
     div().flex_1().min_w(px(0.0)).text_size(pt(11.0)).text_color(rgba(t.text)).child(SharedString::from(text))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unique_prop_name;
+
+    #[test]
+    fn new_property_name_never_collides_with_existing() {
+        let base = figcraft_i18n::tr("Property");
+        assert_eq!(unique_prop_name(&[]), base);
+        assert_eq!(unique_prop_name(&[base.to_string()]), format!("{} 2", base));
+        assert_eq!(unique_prop_name(&[base.to_string(), format!("{} 2", base)]), format!("{} 3", base));
+        // 非连续占用也跳过（删过属性后留下的空号不复用，行为确定即可）。
+        assert_eq!(unique_prop_name(&[base.to_string(), format!("{} 3", base)]), format!("{} 2", base));
+    }
 }

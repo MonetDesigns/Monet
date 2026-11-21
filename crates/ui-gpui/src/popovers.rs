@@ -1791,71 +1791,86 @@ impl WindowState {
         name: String,
         kind: &'static str,
         default: String,
-        options: Vec<String>,
+        options: Vec<(String, u64)>,
         anchor: Point<Pixels>,
     ) -> Self {
         let mut w = Self::base(WindowKind::ComponentProperty, tr("Edit property"), cmds, Open::Anchor(anchor));
         w.width = 300.0;
         w.pad = 12.0;
-        w.height = HEADER_H + if kind == "variant" { 3.0 * 32.0 } else { 2.0 * 32.0 } + 24.0;
+        // Name + 一行默认值/下拉 + 类型说明；variant 多一行（默认值下拉）。
+        w.height = HEADER_H + 3.0 * 32.0 + 24.0;
         let mut settings = Vec::new();
         // Name：改名用 newName；owner + 原 name 定位属性。
         let nc = w.cmds.clone();
-        let n_owner = owner;
         let n_old = name.clone();
         let name_field = TextField::build(cx, 176.0, move |tf, _| {
             tf.set_value(n_old.clone());
             let nc = nc.clone();
-            let n_owner = n_owner;
             let n_old = n_old.clone();
             tf.set_on_commit(move |text, _w, _cx| {
                 let next = text.trim();
                 if !next.is_empty() && next != n_old {
                     nc.push(Cmd {
                         id: "component.editProperty",
-                        params: Some(json!({ "id": n_owner, "name": n_old, "newName": next })),
+                        params: Some(json!({ "id": owner, "name": n_old, "newName": next })),
                     });
                 }
             });
         });
         settings.push(Setting::Field { tab: 0, label: tr("Name").into(), field: name_field });
-        // Default / value：variant 用下拉（选一个值成为默认），text 用文本输入框，
-        // boolean 用 True/False 分段，instanceSwap / slot 用文本显示当前候选名。
-        if kind == "variant" {
-            settings.push(Setting::Dropdown {
-                tab: 0,
-                label: tr("Default value").into(),
-                current: Rc::new(RefCell::new(SharedString::from(default.clone()))),
-                options: options
-                    .into_iter()
-                    .map(|v| Opt::new(v.clone(), "component.editProperty", json!({ "id": owner, "name": name, "default": v })))
-                    .collect(),
-                anchor: Rc::new(RefCell::new(None)),
-            });
-        } else {
-            let dc = w.cmds.clone();
-            let d_owner = owner;
-            let d_name = name.clone();
-            let d_kind = kind;
-            let default_field = TextField::build(cx, 176.0, move |tf, _| {
-                tf.set_value(default.clone());
-                let dc = dc.clone();
-                let d_owner = d_owner;
-                let d_name = d_name.clone();
-                tf.set_on_commit(move |text, _w, _cx| {
-                    let value: Value = match d_kind {
-                        "boolean" => json!(text.trim().eq_ignore_ascii_case("true")),
-                        _ => json!(text.trim()),
-                    };
-                    dc.push(Cmd {
-                        id: "component.editProperty",
-                        params: Some(json!({ "id": d_owner, "name": d_name, "default": value })),
+        // 默认值：按引擎 coerce 契约分别渲染（见 engine cmd/component/props.rs::coerce）。
+        // - boolean: 文本 true/false（coerce 认）→ 通用 Field
+        // - text: 字符串 → 通用 Field
+        // - variant: 候选值下拉 → Dropdown（default 是字符串值）
+        // - instanceSwap: 必须是 component id → Dropdown（Opt 的 params 用 id 数字）
+        // - slot: 引擎不接受 default → 不画这一行，只提示
+        match kind {
+            "variant" => {
+                settings.push(Setting::Dropdown {
+                    tab: 0,
+                    label: tr("Default value").into(),
+                    current: Rc::new(RefCell::new(SharedString::from(default.clone()))),
+                    options: options
+                        .into_iter()
+                        .map(|(label, _)| Opt::new(label.clone(), "component.editProperty", json!({ "id": owner, "name": name, "default": label })))
+                        .collect(),
+                    anchor: Rc::new(RefCell::new(None)),
+                });
+            }
+            "instanceSwap" => {
+                settings.push(Setting::Dropdown {
+                    tab: 0,
+                    label: tr("Default instance").into(),
+                    current: Rc::new(RefCell::new(SharedString::from(default.clone()))),
+                    options: options
+                        .into_iter()
+                        .map(|(label, id)| Opt::new(label, "component.editProperty", json!({ "id": owner, "name": name, "default": id })))
+                        .collect(),
+                    anchor: Rc::new(RefCell::new(None)),
+                });
+            }
+            "slot" => {
+                settings.push(Setting::Caption { tab: 0, text: tr("Fill this slot in an instance").into() });
+            }
+            _ => {
+                let dc = w.cmds.clone();
+                let d_name = name.clone();
+                let d_kind = kind;
+                let default_field = TextField::build(cx, 176.0, move |tf, _| {
+                    tf.set_value(default.clone());
+                    let dc = dc.clone();
+                    let d_name = d_name.clone();
+                    tf.set_on_commit(move |text, _w, _cx| {
+                        let value: Value = if d_kind == "boolean" { json!(text.trim().eq_ignore_ascii_case("true")) } else { json!(text.trim()) };
+                        dc.push(Cmd {
+                            id: "component.editProperty",
+                            params: Some(json!({ "id": owner, "name": d_name, "default": value })),
+                        });
                     });
                 });
-            });
-            settings.push(Setting::Field { tab: 0, label: tr("Default").into(), field: default_field });
+                settings.push(Setting::Field { tab: 0, label: tr("Default").into(), field: default_field });
+            }
         }
-        // 类型只读提示（引擎不支持改类型；lizard 也不允许已创建的属性改类型）。
         settings.push(Setting::Caption { tab: 0, text: SharedString::from(format!("{} · {}", tr("Type"), kind)) });
         *w.settings.borrow_mut() = settings;
         w

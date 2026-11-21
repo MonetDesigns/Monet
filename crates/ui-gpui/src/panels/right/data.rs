@@ -913,6 +913,10 @@ pub struct ComponentData {
     pub defs: Vec<ComponentDef>,
     /// 组件集：变体属性 → 可选值（供 Properties 节展示与编辑）。
     pub variants: Vec<(String, Vec<String>)>,
+    /// 文件里的组件/组件集（新建 instanceSwap 属性时给它一个合法默认主组件）。
+    pub component_candidates: Vec<(NodeId, String)>,
+    /// 组件/组件集内的第一个 Frame（新建 slot 属性时引擎要求一个 frame 作 layer）。
+    pub slot_layer: Option<NodeId>,
 }
 
 /// 组件/组件集的一行属性定义（抄 lizard `component_panel.rs::properties_ui`）。
@@ -940,6 +944,7 @@ pub fn read_component(doc: &Document, ids: &[NodeId]) -> Option<ComponentData> {
                 set.or(Some(*component)).and_then(|c| doc.node(c)).map(|c| c.name.clone()).unwrap_or_else(|| tr("Main component deleted").into());
             let nested = components::inside_instance(doc, *id);
             let components = list_components(doc);
+            let component_candidates = components.clone();
             let mut out = ComponentData {
                 is_instance: true,
                 nested,
@@ -955,6 +960,8 @@ pub fn read_component(doc: &Document, ids: &[NodeId]) -> Option<ComponentData> {
                 editable_description: false,
                 defs: Vec::new(),
                 variants: Vec::new(),
+                component_candidates,
+                slot_layer: None,
             };
             // 主组件（或变体集）的描述。
             out.description = [Some(*component), set]
@@ -1032,6 +1039,9 @@ pub fn read_component(doc: &Document, ids: &[NodeId]) -> Option<ComponentData> {
                 title: tr("Component set"),
                 description: description.clone(),
                 editable_description: true,
+                main_id: Some(*id),
+                component_candidates: list_components(doc),
+                slot_layer: first_frame(doc, *id),
                 defs,
                 variants,
                 ..Default::default()
@@ -1045,6 +1055,9 @@ pub fn read_component(doc: &Document, ids: &[NodeId]) -> Option<ComponentData> {
                 title: tr("Component"),
                 description: description.clone(),
                 editable_description: true,
+                main_id: Some(*id),
+                component_candidates: list_components(doc),
+                slot_layer: first_frame(doc, *id),
                 defs,
                 variants,
                 ..Default::default()
@@ -1052,6 +1065,11 @@ pub fn read_component(doc: &Document, ids: &[NodeId]) -> Option<ComponentData> {
         }
         _ => None,
     }
+}
+
+/// 组件子树里第一个 Frame（slot 属性的 layer 候选）。
+fn first_frame(doc: &Document, root: NodeId) -> Option<NodeId> {
+    doc.subtree(root).into_iter().find(|id| doc.node(*id).is_some_and(|n| matches!(n.kind, figcraft_doc::NodeKind::Frame)))
 }
 
 /// 从一个组件节点读它的属性定义（供右栏 Properties 节增删/改名/默认值）。
