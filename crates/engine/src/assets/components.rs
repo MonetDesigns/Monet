@@ -176,7 +176,7 @@ pub fn slot_def(doc: &Document, id: NodeId) -> Option<(&str, &[NodeId])> {
         if let Some(name) = n.prop_refs.get(SLOT) {
             let NodeKind::Component { props, .. } = &doc.node(owning_component(doc, cur)?)?.kind else { return None };
             return match props.get(name) {
-                Some(PropDef::Slot { preferred }) => Some((name.as_str(), preferred.as_slice())),
+                Some(PropDef::Slot { preferred, .. }) => Some((name.as_str(), preferred.as_slice())),
                 _ => None,
             };
         }

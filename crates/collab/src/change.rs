@@ -141,6 +141,10 @@ macro_rules! node_props {
 node_props! {
     Name => name,
     Kind => kind,
+    // lizard-only engine extension (component value table); re-sync from figcraft main when
+    // it gains an equivalent. Registered so the exhaustive node-field check compiles and the
+    // matrix travels with the node in collab.
+    ComponentMatrix => component_matrix,
     Visible => visible,
     Locked => locked,
     Opacity => opacity,

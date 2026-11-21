@@ -1899,6 +1899,83 @@ impl WindowState {
         w
     }
 
+    /// 「创建组件属性」弹窗（对照 lizard-main `component_panel.rs::property_create_dialog`）。
+    /// 用同一张 `WindowState` 通用卡 + 通用 `Setting::Field` 行：Name / Value 两个输入框，
+    /// 底部 Caption 提示「回车即创建」。Name 提交时一次性推 `component.addProperty`，
+    /// 默认值从共享的 Value 输入框读取；这样字段仍是通用控件，命令一次成型。
+    ///
+    /// `kind`: text / boolean / instanceSwap / slot；Variant 走直接创建（没有可填的 Value）。
+    /// `preferred`: instanceSwap 的候选 (显示名, id)，用通用 `Setting::Dropdown` 选一个。
+    pub(crate) fn component_property_create(
+        cmds: Cmds,
+        cx: &mut App,
+        owner: u64,
+        kind: &'static str,
+        default_name: String,
+        candidates: Vec<(String, u64)>,
+        anchor: Point<Pixels>,
+    ) -> Self {
+        let mut w = Self::base(WindowKind::ComponentProperty, tr("Create property"), cmds, Open::Anchor(anchor));
+        w.width = 300.0;
+        w.pad = 12.0;
+        w.height = HEADER_H + 3.0 * 32.0 + 24.0;
+        let mut settings = Vec::new();
+
+        // 默认值 / 主组件：按引擎 coerce 契约决定控件类型。
+        // text/boolean 用文本输入框；instanceSwap 用下拉选 component id；slot 无默认值。
+        let value_cell: Rc<RefCell<Value>> = Rc::new(RefCell::new(match kind {
+            "boolean" => json!(true),
+            "text" => json!("Text"),
+            _ => Value::Null,
+        }));
+        // instanceSwap 的候选组件在此仅作类型说明：引擎 coerce 要的是 component id，
+        // 而创建尚未发生，故统一用文本输入（用户随后可在属性设置弹窗里用下拉改默认值）。
+        let _ = candidates;
+        // 统一用 Field：text/boolean/instanceSwap 都是文本输入（boolean 填 true/false，
+        // instanceSwap 填组件名或留空由后续下拉改），提交时按 kind 转成引擎要的 Value。
+        let vc = value_cell.clone();
+        let v_kind = kind;
+        let value_field = TextField::build(cx, 176.0, move |tf, _| {
+            tf.set_value(match v_kind {
+                "boolean" => tr("true").to_string(),
+                "text" => tr("Text").to_string(),
+                _ => String::new(),
+            });
+            let vc = vc.clone();
+            tf.set_on_commit(move |text, _w, _cx| {
+                *vc.borrow_mut() = match v_kind {
+                    "boolean" => json!(text.trim().eq_ignore_ascii_case("true")),
+                    "text" => json!(text),
+                    _ => Value::Null,
+                };
+            });
+        });
+        settings.push(Setting::Field { tab: 0, label: tr("Value").into(), field: value_field });
+
+        let nc = w.cmds.clone();
+        let vc = value_cell.clone();
+        let name_field = TextField::build(cx, 176.0, move |tf, _| {
+            tf.set_value(default_name.clone());
+            let nc = nc.clone();
+            let vc = vc.clone();
+            tf.set_on_commit(move |text, _w, _cx| {
+                let name = text.trim();
+                if name.is_empty() {
+                    return;
+                }
+                let default = vc.borrow().clone();
+                nc.push(Cmd {
+                    id: "component.addProperty",
+                    params: Some(json!({ "id": owner, "name": name, "type": kind, "default": default })),
+                });
+            });
+        });
+        settings.insert(0, Setting::Field { tab: 0, label: tr("Name").into(), field: name_field });
+        settings.push(Setting::Caption { tab: 0, text: SharedString::from(format!("{} · {}", tr("Type"), kind)) });
+        *w.settings.borrow_mut() = settings;
+        w
+    }
+
     /// 与 Layout / 描边 / 效果设置共用同一张 `WindowState` 通用弹窗卡（header + 关闭 + 拖动），
     /// 只是正文换成滑条，没有另造一套窗口框架。
     pub(crate) fn corner_smoothing(cmds: Cmds, value: f32, anchor: Point<Pixels>) -> Self {

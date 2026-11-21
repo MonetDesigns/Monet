@@ -31,7 +31,7 @@ fn slots_document_with(own_slot: bool) -> Document {
     let props = BTreeMap::from([
         ("Label".to_string(), PropDef::Text { default: "Title".into() }),
         ("Visible".to_string(), PropDef::Boolean { default: true }),
-        ("Content".to_string(), PropDef::Slot { preferred: Vec::new() }),
+        ("Content".to_string(), PropDef::Slot { preferred: Vec::new(), settings: Default::default() }),
     ]);
     let main =
         doc.create(page, NodeKind::Component { description: String::new(), props, prop_order: Vec::new() }, "Card", 0.0, 0.0, 300.0, 160.0).unwrap();
@@ -92,7 +92,7 @@ fn set_slots_document() -> Document {
     let set = doc.create(page, NodeKind::ComponentSet { description: String::new() }, "Panel", 0.0, 0.0, 300.0, 100.0).unwrap();
     let mut variants = Vec::new();
     for (i, name) in ["Size=Small", "Size=Large"].into_iter().enumerate() {
-        let props = BTreeMap::from([("Content".to_string(), PropDef::Slot { preferred: Vec::new() })]);
+        let props = BTreeMap::from([("Content".to_string(), PropDef::Slot { preferred: Vec::new(), settings: Default::default() })]);
         let v = doc
             .create(set, NodeKind::Component { description: String::new(), props, prop_order: Vec::new() }, name, 0.0, 60.0 * i as f64, 100.0, 100.0)
             .unwrap();

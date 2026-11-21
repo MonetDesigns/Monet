@@ -93,7 +93,7 @@ fn slot_layers_bind_to_their_property_and_keep_instance_content() {
 
     let main = by_rest(&doc, &v, "1:2");
     let NodeKind::Component { props, .. } = &main.kind else { panic!("{:?}", main.kind) };
-    assert_eq!(props.get("Slot"), Some(&PropDef::Slot { preferred: Vec::new() }), "named without its #id suffix");
+    assert_eq!(props.get("Slot"), Some(&PropDef::Slot { preferred: Vec::new(), settings: Default::default() }), "named without its #id suffix");
     let main_slot = by_rest(&doc, &v, "1:5");
     assert!(matches!(main_slot.kind, NodeKind::Frame));
     assert_eq!(main_slot.prop_refs.get("slot").map(String::as_str), Some("Slot"));

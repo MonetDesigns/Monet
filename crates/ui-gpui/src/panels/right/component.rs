@@ -27,7 +27,60 @@ pub(crate) fn section(f: &RightFields, d: &PanelData, cx: &mut App, n: &mut usiz
     if !c.editable_description {
         return None;
     }
-    // 组件 / 组件集：描述 + 属性列表 + 当前变体。
+    // lizard-main `component_panel.rs::instance_section` 的分派：
+    // - 变体（属于 set 的 Component）→ `variant_ui`：Component values 矩阵 + Current variant，
+    //   **不显示** 属性定义列表（Properties）。用户图1：选变体时应展示 current variant。
+    // - 组件集 / 独立组件 → `properties_ui`：只有属性栏（Properties）。用户图2。
+    if c.set_id.is_some() && !c.owner_is_set {
+        return Some(variant_section(f, c));
+    }
+    Some(properties_section(f, c, cx, n))
+}
+
+/// 选中变体（lizard `variant_ui`）：Component values + Current variant 区。
+/// 引擎（storytold/figcraft）没有 setVariantValue / component_matrix，变体值改走
+/// `component.editProperty`（按属性名改当前变体的名字编码值）， grit 见下。
+fn variant_section(f: &RightFields, c: &ComponentData) -> PanelSection {
+    let t = tokens();
+    let variant_id = c.main_id.unwrap_or(NodeId(0));
+    let mut sec = PanelSection::new(c.title);
+
+    // ── Component values：属性 → 候选值概览（lizard `matrix_ui` 的紧凑摘要）。
+    // storytold/figcraft 引擎没有 component_matrix / 值表，这里只展示每个变体属性的可选值。
+    if !c.own_variant_props.is_empty() {
+        sec = sec.child(field_row_full(div().text_size(pt(11.0)).text_color(rgba(t.text)).child(tr("Component values"))));
+        for (name, values, _) in &c.own_variant_props {
+            let label = div().w(px(84.0)).flex_none().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(name.clone()));
+            let shown = if values.is_empty() { tr("None").to_string() } else { values.join(", ") };
+            let value = div().flex_1().min_w(px(0.0)).text_size(pt(11.0)).text_color(rgba(t.text)).child(SharedString::from(shown));
+            sec = sec.child(field_row_full(div().flex().flex_row().items_center().gap(pt(8.0)).child(label).child(value)));
+        }
+    }
+
+    // ── Current variant：当前变体的每个属性值用下拉切换。引擎无 setVariantValue，
+    // 走 `node.set {props:{name: "Property=Value, ..."}}` 重建变体名（KEYS 支持 name）。
+    sec = sec.child(field_row_full(div().text_size(pt(11.0)).text_color(rgba(t.text)).child(tr("Current variant"))));
+    if c.own_variant_props.is_empty() {
+        sec = sec.child(field_row_full(div().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(tr("No variant properties"))));
+    }
+    for (name, values, current) in &c.own_variant_props {
+        let label = div().w(px(84.0)).flex_none().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(name.clone()));
+        let rows: Vec<(String, &'static str, Value)> = values
+            .iter()
+            .map(|v| {
+                // `component.setVariantValue` is lizard-only (see its SOURCE NOTE in the engine);
+                // until figcraft gains an equivalent we use it here for Current variant edits.
+                (v.clone(), "component.setVariantValue", json!({ "id": variant_id.0, "property": name, "value": v }))
+            })
+            .collect();
+        let dd = pick_dropdown(f, current.clone(), 0.0, rows);
+        sec = sec.child(field_row_full(div().flex().flex_row().items_center().gap(pt(8.0)).child(label).child(dd)));
+    }
+    sec
+}
+
+/// 选中组件集 / 独立组件（lizard `properties_ui`）：只有属性栏（描述 + Properties + 属性行）。
+fn properties_section(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut usize) -> PanelSection {
     let mut sec = PanelSection::new(c.title);
     if !c.description.is_empty() || c.editable_description {
         let field = f.row_field(
@@ -48,21 +101,21 @@ pub(crate) fn section(f: &RightFields, d: &PanelData, cx: &mut App, n: &mut usiz
         );
         sec = sec.child(field_row_full(field));
     }
-    for row in property_rows(f, c, cx) {
+    for row in property_rows(f, c) {
         sec = sec.child(row);
     }
-    for row in current_variant_rows(f, c) {
-        sec = sec.child(row);
-    }
-    Some(sec)
+    // Only a component set has a variant matrix; an independent component's variant grid is
+    // shown as "Add variant" from `property_rows` and has no Current variant section here.
+    sec
 }
 
 /// 组件的 Properties 节：每行一个属性定义，行尾设置按钮打开通用弹窗；header 的 + 建新属性。
-fn property_rows(f: &RightFields, c: &ComponentData, cx: &mut App) -> Vec<crate::widgets::FieldRow> {
+fn property_rows(f: &RightFields, c: &ComponentData) -> Vec<crate::widgets::FieldRow> {
     let owner = c.main_id.unwrap_or(NodeId(0));
+    let t = tokens();
     let mut out: Vec<crate::widgets::FieldRow> = Vec::new();
     out.push(field_row_full_trailing(
-        div().text_size(pt(11.0)).text_color(rgba(tokens().text)).child(tr("Properties")),
+        div().text_size(pt(11.0)).text_color(rgba(t.text)).child(tr("Properties")),
         vec![add_property_button(f, c)],
     ));
     for def in &c.defs {
@@ -92,19 +145,32 @@ fn property_rows(f: &RightFields, c: &ComponentData, cx: &mut App) -> Vec<crate:
                 )
             });
         });
+        // 类型图标（lizard `type_kind` / `PropertyControllerKind`）：Boolean=Boolean、
+        // Text=Text、InstanceSwap=Instance、Variant=ComponentSet、Slot=Slot。
+        let icon = match def.kind {
+            "boolean" => Icon::Boolean,
+            "text" => Icon::Text,
+            "instanceSwap" => Icon::Instance,
+            "variant" => Icon::ComponentSet,
+            "slot" => Icon::Slot,
+            _ => Icon::ComponentSet,
+        };
+        let mut line = div().flex().flex_row().items_center().gap(pt(8.0));
+        line = line.child(crate::widgets::icon::paint_in_slot(icon, 14.0, Some(rgba(t.text_secondary))));
         let label = div()
             .w(px(84.0))
             .flex_none()
             .text_size(pt(11.0))
-            .text_color(rgba(tokens().text_secondary))
+            .text_color(rgba(t.text_secondary))
             .child(SharedString::from(def.name.clone()));
         let kind = div()
             .flex_1()
             .min_w(px(0.0))
             .text_size(pt(11.0))
-            .text_color(rgba(tokens().text))
+            .text_color(rgba(t.text))
             .child(SharedString::from(format!("{} · {}", def.kind, def.default)));
-        out.push(field_row_full_trailing(div().flex().flex_row().items_center().gap(pt(8.0)).child(label).child(kind), vec![settings]));
+        line = line.child(label).child(kind);
+        out.push(field_row_full_trailing(line, vec![settings]));
     }
     out
 }
@@ -133,8 +199,8 @@ fn add_property_button(f: &RightFields, c: &ComponentData) -> gpui::AnyElement {
     let key = "component-add-property";
     let root = f.root.clone();
     let t = tokens();
-    let candidates = c.component_candidates.clone();
-    let slot_layer = c.slot_layer;
+    let candidates: Vec<(String, u64)> = c.component_candidates.iter().map(|(id, name)| (name.clone(), id.0)).collect();
+    let add_popups = f.popups();
     let used_names: Vec<String> = c.defs.iter().map(|d| d.name.clone()).chain(c.variants.iter().map(|(n, _)| n.clone())).collect();
     div()
         .id(SharedString::from(format!("window-open-{key}")))
@@ -150,33 +216,63 @@ fn add_property_button(f: &RightFields, c: &ComponentData) -> gpui::AnyElement {
             let Some(root) = root.clone() else { return };
             let candidates = candidates.clone();
             let used_names = used_names.clone();
-            let slot_layer = slot_layer.clone();
+            let add_popups = add_popups.clone();
             let p = window.mouse_position();
             let anchor = gpui::Bounds { origin: p, size: gpui::size(px(0.0), px(0.0)) };
             // Slot creation stays on the Frame row's "Make slot" flow: the component-level
             // add menu has no Frame to bind, and engine add_prop requires a `layer`.
-            let rows: Vec<crate::widgets::menu::MenuRow> = [("Variant", "variant"), ("Text", "text"), ("Boolean", "boolean"), ("Instance swap", "instanceSwap")]
-                .into_iter()
-                .map(|(label, ty)| crate::widgets::menu::MenuRow::row(tr(label)).key(ty))
-                .collect();
+            let rows: Vec<crate::widgets::menu::MenuRow> = [
+                ("Variant", "variant"),
+                ("Text", "text"),
+                ("Boolean", "boolean"),
+                ("Instance swap", "instanceSwap"),
+                ("Slot", "slot"),
+            ]
+            .into_iter()
+            .map(|(label, ty)| crate::widgets::menu::MenuRow::row(tr(label)).key(ty))
+            .collect();
             let cmds = cmds.clone();
-            let on_pick = std::rc::Rc::new(move |ty: &str, _w: &mut gpui::Window, _cx: &mut App| {
-                // 唯一名字：引擎拒绝重名。
-                let name = unique_prop_name(&used_names);
-                let default = match ty {
-                    "boolean" => json!(true),
-                    "variant" => json!("Default"),
-                    "instanceSwap" => candidates.first().map(|(id, _)| json!(id.0)).unwrap_or(Value::Null),
-                    _ => Value::Null,
-                };
-                let mut params = json!({ "id": owner.0, "name": name, "type": ty, "default": default });
-                // Slot 必须绑定一个 frame（引擎 add_prop 要求 layer），取组件子树里第一个 Frame。
-                if ty == "slot" {
-                    if let Some(layer) = slot_layer {
-                        params["layer"] = json!(layer.0);
-                    }
+            let on_pick = std::rc::Rc::new(move |ty: &str, window: &mut gpui::Window, cx: &mut App| {
+                // Variant 一键建（默认值固定）；其余类型打开通用「创建属性」弹窗填写
+                // Name / Value 后再推 component.addProperty（对照 lizard-main 的
+                // property_create_dialog：Text/Boolean/Instance swap/Slot 都走创建弹窗）。
+                if ty == "variant" {
+                    let name = unique_prop_name(&used_names);
+                    cmds.push(crate::panels::Cmd {
+                        id: "component.addProperty",
+                        params: Some(json!({ "id": owner.0, "name": name, "type": "variant", "default": "Default" })),
+                    });
+                    return;
                 }
-                cmds.push(crate::panels::Cmd { id: "component.addProperty", params: Some(params) });
+                let trigger = format!("component-create-property-{}", ty);
+                let top = crate::popovers::anchored_top(&trigger, window);
+                let base = match ty {
+                    "text" => tr("Text"),
+                    "boolean" => tr("Boolean"),
+                    "instanceSwap" => tr("Instance"),
+                    _ => tr("Slot"),
+                };
+                let name = if used_names.iter().any(|n| n == &base.to_string()) { unique_prop_name(&used_names) } else { base.to_string() };
+                let kind: &'static str = match ty {
+                    "text" => "text",
+                    "boolean" => "boolean",
+                    "instanceSwap" => "instanceSwap",
+                    _ => "slot",
+                };
+                let cmds = cmds.clone();
+                let candidates = candidates.clone();
+                let add_popups = add_popups.clone();
+                crate::panels::right::sections::open_detached_with(add_popups, &trigger, Some(top), cx, move |anchor, cx| {
+                    crate::popovers::WindowState::component_property_create(
+                        cmds.clone(),
+                        cx,
+                        owner.0,
+                        kind,
+                        name.clone(),
+                        candidates.clone(),
+                        anchor,
+                    )
+                });
             });
             root.update(cx, |cv, cx| cv.open_menu(anchor, Some(180.0), rows, on_pick, cx));
         })
@@ -245,7 +341,24 @@ fn instance_section(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut us
         sec = sec.child(sublabel_row(tr("Properties")));
     }
     for p in &c.props {
-        let label = div().w(px(84.0)).flex_none().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(p.name.clone()));
+        // 每个属性行左侧的类型图标（lizard `prop_label`）。
+        let p_icon = match p.kind {
+            "boolean" => Icon::Boolean,
+            "text" => Icon::Text,
+            "variant" => Icon::ComponentSet,
+            "swap" => Icon::Instance,
+            "slot" => Icon::Slot,
+            _ => Icon::ComponentSet,
+        };
+        let label = div()
+            .w(px(84.0))
+            .flex_none()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(pt(6.0))
+            .child(crate::widgets::icon::paint_in_slot(p_icon, 14.0, Some(rgba(t.text_secondary))))
+            .child(SharedString::from(p.name.clone()));
         let control: gpui::AnyElement = match p.kind {
             "boolean" => {
                 let on = p.value == "true";
@@ -296,6 +409,15 @@ fn plain_label(text: &'static str) -> Div {
 #[cfg(test)]
 mod tests {
     use super::unique_prop_name;
+
+    #[test]
+    fn variant_value_edit_rewrites_only_its_segment() {
+        use super::super::data::variant_name_with_value;
+        assert_eq!(variant_name_with_value("Size=Large, State=Hover", "Size", "Small"), "Size=Small, State=Hover");
+        assert_eq!(variant_name_with_value("Size=Large, State=Hover", "State", "Press"), "Size=Large, State=Press");
+        // 名字里没有该属性时追加。
+        assert_eq!(variant_name_with_value("Size=Large", "State", "On"), "Size=Large, State=On");
+    }
 
     #[test]
     fn new_property_name_never_collides_with_existing() {

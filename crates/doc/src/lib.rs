@@ -14,6 +14,8 @@ mod board_mindmap;
 pub use board_mindmap::{MIND_GAP_X, MIND_GAP_Y, MIND_MAX_DEPTH, MIND_MAX_NODES, MindBox, mind_layout};
 pub mod board_route;
 pub mod colors;
+// lizard-only engine extension; re-sync from figcraft main when it gains an equivalent.
+pub mod component_matrix;
 pub mod comments;
 pub mod facilitation;
 pub mod geometry;
@@ -34,6 +36,9 @@ pub use anim::*;
 pub use board::*;
 pub use board_route::{END_GAP, MAX_RUNS, RouteEnd, attach_points, attached_sides, path_handles, reshaped, route_along, route_points};
 pub use colors::*;
+// lizard-only engine extension (component value table); see component_matrix.rs source note.
+// Re-sync from figcraft main when it gains an equivalent.
+pub use component_matrix::*;
 pub use comments::*;
 pub use facilitation::*;
 pub use figcraft_color as color;

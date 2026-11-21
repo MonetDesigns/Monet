@@ -917,6 +917,25 @@ pub struct ComponentData {
     pub component_candidates: Vec<(NodeId, String)>,
     /// 组件/组件集内的第一个 Frame（新建 slot 属性时引擎要求一个 frame 作 layer）。
     pub slot_layer: Option<NodeId>,
+
+    // ── 变体面板（对照 lizard-main `component_panel.rs::variant_ui`）──────────────
+    /// 选中节点所属的变体集（Component 变体时有值；ComponentSet 为自身；其它 None）。
+    pub set_id: Option<NodeId>,
+    /// 选中的是变体集本体（`variant_ui` 与 `properties_ui` 的分派依据）。
+    pub owner_is_set: bool,
+    /// 变体集第一个子组件：共享属性定义从它读（lizard `properties_ui::first`）。
+    pub first_variant_id: Option<NodeId>,
+    /// 左上角默认变体 id：Current variant 区的默认值列以它为准。
+    pub default_variant_id: Option<NodeId>,
+    /// 选中变体自己的属性值（`variant_props(name)` 解析 "Size=Large, State=Hover"）。
+    /// `variant_ui` 的 Current variant 区逐行显示/编辑这些值。
+    pub own_variant_props: Vec<(String, Vec<String>, String)>,
+    /// 变体节点原始名字（改值时用它重建 "Property=Value, ..." 再走 `node.set`）。
+    pub own_variant_name: String,
+    /// 变体值冲突分组（lizard 的黄色提示）。
+    pub variant_conflicts: Vec<Vec<NodeId>>,
+    /// 可否 Add variant（引擎 `can_add_variant`）。
+    pub can_add_variant: bool,
 }
 
 /// 组件/组件集的一行属性定义（抄 lizard `component_panel.rs::properties_ui`）。
@@ -962,6 +981,14 @@ pub fn read_component(doc: &Document, ids: &[NodeId]) -> Option<ComponentData> {
                 variants: Vec::new(),
                 component_candidates,
                 slot_layer: None,
+                own_variant_name: String::new(),
+                set_id: None,
+                owner_is_set: false,
+                first_variant_id: None,
+                default_variant_id: None,
+                own_variant_props: Vec::new(),
+                variant_conflicts: Vec::new(),
+                can_add_variant: false,
             };
             // 主组件（或变体集）的描述。
             out.description = [Some(*component), set]
@@ -1044,13 +1071,35 @@ pub fn read_component(doc: &Document, ids: &[NodeId]) -> Option<ComponentData> {
                 slot_layer: first_frame(doc, *id),
                 defs,
                 variants,
+                // 组件集本体：`properties_ui` 路径，属性定义直接可编辑；无「当前变体」区。
+                set_id: Some(*id),
+                owner_is_set: true,
+                first_variant_id: first,
+                default_variant_id: components::default_variant(doc, *id),
+                variant_conflicts: components::variant_conflicts(doc, *id),
+                can_add_variant: figcraft_engine::cmd::component::can_add_variant(doc, *id),
                 ..Default::default()
             })
         }
         figcraft_doc::NodeKind::Component { description, props, .. } => {
             let defs = read_defs(doc, *id);
-            let variants = components::variant_set(doc, *id).map(|set| components::variant_options(doc, set)).unwrap_or_default();
+            let set = components::variant_set(doc, *id);
+            let variants = set.map(|s| components::variant_options(doc, s)).unwrap_or_default();
             let _ = props; // defs 已从节点读到
+
+            // 变体（属于某个 set）→ `variant_ui`：显示当前变体的属性值，不是属性定义列表。
+            // 属性值来自节点名字里的 "Property=Value, ..."（引擎 `variant_props`）。
+            let own_variant_props = match set {
+                Some(s) => {
+                    let pairs = components::variant_props(&n.name);
+                    variants
+                        .iter()
+                        .map(|(name, vals)| (name.clone(), vals.clone(), pairs.get(name).cloned().unwrap_or_default()))
+                        .collect()
+                }
+                None => Vec::new(),
+            };
+            let owner = set.unwrap_or(*id);
             Some(ComponentData {
                 title: tr("Component"),
                 description: description.clone(),
@@ -1060,11 +1109,46 @@ pub fn read_component(doc: &Document, ids: &[NodeId]) -> Option<ComponentData> {
                 slot_layer: first_frame(doc, *id),
                 defs,
                 variants,
+                set_id: set,
+                owner_is_set: false,
+                first_variant_id: set.and_then(|s| {
+                    doc.node(s).and_then(|sn| {
+                        sn.children
+                            .iter()
+                            .copied()
+                            .find(|c| matches!(doc.node(*c).map(|cn| &cn.kind), Some(figcraft_doc::NodeKind::Component { .. })))
+                    })
+                }),
+                default_variant_id: set.and_then(|s| components::default_variant(doc, s)),
+                variant_conflicts: set.map(|s| components::variant_conflicts(doc, s)).unwrap_or_default(),
+                can_add_variant: figcraft_engine::cmd::component::can_add_variant(doc, owner),
+                own_variant_props,
+                own_variant_name: n.name.clone(),
                 ..Default::default()
             })
         }
         _ => None,
     }
+}
+
+/// 把变体名字里的 `Property=Old` 换成 `Property=New`（其它段原样保留）。
+/// 引擎 `variant_props` 用 `,` 分段、`=` 分键值，`setVariantValue` 在 storytold/figcraft
+/// 中不存在，走 `node.set {props:{name}}`（`KEYS` 里 name 可写）。
+pub fn variant_name_with_value(name: &str, property: &str, value: &str) -> String {
+    let mut out: Vec<String> = name
+        .split(',')
+        .map(|seg| {
+            let seg = seg.trim();
+            match seg.split_once('=') {
+                Some((k, _)) if k.trim() == property => format!("{}={}", property, value),
+                _ => seg.to_string(),
+            }
+        })
+        .collect();
+    if !out.iter().any(|seg| seg.split_once('=').is_some_and(|(k, _)| k.trim() == property)) {
+        out.push(format!("{}={}", property, value));
+    }
+    out.join(", ")
 }
 
 /// 组件子树里第一个 Frame（slot 属性的 layer 候选）。
@@ -1094,7 +1178,7 @@ fn read_defs(doc: &Document, id: NodeId) -> Vec<ComponentDef> {
                         .collect(),
                 ),
                 figcraft_doc::PropDef::Variant { default, options } => ("variant", default.clone(), options.iter().map(|v| (v.clone(), 0)).collect()),
-                figcraft_doc::PropDef::Slot { preferred } => (
+                figcraft_doc::PropDef::Slot { preferred, .. } => (
                     "slot",
                     String::new(),
                     preferred.iter().copied().filter_map(|c| doc.node(c).map(|n| (n.name.clone(), c.0))).collect(),

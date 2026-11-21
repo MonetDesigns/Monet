@@ -291,7 +291,7 @@ pub(super) fn add_prop_for(cmd: &str, s: &mut Session, p: &Value) -> Result<Valu
             if !layer_node.as_ref().is_some_and(|n| matches!(n.kind, NodeKind::Frame)) {
                 return Err(bad(cmd, "a slot is a frame inside the component: select one (or pass `layer`)"));
             }
-            PropDef::Slot { preferred: preferred_arg(cmd, doc, p)? }
+            PropDef::Slot { preferred: preferred_arg(cmd, doc, p)?, settings: Default::default() }
         }
         _ => return Err(bad(cmd, "type: boolean|text|instanceSwap|variant|slot")),
     };
@@ -514,7 +514,7 @@ pub(super) fn edit_prop(s: &mut Session, p: &Value) -> Result<Value> {
         },
         None => def.clone(),
     };
-    if let (Some(list), PropDef::Slot { preferred } | PropDef::InstanceSwap { preferred, .. }) = (preferred, &mut new_def) {
+    if let (Some(list), PropDef::Slot { preferred, .. } | PropDef::InstanceSwap { preferred, .. }) = (preferred, &mut new_def) {
         *preferred = list;
     }
     for c in &comps {
@@ -580,7 +580,7 @@ fn def_json(name: &str, d: &PropDef) -> Value {
         PropDef::Text { default } => json!({"name": name, "type": "text", "default": default}),
         PropDef::InstanceSwap { default, preferred } => json!({"name": name, "type": "instanceSwap", "default": default, "preferred": preferred}),
         PropDef::Variant { options, default } => json!({"name": name, "type": "variant", "default": default, "options": options}),
-        PropDef::Slot { preferred } => json!({"name": name, "type": "slot", "preferred": preferred}),
+        PropDef::Slot { preferred, .. } => json!({"name": name, "type": "slot", "preferred": preferred}),
     }
 }
 
