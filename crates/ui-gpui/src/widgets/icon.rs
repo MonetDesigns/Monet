@@ -599,6 +599,8 @@ static ICON_FILES: &[(&str, &[u8])] = &[
     ("layout-padding-left", include_bytes!("../../assets/icons/layout-padding-left.svg")),
     ("layout-padding-right", include_bytes!("../../assets/icons/layout-padding-right.svg")),
     ("layout-padding-top", include_bytes!("../../assets/icons/layout-padding-top.svg")),
+    ("constraint-horizontal", include_bytes!("../../assets/icons/constraint-horizontal.svg")),
+    ("constraint-vertical", include_bytes!("../../assets/icons/constraint-vertical.svg")),
 ];
 
 fn file_bytes(rel: &str) -> Option<&'static [u8]> {
@@ -760,6 +762,24 @@ mod tests {
                 let width = cap.split('"').next().unwrap_or("");
                 assert_eq!(width, format!("{}", ICON_STROKE), "{rel} stroke width {width}");
             }
+        }
+    }
+
+    #[test]
+    fn layout_property_icons_fill_their_twenty_four_point_slot() {
+        for rel in [
+            "layout-corner-tl",
+            "layout-corner-tr",
+            "layout-corner-bl",
+            "layout-corner-individual",
+            "layout-padding-top",
+            "layout-padding-individual",
+            "ui-code",
+            "constraint-horizontal",
+            "constraint-vertical",
+        ] {
+            let bytes = file_bytes(rel).unwrap_or_else(|| panic!("missing {rel}.svg"));
+            assert_eq!(view_box_size(bytes), 24.0, "{rel} must be drawn at its 24 pt slot size");
         }
     }
 

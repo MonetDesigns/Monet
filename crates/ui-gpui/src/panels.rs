@@ -10,8 +10,8 @@ use crate::canvas::geom::Color32;
 use crate::inline_input::InlineInput;
 use crate::widgets::menu::MenuRow;
 use crate::widgets::{
-    Icon, IconButton, PanelSection, SectionHeader, SectionHeaderVariant, Segmented, Slot, TextEdit, TextField, field_row, field_row_full, pt, rgba,
-    sublabel_row, sublabel_row2, tokens,
+    Icon, IconButton, PanelSection, SectionHeader, SectionHeaderVariant, Segmented, Slot, TextEdit, TextField, field_row, field_row_full, field_row_h,
+    pt, rgba, sublabel_row, sublabel_row2, tokens,
 };
 use figcraft_color::BlendMode;
 use figcraft_i18n::tr;
@@ -1041,19 +1041,24 @@ fn nf_stroke_side(cx: &mut App, icon: &'static str, key: &'static str, cmds: &Cm
 
 /// Replace a field's text lead with a named SVG glyph from `assets/icons/`.
 ///
-/// The corner / padding fields were built with a text lead (`C`, `TL`, `H`, `T`, …) before the
-/// matching 16-grid icons existed. The SVGs are registered in `ICON_FILES` but have no frozen
-/// `Icon` enum variant, so `Slot::Custom` + `svg().path()` is the only route that does not touch
-/// the frozen widget files. `Slot::Custom` is called again on every frame, so the icon inks from
-/// the current tokens just like the text lead did.
+/// The corner / padding / stroke-side fields were built with a text lead (`C`, `TL`, `H`, `T`, …)
+/// before the matching icons existed. The SVGs live in `assets/icons/`, are registered in
+/// `ICON_FILES` and are authored on the 24 unit grid, so the lead is drawn at 24 pt — the field's
+/// slot size — exactly like the enum-variant icons via `default_glyph`. `Slot::Custom` is the
+/// route that avoids touching the frozen widget files and the frozen `Icon` enum. It is called
+/// again on every frame, so the icon inks from the current tokens just like the text lead did.
 fn set_icon_lead(tf: &Entity<TextField>, cx: &mut App, name: &'static str) {
     let path = right::sections::named_icon(name);
+    // 这些 SVG 都是 24 网格资源（见 icon.rs 的 ICON_FILES 与
+    // `layout_property_icons_fill_their_twenty_four_point_slot` 断言），按原生尺寸画满
+    // 字段的 24pt lead 槽。此前写死 16 会把 24 的矢量压小，看起来像被挤压。
+    let glyph = 24.0f32;
     tf.update(cx, |tf, _| {
         tf.set_lead(Slot::custom(move || {
             svg()
                 .path(path.clone())
-                .w(px(16.0))
-                .h(px(16.0))
+                .w(px(glyph))
+                .h(px(glyph))
                 .flex_none()
                 .text_color(Hsla::from(rgba(tokens().icon)))
                 .into_any_element()
@@ -2527,16 +2532,23 @@ pub(crate) fn right_panel(
             if has_pos_trail {
                 pos_sec = pos_sec.header_trail(pos_trail);
             }
-            let pos_sec = pos_sec
-                .child(sublabel_row(tr("Alignment")))
-                .child(field_row(vec![h.into_any_element(), v.into_any_element()], Vec::<IconButton>::new()))
+            // 对齐行在 Position(X/Y) **之上**，与参考实现 `right.rs::position_fields` 的顺序一致。
+            // 它只在 can_align 时出现：空选区或页面上的孤层没有对齐目标，两组图标与 caption
+            // 整行都不画。`data.can_align` 由引擎同名函数算出。
+            if data.can_align {
+                pos_sec = pos_sec
+                    .child(sublabel_row(tr("Alignment")))
+                    .child(field_row(vec![h.into_any_element(), v.into_any_element()], Vec::<IconButton>::new()));
+            }
+            pos_sec = pos_sec
                 .child(sublabel_row(tr("Position")))
                 .child(field_row(
                     vec![f.x.clone().into_any_element(), f.y.clone().into_any_element()],
-                    vec![constraints_toggle],
-                ))
-                .child(sublabel_row(tr("Rotation")))
-                .child(field_row(vec![f.rotation.clone().into_any_element(), rotate.into_any_element()], Vec::<IconButton>::new()));
+                    // 约束只在 frame 子层（父级无 auto layout 或自身 absolute）时出现：
+                    // 展开按钮与下面的约束节共用同一个 in_frame 门槛（参考实现
+                    // `right.rs::position_fields` 的 `if in_frame { … }`），两者不能分家。
+                    if data.in_frame { vec![constraints_toggle] } else { Vec::<IconButton>::new() },
+                ));
 
             // ── Constraints（egui `right.rs::position_fields`：仅 frame 子层、自身无自动布局或为
             // absolute 时才显示；`in_frame` 的逻辑与 egui `common` 后的 `all(...)` 完全一致）。──
@@ -2544,7 +2556,7 @@ pub(crate) fn right_panel(
             // 选中即 `node.set {"props":{"constraints":{"horizontal"/"vertical":v}}}`（等价于 egui 的
             // `app.set_props(&ids, json!({"constraints":{"horizontal": v}}))`，`node.set` 由 Cmd 通道附带
             // 选区 ids 执行）。`None` = Mixed，下拉显示 "Mixed"。
-            let pos_sec = if constraints_open {
+            let pos_sec = if constraints_open && data.in_frame {
                 let pretty_h = |v: Option<&'static str>| -> &'static str {
                     match v {
                         Some("leftRight") => tr("Left & right"),
@@ -2596,7 +2608,7 @@ pub(crate) fn right_panel(
                                 Some(Icon::AlignTop),
                             ))
                             .into_any_element(),
-                        right::sections::constraint_graphic(f, data, col),
+                        right::sections::constraint_graphic(f, data),
                     ],
                     Vec::<IconButton>::new(),
                     56.0,
@@ -2605,6 +2617,8 @@ pub(crate) fn right_panel(
                 pos_sec
             };
             pos_sec
+                .child(sublabel_row(tr("Rotation")))
+                .child(field_row(vec![f.rotation.clone().into_any_element(), rotate.into_any_element()], Vec::<IconButton>::new()))
         })
         .child(sep())
         // ── Auto layout（egui `layout_panel.rs::layout_section` / `direction` / `spacing` / `alignment`）──

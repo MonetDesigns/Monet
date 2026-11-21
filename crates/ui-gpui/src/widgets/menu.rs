@@ -65,9 +65,9 @@ pub(crate) fn menu_metrics(rows: &[MenuRow]) -> (f32, f32) {
         .map(|r| {
             let label: f32 = r.label.chars().map(|c| if c.is_ascii() { 6.5 } else { 11.0 }).sum();
             let trail: f32 = r.trail.as_ref().map(|s| s.chars().count() as f32 * 6.5 + 12.0).unwrap_or(0.0);
-            // 前置图标占一列（与 menu_card 的 ICON_LABEL_X 一致：带图标时标签从 48 起）。
-            let icon: f32 = if r.icon.is_some() || r.glyph.is_some() { 20.0 } else { 0.0 };
-            label + trail + icon + if r.checked.is_some() { 28.0 } else { 8.0 } + 10.0
+            // 勾 / 图标各占一个 24×24 槽位，两槽相邻无间距；带图标时标签从 48 起。
+            let icon: f32 = if r.icon.is_some() || r.glyph.is_some() { 24.0 } else { 0.0 };
+            label + trail + icon + if r.checked.is_some() { 24.0 } else { 8.0 } + 10.0
         })
         .fold(0.0f32, f32::max);
     (rows_h, content_w)
@@ -156,10 +156,9 @@ fn menu_popup_impl(
         if r.separator_before {
             col = col.child(crate::menu_metrics::divider(card_w));
         }
-        // ⛔ 勾选列是**固定 28pt 的一列**，不是文字前缀。egui `widgets::menu_row_draw`：
-        // 勾号画在 `r.min.x + 12`（12×12），文字起点是 `pos2(r.min.x + 28.0 + indent, …)`。
-        // 之前用 `"✓ "` / `"    "` 前缀去顶，勾与不勾的字宽不同、缩进对不上，整列是歪的
-        // （用户 2026-11-05 指出）。没有勾选态的行不占这一列。
+        // ⛔ 勾选列是**固定 24pt 的一列**（与 `menu_card::CHECK_W` 同一个 24×24 槽位），
+        // 不是文字前缀。勾号画在槽中心，文字起点是槽右缘 + 图标槽 + 4pt。
+        // 没有勾选态的行不占这一列。
         let check = if r.checked == Some(true) { "✓" } else { "" };
         // 统一到 Item 后 key 非 Option：空 key = 回落到 label（原 None 的语义）。
         let pick_text = if r.key.is_empty() { r.label.clone() } else { r.key.clone() }.to_string();
@@ -184,8 +183,8 @@ fn menu_popup_impl(
                 dismiss(window, cx);
             });
         if has_check {
-            // 勾号靠左 6pt（字形约 12 宽，中心≈12，与 egui 的 `r.min.x + 12` 一致）。
-            row = row.child(div().w(pt(28.0)).flex_none().flex().flex_row().items_center().pl(pt(6.0)).child(check));
+            // 勾号在一个 24pt 槽里居中（字形约 12 宽，中心 12）。
+            row = row.child(div().w(pt(24.0)).flex_none().flex().flex_row().items_center().justify_center().child(check));
         } else {
             // 没有勾选列时左边至少留 8pt —— 不能把文字顶到行首。
             row = row.pl(pt(8.0));
@@ -195,13 +194,13 @@ fn menu_popup_impl(
         let icon_ink = crate::menu_metrics::ink();
         if let Some(path) = glyph {
             row = row.child(
-                div().w(pt(20.0)).flex_none().flex().items_center().justify_center().child(
+                div().w(pt(24.0)).flex_none().flex().items_center().justify_center().child(
                     svg().path(path).w(pt(16.0)).h(pt(16.0)).flex_none().text_color(gpui::Hsla::from(icon_ink)),
                 ),
             );
         } else if let Some(icon) = enum_icon {
             row = row.child(
-                div().w(pt(20.0)).flex_none().flex().items_center().justify_center().child(crate::widgets::icon::paint(icon, icon_ink, 16.0)),
+                div().w(pt(24.0)).flex_none().flex().items_center().justify_center().child(crate::widgets::icon::paint(icon, icon_ink, 16.0)),
             );
         }
         // 标签占满剩余宽度，超长裁掉（egui 把文字裁到 `r.max.x - 8.0`）。

@@ -83,9 +83,10 @@ pub(crate) fn anchored_left_below(key: &str, window: &Window) -> Point<Pixels> {
 const LIST_MAX_H: f32 = 320.0;
 
 /// 样式编辑器属性行里那颗左侧 `Dropdown` 的宽度：卡片 304 − 左缩进 `PAD` 16 − 右缩进
-/// `PAD_RIGHT` 8 − 尾部两颗 24 pt 图标按钮 48。与右栏 `field_row_full_trailing` 的字段列同宽，
+/// `PAD_RIGHT` 8 − 尾部两颗 24 pt 图标按钮 48 与它们之间的 8 pt 列间距 = 224。
+/// 与右栏 `field_row_full_trailing` 的字段列同宽，
 /// 这样两个面板里同一行的内缩与图标位置完全一致。
-const STYLE_ROW_FIELD_W: f32 = 232.0;
+const STYLE_ROW_FIELD_W: f32 = 224.0;
 
 /// Which of the five old popovers is open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -1471,6 +1471,9 @@ pub struct PanelData {
     pub vector: Option<VectorData>,
     /// 选中节点是否都是「无自动布局（或自身 absolute）的 frame 子层」——只有这种才显示 Constraints 子节。
     pub in_frame: bool,
+    /// 参考实现 `engine::cmd::arrange::can_align`：对齐是否有目标。空选区 / 页面上的孤层都
+    /// 无可对齐目标，此时 Alignment 行整行隐藏（连 caption 一起），不是画出来再禁用。
+    pub can_align: bool,
     /// 选中的层是否都在 auto layout 父级里（egui `position_row` 的 `pv.parent_al`）。
     pub parent_al: bool,
     /// 这些层的 absolute 状态；`None` = 多选不一致。驱动标题栏的「忽略自动布局」按钮。
@@ -1511,6 +1514,9 @@ pub struct PanelData {
     pub corner_radii: Option<[f64; 4]>,
     /// 选中节点是否都支持独立四边圆角（`NodeKind::has_independent_corners`，egui 的 `indep_ok`）。
     pub corners_independent: bool,
+    /// 参考实现 `right.rs::appearance` 的 `radius_ok`：选中节点都支持圆角（或正在编辑点半径）
+    /// 时右侧那列才是 "Corner radius" 输入框；否则整列隐藏，Opacity 占满一行。
+    pub corner_radius_ok: bool,
     /// 画布辅助元素的显示 / 隐藏开关（右栏顶部 Zoom / Show 菜单）。
     pub view: ViewData,
     /// Prototype 标签的全部数据（flows / settings / interactions / scroll）。
@@ -1970,9 +1976,11 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
     d.corner_radii = common(doc, ids, |n| n.corners.radii);
     d.corner_smoothing_supported = !ids.is_empty();
     d.corners_independent = !ids.is_empty();
+    d.corner_radius_ok = !ids.is_empty();
     for n in ids.iter().filter_map(|i| doc.node(*i)) {
         d.corner_smoothing_supported &= n.kind.has_corner_smoothing();
         d.corners_independent &= n.kind.has_independent_corners();
+        d.corner_radius_ok &= n.kind.has_corner_radius();
         d.corner_radius = d.corner_radius.max(n.corners.radii.iter().copied().fold(0.0, f64::max));
     }
 
@@ -2060,6 +2068,9 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
         figcraft_doc::VConstraint::Scale => "scale",
     });
     d.in_frame = in_frame;
+    // `arrange::can_align`：roots 后的单层要有非 page 父级，多层总能对齐（按合包围盒）。
+    // panel 读的是当前 ids，roots 只影响「对齐到哪」，不影响「能不能对齐」，直接用 ids 等价。
+    d.can_align = figcraft_engine::cmd::arrange::can_align(doc, ids);
     d.parent_al = parent_al;
     d.absolute = common(doc, ids, |n| n.child_layout.absolute);
     d.constraints_h = constraints_h;

@@ -46,14 +46,15 @@ pub(crate) fn named_icon(name: &'static str) -> SharedString {
     SharedString::from(format!("icons/{name}.svg"))
 }
 
-/// 一个 16 网格字形，画成字段 lead / 菜单图标。`color` 由调用处按所在表面注入。
+/// 一个命名字形，画成字段 lead / 菜单图标。`size` 由调用处给；`assets/icons/` 里的
+/// layout-corner / layout-padding / constraint 等资源都是 24 网格，按 24pt 画满槽位。
 pub(crate) fn named_icon_glyph(name: &'static str, color: gpui::Rgba, size: f32) -> gpui::AnyElement {
     svg().path(named_icon(name)).w(pt(size)).h(pt(size)).flex_none().text_color(Hsla::from(color)).into_any_element()
 }
 
 /// 24 pt 切换按钮，字形走 `assets/icons/<name>.svg`（`layout-corner-individual` /
 /// `layout-padding-individual` 这些没有 `Icon` 枚举变体的图标）。外观与通用 `IconButton`
-/// 完全一致：hover / active 换底、16 网格原生尺寸、accent 着色。
+/// 完全一致：hover / active 换底、24 网格原生尺寸、accent 着色。
 pub(crate) fn named_icon_toggle(name: &'static str, active: bool, on_click: impl Fn() + 'static) -> gpui::AnyElement {
     let t = tokens();
     let ink = if active { rgba(t.accent) } else { rgba(t.icon) };
@@ -66,7 +67,7 @@ pub(crate) fn named_icon_toggle(name: &'static str, active: bool, on_click: impl
         .cursor_pointer()
         .when(active, |d| d.bg(rgba(t.selected_row)))
         .when(!active, |d| d.hover(|s| s.bg(rgba(t.hover))))
-        .child(named_icon_glyph(name, ink, 16.0))
+        .child(named_icon_glyph(name, ink, 24.0))
         .on_mouse_down(MouseButton::Left, move |_e, _w, _cx| on_click())
         .into_any_element()
 }
@@ -157,8 +158,19 @@ pub(crate) fn slot(n: &mut usize) -> usize {
 /// 一个「点开菜单选中即推命令」的下拉（egui `menu_popup` + `menu_item`）。
 /// `rows`: (显示名, 选中后推的命令 id, 命令额外参数)。`cmds` 句柄 clone 进 `on_pick`。
 pub(crate) fn pick_dropdown(f: &RightFields, label: impl Into<SharedString>, width: f32, rows: Vec<(String, &'static str, Value)>) -> Dropdown {
+    pick_dropdown_lead(f, label, width, rows, None)
+}
+
+/// Same dropdown, with a leading glyph in the field's lead slot.
+pub(crate) fn pick_dropdown_lead(
+    f: &RightFields,
+    label: impl Into<SharedString>,
+    width: f32,
+    rows: Vec<(String, &'static str, Value)>,
+    lead: Option<Icon>,
+) -> Dropdown {
     let menu: Vec<MenuRow> = rows.iter().map(|(l, _, _)| MenuRow::row(l.clone())).collect();
-    let mut d = Dropdown::new(label, width, None).fill();
+    let mut d = Dropdown::new(label, width, lead.map(crate::widgets::dropdown::DropLead::Icon)).fill();
     if let Some(root) = f.root.clone() {
         let cmds = f.cmds.clone();
         d = d.on_click(move |anchor, _window, cx: &mut App| {
@@ -195,9 +207,27 @@ fn constraint_rect(window: &mut Window, x: f32, y: f32, w: f32, h: f32, color: g
     );
 }
 
+/// 约束图里的一根 pin / 居中标记：横竖都按整设备像素落位、取整厚度，
+/// 避免同一条线在不同位置被 AA 摊成一粗一细。选中 3pt、未选中 1.5pt，四边与中心一致。
+fn constraint_bar(window: &mut Window, cx: f32, cy: f32, horizontal: bool, active: bool, color: gpui::Rgba, len: f32) {
+    let ppp = window.scale_factor().max(1.0);
+    let snap = |v: f32| (v * ppp).round() / ppp;
+    let thick = snap(if active { 3.0 } else { 1.5 });
+    if horizontal {
+        constraint_rect(window, snap(cx - len / 2.0), snap(cy - thick / 2.0), snap(len), thick, color, 0.0);
+    } else {
+        constraint_rect(window, snap(cx - thick / 2.0), snap(cy - len / 2.0), thick, snap(len), color, 0.0);
+    }
+}
+
 /// 约束图形选择器：与其余右栏控件同一套 1fr 网格；图形本身在 canvas 上绘制，
 /// 上层只叠 5 个 22×22 的命中盒。
-pub(crate) fn constraint_graphic(f: &RightFields, d: &PanelData, width: f32) -> gpui::AnyElement {
+///
+/// 宽度**必须由网格给**：右栏统一传 `col = 0` 哨兵，旧版拿它当 `w(px(0))`，
+/// 于是图形和命中盒全被挤在零宽列里。这里改成 `w_full()`，命中盒用
+/// 「左 / 中 / 右」三段布局按真实列宽摆位，与参考实现 `constraint_preview` 的
+/// `rect.left()+8 / rect.center().x / rect.right()-8` 完全一致。
+pub(crate) fn constraint_graphic(f: &RightFields, d: &PanelData) -> gpui::AnyElement {
     let t = tokens();
     let h = d.constraints_h;
     let v = d.constraints_v;
@@ -227,58 +257,111 @@ pub(crate) fn constraint_graphic(f: &RightFields, d: &PanelData, width: f32) -> 
                 (cx, y + height - 8.0, false, matches!(v, Some("bottom" | "topBottom"))),
             ];
             for (px, py, horizontal, active) in pins {
-                let col = if active { rgba(accent) } else { rgba(secondary) };
-                let thick = if active { 3.0 } else { 1.5 };
-                if horizontal {
-                    constraint_rect(window, px - 5.0, py - thick / 2.0, 10.0, thick, col, thick / 2.0);
-                } else {
-                    constraint_rect(window, px - thick / 2.0, py - 5.0, thick, 10.0, col, thick / 2.0);
-                }
+                constraint_bar(window, px, py, horizontal, active, if active { rgba(accent) } else { rgba(secondary) }, 10.0);
             }
-            let center_col = if matches!(h, Some("center")) || matches!(v, Some("center")) { rgba(accent) } else { rgba(secondary) };
-            constraint_rect(window, cx - 7.0, cy - 0.5, 14.0, 1.0, center_col, 0.0);
-            constraint_rect(window, cx - 0.5, cy - 7.0, 1.0, 14.0, center_col, 0.0);
+            // 中间十字的两条**分别**着色、同一套像素吸附粗细：横条只反映水平居中，竖条只反映垂直居中。
+            let h_center = matches!(h, Some("center"));
+            let v_center = matches!(v, Some("center"));
+            constraint_bar(window, cx, cy, true, h_center, if h_center { rgba(accent) } else { rgba(secondary) }, 14.0);
+            constraint_bar(window, cx, cy, false, v_center, if v_center { rgba(accent) } else { rgba(secondary) }, 14.0);
         },
     );
 
-    let mut root = div().relative().w(px(width)).h(px(height)).flex_none().child(draw.absolute().inset_0());
-    let hit = |f: &RightFields, label: &'static str, x: f32, y: f32, horizontal: bool| {
+    let root = div().relative().w_full().h(px(height)).child(draw.absolute().inset_0());
+
+    // 命中层：左右两颗贴边（盒心在 8 / w-8），中间三颗共用一个 22 pt 宽的列（盒心在 w/2）。
+    // 这样不用知道列的像素宽，也与参考实现的 22×22 命中盒一一对应。
+    let hit = |f: &RightFields, label: &'static str, pair: &'static str, other: &'static str, current: Option<&'static str>, horizontal: bool| {
         let cmds = f.cmds.clone();
         let key = if horizontal { "horizontal" } else { "vertical" };
+        let fallback = if horizontal { "left" } else { "top" };
+        div()
+            .w(px(22.0))
+            .h(px(22.0))
+            .cursor_pointer()
+            .on_mouse_down(MouseButton::Left, move |e: &MouseDownEvent, _w, _cx| {
+                // Shift 把同轴两端做成可反复切换的组合态：不在组合里就加进来（leftRight /
+                // topBottom），已在组合里再 Shift 点同一端就把它摘掉、只留对端。
+                // 普通点仍是单端；点已生效的单端则回到该轴默认值，避免选上去解不掉。
+                let value = if e.modifiers.shift {
+                    if current == Some(pair) { other } else { pair }
+                } else if current == Some(label) {
+                    fallback
+                } else {
+                    label
+                };
+                cmds.push(Cmd { id: "node.set", params: Some(json!({ "props": { "constraints": { key: value } } })) });
+            })
+    };
+    // 上下 pin 仍是一个 22×22 命中盒；Shift 在 topBottom 与单端间切换。
+    let middle_hit = |y: f32, current: Option<&'static str>| {
+        let cmds = f.cmds.clone();
+        let label = y_to_constraint(y);
+        let fallback = "top";
+        let other = if label == "top" { "bottom" } else { "top" };
         div()
             .absolute()
-            .left(px(x - 11.0))
+            .left(px(0.0))
             .top(px(y - 11.0))
             .w(px(22.0))
             .h(px(22.0))
             .cursor_pointer()
-            .on_mouse_down(MouseButton::Left, move |_e, _w, _cx| {
-                cmds.push(Cmd { id: "node.set", params: Some(json!({ "props": { "constraints": { key: label } } })) });
+            .on_mouse_down(MouseButton::Left, move |e: &MouseDownEvent, _w, _cx| {
+                let value = if e.modifiers.shift {
+                    if current == Some("topBottom") { other } else { "topBottom" }
+                } else if current == Some(label) {
+                    fallback
+                } else {
+                    label
+                };
+                cmds.push(Cmd { id: "node.set", params: Some(json!({ "props": { "constraints": { "vertical": value } } })) });
             })
-            .into_any_element()
     };
-    root = root
-        .child(hit(f, "left", 8.0, height / 2.0, true))
-        .child(hit(f, "right", width - 8.0, height / 2.0, true))
-        .child(hit(f, "top", width / 2.0, 8.0, false))
-        .child(hit(f, "bottom", width / 2.0, height - 8.0, false));
-    let center_cmds = f.cmds.clone();
+    // 中间十字拆成两条独立命中区：横条只设 horizontal=center，竖条只设 vertical=center。
+    // 两者各占 14×4 / 4×14，在正中有 4×4 重叠——后绘制的竖条拿到中心点，横条仍可在两端点到。
+    let center_hit = |f: &RightFields, horizontal: bool| {
+        let cmds = f.cmds.clone();
+        let (w, hh, top, left) = if horizontal { (14.0, 4.0, -2.0, 4.0) } else { (4.0, 14.0, -7.0, 9.0) };
+        div()
+            .absolute()
+            .left(px(left))
+            .top(px(height / 2.0 + top))
+            .w(px(w))
+            .h(px(hh))
+            .cursor_pointer()
+            .on_mouse_down(MouseButton::Left, move |_e: &MouseDownEvent, _w, _cx| {
+                let key = if horizontal { "horizontal" } else { "vertical" };
+                let current = if horizontal { h } else { v };
+                let value = if current == Some("center") { if horizontal { "left" } else { "top" } } else { "center" };
+                cmds.push(Cmd { id: "node.set", params: Some(json!({ "props": { "constraints": { key: value } } })) });
+            })
+    };
+    let middle = div()
+        .relative()
+        .flex_none()
+        .w(px(22.0))
+        .h(px(height))
+        .child(middle_hit(8.0, v))
+        .child(middle_hit(height - 8.0, v))
+        .child(center_hit(f, true))
+        .child(center_hit(f, false));
     root.child(
         div()
             .absolute()
-            .left(px(width / 2.0 - 11.0))
-            .top(px(height / 2.0 - 11.0))
-            .w(px(22.0))
-            .h(px(22.0))
-            .cursor_pointer()
-            .on_mouse_down(MouseButton::Left, move |_e, _w, _cx| {
-                center_cmds.push(Cmd {
-                    id: "node.set",
-                    params: Some(json!({ "props": { "constraints": { "horizontal": "center", "vertical": "center" } } })),
-                });
-            }),
+            .inset_0()
+            .flex()
+            .flex_row()
+            .items_center()
+            .child(hit(f, "left", "leftRight", "right", h, true).flex_none().ml(px(-3.0)))
+            .child(div().flex_1().min_w(px(0.0)).h_full().flex().items_center().justify_center().child(middle))
+            .child(hit(f, "right", "leftRight", "left", h, true).flex_none().mr(px(-3.0))),
     )
     .into_any_element()
+}
+
+/// 中间列的 y 坐标 → 垂直约束名（8 / 48 → top / bottom）。
+fn y_to_constraint(y: f32) -> &'static str {
+    if y < 28.0 { "top" } else { "bottom" }
 }
 
 /// 字体族选择按钮：外观沿用 `Dropdown`，但点击打开一个带字体预览的窗口（每项用它自己的
@@ -2556,15 +2639,32 @@ pub(crate) fn appearance(
     };
     let mut sec = PanelSection::new(tr("Appearance")).header_trail(icon_row(vec![eye.into_any_element(), blend.into_any_element()]));
     let corner_row_trail: Vec<gpui::AnyElement> = indep_toggle.into_iter().collect();
-    sec = sec.child(sublabel_row2(tr("Opacity"), tr("Corner radius"))).child(field_row(
-        vec![
-            // Opacity / corner radius 都是原版白名单里可绑定的数值字段
-            // （`paints.rs::appearance` 用 `variable_ui::number_field_mixed`）。
-            bindable(f, "opacity", d.bound.get("opacity").map(String::as_str), &d.number_variables, opacity.clone().into_any_element()),
-            bindable(f, "cornerRadius", d.bound.get("cornerRadius").map(String::as_str), &d.number_variables, corner.clone().into_any_element()),
-        ],
-        corner_row_trail,
-    ));
+    // 参考实现 `right.rs::appearance`：`radius_ok` 管的是**整个第二列** —— 圆角 caption、
+    // 圆角输入框、展开按钮一起出现 / 一起消失；不支持圆角的层（如纯矢量路径）该列不存在，
+    // Opacity 占满整行。之前只把 `radius_ok` 作用在展开按钮上，输入框和 caption 照旧画着，
+    // 于是出现「展开按钮没了、圆角输入框还在」的错位。
+    if d.corner_radius_ok {
+        sec = sec.child(sublabel_row2(tr("Opacity"), tr("Corner radius")));
+    } else {
+        sec = sec.child(sublabel_row(tr("Opacity")));
+    }
+    let mut fields: Vec<gpui::AnyElement> = vec![bindable(
+        f,
+        "opacity",
+        d.bound.get("opacity").map(String::as_str),
+        &d.number_variables,
+        opacity.clone().into_any_element(),
+    )];
+    if d.corner_radius_ok {
+        fields.push(bindable(
+            f,
+            "cornerRadius",
+            d.bound.get("cornerRadius").map(String::as_str),
+            &d.number_variables,
+            corner.clone().into_any_element(),
+        ));
+    }
+    sec = sec.child(field_row(fields, corner_row_trail));
     // 展开区（egui 同序）：四个独立圆角字段（仅 indep_ok 的类型画，egui 的
     // `chunks(2).filter(|_| indep_ok)`）+ 平滑圆角按钮。折叠时整块不画——平滑按钮随之隐藏。
     if indep_open && smooth_ok {

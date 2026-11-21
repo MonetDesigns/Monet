@@ -44,10 +44,11 @@
 //! * **Field columns** — `flex_1().min_w(0)` for each, i.e. every field column is a `1fr` that
 //!   shares the space *equally*. A normal section has **two** equally-divided field columns
 //!   (e.g. `X | Y`, `W | H`); a row that supplies only one field simply leaves the second empty.
-//! * **Exactly ONE fixed 24 pt column** — `flex_none().w(SLOT * n)`, holding the row's right-hand
-//!   actions (the `.fig`'s 24×24 icon buttons). It is *always* present: blank when the row has no
-//!   trailing element, otherwise one 24 per trailing element. **There is only one such column —
-//!   never a separate "blank 24" plus a "trailing 24".**
+//! * **One fixed trailing column** — `flex_none().w(SLOT * n + GRID_GAP * (n - 1))`, holding the
+//!   row's right-hand actions (the 24×24 icon buttons). Adjacent icon columns are **8 pt apart**.
+//!   It is *always* present: blank when the row has no trailing element, otherwise one 24 per
+//!   trailing element. **There is only one such column — never a separate "blank 24" plus a
+//!   "trailing 24".**
 //!
 //! GPUI 0.2.1's `grid()` only emits uniform columns (`grid_cols(n)` → equal `1fr`), so it cannot
 //! express a fixed-width shared column. We therefore build the unified grid **column-major**: a
@@ -89,6 +90,13 @@ pub struct FieldRow {
     height: Option<f32>,
 }
 
+/// Width of the shared trailing column for `n` icon buttons: one 24 pt slot each, plus the
+/// design's 8 pt gutter between adjacent slots. Rows with no trailing control still reserve
+/// one slot so every row's right edge stays on the same track.
+pub(crate) fn trailing_width(n: usize) -> f32 {
+    SLOT * n.max(1) as f32 + GRID_GAP * n.saturating_sub(1) as f32
+}
+
 /// Build a body row. `fields` become the `1fr` columns of the unified grid; `trailing` go into the
 /// shared 24 pt trailing column on the right-hand side.
 pub fn field_row(fields: Vec<impl IntoElement>, trailing: Vec<impl IntoElement>) -> FieldRow {
@@ -117,9 +125,10 @@ pub fn block_row(el: impl IntoElement) -> FieldRow {
 
 /// A row whose element spans **both** field columns **and** keeps trailing 24 pt icon cells.
 /// `ui-egui` builds a paint / effect / grid row as one field of `available_width - 56` followed
-/// by an `icon_pair` (two 24 pt buttons 4 apart); on the unified grid that is exactly one
-/// spanning field plus a `SLOT * 2` trailing column, so the icons share the same right edge as
-/// every other row's trailing column. Nothing is hand-measured here.
+/// by an `icon_pair` (two 24 pt buttons with the design's 8 pt column gutter); on the unified
+/// grid that is exactly one spanning field plus a `SLOT * 2 + GRID_GAP` trailing column, so the
+/// icons share the same right edge as every other row's trailing column. Nothing is
+/// hand-measured here.
 pub fn field_row_full_trailing(el: impl IntoElement, trailing: Vec<impl IntoElement>) -> FieldRow {
     FieldRow {
         fields: vec![el.into_any_element()],
@@ -222,14 +231,14 @@ fn render_rows(rows: Vec<FieldRow>) -> Div {
                 line = line.child(dbg_frame(div().flex_1().min_w(pt(0.0)).h_full(), 0x30D158));
             }
         }
-        // **One** 24 pt column per trailing element — a separate "blank 24" plus "trailing 24"
-        // would shift every row. Each trailing element gets its OWN `SLOT` (24 pt) cell, centred:
-        // that is the `field_row_full_trailing` contract ("two 24 pt buttons 4 apart"). Without
-        // per-element slots, two 20 pt icons sit flush (centres 20 apart) instead of 24 apart,
-        // losing the 4 pt gutter — the clip row's eye/minus looked stuck together (user 2026-11-12).
-        // Single-icon rows are unchanged (their icon just centres in the same 24 pt).
-        let count = trailing.len().max(1) as f32;
-        let mut cell = div().flex_none().w(pt(SLOT * count)).h_full().flex().flex_row().items_center();
+        // **One** 24 pt column per trailing element, and **8 pt between adjacent columns** —
+        // the design's icon-column gutter. Each trailing element gets its OWN `SLOT` (24 pt)
+        // cell, centred; without the gap the two 24 pt cells sit flush and the user sees the
+        // two columns touching (fill / stroke / selection-colours / export rows).
+        // Single-icon rows are unchanged (their icon just centres in the same 24 pt cell).
+        let n = trailing.len();
+        let trailing_w = trailing_width(n);
+        let mut cell = div().flex_none().w(pt(trailing_w)).h_full().flex().flex_row().items_center().gap(pt(GRID_GAP));
         for t in trailing {
             cell = cell.child(dbg_frame(div().w(pt(SLOT)).h_full().flex().items_center().justify_center().child(t), 0xBF5AF2));
         }
@@ -396,4 +405,17 @@ pub fn segmented(items: &[(Icon, &'static str)], active: Option<usize>, on_pick:
         bar = bar.child(c);
     }
     bar
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trailing_icon_columns_keep_the_eight_point_gutter() {
+        assert_eq!(trailing_width(0), SLOT);
+        assert_eq!(trailing_width(1), SLOT);
+        assert_eq!(trailing_width(2), SLOT * 2.0 + GRID_GAP);
+        assert_eq!(trailing_width(3), SLOT * 3.0 + GRID_GAP * 2.0);
+    }
 }
