@@ -185,7 +185,7 @@ pub(crate) fn constraint_graphic(f: &RightFields, d: &PanelData, width: f32) -> 
     let mut root = div()
         .relative()
         .w(px(width))
-        .h(px(40.0))
+        .h(px(56.0))
         .flex_none()
         .rounded(px(5.0))
         .bg(rgba(t.field))
@@ -194,18 +194,19 @@ pub(crate) fn constraint_graphic(f: &RightFields, d: &PanelData, width: f32) -> 
                 .absolute()
                 .left(px(16.0))
                 .right(px(16.0))
-                .top(px(8.0))
-                .bottom(px(8.0))
+                .top(px(16.0))
+                .bottom(px(16.0))
                 .rounded(px(5.0))
                 .border(px(1.0))
-                .border_color(rgba(t.text_secondary)),
+                .border_color(gpui::Rgba { a: 0.4, ..rgba(t.text_secondary) }),
         );
 
     let pin = |f: &RightFields, label: &'static str, x: f32, y: f32, horizontal: bool, on: bool| {
         let cmds = f.cmds.clone();
         let col = if on { active } else { idle };
-        let w = if horizontal { 10.0 } else { 1.5 };
-        let hgt = if horizontal { 1.5 } else { 10.0 };
+        let bar = if on { 3.0 } else { 1.5 };
+        let w = if horizontal { 10.0 } else { bar };
+        let hgt = if horizontal { bar } else { 10.0 };
         let key = if horizontal { "horizontal" } else { "vertical" };
         div()
             .absolute()
@@ -224,10 +225,10 @@ pub(crate) fn constraint_graphic(f: &RightFields, d: &PanelData, width: f32) -> 
     };
 
     root = root
-        .child(pin(f, "left", 8.0, 20.0, true, matches!(h, Some("left" | "leftRight"))))
-        .child(pin(f, "right", width - 8.0, 20.0, true, matches!(h, Some("right" | "leftRight"))))
+        .child(pin(f, "left", 8.0, 28.0, true, matches!(h, Some("left" | "leftRight"))))
+        .child(pin(f, "right", width - 8.0, 28.0, true, matches!(h, Some("right" | "leftRight"))))
         .child(pin(f, "top", width / 2.0, 8.0, false, matches!(v, Some("top" | "topBottom"))))
-        .child(pin(f, "bottom", width / 2.0, 32.0, false, matches!(v, Some("bottom" | "topBottom"))));
+        .child(pin(f, "bottom", width / 2.0, 48.0, false, matches!(v, Some("bottom" | "topBottom"))));
 
     let center_cmds = f.cmds.clone();
     let center_col = if matches!(h, Some("center")) || matches!(v, Some("center")) { active } else { idle };
@@ -235,7 +236,7 @@ pub(crate) fn constraint_graphic(f: &RightFields, d: &PanelData, width: f32) -> 
         div()
             .absolute()
             .left(px(width / 2.0 - 11.0))
-            .top(px(9.0))
+            .top(px(17.0))
             .w(px(22.0))
             .h(px(22.0))
             .flex()

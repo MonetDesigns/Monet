@@ -2573,27 +2573,32 @@ pub(crate) fn right_panel(
                     (tr("Center").into(), "node.set", serde_json::json!({ "props": { "constraints": { "vertical": "center" } } })),
                     (tr("Scale").into(), "node.set", serde_json::json!({ "props": { "constraints": { "vertical": "scale" } } })),
                 ];
-                pos_sec.child(sublabel_row(tr("Constraints"))).child(block_row(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .items_start()
-                        .gap(pt(8.0))
-                        .child(right::sections::pick_dropdown_lead(
-                            f,
-                            pretty_h(data.constraints_h),
-                            col,
-                            h_opts,
-                            Some(Icon::DistributeH),
-                        ))
-                        .child(right::sections::pick_dropdown_lead(
-                            f,
-                            pretty_v(data.constraints_v),
-                            col,
-                            v_opts,
-                            Some(Icon::AlignTop),
-                        ))
-                        .child(right::sections::constraint_graphic(f, data, col)),
+                pos_sec.child(sublabel_row(tr("Constraints"))).child(field_row_h(
+                    vec![
+                        div()
+                            .flex()
+                            .flex_col()
+                            .h_full()
+                            .gap(pt(8.0))
+                            .child(right::sections::pick_dropdown_lead(
+                                f,
+                                pretty_h(data.constraints_h),
+                                col,
+                                h_opts,
+                                Some(Icon::DistributeH),
+                            ))
+                            .child(right::sections::pick_dropdown_lead(
+                                f,
+                                pretty_v(data.constraints_v),
+                                col,
+                                v_opts,
+                                Some(Icon::AlignTop),
+                            ))
+                            .into_any_element(),
+                        right::sections::constraint_graphic(f, data, col),
+                    ],
+                    Vec::<IconButton>::new(),
+                    56.0,
                 ))
             } else {
                 pos_sec
