@@ -61,6 +61,9 @@ pub fn menu_popup(
 pub(crate) fn menu_metrics(rows: &[MenuRow]) -> (f32, f32) {
     let rows_h = rows.len() as f32 * crate::menu_metrics::MENU_ROW_H
         + rows.iter().filter(|r| r.separator_before).count() as f32 * crate::menu_metrics::MENU_SEP_H;
+    // The check column is reserved menu-wide (menu_card::rows uses one `has_check` for every
+    // row). Estimating it per-row undercounts and clips the right edge in fit/scroll menus.
+    let has_check = rows.iter().any(|r| r.checked.is_some());
     let content_w = rows
         .iter()
         .map(|r| {
@@ -68,7 +71,7 @@ pub(crate) fn menu_metrics(rows: &[MenuRow]) -> (f32, f32) {
             let trail: f32 = r.trail.as_ref().map(|s| s.chars().count() as f32 * 6.5 + 12.0).unwrap_or(0.0);
             // 勾 / 图标各占一个 24×24 槽位，两槽相邻无间距；带图标时标签从 48 起。
             let icon: f32 = if r.icon.is_some() { 24.0 } else { 0.0 };
-            label + trail + icon + if r.checked.is_some() { 24.0 } else { 8.0 } + 10.0
+            label + trail + icon + if has_check { 24.0 } else { 8.0 } + 10.0
         })
         .fold(0.0f32, f32::max);
     (rows_h, content_w)

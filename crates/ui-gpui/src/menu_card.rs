@@ -145,7 +145,8 @@ fn label_x(item: &Item, has_check: bool) -> f32 {
     match (has_check, marked) {
         (true, true) => ICON_LABEL_X,
         (true, false) => CHECK_W,
-        (false, true) => ICON_X,
+        // No check column: the leading glyph starts at 0 and owns one 24pt slot.
+        (false, true) => crate::menu_metrics::MENU_SLOT_W,
         (false, false) => 8.0,
     }
 }
@@ -283,7 +284,10 @@ pub(crate) fn rows(
         // 与标签、勾号同色；.disabled 的变淡由行盒的 opacity(0.4) 统一负责。
         let color = crate::menu_metrics::ink();
         if let Some(icon) = item.icon {
-            row = row.child(div().absolute().left(pt(ICON_X)).w(pt(crate::menu_metrics::MENU_SLOT_W)).top(pt(0.0)).h(pt(row_h)).flex().items_center().justify_center().child(paint_in_slot(icon, 16.0, Some(color))));
+            // With a check column the icon sits after it; without one it starts at 0 so it never
+            // overlaps the label (the label inset is derived from this same slot in label_x).
+            let icon_x = if has_check { ICON_X } else { 0.0 };
+            row = row.child(div().absolute().left(pt(icon_x)).w(pt(crate::menu_metrics::MENU_SLOT_W)).top(pt(0.0)).h(pt(row_h)).flex().items_center().justify_center().child(paint_in_slot(icon, 16.0, Some(color))));
         }
         row = row.child(div().flex_1().min_w(pt(0.0)).overflow_hidden().whitespace_nowrap().child(item.label.clone()));
         if has_sub {

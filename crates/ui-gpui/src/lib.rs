@@ -5975,6 +5975,8 @@ impl Render for CanvasView {
         // A27：画板计时器在走，每秒续一帧。
         let fac_ticking = board_facilitate::ticking(&self.app);
 
+        // Snapping the canvas origin needs the scale factor; capture it before the move closure.
+        let paint_ppp = self.app.ppp;
         let shapes = gpui::canvas(
             |_, _, _| (),
             move |b, _, window, cx| {
@@ -6002,7 +6004,12 @@ impl Render for CanvasView {
 
                 let p = Painter { clip: Rect::NOTHING, ops: ops.clone(), labels: Vec::new() };
 
-                p.paint(window, pos2(f32::from(b.origin.x), f32::from(b.origin.y)));
+                // crisp_rect/crisp_line snap in canvas-local space; the painter then adds the
+                // canvas origin. Snap that origin too (same rule as the presented image rect)
+                // so guides/grid/ruler edges land on whole device pixels after a divider drag
+                // leaves `b.origin` fractional.
+                let (ox, oy) = crate::canvas::snap_origin(f32::from(b.origin.x), f32::from(b.origin.y), paint_ppp, false);
+                p.paint(window, pos2(ox, oy));
 
                 // 续帧只能在 request_layout/prepaint/paint 里调，所以放这里。
 

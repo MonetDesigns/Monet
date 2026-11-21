@@ -172,30 +172,6 @@ pub(crate) fn pick_dropdown(f: &RightFields, label: impl Into<SharedString>, wid
 }
 
 /// Same dropdown, with a leading glyph in the field's lead slot.
-pub(crate) fn pick_dropdown_lead(
-    f: &RightFields,
-    label: impl Into<SharedString>,
-    width: f32,
-    rows: Vec<(String, &'static str, Value)>,
-    lead: Option<Icon>,
-) -> Dropdown {
-    let menu: Vec<MenuRow> = rows.iter().map(|(l, _, _)| MenuRow::row(l.clone())).collect();
-    let mut d = Dropdown::new(label, width, lead.map(crate::widgets::dropdown::DropLead::Icon)).fill();
-    if let Some(root) = f.root.clone() {
-        let cmds = f.cmds.clone();
-        d = d.on_click(move |anchor, _window, cx: &mut App| {
-            let rows = rows.clone();
-            let cmds = cmds.clone();
-            let on_pick = Rc::new(move |label: &str, _w: &mut Window, _cx: &mut App| {
-                if let Some((_, cmd, params)) = rows.iter().find(|(l, _, _)| l == label) {
-                    cmds.push(Cmd { id: cmd, params: Some(params.clone()) });
-                }
-            });
-            root.update(cx, |cv, cx| cv.open_menu(anchor, Some(width.max(120.0)), menu.clone(), on_pick, cx));
-        });
-    }
-    d
-}
 
 /// 约束图形选择器：外框里的子层与四条边的 pin，中间十字设居中。
 fn constraint_rect(window: &mut Window, x: f32, y: f32, w: f32, h: f32, color: gpui::Rgba, radius: f32) {
@@ -2319,7 +2295,7 @@ pub(crate) fn export(f: &RightFields, d: &PanelData, col: f32, _n: &mut usize, c
         let trigger = format!("export-options-{index}");
         let popups = f.popups();
         let queue = f.queue();
-        let export_rows = export_setting_rows(row, &d.doc_profile, &target);
+        let export_rows = export_setting_rows(row, &d.doc_profile, &target, &queue, cx);
         let btn_key = trigger.clone();
         let dots = window_open_button(&btn_key, Icon::Menu, popups.is_open(&trigger), move |window, cx| {
             let top = crate::popovers::anchored_top(&trigger, window);
@@ -2428,7 +2404,13 @@ pub(crate) fn export(f: &RightFields, d: &PanelData, col: f32, _n: &mut usize, c
 /// 勾选项用通用 Toggle，VD_COMPAT / Color profile 两组用 Radio（egui `widgets::radio`）；
 /// 每组前一条 SubLabel 就是 egui 的 `widgets::label(..., text_secondary)`。egui 里这些住在
 /// `menu_popup` 下拉中，但单选器在下拉里不好放，用户要求改用通用弹窗，内容一行不差。
-fn export_setting_rows(row: &ExportRow, doc_profile: &str, target: &[figcraft_doc::NodeId]) -> Vec<crate::popovers::Setting> {
+fn export_setting_rows(
+    row: &ExportRow,
+    doc_profile: &str,
+    target: &[figcraft_doc::NodeId],
+    cmds: &crate::panels::Cmds,
+    cx: &mut App,
+) -> Vec<crate::popovers::Setting> {
     use crate::popovers::{Opt, Setting};
     let index = row.index;
     // Every advanced-option command must carry the target ids: in page mode the selection is
@@ -2441,6 +2423,25 @@ fn export_setting_rows(row: &ExportRow, doc_profile: &str, target: &[figcraft_do
         v
     };
     let mut out: Vec<Setting> = Vec::new();
+    // Per-setting Suffix editor (egui `setting_row`). It always shows with its "Suffix" label
+    // even when empty, and edits go through `export.update` with this row's ids/index/suffix.
+    {
+        let field = crate::widgets::input::field::text_field(cx, 176.0, &row.suffix, "", crate::widgets::Slot::None, crate::widgets::Slot::None);
+        let queue = cmds.clone();
+        let ids = target.to_vec();
+        field.update(cx, move |tf, _| {
+            let queue = queue.clone();
+            let ids = ids.clone();
+            tf.set_on_commit(move |typed, _, _| {
+                let mut params = json!({ "index": index, "suffix": typed.to_string() });
+                if let Some(o) = params.as_object_mut() {
+                    o.insert("ids".into(), json!(&ids));
+                }
+                queue.push(crate::panels::Cmd { id: "export.update", params: Some(params) });
+            });
+        });
+        out.push(Setting::Field { tab: 0, label: tr("Suffix").into(), field });
+    }
     let toggle = |label: String, on: bool, key: &'static str| Setting::Toggle {
         tab: 0,
         label: label.into(),
@@ -2450,9 +2451,8 @@ fn export_setting_rows(row: &ExportRow, doc_profile: &str, target: &[figcraft_do
         off_cmd: Opt::new(String::new(), "export.update", with_ids(json!({ "index": index, key: false }))),
     };
     out.push(toggle(tr("Ignore overlapping layers").to_string(), row.contents_only, "contentsOnly"));
-    if row.format == "svg" || row.include_bounding_box {
-        out.push(toggle(tr("Include bounding box").to_string(), row.include_bounding_box, "includeBoundingBox"));
-    }
+    // Always offer the toggle: hiding it when a PNG has it off leaves no way to enable it.
+    out.push(toggle(tr("Include bounding box").to_string(), row.include_bounding_box, "includeBoundingBox"));
     if row.format == "svg" {
         out.push(toggle(tr("Outline text").to_string(), row.svg_outline_text, "svgOutlineText"));
         out.push(toggle(tr("Include id attribute").to_string(), row.svg_id_attribute, "svgIdAttribute"));

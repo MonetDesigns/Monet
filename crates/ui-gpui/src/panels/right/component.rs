@@ -153,7 +153,9 @@ fn add_property_button(f: &RightFields, c: &ComponentData) -> gpui::AnyElement {
             let slot_layer = slot_layer.clone();
             let p = window.mouse_position();
             let anchor = gpui::Bounds { origin: p, size: gpui::size(px(0.0), px(0.0)) };
-            let rows: Vec<crate::widgets::menu::MenuRow> = [("Variant", "variant"), ("Text", "text"), ("Boolean", "boolean"), ("Instance swap", "instanceSwap"), ("Slot", "slot")]
+            // Slot creation stays on the Frame row's "Make slot" flow: the component-level
+            // add menu has no Frame to bind, and engine add_prop requires a `layer`.
+            let rows: Vec<crate::widgets::menu::MenuRow> = [("Variant", "variant"), ("Text", "text"), ("Boolean", "boolean"), ("Instance swap", "instanceSwap")]
                 .into_iter()
                 .map(|(label, ty)| crate::widgets::menu::MenuRow::row(tr(label)).key(ty))
                 .collect();

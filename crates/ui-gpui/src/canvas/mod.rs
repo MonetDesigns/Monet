@@ -532,7 +532,7 @@ pub(crate) fn draw_overlays(app: &mut CanvasApp, painter: &mut Painter, t: &Toke
 /// 贴图的屏幕矩形；原生密度的渲染对齐到设备像素，避免线性过滤把相邻纹素混在一起。
 /// 位置吸附设备像素；像素预览或无效 ppp 时原样返回。
 /// 与贴图自带的 `view.scale` 无关：缩放中贴图是旧 scale，位置也必须对齐。
-fn snap_origin(x: f32, y: f32, ppp: f32, pixel_preview: bool) -> (f32, f32) {
+pub(crate) fn snap_origin(x: f32, y: f32, ppp: f32, pixel_preview: bool) -> (f32, f32) {
     if pixel_preview || !ppp.is_finite() || ppp <= 0.0 || !x.is_finite() || !y.is_finite() {
         return (x, y);
     }

@@ -614,8 +614,25 @@ impl CanvasView {
                 k += 1;
             }
             let end = k - 1;
+            // Classify the whole run once (run_color scans every row in [start, end]); doing it
+            // per selected row is O(n^2) for a large selected block. The root/child shades differ
+            // only in which ramp slot they take, from the same single classification.
+            let root_band = run_color(&t, &rows, start, end, false);
+            let child_band = run_color(&t, &rows, start, end, true);
             for j in start..=end {
-                band[j] = Some(run_color(&t, &rows, start, end, !rows[j].selected_root));
+                band[j] = Some(if rows[j].selected_root { root_band } else { child_band });
+            }
+        }
+        // Unselected descendants of a selected hierarchy root (Mark::Child) also sit on the
+        // hierarchy band. Use the child shade of their own type so a component's child is tinted
+        // with the component ramp, not the brand fallback (egui derives this from the root).
+        for (j, m) in marked.iter().enumerate() {
+            if *m == Mark::Child {
+                band[j] = Some(match rows[j].mark_kind {
+                    1 => rgba(t.component_row_child),
+                    _ if rows[j].icon == Icon::Slot => rgba(t.slot_row_child),
+                    _ => rgba(t.selected_row_child),
+                });
             }
         }
         // The per-row render snapshot (`'static` closures only get `&mut App`).
@@ -1115,7 +1132,6 @@ impl CanvasView {
                 // `layer_glyph_element` 优先画 `r.shape` 里的真实轮廓，只有轮廓缺失时才
                 // 落到 `None` 分支，用主图标（`paint_icon`）兜底。
                 Icon::Component => Some(L::Component),
-                Icon::ComponentSet => Some(L::Component),
                 Icon::Instance => Some(L::Instance),
                 Icon::Group => Some(L::Group),
                 _ => None,

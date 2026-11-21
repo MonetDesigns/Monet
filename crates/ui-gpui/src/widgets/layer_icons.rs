@@ -116,7 +116,7 @@ mod tests {
 
     #[test]
     fn every_glyph_has_an_asset() {
-        assert_eq!(ASSETS.len(), 11);
+        assert_eq!(ASSETS.len(), 15);
         for (stem, bytes) in ASSETS {
             assert!(!bytes.is_empty(), "{stem} is empty");
             let text = std::str::from_utf8(bytes).unwrap();

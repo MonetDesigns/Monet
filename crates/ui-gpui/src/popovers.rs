@@ -4966,8 +4966,14 @@ impl WindowState {
                 // 浮层占着根视图唯一的 popup 槽，故菜单由 `render()` 作为窗口级兄弟元素返回。
                 let shown = *anchor.borrow();
                 if let Some(rect) = shown {
-                    let rows: Vec<MenuRow> =
-                        options.iter().map(|o| MenuRow::row(o.label.clone()).checked(Some(o.label == *current.borrow()))).collect();
+                    // Stable keys by option index: two candidates can share a display label
+                    // (e.g. two components named "Icon"); resolving by label would always pick
+                    // the first and drop the second candidate's id.
+                    let rows: Vec<MenuRow> = options
+                        .iter()
+                        .enumerate()
+                        .map(|(i, o)| MenuRow::row(o.label.clone()).key(i.to_string()).checked(Some(o.label == *current.borrow())))
+                        .collect();
                     let opts = options.clone();
                     let cmds = self.cmds.clone();
                     let cur_state = current.clone();
@@ -4977,7 +4983,8 @@ impl WindowState {
                     // 选中即关窗，重新点开时按新类型重建设置项；其它窗口的行为不变。
                     let close_window = if self.kind == WindowKind::EffectSettings { self.dismiss.borrow().clone() } else { None };
                     let on_pick = Rc::new(move |picked: &str, w: &mut Window, cx: &mut App| {
-                        if let Some(o) = opts.iter().find(|o| o.label == picked) {
+                        let chosen = picked.parse::<usize>().ok().and_then(|i| opts.get(i));
+                        if let Some(o) = chosen {
                             *cur_state.borrow_mut() = o.label.clone();
                             cmds.push(Cmd { id: o.cmd, params: Some(o.now()) });
                         }

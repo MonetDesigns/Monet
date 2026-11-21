@@ -221,7 +221,7 @@ impl Icon {
         Icon::Panel,
         Icon::Menu,
         Icon::Settings,
-        /// 四圆点：Fill / Stroke / 样式 / 网格行的「打开样式编辑器」按钮（24 网格）。
+        // 四圆点：Fill / Stroke / 样式 / 网格行的「打开样式编辑器」按钮（24 网格）。
         Icon::StyleSettings,
         Icon::Trash,
         Icon::Rectangle,

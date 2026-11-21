@@ -97,7 +97,9 @@ pub fn draw(
         let x = tl.x;
         // 名字画在帧上边缘之上。
         let font = regular(11.0);
-        let shown = fit_with(&n.name, (edge.len - 16.0).max(20.0), |s| text_size(s, font).x);
+        // The egui reference reserves no icon width for an ordinary frame name (x == tl.x),
+        // so it may use the whole edge; the 16pt reservation belongs to the selected badge path.
+        let shown = fit_with(&n.name, (edge.len - (x - tl.x)).max(20.0), |s| text_size(s, font).x);
         let galley = painter.layout_no_wrap(shown, font, col);
         let size = galley.size();
         let end = x + size.x;
