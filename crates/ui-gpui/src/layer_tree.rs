@@ -245,6 +245,8 @@ pub struct LayerTreeState {
     pub scroll: VirtualListScrollHandle,
     /// Selection seen on the previous frame; a change reveals the selected row.
     pub last_selection: Vec<NodeId>,
+    /// Identity of the document that `last_selection` belongs to (its in-memory address).
+    pub last_doc: Option<usize>,
     /// A row press in the list owns its own viewport position; skip the reveal on that change.
     pub suppress_reveal: bool,
     clock: Instant,
@@ -263,6 +265,7 @@ impl Default for LayerTreeState {
             pointer: Point::new(px(0.0), px(0.0)),
             scroll: VirtualListScrollHandle::new(),
             last_selection: Vec::new(),
+            last_doc: None,
             suppress_reveal: false,
             clock: Instant::now(),
         }
@@ -958,7 +961,13 @@ impl CanvasView {
         // A selection made on the canvas must be revealed here: expand its ancestors and
         // defer a scroll to the first selected row once the virtual list has been laid out.
         let selection: Vec<NodeId> = ds.selection.iter().copied().collect();
-        let selection_changed = selection != self.layer_tree.last_selection;
+        // NodeIds restart at 1 in every document: a stale snapshot from a previous document can
+        // equal the new selection and wrongly suppress the reveal. Compare against an empty
+        // snapshot on a document switch (write-back at the end records the new doc identity).
+        let doc_identity = std::sync::Arc::as_ptr(doc) as usize;
+        let doc_switched = self.layer_tree.last_doc != Some(doc_identity);
+        let effective_last: &[NodeId] = if doc_switched { &[] } else { &self.layer_tree.last_selection };
+        let selection_changed = selection.as_slice() != effective_last;
         let reveal = selection_changed && !suppress_reveal;
         let mut reveal_ancestors = Vec::new();
         if reveal {
@@ -1035,6 +1044,7 @@ impl CanvasView {
         }
         if selection_changed {
             self.layer_tree.last_selection = selection;
+            self.layer_tree.last_doc = Some(doc_identity);
             if reveal {
                 self.layer_tree.expanded = expanded_set;
                 if let Some(ix) = visual.iter().position(|r| r.selected) {
@@ -1347,24 +1357,38 @@ impl CanvasView {
         cx.notify();
     }
 
-    /// Called from the root `on_mouse_up`: a drag commits its drop **here and only here**;
+    /// Called from the root `on_mouse_up`: a drag commits its drop **here and only here**.
+    ///
+    /// GPUI starts the drag on mouse-down, so a plain click also carries a press candidate.
+    /// Match egui's release semantics: a gesture that produced a drop target (a committed move,
+    /// or one refused/no-op because it landed on its own subtree) is *not* a click and must not
+    /// change the selection. Only a press that never resolved a target (target == None) is a
+    /// plain (or Ctrl/Shift) click, so only that path applies the candidate via `layer_click`.
     pub(crate) fn layer_drag_up(&mut self, cx: &mut Context<Self>) {
-        let mut click = None;
         if let Some(mut d) = self.layer_tree.drag.take() {
             let target = d.take();
-            if let Some(t) = target.as_ref()
-                && !t.refused
-                && !t.noop
-            {
-                self.layer_commit_drop(&d, target.as_ref().unwrap(), cx);
-            } else {
-                // The drag never resolved to a move: this was a plain (or Ctrl/Shift) click.
-                click = self.layer_tree.candidate.take();
+            match target {
+                Some(t) if !t.refused && !t.noop => {
+                    // A completed drop decides the selection through the reparent; the press
+                    // candidate must not fire a click afterwards (it would collapse a multi-selection).
+                    self.layer_tree.candidate = None;
+                    self.layer_commit_drop(&d, &t, cx);
+                }
+                Some(_) => {
+                    // Refused / no-op drag: egui leaves the selection untouched on this release.
+                    self.layer_tree.candidate = None;
+                }
+                None => {
+                    // No drop target ever resolved: pure press/release, i.e. a click. Keep the
+                    // candidate so the fallback below applies it with its modifiers.
+                }
             }
             self.layer_tree.calibrated = None;
             cx.notify();
         }
-        if let Some((cid, _, m)) = click.or_else(|| self.layer_tree.candidate.take()) {
+        // Only a pure click still has a candidate here; a drag (committed or refused) consumed
+        // its candidate above, so it can no longer change the selection after the release.
+        if let Some((cid, _, m)) = self.layer_tree.candidate.take() {
             self.layer_click(cid, m, cx);
         }
     }

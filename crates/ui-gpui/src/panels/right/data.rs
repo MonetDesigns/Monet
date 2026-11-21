@@ -1797,12 +1797,12 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
             local_styles: doc.styles.len(),
             export_ids: page_node.map(|n| n.children.clone()).unwrap_or_default(),
         });
-        // 页面导出节与 Design 区用同一个通用导出控件：目标就是页面节点自己，设置存在它身上；
-        // 页面还没有设置时给一条默认的（PNG 1x），面板一进来就能改格式 / 预览。
+        // 页面导出节与 Design 区用同一个通用导出控件：目标就是页面节点自己，设置存在它身上。
+        // 不伪造一条 display-only 默认行：`export.update` / `export.remove` 按索引作用于真实存储，
+        // 虚行会让编辑静默失效。页面没有设置时节保持为空，用户点 `+` 走 export.add 真正落库。
         d.page_node = page;
         if let Some(n) = page_node {
-            let list = if n.exports.is_empty() { vec![figcraft_doc::ExportSetting::default()] } else { n.exports.clone() };
-            d.exports = Some(export_rows(&list));
+            d.exports = if n.exports.is_empty() { None } else { Some(export_rows(&n.exports)) };
         }
         return d;
     }

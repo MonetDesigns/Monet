@@ -51,6 +51,9 @@ pub struct Item {
     /// The value handed to `OnPick` (defaults to `id`). Dynamic rows — an Actions palette
     /// component, style, plugin or widget — carry a runtime key here instead of a static id.
     pub key: SharedString,
+    /// Distinguishes an explicitly-set key (even an empty one, e.g. `.key("")` to clear the
+    /// brush tip) from the row() default where an empty key means "fall back to the label".
+    pub key_explicit: bool,
     pub label: SharedString,
     pub checked: Option<bool>,
     /// 让这一行常亮 **hover 底色**（工具栏 flyout 用它标出当前工具）。默认 `false`：
@@ -68,6 +71,7 @@ impl Item {
         Self {
             id,
             key: SharedString::from(id),
+            key_explicit: true,
             label: label.into(),
             checked: None,
             active_fill: false,
@@ -82,7 +86,9 @@ impl Item {
     /// 右栏下拉/主菜单的习惯构造：只要一个标签。`id` 留空、pick 值回落到标签（对齐旧
     /// `MenuRow::new` 的语义）。统一后两侧菜单都调这里，项配置仍走同一套 builder。
     pub fn row(label: impl Into<SharedString>) -> Self {
-        Self::new("", label)
+        let mut r = Self::new("", label);
+        r.key_explicit = false;
+        r
     }
 
     /// 旧 `MenuRow::separator()` 的别名 —— 统一项模型后 `separator_before()` 保持原样，
@@ -95,6 +101,7 @@ impl Item {
     /// Override the value handed to `OnPick` (defaults to `id`).
     pub fn key(mut self, k: impl Into<SharedString>) -> Self {
         self.key = k.into();
+        self.key_explicit = true;
         self
     }
     pub fn disabled(mut self, b: bool) -> Self {

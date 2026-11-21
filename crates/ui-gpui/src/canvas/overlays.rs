@@ -548,22 +548,36 @@ fn transform_box(
     if let Some(label) = label.filter(|_| app.session.prefs.show_dimensions) {
         let bottom = q.iter().map(|p| p.y).fold(f32::MIN, f32::max);
         let cx = q.iter().map(|p| p.x).sum::<f32>() / 4.0;
-        return Some(pill_with_bg(painter, pos2(cx, bottom + 9.0), Align2::CENTER_TOP, label, col, col));
+        // Keep the requested layer-colour background, but choose a legible foreground: a light
+        // Yellow (#FFCC00) with white text was ~1.5:1. Dark ink on light fills, white on dark.
+        let fg = contrasting_ink(col);
+        return Some(pill_with_bg(painter, pos2(cx, bottom + 9.0), Align2::CENTER_TOP, label, col, fg, col));
     }
     None
 }
 
 /// 画布读数：`col` 底色的 pill 上白字（返回 pill 区域）。
 pub(super) fn pill(painter: &mut Painter, at: Pos2, align: Align2, text: String, col: Color32) -> Rect {
-    pill_with_bg(painter, at, align, text, col, under_white(col))
+    pill_with_bg(painter, at, align, text, col, Color32::WHITE, under_white(col))
 }
 
-fn pill_with_bg(painter: &mut Painter, at: Pos2, align: Align2, text: String, col: Color32, bg: Color32) -> Rect {
-    let galley = painter.layout_no_wrap(text, semibold(11.0), Color32::WHITE);
+fn pill_with_bg(painter: &mut Painter, at: Pos2, align: Align2, text: String, _col: Color32, fg: Color32, bg: Color32) -> Rect {
+    let galley = painter.layout_no_wrap(text, semibold(11.0), fg);
     let r = align.anchor_size(at, galley.size() + vec2(8.0, 4.0));
     painter.rect_filled(r, CornerRadius::same(3), bg);
-    painter.galley(r.min + vec2(4.0, 2.0), galley, Color32::WHITE);
+    painter.galley(r.min + vec2(4.0, 2.0), galley, fg);
     r
+}
+
+/// WCAG relative-luminance split: near-black ink on light fills, white on dark fills.
+fn contrasting_ink(bg: Color32) -> Color32 {
+    let [r, g, b, _] = bg.to_array();
+    let lin = |v: u8| {
+        let c = f32::from(v) / 255.0;
+        if c <= 0.03928 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    };
+    let lum = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+    if lum > 0.35 { Color32::from_black_alpha(230) } else { Color32::WHITE }
 }
 
 /// 白字下面的底色需要压暗才够对比（对应 `theme::under_white`）。

@@ -162,7 +162,9 @@ fn menu_popup_impl(
         // 没有勾选态的行不占这一列。
         let check = if r.checked == Some(true) { "✓" } else { "" };
         // 统一到 Item 后 key 非 Option：空 key = 回落到 label（原 None 的语义）。
-        let pick_text = if r.key.is_empty() { r.label.clone() } else { r.key.clone() }.to_string();
+        // Preserve an explicitly empty key (`.key("")` clears the brush tip); only an
+        // unspecified key from row() falls back to the label (the old `None` semantics).
+        let pick_text = if r.key_explicit || !r.key.is_empty() { r.key.clone() } else { r.label.clone() }.to_string();
         let label = r.label;
         let trail = r.trail;
         let enum_icon = r.icon;

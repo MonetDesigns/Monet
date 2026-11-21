@@ -1872,6 +1872,10 @@ impl RightFields {
             &self.pad_l,
             &self.pad_h,
             &self.pad_v,
+            &self.stroke_side_t,
+            &self.stroke_side_r,
+            &self.stroke_side_b,
+            &self.stroke_side_l,
         ];
         for e in items {
             e.update(cx, |tf, _| tf.set_width(col));
@@ -2563,7 +2567,7 @@ pub(crate) fn right_panel(
                     (tr("Center").into(), "node.set", serde_json::json!({ "props": { "constraints": { "vertical": "center" } } })),
                     (tr("Scale").into(), "node.set", serde_json::json!({ "props": { "constraints": { "vertical": "scale" } } })),
                 ];
-                pos_sec.child(sublabel_row(tr("Constraints"))).child(field_row_h(
+                pos_sec.child(sublabel_row(tr("Constraints"))).child(crate::widgets::field_row_h(
                     vec![
                         div()
                             .w_full()

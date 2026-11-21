@@ -142,6 +142,31 @@ pub(crate) fn slot(n: &mut usize) -> usize {
 
 /// 一个「点开菜单选中即推命令」的下拉（egui `menu_popup` + `menu_item`）。
 /// `rows`: (显示名, 选中后推的命令 id, 命令额外参数)。`cmds` 句柄 clone 进 `on_pick`。
+pub(crate) fn pick_dropdown_lead(
+    f: &RightFields,
+    label: impl Into<SharedString>,
+    width: f32,
+    rows: Vec<(String, &'static str, Value)>,
+    lead: Option<Icon>,
+) -> Dropdown {
+    let menu: Vec<MenuRow> = rows.iter().map(|(l, _, _)| MenuRow::row(l.clone())).collect();
+    let mut d = Dropdown::new(label, width, lead.map(crate::widgets::dropdown::DropLead::Icon)).fill();
+    if let Some(root) = f.root.clone() {
+        let cmds = f.cmds.clone();
+        d = d.on_click(move |anchor, _window, cx: &mut App| {
+            let rows = rows.clone();
+            let cmds = cmds.clone();
+            let on_pick = Rc::new(move |label: &str, _w: &mut Window, _cx: &mut App| {
+                if let Some((_, cmd, params)) = rows.iter().find(|(l, _, _)| l == label) {
+                    cmds.push(Cmd { id: cmd, params: Some(params.clone()) });
+                }
+            });
+            root.update(cx, |cv, cx| cv.open_menu(anchor, Some(width.max(120.0)), menu.clone(), on_pick, cx));
+        });
+    }
+    d
+}
+
 pub(crate) fn pick_dropdown(f: &RightFields, label: impl Into<SharedString>, width: f32, rows: Vec<(String, &'static str, Value)>) -> Dropdown {
     pick_dropdown_lead(f, label, width, rows, None)
 }
@@ -2258,9 +2283,14 @@ pub(crate) fn export(f: &RightFields, d: &PanelData, col: f32, _n: &mut usize, c
     } else {
         icon_cmd(Icon::Plus, "export.add", with_ids(json!({})), f, false)
     };
-    let Some(rows) = d.exports.clone().filter(|v| !v.is_empty()) else {
+    // A display-only default row is never fabricated: export.update/remove work by index on
+    // stored settings. In page mode the Export button and preview must still show even when the
+    // page has no setting yet (the button falls back to PNG); only a non-page empty selection
+    // collapses to an empty section.
+    let rows = d.exports.clone().filter(|v| !v.is_empty()).unwrap_or_default();
+    if rows.is_empty() && !page_mode {
         return Section::empty(tr("Export"), plus);
-    };
+    }
     let mut sec = PanelSection::new(tr("Export")).header_trail(plus);
     // 预览框是整行宽（两列 + 间隙），图片再让出左右内边距与 8 pt 呼吸位。
     let full_w = col * 2.0 + crate::widgets::GRID_GAP;
@@ -2289,7 +2319,7 @@ pub(crate) fn export(f: &RightFields, d: &PanelData, col: f32, _n: &mut usize, c
         let trigger = format!("export-options-{index}");
         let popups = f.popups();
         let queue = f.queue();
-        let export_rows = export_setting_rows(row, &d.doc_profile);
+        let export_rows = export_setting_rows(row, &d.doc_profile, &target);
         let btn_key = trigger.clone();
         let dots = window_open_button(&btn_key, Icon::Menu, popups.is_open(&trigger), move |window, cx| {
             let top = crate::popovers::anchored_top(&trigger, window);
@@ -2307,7 +2337,19 @@ pub(crate) fn export(f: &RightFields, d: &PanelData, col: f32, _n: &mut usize, c
     let (cmd, params, label): (&'static str, Value, SharedString) = if page_mode {
         let fmt = rows.first().map(|r| r.format).unwrap_or("png");
         let page_ids = d.page.as_ref().map(|p| p.export_ids.clone()).unwrap_or_default();
-        ("file.export", json!({ "ids": page_ids, "format": fmt }), tr("Export page").into())
+        // The preview uses the page's first ExportSetting; the actual export must match it.
+        // Carry the stored scale, colour profile and the advanced flags into file.export instead
+        // of exporting at 1x / default profile while the preview shows the configured setting.
+        let mut params = json!({ "ids": page_ids, "format": fmt });
+        if let Some(row) = rows.first() {
+            // `size` is the ExportSize label ("2x" / "512w" / "512h"); the engine parses it with
+            // the same rule the size dropdown uses, so scale and pixel sizes both round-trip.
+            params["size"] = json!(row.size);
+            params["colorProfile"] = json!(row.color_profile);
+            params["contentsOnly"] = json!(row.contents_only);
+            params["includeBoundingBox"] = json!(row.include_bounding_box);
+        }
+        ("file.export", params, tr("Export page").into())
     } else if target.len() == 1 && !name.is_empty() {
         ("file.exportLayers", json!({ "ids": &target }), trf("Export {name}", &[("name", &name)]).into())
     } else {
@@ -2386,17 +2428,26 @@ pub(crate) fn export(f: &RightFields, d: &PanelData, col: f32, _n: &mut usize, c
 /// 勾选项用通用 Toggle，VD_COMPAT / Color profile 两组用 Radio（egui `widgets::radio`）；
 /// 每组前一条 SubLabel 就是 egui 的 `widgets::label(..., text_secondary)`。egui 里这些住在
 /// `menu_popup` 下拉中，但单选器在下拉里不好放，用户要求改用通用弹窗，内容一行不差。
-fn export_setting_rows(row: &ExportRow, doc_profile: &str) -> Vec<crate::popovers::Setting> {
+fn export_setting_rows(row: &ExportRow, doc_profile: &str, target: &[figcraft_doc::NodeId]) -> Vec<crate::popovers::Setting> {
     use crate::popovers::{Opt, Setting};
     let index = row.index;
+    // Every advanced-option command must carry the target ids: in page mode the selection is
+    // empty, so without explicit ids `req_targets` rejects the command and page settings cannot
+    // be edited. The format/size dropdowns already do the same through `with_ids`.
+    let with_ids = |mut v: Value| {
+        if let Some(o) = v.as_object_mut() {
+            o.insert("ids".into(), json!(target));
+        }
+        v
+    };
     let mut out: Vec<Setting> = Vec::new();
     let toggle = |label: String, on: bool, key: &'static str| Setting::Toggle {
         tab: 0,
         label: label.into(),
         on: std::rc::Rc::new(std::cell::RefCell::new(on)),
         supported: true,
-        on_cmd: Opt::new(String::new(), "export.update", json!({ "index": index, key: true })),
-        off_cmd: Opt::new(String::new(), "export.update", json!({ "index": index, key: false })),
+        on_cmd: Opt::new(String::new(), "export.update", with_ids(json!({ "index": index, key: true }))),
+        off_cmd: Opt::new(String::new(), "export.update", with_ids(json!({ "index": index, key: false }))),
     };
     out.push(toggle(tr("Ignore overlapping layers").to_string(), row.contents_only, "contentsOnly"));
     if row.format == "svg" || row.include_bounding_box {
@@ -2418,8 +2469,8 @@ fn export_setting_rows(row: &ExportRow, doc_profile: &str) -> Vec<crate::popover
             out.push(Setting::Radio {
                 tab: 0,
                 label: label.into(),
-                on: row.vd_compat == key,
-                cmd: Opt::new(String::new(), "export.update", json!({ "index": index, "vdCompat": key })),
+                on: std::rc::Rc::new(std::cell::RefCell::new(row.vd_compat == key)),
+                cmd: Opt::new(String::new(), "export.update", with_ids(json!({ "index": index, "vdCompat": key }))),
             });
         }
     }
@@ -2429,8 +2480,8 @@ fn export_setting_rows(row: &ExportRow, doc_profile: &str) -> Vec<crate::popover
             label: "3 mm bleed".into(),
             on: std::rc::Rc::new(std::cell::RefCell::new(row.bleed > 0.0)),
             supported: true,
-            on_cmd: Opt::new(String::new(), "export.update", json!({ "index": index, "bleed": "3mm" })),
-            off_cmd: Opt::new(String::new(), "export.update", json!({ "index": index, "bleed": 0 })),
+            on_cmd: Opt::new(String::new(), "export.update", with_ids(json!({ "index": index, "bleed": "3mm" }))),
+            off_cmd: Opt::new(String::new(), "export.update", with_ids(json!({ "index": index, "bleed": 0 }))),
         });
         out.push(toggle(tr("Crop marks").to_string(), row.crop_marks, "cropMarks"));
         out.push(toggle(tr("Bleed marks").to_string(), row.bleed_marks, "bleedMarks"));
@@ -2447,8 +2498,8 @@ fn export_setting_rows(row: &ExportRow, doc_profile: &str) -> Vec<crate::popover
             out.push(Setting::Radio {
                 tab: 0,
                 label: label.into(),
-                on: row.color_profile == p.key(),
-                cmd: Opt::new(String::new(), "export.update", json!({ "index": index, "colorProfile": p.key() })),
+                on: std::rc::Rc::new(std::cell::RefCell::new(row.color_profile == p.key())),
+                cmd: Opt::new(String::new(), "export.update", with_ids(json!({ "index": index, "colorProfile": p.key() }))),
             });
         }
     }
