@@ -93,7 +93,7 @@ pub fn menu_popup_in(
     menu_popup_in_aligned(anchor, width_override, rows, on_pick, dismiss, vw, vh, crate::widgets::RectAlign::BottomStart)
 }
 
-/// 与 [`menu_popup_in`] 相同，但可指定相对锚点的对齐方式（右对齐的按钮用 `BottomEnd`）。
+/// 与 [`menu_popup_in`] 相同，但显式指定对齐方式。右栏下拉用 `BottomEnd`（右缘对齐按钮右缘）。
 pub fn menu_popup_in_aligned(
     anchor: Bounds<Pixels>,
     width_override: Option<f32>,
@@ -105,6 +105,19 @@ pub fn menu_popup_in_aligned(
     align: crate::widgets::RectAlign,
 ) -> AnyElement {
     menu_popup_impl(anchor, width_override, false, rows, on_pick, dismiss, vw, vh, align)
+}
+
+/// 与 [`menu_popup_fit`] 相同，但显式指定对齐方式（宽度仍由最宽行决定）。
+pub fn menu_popup_fit_aligned(
+    anchor: Bounds<Pixels>,
+    rows: Vec<MenuRow>,
+    on_pick: Rc<dyn Fn(&str, &mut Window, &mut App)>,
+    dismiss: Rc<dyn Fn(&mut Window, &mut App)>,
+    vw: f32,
+    vh: f32,
+    align: crate::widgets::RectAlign,
+) -> AnyElement {
+    menu_popup_impl(anchor, None, true, rows, on_pick, dismiss, vw, vh, align)
 }
 
 /// 与 [`menu_popup_in`] 同款，但宽度走 `Width::Fit` —— 卡片宽度完全由最宽那一行决定，不设

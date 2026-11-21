@@ -12,7 +12,7 @@
 use crate::menu_card::Item;
 use crate::widgets::icon::paint_in_slot;
 use crate::widgets::{MENU_TRAIL_GAP, pt, rgba, tokens};
-use gpui::{AnyElement, App, MouseButton, MouseDownEvent, Window, div, prelude::*};
+use gpui::{AnyElement, App, MouseButton, MouseDownEvent, Window, div, prelude::*, px};
 use std::rc::Rc;
 
 pub(crate) type OnPick = Rc<dyn Fn(&str, &mut Window, &mut App)>;
@@ -35,6 +35,50 @@ pub(crate) fn label_x(item: &Item, has_check: bool) -> f32 {
         (true, false) => SLOT,
         (false, true) => SLOT,
         (false, false) => 8.0,
+    }
+}
+
+/// 下拉行为的关闭判定：触发按钮相对开窗锚点移动超过 1pt 就关闭。
+/// 纯函数，便于单测；工具栏 flyout / 右键菜单没有 probe，不会走到这里。
+pub(crate) fn trigger_moved(open: gpui::Bounds<gpui::Pixels>, live: gpui::Bounds<gpui::Pixels>) -> bool {
+    (f32::from(live.origin.x) - f32::from(open.origin.x)).abs() > 1.0
+        || (f32::from(live.origin.y) - f32::from(open.origin.y)).abs() > 1.0
+}
+
+/// 给一个按钮挂「下拉行为」：按钮真实矩形通过跨帧探针上报，点击时用它当锚点开菜单。
+/// 这是所有左键下拉菜单唯一的开窗方式 —— 绝不从 `mouse_position()` 取锚点。
+///
+/// 返回 `(带探针的按钮元素, 点击时调用的开窗回调所需的一切)`；实际开窗需要 root 实体，
+/// 调用处把 `on_click` 里拿到的 `rect` 交给 `open_menu_fit(anchor, rect, rows, on_pick, cx)`。
+pub(crate) struct AnchoredMenu {
+    /// 按钮每帧写入真实矩形的探针 cell。
+    pub cell: Rc<std::cell::Cell<Option<gpui::Bounds<gpui::Pixels>>>>,
+    /// 开窗时要传给 `open_menu_fit` 的跨帧锚点。
+    pub anchor: crate::widgets::dropdown::MenuAnchor,
+}
+
+impl AnchoredMenu {
+    /// `key` 必须跨帧稳定（同一按钮每帧同一个值）。
+    pub fn new(key: impl Into<String>) -> Self {
+        let anchor = crate::widgets::dropdown::menu_anchor(key);
+        Self { cell: anchor.cell(), anchor }
+    }
+
+    /// 点击那一帧的锚点矩形；首帧探针还没量到时给一个 24×24 的兜底（按钮尺寸）。
+    pub fn rect(&self) -> gpui::Bounds<gpui::Pixels> {
+        self.cell.get().unwrap_or_else(|| gpui::Bounds {
+            origin: gpui::Point::new(px(0.0), px(0.0)),
+            size: gpui::size(px(24.0), px(24.0)),
+        })
+    }
+
+    /// 把探针包到按钮元素里（绝对定位、不占空间）。
+    pub fn wrap<E>(&self, el: E) -> gpui::AnyElement
+    where
+        E: gpui::IntoElement,
+        E::Element: gpui::ParentElement + gpui::Styled,
+    {
+        crate::popovers::with_button_bounds(el, self.cell.clone())
     }
 }
 
@@ -241,6 +285,22 @@ mod tests {
         let drop = dropdown_behavior(pick, Rc::new(|_, _| {}));
         assert!(card.selected.is_none() && drop.selected.is_none());
         assert!(card.open_sub.is_none() && drop.open_sub.is_none());
+    }
+
+    #[test]
+    fn dropdown_closes_when_its_trigger_moves() {
+        use gpui::{point, px, size};
+        let at = gpui::Bounds { origin: point(px(100.0), px(50.0)), size: size(px(80.0), px(24.0)) };
+        let same = at;
+        assert!(!trigger_moved(at, same), "按钮没动就不关");
+        let nudged = gpui::Bounds { origin: point(px(100.5), px(50.0)), ..at };
+        assert!(!trigger_moved(at, nudged), "亚像素抖动不关");
+        let shifted = gpui::Bounds { origin: point(px(120.0), px(50.0)), ..at };
+        assert!(trigger_moved(at, shifted), "按钮横向移动就关");
+        let dropped = gpui::Bounds { origin: point(px(100.0), px(70.0)), ..at };
+        assert!(trigger_moved(at, dropped), "按钮纵向移动就关");
+        let resized = gpui::Bounds { size: size(px(120.0), px(24.0)), ..at };
+        assert!(!trigger_moved(at, resized), "只有宽度变化不算位置移动");
     }
 
     #[test]

@@ -2452,10 +2452,13 @@ pub(crate) fn right_panel(
             let distribute_btn = visibility::distribute(&sel).then(|| {
                 let dist_cmds = f.cmds.clone();
                 let dist_root = f.root.clone();
-                IconButton::new(Icon::DistributeH).size(24.0).on_click(move |_e, window, cx| {
+                // 下拉行为：按钮真实矩形 + 跨帧探针，不用 mouse_position()。
+                let anchored = crate::menu_rows::AnchoredMenu::new("position-distribute");
+                let click_anchor = anchored.anchor.clone();
+                let click_cell = anchored.cell.clone();
+                let btn = IconButton::new(Icon::DistributeH).size(24.0).on_click(move |_e, _window, cx| {
                     let Some(root) = dist_root.clone() else { return };
-                    let p = window.mouse_position();
-                    let anchor = gpui::Bounds { origin: p, size: gpui::size(px(0.0), px(0.0)) };
+                    let rect = click_cell.get().unwrap_or_else(|| gpui::Bounds { origin: gpui::Point::new(px(0.0), px(0.0)), size: gpui::size(px(24.0), px(24.0)) });
                     let dc = dist_cmds.clone();
                     let on_pick = Rc::new(move |label: &str, _w: &mut Window, _cx: &mut App| {
                         let cmd = match label {
@@ -2466,8 +2469,10 @@ pub(crate) fn right_panel(
                         };
                         dc.push(Cmd { id: cmd, params: None });
                     });
-                    root.update(cx, |cv, cx| cv.open_menu(anchor, Some(220.0), distribute_rows(), on_pick, cx));
-                })
+                    let anchor = click_anchor.clone();
+                    root.update(cx, move |cv, cx| cv.open_menu_fit(anchor, rect, distribute_rows(), on_pick, cx));
+                });
+                anchored.wrap(btn)
             });
             // `rotate_row`: the three 24 pt cells under "Rotation" (`position_fields`'s
             // `widgets::segmented`): Rotate 90° / Flip H / Flip V — each a `object.*` command.

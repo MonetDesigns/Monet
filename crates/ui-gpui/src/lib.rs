@@ -195,7 +195,9 @@ use std::sync::Arc;
 
 use std::time::{Duration, Instant};
 
-use crate::widgets::menu::{MenuRow, menu_popup_fit, menu_popup_in, popup_backdrop};
+use crate::widgets::menu::{
+    MenuRow, menu_popup_fit_aligned, menu_popup_in_aligned, popup_backdrop,
+};
 
 use figcraft_doc::{CrossAlign, Document, MainAlign, Node, NodeId, NodeKind};
 
@@ -7536,19 +7538,31 @@ impl Render for CanvasView {
 
             match p {
                 Popup::Menu { anchor, width, rows, on_pick, probe, fit_width } => {
-                    // 每帧取触发按钮的当前矩形（滚动 / resize / 弹窗拖动后仍跟着按钮走）。
-
+                    // 每帧取触发按钮的当前矩形。下拉行为的约定：按钮位置一变就关闭菜单
+                    // （面板 resize / 字段重新布局后，菜单停在旧位置会被误点）。
+                    // 例外：底部工具栏 flyout 与右键菜单走 `menu_card::card`，**没有 probe**，
+                    // 它们每帧按工具按钮 / 鼠标重算位置，天然跟着跑，不在这里被关掉。
                     let live = probe.as_ref().and_then(|p| p.get()).unwrap_or(*anchor);
-
-                    // 位置与防溢出全部交给通用 `Menu`：它自带「按钮底 + 4」、上下防溢出、
-                    // 内部滚动、水平贴边。fit_width 的菜单（sides 下拉）走 Width::Fit，
-                    // 宽度只由最宽行决定；其余菜单保持「下限 = 按钮宽」不变。
-
-                    if *fit_width {
-                        els.push(menu_popup_fit(live, rows.clone(), on_pick.clone(), dismiss.clone(), vw, vh));
-                    } else {
-                        let w = f32::from(live.size.width).max(width.unwrap_or(0.0)).max(48.0);
-                        els.push(menu_popup_in(live, Some(w), rows.clone(), on_pick.clone(), dismiss.clone(), vw, vh));
+                    let mut moved = false;
+                    if probe.is_some() {
+                        moved = crate::menu_rows::trigger_moved(*anchor, live);
+                        if moved {
+                            // `p` 正可变借用着 self.pane.popup，不能当场 close_popup；
+                            // 通过实体延迟到本帧末关闭，这一帧不画菜单。
+                            let me = cx.entity();
+                            window.defer(cx, move |_window, cx| me.update(cx, |cv, cx| cv.close_popup(cx)));
+                        }
+                    }
+                    // 落位：按钮下方 4pt，右缘对齐按钮右缘（BottomEnd）。主菜单走
+                    // `Popup::MainMenu`，那里单独用 BottomStart 左对齐，不受这里影响。
+                    if !moved {
+                        let align = crate::widgets::RectAlign::BottomEnd;
+                        if *fit_width {
+                            els.push(menu_popup_fit_aligned(live, rows.clone(), on_pick.clone(), dismiss.clone(), vw, vh, align));
+                        } else {
+                            let w = f32::from(live.size.width).max(width.unwrap_or(0.0)).max(48.0);
+                            els.push(menu_popup_in_aligned(live, Some(w), rows.clone(), on_pick.clone(), dismiss.clone(), vw, vh, align));
+                        }
                     }
                 }
 
