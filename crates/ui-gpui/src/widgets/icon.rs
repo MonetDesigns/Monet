@@ -47,6 +47,8 @@ pub enum Icon {
     Frame,
     /// The letter "T" (a `Text` node kind).
     Text,
+    /// The bottom toolbar's dedicated text tool glyph.
+    ToolText,
     /// Filled diamond (a `Component` / `ComponentSet` node kind).
     Component,
     /// Outlined diamond (an `Instance` node kind).
@@ -207,6 +209,7 @@ impl Icon {
         Icon::Ellipse,
         Icon::Frame,
         Icon::Text,
+        Icon::ToolText,
         Icon::Component,
         Icon::Instance,
         Icon::Page,
@@ -307,6 +310,7 @@ impl Icon {
             Icon::Ellipse => "shape-ellipse",
             Icon::Frame => "shape-frame",
             Icon::Text => "shape-text",
+            Icon::ToolText => "tool-text",
             Icon::Component => "shape-component",
             Icon::Instance => "shape-instance",
             Icon::Page => "shape-page",
@@ -405,6 +409,7 @@ impl Icon {
             Icon::Ellipse => "shape-ellipse",
             Icon::Frame => "shape-frame",
             Icon::Text => "shape-text",
+            Icon::ToolText => "tool-text",
             Icon::Component => "shape-component",
             Icon::Instance => "shape-instance",
             Icon::Page => "shape-page",
@@ -541,6 +546,7 @@ static ICON_FILES: &[(&str, &[u8])] = &[
     ("tool-scale", include_bytes!("../../assets/icons/tool-scale.svg")),
     ("tool-shape-builder", include_bytes!("../../assets/icons/shape-intersect.svg")),
     ("tool-text-on-path", include_bytes!("../../assets/icons/tool-text-on-path.svg")),
+    ("tool-text", include_bytes!("../../assets/icons/tool-text.svg")),
     ("ui-actions", include_bytes!("../../assets/icons/ui-actions.svg")),
     ("ui-animation", include_bytes!("../../assets/icons/ui-animation.svg")),
     ("ui-assets", include_bytes!("../../assets/icons/ui-assets.svg")),
@@ -734,7 +740,7 @@ mod tests {
 
     #[test]
     fn every_icon_has_an_external_svg_with_the_shared_stroke() {
-        assert_eq!(Icon::ALL.len(), 92, "Icon 变体数变了：请同步 ALL / asset_name / 本断言");
+        assert_eq!(Icon::ALL.len(), 93, "Icon 变体数变了：请同步 ALL / asset_name / 本断言");
         let mut names = HashSet::new();
         for &icon in Icon::ALL {
             let rel = icon.asset_rel();

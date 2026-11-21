@@ -175,6 +175,88 @@ pub(crate) fn pick_dropdown(f: &RightFields, label: impl Into<SharedString>, wid
     d
 }
 
+/// 约束图形选择器：外框里的子层与四条边的 pin，中间十字设居中。
+pub(crate) fn constraint_graphic(f: &RightFields, d: &PanelData, width: f32) -> gpui::AnyElement {
+    let t = tokens();
+    let h = d.constraints_h;
+    let v = d.constraints_v;
+    let active = rgba(t.accent);
+    let idle = rgba(t.text_secondary);
+    let mut root = div()
+        .relative()
+        .w(px(width))
+        .h(px(40.0))
+        .flex_none()
+        .rounded(px(5.0))
+        .bg(rgba(t.field))
+        .child(
+            div()
+                .absolute()
+                .left(px(16.0))
+                .right(px(16.0))
+                .top(px(8.0))
+                .bottom(px(8.0))
+                .rounded(px(5.0))
+                .border(px(1.0))
+                .border_color(rgba(t.text_secondary)),
+        );
+
+    let pin = |f: &RightFields, label: &'static str, x: f32, y: f32, horizontal: bool, on: bool| {
+        let cmds = f.cmds.clone();
+        let col = if on { active } else { idle };
+        let w = if horizontal { 10.0 } else { 1.5 };
+        let hgt = if horizontal { 1.5 } else { 10.0 };
+        let key = if horizontal { "horizontal" } else { "vertical" };
+        div()
+            .absolute()
+            .left(px(x - 11.0))
+            .top(px(y - 11.0))
+            .w(px(22.0))
+            .h(px(22.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .on_mouse_down(MouseButton::Left, move |_e, _w, _cx| {
+                cmds.push(Cmd { id: "node.set", params: Some(json!({ "props": { "constraints": { key: label } } })) });
+            })
+            .child(div().w(px(w)).h(px(hgt)).bg(col))
+            .into_any_element()
+    };
+
+    root = root
+        .child(pin(f, "left", 8.0, 20.0, true, matches!(h, Some("left" | "leftRight"))))
+        .child(pin(f, "right", width - 8.0, 20.0, true, matches!(h, Some("right" | "leftRight"))))
+        .child(pin(f, "top", width / 2.0, 8.0, false, matches!(v, Some("top" | "topBottom"))))
+        .child(pin(f, "bottom", width / 2.0, 32.0, false, matches!(v, Some("bottom" | "topBottom"))));
+
+    let center_cmds = f.cmds.clone();
+    let center_col = if matches!(h, Some("center")) || matches!(v, Some("center")) { active } else { idle };
+    root.child(
+        div()
+            .absolute()
+            .left(px(width / 2.0 - 11.0))
+            .top(px(9.0))
+            .w(px(22.0))
+            .h(px(22.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .on_mouse_down(MouseButton::Left, move |_e, _w, _cx| {
+                center_cmds.push(Cmd {
+                    id: "node.set",
+                    params: Some(json!({ "props": { "constraints": { "horizontal": "center", "vertical": "center" } } })),
+                });
+            })
+            .child(
+                div()
+                    .relative()
+                    .child(div().absolute().left(px(4.0)).top(px(10.5)).w(px(14.0)).h(px(1.0)).bg(center_col))
+                    .child(div().absolute().left(px(10.5)).top(px(4.0)).w(px(1.0)).h(px(14.0)).bg(center_col)),
+            ),
+    )
+    .into_any_element()
+}
+
 /// 字体族选择按钮：外观沿用 `Dropdown`，但点击打开一个带字体预览的窗口（每项用它自己的
 /// 字体渲染名称），而不是纯文本菜单。
 fn font_picker_button(f: &RightFields, label: impl Into<SharedString>, width: f32, current: Option<String>) -> Dropdown {
@@ -1473,9 +1555,11 @@ pub(crate) fn paints(
             let stroke_queue = f.queue();
             let stroke_data = d.clone();
             let dots = window_open_button("stroke", Icon::Menu, popups.is_open("stroke"), move |window, cx| {
-                let top = crate::popovers::anchored_top("stroke", window);
-                open_detached_with(popups.clone(), "stroke", Some(top), cx, |anchor, cx| {
-                    crate::popovers::WindowState::stroke(stroke_queue.clone(), &stroke_data, cx, anchor)
+                let at = crate::popovers::anchored_left_below("stroke", window);
+                open_detached_with(popups.clone(), "stroke", None, cx, |_anchor, cx| {
+                    let mut w = crate::popovers::WindowState::stroke(stroke_queue.clone(), &stroke_data, cx, at);
+                    w.anchor_at(at);
+                    w
                 });
             });
             // 第二行 = 描边对齐下拉 + **线宽字段** + 独立边宽 + 高级描边（egui `paints.rs`:

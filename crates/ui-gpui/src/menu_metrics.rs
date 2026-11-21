@@ -14,6 +14,8 @@ pub(crate) const MENU_ROW_H: f32 = 24.0;
 pub(crate) const MENU_SEP_H: f32 = 9.0;
 /// The card's inset; the divider cancels it with a negative margin.
 pub(crate) const MENU_PAD: f32 = 8.0;
+/// Every leading glyph (check / icon) owns a 24 pt grid slot; adjacent slots have no gap.
+pub(crate) const MENU_SLOT_W: f32 = 24.0;
 
 fn white(pct: f32) -> Rgba {
     rgba(Color32::from_white_alpha((255.0 * pct).round() as u8))
@@ -101,6 +103,7 @@ mod tests {
         // 卡片的水平内边距必须留在 `menu_surface()` 上：选中/hover 高亮画在整个 w_full
         // 行盒上，把它挪到行内会让色块顶到卡片左右边缘（用户 2026-11-14 的回归）。
         assert_eq!(MENU_PAD, 8.0);
+        assert_eq!(MENU_SLOT_W, 24.0, "check and icon slots are 24 pt and touch");
         assert!((ink().a - 0.9).abs() < 0.01);
         assert!((trail_ink().a - 0.7).abs() < 0.01);
         assert!((divider_ink().a - 0.1).abs() < 0.01);

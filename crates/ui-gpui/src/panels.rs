@@ -762,6 +762,8 @@ pub(crate) struct RightFields {
     corner_br: Entity<TextField>,
     /// 「独立圆角」展开开关（egui `right.rs` 的 `Id::new("indep_corners")` 临时标记）。
     corners_individual: std::rc::Rc<std::cell::RefCell<bool>>,
+    /// Whether the constraints row under X/Y is revealed.
+    constraints_open: std::rc::Rc<std::cell::RefCell<bool>>,
     /// 描边逐边权重 T/R/B/L（`strokeTopWeight` … `strokeLeftWeight`）。选「Custom」后展开，
     /// 对应 egui `paints.rs::stroke` 的 `common(doc, sel, |n| n.stroke.sides)` 那两行输入框。
     stroke_side_t: Entity<TextField>,
@@ -1381,6 +1383,7 @@ impl RightFields {
             corner_bl: nf_corner(cx, "BL", "bottomLeftRadius", &cmds),
             corner_br: nf_corner(cx, "BR", "bottomRightRadius", &cmds),
             corners_individual: std::rc::Rc::new(std::cell::RefCell::new(false)),
+            constraints_open: std::rc::Rc::new(std::cell::RefCell::new(false)),
             // 描边逐边权重：与菜单里 T/R/B/L 四项、展开后 lead 同一族图标。
             stroke_side_t: nf_stroke_side(cx, "layout-padding-top", "strokeTopWeight", &cmds, wake),
             stroke_side_r: nf_stroke_side(cx, "layout-padding-right", "strokeRightWeight", &cmds, wake),
@@ -1512,6 +1515,7 @@ impl RightFields {
         // scale_ctx / pad 同理保留共享（见上方注释），不重置。
         f.pad_individual = Default::default();
         f.corners_individual = Default::default();
+        f.constraints_open = Default::default();
         f.limit_open = Default::default();
         f.bind_hover = Default::default();
         f.blend_open = Default::default();
@@ -2506,6 +2510,19 @@ pub(crate) fn right_panel(
             if let Some(b) = absolute_btn {
                 pos_trail = pos_trail.child(b);
             }
+            let constraints_open = *f.constraints_open.borrow();
+            let constraints_toggle = {
+                let flag = f.constraints_open.clone();
+                let wake = f.cmds.clone();
+                IconButton::new(Icon::LayoutGrid)
+                    .size(24.0)
+                    .active(constraints_open)
+                    .on_click(move |_e, _w, _cx| {
+                        let next = !*flag.borrow();
+                        *flag.borrow_mut() = next;
+                        wake.wake();
+                    })
+            };
             let mut pos_sec = PanelSection::new(tr("Position"));
             if has_pos_trail {
                 pos_sec = pos_sec.header_trail(pos_trail);
@@ -2514,7 +2531,10 @@ pub(crate) fn right_panel(
                 .child(sublabel_row(tr("Alignment")))
                 .child(field_row(vec![h.into_any_element(), v.into_any_element()], Vec::<IconButton>::new()))
                 .child(sublabel_row(tr("Position")))
-                .child(field_row(vec![f.x.clone().into_any_element(), f.y.clone().into_any_element()], Vec::<IconButton>::new()))
+                .child(field_row(
+                    vec![f.x.clone().into_any_element(), f.y.clone().into_any_element()],
+                    vec![constraints_toggle],
+                ))
                 .child(sublabel_row(tr("Rotation")))
                 .child(field_row(vec![f.rotation.clone().into_any_element(), rotate.into_any_element()], Vec::<IconButton>::new()));
 
@@ -2524,7 +2544,7 @@ pub(crate) fn right_panel(
             // 选中即 `node.set {"props":{"constraints":{"horizontal"/"vertical":v}}}`（等价于 egui 的
             // `app.set_props(&ids, json!({"constraints":{"horizontal": v}}))`，`node.set` 由 Cmd 通道附带
             // 选区 ids 执行）。`None` = Mixed，下拉显示 "Mixed"。
-            let pos_sec = if data.in_frame {
+            let pos_sec = if data.in_frame && constraints_open {
                 let pretty_h = |v: Option<&'static str>| -> &'static str {
                     match v {
                         Some("leftRight") => tr("Left & right"),
@@ -2553,12 +2573,27 @@ pub(crate) fn right_panel(
                     (tr("Center").into(), "node.set", serde_json::json!({ "props": { "constraints": { "vertical": "center" } } })),
                     (tr("Scale").into(), "node.set", serde_json::json!({ "props": { "constraints": { "vertical": "scale" } } })),
                 ];
-                pos_sec.child(sublabel_row(tr("Constraints"))).child(field_row(
-                    vec![
-                        right::sections::pick_dropdown(f, pretty_h(data.constraints_h), col, h_opts),
-                        right::sections::pick_dropdown(f, pretty_v(data.constraints_v), col, v_opts),
-                    ],
-                    Vec::<IconButton>::new(),
+                pos_sec.child(sublabel_row(tr("Constraints"))).child(block_row(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_start()
+                        .gap(pt(8.0))
+                        .child(right::sections::pick_dropdown_lead(
+                            f,
+                            pretty_h(data.constraints_h),
+                            col,
+                            h_opts,
+                            Some(Icon::DistributeH),
+                        ))
+                        .child(right::sections::pick_dropdown_lead(
+                            f,
+                            pretty_v(data.constraints_v),
+                            col,
+                            v_opts,
+                            Some(Icon::AlignTop),
+                        ))
+                        .child(right::sections::constraint_graphic(f, data, col)),
                 ))
             } else {
                 pos_sec

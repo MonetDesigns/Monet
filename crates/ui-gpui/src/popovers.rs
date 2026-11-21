@@ -66,6 +66,18 @@ pub(crate) fn anchored_top(key: &str, window: &Window) -> Pixels {
     window_trigger_top(key).get().map(|b| b.origin.y).unwrap_or_else(|| window.mouse_position().y - px(BUTTON_HALF))
 }
 
+/// A menu that opens below a button: its left edge on the button's left, its top 4 pt below the
+/// button's bottom. Used where the generic right-edge anchor would put the card over the panel.
+pub(crate) fn anchored_left_below(key: &str, window: &Window) -> Point<Pixels> {
+    window_trigger_top(key)
+        .get()
+        .map(|b| Point { x: b.origin.x, y: b.origin.y + b.size.height + px(4.0) })
+        .unwrap_or_else(|| {
+            let p = window.mouse_position();
+            Point { x: p.x - px(BUTTON_HALF), y: p.y + px(BUTTON_HALF + 4.0) }
+        })
+}
+
 /// 变量 / 文本样式列表的最大可见高度（超出滚动）。必须是常量：从 `body_h` 派生会被
 /// `measured_h` 的「量到多少就多高」反馈放大，每帧长一截。
 const LIST_MAX_H: f32 = 320.0;
@@ -912,6 +924,11 @@ impl WindowState {
     /// point is then used only to decide *which* button was pressed, never to place the card.
     pub(crate) fn anchor_to_button_top(&mut self, top: Pixels) {
         self.exact_top = Some(top);
+    }
+
+    /// Pin the card's top-left exactly at a point (no right-edge anchoring, no lift).
+    pub(crate) fn anchor_at(&mut self, at: Point<Pixels>) {
+        self.open = Open::At(at);
     }
 
     /// 供根视图判断当前是否是某个特定窗口（例如变量面板已开时再点按钮就不要二次弹出）。

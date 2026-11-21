@@ -32,12 +32,13 @@ const PAD: f32 = crate::menu_metrics::MENU_PAD;
 const ITEM_RADIUS: f32 = 5.0;
 /// 动作库行的字号（egui `MenuItem::show_palette` 的 `regular(13.0)`）。
 const PALETTE_TEXT_PT: f32 = 13.0;
-/// The check column: egui's label starts at `r.min.x + 28.0`.
-const CHECK_W: f32 = 28.0;
-/// The icon column's left edge and the label's, for a row that carries a tool mark.
-const ICON_X: f32 = 24.0;
+/// The check column: one whole 24 pt grid slot, centred.
+const CHECK_W: f32 = crate::menu_metrics::MENU_SLOT_W;
+/// The icon column's left edge and the label's, for a row that carries a mark.
+const ICON_X: f32 = crate::menu_metrics::MENU_SLOT_W;
 const ICON_SIZE: f32 = 16.0;
-const ICON_LABEL_X: f32 = 48.0;
+/// Check slot + icon slot; the two slots touch, so the label starts at 48.
+const ICON_LABEL_X: f32 = ICON_X + CHECK_W;
 /// A separator's height, shared by every menu: 4 + 1 + 4.
 const SEP_H: f32 = crate::menu_metrics::MENU_SEP_H;
 
@@ -142,12 +143,12 @@ pub type OnSub = Rc<dyn Fn(usize, &mut Window, &mut App)>;
 
 /// 标签的左内缩：无勾选列 8；有勾选列时普通行 28、带图标的工具行 48。
 fn label_x(item: &Item, has_check: bool) -> f32 {
-    if !has_check {
-        8.0
-    } else if item.icon.is_some() || item.glyph.is_some() {
-        ICON_LABEL_X
-    } else {
-        CHECK_W
+    let marked = item.icon.is_some() || item.glyph.is_some();
+    match (has_check, marked) {
+        (true, true) => ICON_LABEL_X,
+        (true, false) => CHECK_W,
+        (false, true) => ICON_X,
+        (false, false) => 8.0,
     }
 }
 
@@ -268,18 +269,25 @@ pub(crate) fn rows(
         }
         // The check mark and the icon are absolutely placed so the label's own inset stays exact.
         if has_check {
-            row = row.child(div().absolute().left(pt(6.0)).top(pt(0.0)).h(pt(row_h)).flex().items_center().child(if item.checked == Some(true) {
-                "✓"
-            } else {
-                ""
-            }));
+            row = row.child(
+                div()
+                    .absolute()
+                    .left(pt(0.0))
+                    .w(pt(CHECK_W))
+                    .top(pt(0.0))
+                    .h(pt(row_h))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(if item.checked == Some(true) { "✓" } else { "" }),
+            );
         }
         // 与标签、勾号同色；.disabled 的变淡由行盒的 opacity(0.4) 统一负责。
         let color = crate::menu_metrics::ink();
         if let Some(path) = item.glyph.clone() {
             // 资源路径字形：没有 Icon 枚举变体的 SVG（16 网格原生尺寸）。
             let mark = svg().path(path).w(pt(ICON_SIZE)).h(pt(ICON_SIZE)).flex_none().text_color(Hsla::from(color)).into_any_element();
-            row = row.child(div().absolute().left(pt(ICON_X)).top(pt(0.0)).h(pt(row_h)).flex().items_center().child(mark));
+            row = row.child(div().absolute().left(pt(ICON_X)).w(pt(crate::menu_metrics::MENU_SLOT_W)).top(pt(0.0)).h(pt(row_h)).flex().items_center().justify_center().child(mark));
         } else if let Some(icon) = item.icon {
             // A shape-tool mark is a 24 pt vector: the icon column is 24 pt wide, so let the
             // vector keep its own size instead of forcing it into ICON_SIZE (which would also
@@ -289,7 +297,7 @@ pub(crate) fn rows(
             } else {
                 paint_icon(icon, color, ICON_SIZE).into_any_element()
             };
-            row = row.child(div().absolute().left(pt(ICON_X)).top(pt(0.0)).h(pt(row_h)).flex().items_center().child(mark));
+            row = row.child(div().absolute().left(pt(ICON_X)).w(pt(crate::menu_metrics::MENU_SLOT_W)).top(pt(0.0)).h(pt(row_h)).flex().items_center().justify_center().child(mark));
         }
         row = row.child(div().flex_1().min_w(pt(0.0)).overflow_hidden().whitespace_nowrap().child(item.label.clone()));
         if has_sub {
