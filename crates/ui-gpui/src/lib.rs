@@ -7583,29 +7583,22 @@ impl Render for CanvasView {
 
             match p {
                 Popup::Menu { anchor, width, rows, on_pick, probe, fit_width, align_end } => {
-                    // 每帧取触发按钮的当前矩形（滚动 / resize / 弹窗拖动后仍跟着按钮走）。
+                    // 每帧取触发按钮的当前矩形（跟随探针；静态锚点时 probe=None 用 anchor）。
+                    // anchor 是**按钮完整矩形**，`RectAlign::BottomEnd` 自己算
+                    // `top = 按钮底 + 4`、`right = 按钮右缘` —— 不要再手工转成点锚点，
+                    // 否则高度被扣掉、位置就错（之前弹窗跟鼠标跑就是这么来的）。
                     let live = probe.as_ref().and_then(|p| p.get()).unwrap_or(*anchor);
-
-                    // 右对齐弹窗用一个**点锚点**（工具栏同款）：x = 按钮右缘、y = 按钮底部，
-                    // 尺寸 0。通用 Menu 的 BottomEnd 算 `left = ax - 卡片宽`、`top = ay + gap`，
-                    // 于是卡片右缘贴按钮右缘、顶部正好在按钮底部 + 4pt。
-                    // 若把整个按钮矩形当锚点，ah=按钮高 会被重复计入 top（菜单弹到按钮下方很远），
-                    // 这就是之前"位置不对"的根因。
-                    let end_anchor = crate::widgets::at_point(
-                        f32::from(live.origin.x) + f32::from(live.size.width),
-                        f32::from(live.origin.y) + f32::from(live.size.height),
-                    );
 
                     if *fit_width {
                         if *align_end {
-                            els.push(menu_popup_fit_end(end_anchor, rows.clone(), on_pick.clone(), dismiss.clone(), vw, vh));
+                            els.push(menu_popup_fit_end(live, rows.clone(), on_pick.clone(), dismiss.clone(), vw, vh));
                         } else {
                             els.push(menu_popup_fit(live, rows.clone(), on_pick.clone(), dismiss.clone(), vw, vh));
                         }
                     } else {
                         let w = f32::from(live.size.width).max(width.unwrap_or(0.0)).max(48.0);
                         if *align_end {
-                            els.push(menu_popup_below_end(end_anchor, Some(w), rows.clone(), on_pick.clone(), dismiss.clone(), vw, vh));
+                            els.push(menu_popup_below_end(live, Some(w), rows.clone(), on_pick.clone(), dismiss.clone(), vw, vh));
                         } else {
                             els.push(menu_popup_in(live, Some(w), rows.clone(), on_pick.clone(), dismiss.clone(), vw, vh));
                         }

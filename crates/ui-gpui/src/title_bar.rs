@@ -62,7 +62,7 @@ pub fn content_width(viewport_w: f32) -> f32 {
 
 /// 最大化按钮图标：已最大化时画还原，未最大化时用产品的纯线框方框（Icon::Rectangle）。
 pub fn maximize_icon(maximized: bool) -> Icon {
-    if maximized { Icon::WinRestore } else { Icon::Rectangle }
+    if maximized { Icon::WinRestore } else { Icon::WinMaximize }
 }
 
 /// 一个窗口控制按钮：hover 底色，关闭键 hover 变红且图标由常态墨色翻成白色。
@@ -93,17 +93,17 @@ fn control_button(id: &'static str, icon: Icon, close: bool, area: WindowControl
             WindowControlArea::Drag => {}
         })
         // svg 的显式色不继承父 text_color：叠一层白图标，hover 时显隐。
-        .child(div().relative().flex_none().child(icon::paint(icon, ink, 20.0)).when(close, |d| {
-            d.child(div().absolute().inset_0().opacity(0.0).group_hover(group.clone(), |s| s.opacity(1.0)).child(icon::paint(icon, white, 20.0)))
+        .child(div().relative().flex_none().child(icon::paint(icon, ink, 16.0)).when(close, |d| {
+            d.child(div().absolute().inset_0().opacity(0.0).group_hover(group.clone(), |s| s.opacity(1.0)).child(icon::paint(icon, white, 16.0)))
         }))
 }
 
 /// kit `TitleBar::new().child(content)`：整条注册成系统标题栏拖拽区，
 /// 左留白与内容空白区也标 Drag（覆盖子 hitbox 的空隙），右侧三个按钮各归系统。
 pub fn title_bar(content: impl IntoElement, maximized: bool) -> Div {
-    let min = control_button("title-min", Icon::Minus, false, WindowControlArea::Min);
+    let min = control_button("title-min", Icon::WinMinimize, false, WindowControlArea::Min);
     let max = control_button("title-max", maximize_icon(maximized), false, WindowControlArea::Max);
-    let close = control_button("title-close", Icon::Close, true, WindowControlArea::Close);
+    let close = control_button("title-close", Icon::WinClose, true, WindowControlArea::Close);
 
     div()
         .flex_none()
@@ -137,7 +137,7 @@ mod tests {
 
     #[test]
     fn maximize_button_switches_between_maximize_and_restore() {
-        assert_eq!(maximize_icon(false), Icon::Rectangle);
+        assert_eq!(maximize_icon(false), Icon::WinMaximize);
         assert_eq!(maximize_icon(true), Icon::WinRestore);
     }
 

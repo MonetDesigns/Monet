@@ -958,6 +958,10 @@ fn named_icon_menu_end(
     let t = tokens();
     let ink = if active { rgba(t.accent) } else { rgba(t.icon) };
     let _ = key;
+    // 和 Dropdown 完全同款：按钮上挂每帧写的 bounds 探针，点击时读**按钮真实矩形**
+    // （不是鼠标位置），锚点一次性定死，所以菜单跟着按钮、鼠标移开也不跳。
+    let hit = std::rc::Rc::new(std::cell::Cell::new(None::<Bounds<Pixels>>));
+    let hit_click = hit.clone();
     let btn = div()
         .size(pt(24.0))
         .rounded(pt(5.0))
@@ -968,14 +972,12 @@ fn named_icon_menu_end(
         .when(active, |d| d.bg(rgba(t.selected_row)))
         .when(!active, |d| d.hover(|s| s.bg(rgba(t.hover))))
         .child(crate::widgets::icon::paint_in_slot(trigger, 24.0, Some(ink)))
-        .on_mouse_down(MouseButton::Left, move |e, _window, cx: &mut App| {
+        .on_mouse_down(MouseButton::Left, move |_e, _window, cx: &mut App| {
             let Some(root) = root.clone() else { return };
-            // 固定锚点（工具栏/右键菜单同款）：点击位置 + 半个 24pt 按钮 = 按钮右缘/底部，
-            // 交给通用 Menu 的 BottomEnd 算出「顶边在按钮底 +4、右缘对齐按钮右缘」。
-            let at = crate::widgets::at_point(f32::from(e.position.x) + 12.0, f32::from(e.position.y) + 12.0);
-            root.update(cx, |cv, cx| cv.open_menu_fit_end(at, menu.clone(), on_pick.clone(), cx));
+            let Some(rect) = hit_click.get() else { return };
+            root.update(cx, |cv, cx| cv.open_menu_fit_end(rect, menu.clone(), on_pick.clone(), cx));
         });
-    btn.into_any_element()
+    crate::popovers::with_button_bounds(btn, hit).into_any_element()
 }
 
 /// 带勾选 / 单选列的菜单按钮：`MenuRow::checked` 是通用的「勾选列」（egui `ui.selectable_label`）。
@@ -1782,10 +1784,13 @@ fn wgsl_material_rows(f: &RightFields, d: &PanelData, col: f32, cx: &mut App) ->
 /// 有多少个菜单项；选中文件后其参数才在下方就地展开（由 `d.wgsl.path` 驱动，见 `effects()`）。
 /// 菜单项每次点开时现扫固定目录，增删文件立刻反映，无需重编译。
 fn add_effect_menu(f: &RightFields) -> gpui::AnyElement {
-    let mut b = IconButton::new(Icon::Plus).size(24.0);
+    // 和 Dropdown 同款：每帧写按钮矩形，点击时读按钮真实 bounds 作锚点（静态、不跟随）。
+    let hit = std::rc::Rc::new(std::cell::Cell::new(None::<Bounds<Pixels>>));
+    let hit_click = hit.clone();
+    let mut b = IconButton::new(Icon::Plus).size(24.0).id(SharedString::from("effect-add-btn"));
     if let Some(root) = f.root.clone() {
         let cmds = f.cmds.clone();
-        b = b.on_click(move |e, _window, cx: &mut App| {
+        b = b.on_click(move |_e, _window, cx: &mut App| {
             // `on_click` 是 `Fn`，每次点击都要给 on_pick 一份独立的队列句柄，故这里重新 clone
             // （不能直接把外层的 `cmds` 移进内层闭包）。与 `pick_dropdown` 同构。
             let cmds = cmds.clone();
@@ -1814,12 +1819,11 @@ fn add_effect_menu(f: &RightFields) -> gpui::AnyElement {
                     cmds.push(Cmd { id: cmd, params: Some(params.clone()) });
                 }
             });
-            // 固定锚点（右键菜单同款）：点击位置 + 半个 24pt 按钮 = 按钮右缘/底部。
-            let at = crate::widgets::at_point(f32::from(e.position().x) + 12.0, f32::from(e.position().y) + 12.0);
-            root.update(cx, |cv, cx| cv.open_menu_end(at, Some(180.0), rows, on_pick, cx));
+            let Some(rect) = hit_click.get() else { return };
+            root.update(cx, |cv, cx| cv.open_menu_end(rect, Some(180.0), rows, on_pick, cx));
         });
     }
-    b.into_any_element()
+    crate::popovers::with_button_bounds(b, hit).into_any_element()
 }
 
 /// 效果行的方框：点开弹出「效果设置」小窗（egui `effect_settings` 的设置项搬进浮层），
@@ -3454,14 +3458,16 @@ fn head_menu_button_end(
     let cmds = f.cmds.clone();
     let root = f.root.clone();
     let _ = key;
-    let btn = IconButton::new(icon).size(side).on_click(move |e, _window, cx: &mut App| {
+    // 和 Dropdown 同款：按钮真实矩形作锚点，静态定死（鼠标移开不跳）。
+    let hit = std::rc::Rc::new(std::cell::Cell::new(None::<Bounds<Pixels>>));
+    let hit_click = hit.clone();
+    let btn = IconButton::new(icon).size(side).on_click(move |_e, _window, cx: &mut App| {
         let Some(root) = root.clone() else { return };
-        // 固定锚点：点击位置 + 半个按钮 = 右缘/底部（size 0 的点锚点）。
-        let at = crate::widgets::at_point(f32::from(e.position().x) + 12.0, f32::from(e.position().y) + 12.0);
+        let Some(rect) = hit_click.get() else { return };
         let on_pick = head_pick(rows.clone(), cmds.clone());
-        root.update(cx, |cv, cx| cv.open_menu_end(at, Some(width), menu.clone(), on_pick, cx));
+        root.update(cx, |cv, cx| cv.open_menu_end(rect, Some(width), menu.clone(), on_pick, cx));
     });
-    btn.into_any_element()
+    crate::popovers::with_button_bounds(btn, hit).into_any_element()
 }
 
 /// 「Create link」：参考实现 `menus::invoke("text.link")` 先弹输入框拿 URL，再执行 `text.link`。
