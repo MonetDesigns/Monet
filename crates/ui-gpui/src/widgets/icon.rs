@@ -766,6 +766,21 @@ mod tests {
     }
 
     #[test]
+    fn the_icon_usage_contract_is_documented() {
+        let doc = include_str!("../../assets/icons/README.md");
+        for clause in [
+            "## 使用流程（强制，唯一合法路径）",
+            "没有枚举变体的图标等于不存在",
+            "icon::paint",
+            "default_glyph",
+            "rescale_strokes",
+            "❌ `svg().path(\"icons/…\")`",
+        ] {
+            assert!(doc.contains(clause), "图标使用规范缺少条款：{clause}");
+        }
+    }
+
+    #[test]
     fn layout_property_icons_fill_their_twenty_four_point_slot() {
         for rel in [
             "layout-corner-tl",
