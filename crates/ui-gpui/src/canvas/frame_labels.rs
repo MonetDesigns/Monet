@@ -78,18 +78,18 @@ pub fn screen_bounds(app: &CanvasApp, doc: &Document, id: NodeId) -> Option<(f32
 pub enum SlotHit {
     /// 开发状态槽；`true` = 该对象已经有状态（再点一次弹菜单）。
     Status(NodeId, bool),
+    /// 未选中的对象：悬停时槽里是三个点，点一下先选中该对象、再打开菜单。
+    Menu(NodeId),
     /// 变体组「+」。
     AddVariant(NodeId),
 }
 
 /// 在画布坐标 `pos` 上找名称行图标槽：返回命中项与它的矩形（菜单要按它定位）。
 ///
-/// 只认**选中**的顶层帧：未选中时槽不画，也不该抢走对象的任何按下。
+/// 选中的对象认状态槽 / 变体组「+」；未选中的顶层帧只认状态槽里的「三个点」——点它
+/// 先选中再弹菜单（和悬停在名称文本上出现三个点是同一套交互）。
 pub fn slot_at(app: &CanvasApp, doc: &Document, page: NodeId, sel: &[NodeId], pos: Pos2) -> Option<(SlotHit, Rect)> {
     for id in super::rulers::boards(doc, page) {
-        if !sel.contains(&id) {
-            continue;
-        }
         let Some(n) = doc.node(id) else { continue };
         if !n.kind.is_frame_like() || n.is_board_atom() {
             continue;
@@ -97,9 +97,13 @@ pub fn slot_at(app: &CanvasApp, doc: &Document, page: NodeId, sel: &[NodeId], po
         let Some((x0, y0, x1, y1)) = screen_bounds(app, doc, id) else { continue };
         let status = name_slots(x1, y0)[0];
         if status.contains(pos) {
-            return Some((SlotHit::Status(id, !n.dev_status.is_none()), status));
+            return Some(if sel.contains(&id) {
+                (SlotHit::Status(id, !n.dev_status.is_none()), status)
+            } else {
+                (SlotHit::Menu(id), status)
+            });
         }
-        if matches!(n.kind, NodeKind::ComponentSet { .. }) {
+        if sel.contains(&id) && matches!(n.kind, NodeKind::ComponentSet { .. }) {
             let add = add_variant_slot((x0 + x1) / 2.0, y1);
             if add.contains(pos) {
                 return Some((SlotHit::AddVariant(id), add));
@@ -144,6 +148,15 @@ fn status_slot(painter: &mut Painter, t: &Tokens, n: &figcraft_doc::Node, r: Rec
     let (x, y) = (r.min.x, r.min.y);
     painter.add_shape(vec![pos2(x + 6.0, y + 4.5), pos2(x + 2.5, y + 8.0), pos2(x + 6.0, y + 11.5)], false, Color32::TRANSPARENT, stroke(ink, 1.0));
     painter.add_shape(vec![pos2(x + 10.0, y + 4.5), pos2(x + 13.5, y + 8.0), pos2(x + 10.0, y + 11.5)], false, Color32::TRANSPARENT, stroke(ink, 1.0));
+}
+
+/// 未选中时悬停名称行（名称文字或图标槽）显示的「三个点」——点它选中对象并弹菜单。
+/// 灰色实心圆点，与名称的灰同源；居中排在 16×16 槽里。
+fn more_dots(painter: &mut Painter, r: Rect, ink: Color32) {
+    let c = r.center();
+    for dx in [-4.0, 0.0, 4.0] {
+        painter.circle_filled(pos2(c.x + dx, c.y), 1.5, ink);
+    }
 }
 
 /// 变体组「+」按钮：组件紫底、圆角 3、白色十字（设计稿 10×10 的加号）。
@@ -223,23 +236,28 @@ pub fn draw(app: &CanvasApp, painter: &mut Painter, t: &Tokens, doc: &Document, 
         let size = galley.size();
         let end = x + size.x;
         let top = tl.y - LABEL_GAP - size.y;
+        // 命中区 = 文字框本身（顶边 = 文字顶，底边 = 上边缘上方 `LABEL_GAP`），
+        // 重命名框直接用这个顶边，所以两态永远重合。
+        let label_rect = Rect::from_min_max(pos2(tl.x, top), pos2(end, tl.y - LABEL_GAP));
         // 同上：几何（`area`）仍按 galley 量出来的宽度算，只是不落笔。
         if !renaming {
             painter.galley(pos2(x, top), galley, col);
         }
         // 名称行右侧的两个 16×16 槽：最右是开发状态（有状态就铺底色，否则只有灰图标）。
-        // 槽整块坐在对象上边缘外面，所以只在选中时才画，未选中不占地方也不抢按下。
+        // 选中的对象常驻；未选中时**悬停名称文字或槽**都显示「三个点」，点它选中并弹菜单。
         if let Some((x0, y0, x1, y1)) = screen_bounds(app, doc, id) {
+            let slot = name_slots(x1, y0)[0];
+            let hover_row = app.pointer.is_some_and(|p| label_rect.contains(p) || slot.contains(p));
             if selected || !n.dev_status.is_none() {
-                status_slot(painter, t, n, name_slots(x1, y0)[0]);
+                status_slot(painter, t, n, slot);
+            } else if hover_row {
+                more_dots(painter, slot, label_gray(t));
             }
             if selected && matches!(n.kind, NodeKind::ComponentSet { .. }) {
                 add_variant_button(painter, add_variant_slot((x0 + x1) / 2.0, y1));
             }
         }
-        // 命中区 = 文字框本身（顶边 = 文字顶，底边 = 上边缘上方 `LABEL_GAP`），
-        // 重命名框直接用这个顶边，所以两态永远重合。
-        Rect::from_min_max(pos2(tl.x, top), pos2(end, tl.y - LABEL_GAP))
+        label_rect
     };
     if n.hides_contents() {
         let height = (p01 - p00).length();

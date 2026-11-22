@@ -4335,29 +4335,13 @@ impl CanvasView {
                     self.run_command("node.set", serde_json::json!({ "ids": [id.0], "props": { "devStatus": "readyForDev" } }), cx);
                     return true;
                 }
-                let open = tr("Open in developer mode");
-                let remove = tr("Remove status");
-                let rows = vec![MenuRow::row(open), MenuRow::row(remove)];
-                // 菜单与按钮水平居中：锚点左边 = 槽中心 - 菜单宽 / 2；菜单顶边 = 锚点底 + 4，
-                // 所以锚点底取槽底 + 2，菜单正好落在槽下方 6。
-                let w = 180.0;
-                let (ox, oy) = self.dock().canvas_origin();
-                let anchor = Bounds { origin: gpui::point(px(rect.center().x - w / 2.0 + ox), px(rect.max.y + 2.0 + oy)), size: size(px(1.0), px(0.0)) };
-                let me = cx.entity();
-                let on_pick = Rc::new(move |label: &str, _w: &mut Window, cx: &mut App| {
-                    if label == open {
-                        me.update(cx, |cv, cx| {
-                            cv.run_command("select.set", serde_json::json!({ "ids": [id.0] }), cx);
-                            cv.fields.set_right_tab(2);
-                            cx.notify();
-                        });
-                    } else if label == remove {
-                        me.update(cx, |cv, cx| {
-                            cv.run_command("node.set", serde_json::json!({ "ids": [id.0], "props": { "devStatus": "none" } }), cx)
-                        });
-                    }
-                });
-                self.open_menu(anchor, Some(w), rows, on_pick, cx);
+                self.open_dev_status_menu(id, rect, cx);
+                true
+            }
+            // 未选中：三个点是「先选中这个框、再打开菜单」的入口。
+            canvas::frame_labels::SlotHit::Menu(id) => {
+                self.run_command("select.set", serde_json::json!({ "ids": [id.0] }), cx);
+                self.open_dev_status_menu(id, rect, cx);
                 true
             }
             canvas::frame_labels::SlotHit::AddVariant(id) => {
@@ -4365,6 +4349,33 @@ impl CanvasView {
                 true
             }
         }
+    }
+
+    /// 开发状态槽的下拉：在开发模式中打开 / 移除状态。菜单在槽下方 6、与槽水平居中。
+    fn open_dev_status_menu(&mut self, id: NodeId, rect: canvas::geom::Rect, cx: &mut Context<Self>) {
+        let open = tr("Open in developer mode");
+        let remove = tr("Remove status");
+        let rows = vec![MenuRow::row(open), MenuRow::row(remove)];
+        // 菜单顶边 = 锚点底 + 4，所以锚点底取槽底 + 2 → 菜单落在槽下方 6；
+        // 菜单左边 = 槽中心 - 菜单宽 / 2 → 与槽水平居中。
+        let w = 180.0;
+        let (ox, oy) = self.dock().canvas_origin();
+        let anchor = Bounds { origin: gpui::point(px(rect.center().x - w / 2.0 + ox), px(rect.max.y + 2.0 + oy)), size: size(px(1.0), px(0.0)) };
+        let me = cx.entity();
+        let on_pick = Rc::new(move |label: &str, _w: &mut Window, cx: &mut App| {
+            if label == open {
+                me.update(cx, |cv, cx| {
+                    cv.run_command("select.set", serde_json::json!({ "ids": [id.0] }), cx);
+                    cv.fields.set_right_tab(2);
+                    cx.notify();
+                });
+            } else if label == remove {
+                me.update(cx, |cv, cx| {
+                    cv.run_command("node.set", serde_json::json!({ "ids": [id.0], "props": { "devStatus": "none" } }), cx)
+                });
+            }
+        });
+        self.open_menu(anchor, Some(w), rows, on_pick, cx);
     }
 
     /// The Pages-panel row's right-click menu. Flat four rows, so it uses the same `MenuRow` +
