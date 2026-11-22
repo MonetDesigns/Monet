@@ -476,23 +476,19 @@ fn add_property_button(f: &RightFields, c: &ComponentData) -> gpui::AnyElement {
     let candidates: Vec<(String, u64)> = c.component_candidates.iter().map(|(id, name)| (name.clone(), id.0)).collect();
     let add_popups = f.popups();
     let used_names: Vec<String> = c.defs.iter().map(|d| d.name.clone()).chain(c.variants.iter().map(|(n, _)| n.clone())).collect();
-    div()
+    // 纯图标按钮：用带锚点能力的 IconButton（照抄 Dropdown 的探针机制）。
+    let anchor = crate::widgets::dropdown::menu_anchor(key);
+    let btn = crate::widgets::icon_button::IconButton::new(Icon::Plus)
+        .size(24.0)
         .id(SharedString::from(format!("window-open-{key}")))
-        .size(pt(24.0))
-        .rounded(pt(5.0))
-        .flex()
-        .items_center()
-        .justify_center()
-        .cursor_pointer()
-        .hover(|s| s.bg(rgba(t.hover)))
-        .child(crate::widgets::icon::paint(Icon::Plus, rgba(t.icon), 16.0))
-        .on_mouse_down(gpui::MouseButton::Left, move |_e, window, cx: &mut App| {
+        .menu(key)
+        .on_click_at(move |rect, _window, cx: &mut App| {
             let Some(root) = root.clone() else { return };
             let candidates = candidates.clone();
             let used_names = used_names.clone();
+            // 弹窗锚点用按钮自己的矩形（`on_click_at` 给的窗口坐标），不再靠鼠标位置。
+            let dialog_anchor = gpui::point(rect.origin.x + rect.size.width, rect.origin.y);
             let add_popups = add_popups.clone();
-            let p = window.mouse_position();
-            let anchor = gpui::Bounds { origin: p, size: gpui::size(px(0.0), px(0.0)) };
             // Slot creation stays on the Frame row's "Make slot" flow: the component-level
             // add menu has no Frame to bind, and engine add_prop requires a `layer`, so a Slot
             // row here could only ever fail ("a slot is a frame inside the component").
@@ -501,7 +497,7 @@ fn add_property_button(f: &RightFields, c: &ComponentData) -> gpui::AnyElement {
                 .map(|(label, ty)| crate::widgets::menu::MenuRow::row(tr(label)).key(ty))
                 .collect();
             let cmds = cmds.clone();
-            let on_pick = std::rc::Rc::new(move |ty: &str, window: &mut gpui::Window, cx: &mut App| {
+            let on_pick = std::rc::Rc::new(move |ty: &str, _window: &mut gpui::Window, cx: &mut App| {
                 // lizard `add_property_menu`：Variant 点一下直接建、不弹窗；其余 4 种
                 // (Text/Boolean/Instance swap/Slot) 才写 draft 打开带 Create 按钮的弹窗。
                 if ty == "variant" {
@@ -512,7 +508,7 @@ fn add_property_button(f: &RightFields, c: &ComponentData) -> gpui::AnyElement {
                     return;
                 }
                 let trigger = format!("component-create-property-{}", ty);
-                let top = crate::popovers::anchored_top(&trigger, window);
+                let top = dialog_anchor.y;
                 let base = match ty {
                     "variant" => tr("Variant"),
                     "text" => tr("Text"),
@@ -543,9 +539,10 @@ fn add_property_button(f: &RightFields, c: &ComponentData) -> gpui::AnyElement {
                     )
                 });
             });
-            root.update(cx, |cv, cx| cv.open_menu(anchor, Some(180.0), rows, on_pick, cx));
-        })
-        .into_any_element()
+            let anchor = anchor.clone();
+            root.update(cx, move |cv, cx| cv.open_menu_fit(anchor, rect, rows, on_pick, cx));
+        });
+    btn.into_any_element()
 }
 
 /// 属性下面的「当前变体」：组件/组件集列出了变体属性 → 每个属性的默认值/候选。

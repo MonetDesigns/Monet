@@ -77,8 +77,10 @@ pub fn panel(
     let presets_open = ui.presets_open;
     let plus_q = queue.clone();
     let plus_root = root.clone();
-    let plus = IconButton::new(Icon::Plus).on_click(move |_e, window, cx| {
-        let anchor = gpui::Bounds { origin: window.mouse_position(), size: gpui::size(px(1.0), px(1.0)) };
+    // 照抄 `Dropdown`：.menu(key) + on_click_at 收按钮真实矩形。
+    let plus_key = "motion-add-clip";
+    let plus_anchor = crate::widgets::dropdown::menu_anchor(plus_key);
+    let plus = IconButton::new(Icon::Plus).menu(plus_key).on_click_at(move |rect, _window, cx| {
         let rows: Vec<MenuRow> = ClipKind::ALL.iter().map(|k| MenuRow::row(k.name())).collect();
         let q = plus_q.clone();
         let on_pick = std::rc::Rc::new(move |label: &str, _w: &mut Window, _cx: &mut App| {
@@ -86,8 +88,10 @@ pub fn panel(
                 q.push(Act::AddClip(layer, *kind));
             }
         });
-        plus_root.update(cx, |cv, cx| cv.open_menu(anchor, None, rows, on_pick, cx));
+        let anchor = plus_anchor.clone();
+        plus_root.update(cx, move |cv, cx| cv.open_menu_fit(anchor, rect, rows, on_pick, cx));
     });
+    let plus = plus.into_any_element();
     let mut anim_section = panel_section(tr("Animation")).header_trail(
         div()
             .flex()
