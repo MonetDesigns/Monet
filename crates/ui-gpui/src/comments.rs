@@ -79,6 +79,9 @@ pub(crate) struct CommentUi {
     pub reply: String,
     /// A message being edited: (thread, message index, text).
     pub editing: Option<(u64, usize, String)>,
+    /// The composer's live text (kept in sync by the field's `on_change`, like the palette's
+    /// `palette_query`): `TextField::value()` only updates on commit, so submit must read this.
+    pub composer_text: String,
     pub mention: MentionPick,
     drag: Option<PinDrag>,
     pub scroll_to_open: bool,
@@ -94,6 +97,7 @@ impl Default for CommentUi {
             draft: None,
             reply: String::new(),
             editing: None,
+            composer_text: String::new(),
             mention: MentionPick::default(),
             drag: None,
             scroll_to_open: false,
@@ -112,12 +116,14 @@ impl CommentUi {
         self.open = Some(id);
         self.draft = None;
         self.editing = None;
+        self.composer_text.clear();
         self.mention = MentionPick::default();
     }
     pub fn close(&mut self) {
         self.open = None;
         self.draft = None;
         self.editing = None;
+        self.composer_text.clear();
         self.mention = MentionPick::default();
     }
 }
@@ -445,6 +451,7 @@ pub fn input(app: &crate::CanvasApp, ui: &mut CommentUi, pos: Pos2, pressed: boo
 
 pub fn start_draft(ui: &mut CommentUi, x: f64, y: f64) {
     ui.close();
+    ui.composer_text.clear();
     ui.draft = Some((x, y, String::new()));
 }
 
@@ -723,6 +730,28 @@ fn message_params(thread: u64, index: usize) -> Value {
     }
 }
 
+/// The command a composer submit runs, from the live text and the composer's mode. Extracted so
+/// the "typed text actually gets posted" rule is testable without a live view. `None` when there
+/// is nothing to post (the text is empty).
+fn submit_params(thread: Option<u64>, page: (f64, f64), text: &str, editing: Option<&(u64, usize, String)>) -> Option<(&'static str, Value)> {
+    if text.trim().is_empty() {
+        return None;
+    }
+    let text = text.trim();
+    match (thread, editing) {
+        (_, Some((tid, idx, _))) => {
+            let mut p = message_params(*tid, *idx);
+            p["text"] = json!(text);
+            Some(("comment.edit", p))
+        }
+        (Some(id), None) => Some(("comment.reply", json!({ "id": id, "text": text }))),
+        (None, None) => Some((
+            "comment.add",
+            json!({ "x": page.0, "y": page.1, "text": text, "anchor": true }),
+        )),
+    }
+}
+
 /// The retained state of one open comment popover (a draft or a thread).
 pub(crate) struct Overlay {
     ui: CommentState,
@@ -734,6 +763,8 @@ pub(crate) struct Overlay {
     me: String,
     draft_field: Entity<crate::widgets::TextField>,
     edit_field: Entity<crate::widgets::TextField>,
+    /// Focus the composer on the first frame (palette focuses its search box on open).
+    focus_pending: bool,
 }
 
 impl Overlay {
@@ -770,7 +801,7 @@ impl Overlay {
         let people = app.session.doc().map(|d| d.comment_people()).unwrap_or_default();
         let draft_field = crate::widgets::text_field(cx, POPOVER_W - 24.0, "", "Add a comment", crate::widgets::Slot::None, crate::widgets::Slot::None);
         let edit_field = crate::widgets::text_field(cx, POPOVER_W - 24.0, "", "Edit comment", crate::widgets::Slot::None, crate::widgets::Slot::None);
-        Self { ui, cmds, root, thread, page, people, me, draft_field, edit_field }
+        Self { ui, cmds, root, thread, page, people, me, draft_field, edit_field, focus_pending: true }
     }
 
     pub(crate) fn anchor(&self) -> (f64, f64) {
@@ -795,18 +826,15 @@ impl Overlay {
                 let _ = cx;
             }
             PendingAct::MentionPick if pick_active => {
-                let (field, name, range) = {
+                let (name, range) = {
                     let u = self.ui.borrow();
-                    let name = u.mention.names.get(u.mention.sel).cloned().unwrap_or_default();
-                    (u.mention.field, name, u.mention.range)
+                    (u.mention.names.get(u.mention.sel).cloned().unwrap_or_default(), u.mention.range)
                 };
-                let target = if field == 0 { &self.draft_field } else { &self.edit_field };
-                let mut text = target.read(cx).value(cx);
-                insert_mention(&mut text, range, &name);
-                target.update(cx, |tf, _| {
-                    tf.set_value(text);
-                });
-                self.ui.borrow_mut().mention = MentionPick::default();
+                // Insert into the live state text (the source of truth for submit), exactly where
+                // the @query was typed. Upstream rewrites the field and moves the caret here.
+                let mut u = self.ui.borrow_mut();
+                insert_mention(&mut u.composer_text, range, &name);
+                u.mention = MentionPick::default();
                 let _ = cx;
             }
             PendingAct::Submit => self.submit(cx),
@@ -821,36 +849,41 @@ impl Overlay {
     pub(crate) fn submit(&mut self, cx: &mut App) {
         let (text, editing) = {
             let u = self.ui.borrow();
-            (self.draft_field.read(cx).value(cx), u.editing.clone())
+            // Read the live text from state (`on_change` keeps it in sync). `TextField::value()`
+            // only updates on commit, so reading it here posts an empty comment.
+            (u.composer_text.trim().to_string(), u.editing.clone())
         };
-        let text = text.trim().to_string();
-        if text.is_empty() {
-            return;
-        }
-        if let Some(id) = self.thread {
-            if let Some((tid, idx, _)) = editing {
-                let mut p = message_params(tid, idx);
-                p["text"] = json!(text);
-                self.cmds.push(Cmd { id: "comment.edit", params: Some(p) });
-                self.ui.borrow_mut().editing = None;
+        let Some((id, params)) = submit_params(self.thread, self.page, &text, editing.as_ref()) else { return };
+        self.cmds.push(Cmd { id, params: Some(params) });
+        {
+            let mut u = self.ui.borrow_mut();
+            if u.draft.is_some() {
+                u.draft = None;
             } else {
-                self.cmds.push(Cmd { id: "comment.reply", params: Some(json!({ "id": id, "text": text })) });
+                u.reply.clear();
             }
-        } else {
-            let (x, y) = self.page;
-            self.cmds.push(Cmd { id: "comment.add", params: Some(json!({ "x": x, "y": y, "text": text, "anchor": true })) });
-            self.ui.borrow_mut().draft = None;
+            u.composer_text.clear();
+            if editing.is_some() {
+                u.editing = None;
+            }
         }
-        let _ = cx;
         self.cmds.wake();
+        let _ = cx;
     }
 
-    pub(crate) fn render(&mut self, viewport: gpui::Size<gpui::Pixels>, canvas_left: f32, canvas_top: f32, cx: &mut App) -> Vec<gpui::AnyElement> {
+    pub(crate) fn render(&mut self, app: &crate::CanvasApp, viewport: gpui::Size<gpui::Pixels>, canvas_left: f32, canvas_top: f32, window: &mut Window, cx: &mut App) -> Vec<gpui::AnyElement> {
+        // Put the caret in the composer on the first frame, like the Actions palette does, so
+        // typing goes into the field instead of the canvas shortcuts.
+        if self.focus_pending {
+            self.focus_pending = false;
+            let field = if self.ui.borrow().editing.is_some() { self.edit_field.clone() } else { self.draft_field.clone() };
+            let edit = field.read(cx).edit();
+            edit.update(cx, |te, _| te.focus_editor(window));
+        }
         let t = tokens();
-        let at = {
-            let app = &self.root.read(cx).app;
-            app.to_screen(self.page.0, self.page.1)
-        };
+        // `app` is passed in by the caller: reading `self.root` here would borrow CanvasView
+        // while it is being rendered → "cannot read CanvasView while it is already being updated".
+        let at = app.to_screen(self.page.0, self.page.1);
         let anchor = pos2(canvas_left + at.x, canvas_top + at.y);
         let w = POPOVER_W;
         let mut x = anchor.x + PIN + 8.0;
@@ -866,7 +899,7 @@ impl Overlay {
             body = body.child(self.composer(SharedString::from(tr("Add a comment")), cx));
         } else {
             let id = self.thread.unwrap();
-            let doc = self.root.read(cx).app.session.doc().ok().cloned();
+            let doc = app.session.doc().ok().cloned();
             let Some(doc) = doc else { return Vec::new() };
             let Some(c) = doc.comment(id).cloned() else {
                 self.ui.borrow_mut().close();
@@ -977,13 +1010,9 @@ impl Overlay {
                     body = body.child(chips);
                 }
             }
-            // Reply composer: reuse the draft editor, seeded with the reply text.
-            let reply = self.ui.borrow().reply.clone();
-            self.draft_field.update(cx, |tf, cx| {
-                tf.set_value(&reply);
-                tf.set_placeholder(tr("Reply"));
-                cx.notify();
-            });
+            // Reply composer. Do NOT re-seed the field each frame: `set_value` would reset what
+            // the user is typing (and no-ops anyway while editing). Its live text lives in
+            // `CommentUi::composer_text`, synced by `on_change`.
             body = body.child(self.composer(SharedString::from(tr("Reply")), cx));
         }
 
@@ -1047,9 +1076,9 @@ fn setup_field(field: &Entity<crate::widgets::TextField>, slot: u8, ui: &Comment
                 .map(|q| mention_matches(&people, q, &me))
                 .unwrap_or_default();
             let mut u = u.borrow_mut();
-            if slot == 0 {
-                u.reply = text.to_string();
-            }
+            // The live text is the single source of truth for submit (palette's `palette_query`
+            // pattern) — `TextField::value()` lags until commit.
+            u.composer_text = text.to_string();
             if let Some(r) = found
                 && !names.is_empty()
             {
@@ -1196,6 +1225,32 @@ mod tests {
         assert_eq!(insert_mention(&mut t, (1, 2), "X"), 1, "not on a char boundary: unchanged");
         assert_eq!(insert_mention(&mut t, (5, 9), "X"), 1, "out of range: unchanged");
         assert_eq!(t, "é");
+    }
+
+    #[test]
+    fn composer_submits_the_live_typed_text_not_an_empty_field() {
+        // Regression: TextField::value() only updates on commit, so the composer keeps its live
+        // text in CommentUi::composer_text. A click-draft with typed text must post comment.add
+        // carrying that text and the page point — this is the whole "can't create a comment" bug.
+        let (id, params) = submit_params(None, (120.5, -30.0), "  hello  ", None).expect("non-empty text posts");
+        assert_eq!(id, "comment.add");
+        assert_eq!(params["text"], "hello");
+        assert_eq!(params["x"], 120.5);
+        assert_eq!(params["y"], -30.0);
+        assert_eq!(params["anchor"], true);
+        assert!(submit_params(None, (0.0, 0.0), "   ", None).is_none(), "empty text posts nothing");
+
+        // A thread's reply and an edit go to their own commands, also carrying the live text.
+        let (id, params) = submit_params(Some(7), (0.0, 0.0), "a reply", None).unwrap();
+        assert_eq!(id, "comment.reply");
+        assert_eq!(params["id"], 7);
+        assert_eq!(params["text"], "a reply");
+        let editing = (9u64, 2usize, "old".to_string());
+        let (id, params) = submit_params(Some(9), (0.0, 0.0), "edited", Some(&editing)).unwrap();
+        assert_eq!(id, "comment.edit");
+        assert_eq!(params["id"], 9);
+        assert_eq!(params["reply"], 1, "message index 2 is reply 1");
+        assert_eq!(params["text"], "edited");
     }
 
     #[test]

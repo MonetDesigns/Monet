@@ -454,6 +454,35 @@ mod tests {
     }
 
     #[test]
+    fn comment_tool_click_emits_comment_new_then_posts_a_real_comment() {
+        // The exact path that was broken: select the Comment tool, click the canvas; the engine
+        // must emit a `comment.new` UI request with the page point, and `comment.add` with the
+        // typed text must create a real comment in the document.
+        let mut app = CanvasApp::new(crate::app::sample_doc());
+        handle(&mut app, "engine.execute", &json!({"command": "tool.set", "params": {"tool": "comment"}})).expect("tool.set");
+
+        handle(&mut app, "ui.pointer", &json!({"kind": "click", "x": 500.0, "y": 420.0})).expect("click");
+
+        let reqs: Vec<_> = app.session.ui_requests.iter().filter(|r| r.kind == "comment.new").cloned().collect();
+        assert_eq!(reqs.len(), 1, "a canvas click with the Comment tool must request a new comment");
+        let x = reqs[0].data["x"].as_f64().expect("x");
+        let y = reqs[0].data["y"].as_f64().expect("y");
+        assert!(x.is_finite() && y.is_finite(), "the request carries a page point");
+
+        // Post through the real engine command, exactly as the composer's submit does.
+        let before = app.session.doc().expect("doc").comments.len();
+        let posted = handle(
+            &mut app,
+            "engine.execute",
+            &json!({"command": "comment.add", "params": {"x": x, "y": y, "text": "hello", "anchor": true}}),
+        )
+        .expect("comment.add");
+        assert!(posted.get("id").is_some(), "comment.add returns the new thread id");
+        assert_eq!(app.session.doc().expect("doc").comments.len(), before + 1, "a real comment was created");
+        assert_eq!(app.session.doc().expect("doc").comments.last().unwrap().first.text, "hello");
+    }
+
+    #[test]
     fn a_cancelled_request_is_not_answered() {
         let mut app = CanvasApp::new(crate::app::sample_doc());
         let queue: Queue = Arc::new(Mutex::new(Vec::new()));

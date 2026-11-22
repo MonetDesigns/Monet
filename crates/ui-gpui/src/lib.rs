@@ -6267,12 +6267,16 @@ impl Render for CanvasView {
         }
 
         // A3: the comment draft / thread popover, anchored to its pin on the canvas.
-        let comment_el: Vec<AnyElement> = if let Some(o) = self.comment_overlay.as_mut() {
-            let canvas_left = dock.center_x();
-            let canvas_top = dock.titlebar_h;
-            o.render(vp, canvas_left, canvas_top, cx)
-        } else {
-            Vec::new()
+        let comment_el: Vec<AnyElement> = {
+            // Split the borrows: read `app` while the overlay is mutably borrowed.
+            let CanvasView { app, comment_overlay, .. } = &mut *self;
+            if let Some(o) = comment_overlay.as_mut() {
+                let canvas_left = dock.center_x();
+                let canvas_top = dock.titlebar_h;
+                o.render(app, vp, canvas_left, canvas_top, window, cx)
+            } else {
+                Vec::new()
+            }
         };
 
         // ── 变量编辑器（结构性：独立于 `popup`，egui `app.ui.variables`）────────────────────
