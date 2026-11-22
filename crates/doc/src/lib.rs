@@ -985,6 +985,13 @@ impl Document {
             if let Some(b) = c.board.as_mut() {
                 b.remap(map);
             }
+            // A value table binds fields of its own component's layers: copied along, it targets
+            // the copies (a field whose layer stayed behind keeps pointing at the original).
+            for f in &mut c.component_matrix.fields {
+                if let Some(m) = map.get(&f.layer) {
+                    f.layer = *m;
+                }
+            }
             // A pattern tiling a layer of the copy tiles the copy's layer.
             for p in c.fills.iter_mut().chain(c.strokes.iter_mut()) {
                 if let figcraft_color::PaintKind::Pattern(pt) = &mut p.kind

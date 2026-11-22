@@ -34,7 +34,10 @@ pub(crate) fn section(f: &RightFields, d: &PanelData, cx: &mut App, n: &mut usiz
         return None;
     };
     if c.is_instance {
-        return Some(instance_section(f, c, cx, n));
+        // 嵌在主组件里的实例：实例属性之外，还要能把它「显示哪个组件」绑到 instanceSwap 属性上
+        // （lizard `scoped_property_row(mainComponent)`）。这一行只存在于 `binding_section`，
+        // 而走到这里时 `d.component` 一定是 Some，之前就整行丢了。
+        return Some(instance_section(f, c, d.binding.as_ref(), cx, n));
     }
     if !c.editable_description {
         return None;
@@ -168,8 +171,9 @@ fn property_rows(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut usize
     // 末尾 + 加一个新值（addVariant property/value）。之前只做了弹窗改默认值，
     // 值的重命名 / 新增完全没接（用户反复指出）。
     for (name, values) in &c.variants {
-        // 默认值：取默认变体（左上角）里该属性的值。快照未逐变体存值，用候选首项兜底。
-        let default = values.first().cloned().unwrap_or_default();
+        // 默认值：默认变体（左上角）里该属性自己的值。候选值列表的顺序与默认变体无关，
+        // 拿 `values.first()` 会显示一个根本不是默认变体的值（CodeRabbit PR #18）。
+        let default = c.variant_defaults.get(name).cloned().or_else(|| values.first().cloned()).unwrap_or_default();
         let name_edit = f.row_field(
             cx,
             slot(n),
@@ -490,17 +494,12 @@ fn add_property_button(f: &RightFields, c: &ComponentData) -> gpui::AnyElement {
             let p = window.mouse_position();
             let anchor = gpui::Bounds { origin: p, size: gpui::size(px(0.0), px(0.0)) };
             // Slot creation stays on the Frame row's "Make slot" flow: the component-level
-            // add menu has no Frame to bind, and engine add_prop requires a `layer`.
-            let rows: Vec<crate::widgets::menu::MenuRow> = [
-                ("Variant", "variant"),
-                ("Text", "text"),
-                ("Boolean", "boolean"),
-                ("Instance swap", "instanceSwap"),
-                ("Slot", "slot"),
-            ]
-            .into_iter()
-            .map(|(label, ty)| crate::widgets::menu::MenuRow::row(tr(label)).key(ty))
-            .collect();
+            // add menu has no Frame to bind, and engine add_prop requires a `layer`, so a Slot
+            // row here could only ever fail ("a slot is a frame inside the component").
+            let rows: Vec<crate::widgets::menu::MenuRow> = [("Variant", "variant"), ("Text", "text"), ("Boolean", "boolean"), ("Instance swap", "instanceSwap")]
+                .into_iter()
+                .map(|(label, ty)| crate::widgets::menu::MenuRow::row(tr(label)).key(ty))
+                .collect();
             let cmds = cmds.clone();
             let on_pick = std::rc::Rc::new(move |ty: &str, window: &mut gpui::Window, cx: &mut App| {
                 // lizard `add_property_menu`：Variant 点一下直接建、不弹窗；其余 4 种
@@ -561,7 +560,7 @@ fn current_variant_rows(f: &RightFields, c: &ComponentData) -> Vec<crate::widget
             .text_size(pt(11.0))
             .text_color(rgba(tokens().text_secondary))
             .child(SharedString::from(name.clone()));
-        let current = values.first().cloned().unwrap_or_default();
+        let current = c.variant_defaults.get(name).cloned().or_else(|| values.first().cloned()).unwrap_or_default();
         let rows: Vec<(String, &'static str, Value)> = values
             .iter()
             .map(|v| (v.clone(), "component.editProperty", json!({ "id": owner.0, "name": name, "default": v })))
@@ -572,7 +571,13 @@ fn current_variant_rows(f: &RightFields, c: &ComponentData) -> Vec<crate::widget
     out
 }
 
-fn instance_section(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut usize) -> PanelSection {
+fn instance_section(
+    f: &RightFields,
+    c: &ComponentData,
+    binding: Option<&BindingData>,
+    cx: &mut App,
+    n: &mut usize,
+) -> PanelSection {
     let t = tokens();
     let reset = icon_cmd(Icon::Rotate, "component.resetInstance", json!({}), f, false);
     // lizard `instance_ui` 头部：Dots 菜单（Go to main / Push changes / Restore / Reset / Detach）
@@ -614,24 +619,40 @@ fn instance_section(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut us
         sec = sec.child(sublabel_row(tr("Properties")));
     }
     for p in &c.props {
-        sec = sec.child(instance_prop_row(f, c, cx, n, p));
+        sec = sec.child(instance_prop_row(f, c, None, cx, n, p));
     }
     // 暴露属性的嵌套实例（lizard `exposed_copies`）：名字小标题 + 它们各自的属性行。
     // 之前这块完全没接，实例里暴露的嵌套实例属性在右栏看不到。
-    for (name, props) in &c.exposed_instances {
+    for (copy, name, props) in &c.exposed_instances {
         sec = sec.child(field_row_full(
             div().mt(pt(6.0)).text_size(pt(11.0)).text_color(rgba(t.text)).child(SharedString::from(name.clone())),
         ));
         for p in props {
-            sec = sec.child(instance_prop_row(f, c, cx, n, p));
+            // 打在这个嵌套副本上，不是外层选中的实例：属性名可能只有它才有。
+            sec = sec.child(instance_prop_row(f, c, Some(*copy), cx, n, p));
         }
+    }
+    // 嵌在主组件里的实例：主组件绑定行（lizard `scoped_property_row(mainComponent)`）。
+    if let Some(b) = binding.filter(|b| b.show_main_component_row) {
+        sec = sec.child(bind_row(f, b, "mainComponent", tr("Instance"), "instanceSwap", String::new()));
     }
     sec
 }
 
 /// 实例属性的一行（lizard `instance_props` 的 row）：类型图标 + 属性名 + 值控件。
-fn instance_prop_row(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut usize, p: &ComponentProp) -> crate::widgets::FieldRow {
+fn instance_prop_row(
+    f: &RightFields,
+    c: &ComponentData,
+    // 属性写在哪个实例上：外层选中的实例为 None（引擎按选中项走）；暴露属性的嵌套副本传它自己的 id，
+    // 否则引擎会在外层实例的主组件里找同名属性（找不到就报 unknown property）。
+    target: Option<NodeId>,
+    cx: &mut App,
+    n: &mut usize,
+    p: &ComponentProp,
+) -> crate::widgets::FieldRow {
     let t = tokens();
+    // `instance.setProperties` 的 `ids` 只在明确指定目标时给。
+    let ids = target.map(|id| json!([id.0]));
     let p_icon = match p.kind {
         "boolean" => Icon::Boolean,
         "text" => Icon::Text,
@@ -650,7 +671,12 @@ fn instance_prop_row(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut u
         .child(crate::widgets::icon::paint_in_slot(p_icon, 14.0, Some(rgba(t.text_secondary))))
         .child(SharedString::from(p.name.clone()));
     let control: gpui::AnyElement = match p.kind {
-        "boolean" => checkbox_cmd(p.value == "true", "instance.setProperties", json!({ "properties": { p.name.clone(): p.value != "true" } }), f),
+        "boolean" => checkbox_cmd(
+            p.value == "true",
+            "instance.setProperties",
+            json!({ "ids": ids.clone(), "properties": { p.name.clone(): p.value != "true" } }),
+            f,
+        ),
         "text" => f
             .row_field(
                 cx,
@@ -658,7 +684,7 @@ fn instance_prop_row(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut u
                 &p.value,
                 RowEditCtx {
                     cmd: "instance.setProperties",
-                    params: json!({}),
+                    params: json!({ "ids": ids.clone() }),
                     key: "value",
                     scale: 1.0,
                     string_value: true,
@@ -673,7 +699,9 @@ fn instance_prop_row(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut u
             let rows: Vec<(String, &'static str, Value)> = p
                 .options
                 .iter()
-                .map(|(label, value)| (label.clone(), "instance.setProperties", json!({ "properties": { p.name.clone(): value.clone() } })))
+                .map(|(label, value)| {
+                    (label.clone(), "instance.setProperties", json!({ "ids": ids.clone(), "properties": { p.name.clone(): value.clone() } }))
+                })
                 .collect();
             pick_dropdown(f, p.value.clone(), 0.0, rows).into_any_element()
         }
@@ -692,7 +720,7 @@ fn instance_prop_row(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut u
                     crate::popovers::Row::new(
                         label.clone(),
                         "instance.setProperties",
-                        json!({ "properties": { pname.clone(): value.clone() } }),
+                        json!({ "ids": ids.clone(), "properties": { pname.clone(): value.clone() } }),
                     )
                 })
                 .collect();

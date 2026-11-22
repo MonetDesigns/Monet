@@ -318,7 +318,14 @@ pub(crate) fn editor_popover(f: &RightFields, d: &PanelData, cx: &mut App, vp: S
     // 浮窗和右栏正文同一帧画，槽位从 `PROTO_EDITOR_SLOT` 起，绝不与正文撞同一个编辑器实体。
     let mut n = PROTO_EDITOR_SLOT;
     let rows = editor_rows(f, it, k, cx, &mut n);
-    let avail = (f32::from(vp.height) - 16.0 - popover::HEADER_H - 24.0).max(160.0);
+    let y = ANCHOR_Y.with(|a| a.get());
+    let anchor = point(px(f32::from(vp.width) - right_w - 8.0), px(if y > 8.0 { y } else { 120.0 }));
+    // 外壳先建出来：正文的可用高度要从卡片**真实落点**算（egui `max_h = screen.max.y - pos.y - 64`）。
+    // 拿 `vp.height - 80` 算等于假设卡片贴着视口顶；卡片开在被点那一行，顶边可能低得多，
+    // 长动作列表就会伸到视口外、底部控件点不到。
+    let shell = popover_window(popover::Open::Anchor(anchor)).width(280.0).height(420.0).pad(12.0);
+    let origin = shell.origin(vp);
+    let avail = (f32::from(vp.height) - f32::from(origin.y) - 16.0 - popover::HEADER_H - 24.0).max(160.0);
     let mut list = popover_body();
     for row in rows {
         list = list.child(row);
@@ -332,15 +339,7 @@ pub(crate) fn editor_popover(f: &RightFields, d: &PanelData, cx: &mut App, vp: S
             cmds.wake();
         })
     };
-    let y = ANCHOR_Y.with(|a| a.get());
-    let anchor = point(px(f32::from(vp.width) - right_w - 8.0), px(if y > 8.0 { y } else { 120.0 }));
-    let (_, card) = popover_window(popover::Open::Anchor(anchor))
-        .width(280.0)
-        .height(420.0)
-        .pad(12.0)
-        .title(title_text(tr("Interaction")))
-        .body(body)
-        .show(vp, dismiss);
+    let (_, card) = shell.title(title_text(tr("Interaction"))).body(body).show(vp, dismiss);
     vec![card]
 }
 

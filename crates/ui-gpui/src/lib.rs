@@ -8460,7 +8460,9 @@ impl Render for CanvasView {
             .children(if self.motion && !variables_full { self.motion_clip_popover_layer(cx, vp) } else { Vec::new() })
             // 原型交互详情浮窗：复用同一个 `Popover` 窗口外壳（用户 2026-11-22「那个小窗口
             // 直接用通用控件」）。排在 `popup_el` 之前——详情里的下拉菜单要画在卡片之上。
-            .children(if self.present.is_none() && self.fields.right_tab() == 1 {
+            // 对话框打开时不画：`open_dialog` 不清 `proto_open`，卡片又画在 `dialog_el` 之后，
+            // 会盖在模态对话框上。
+            .children(if self.present.is_none() && self.dialog.is_none() && self.fields.right_tab() == 1 {
                 panels::right::proto::editor_popover(&self.fields, &panel_data, cx, vp, self.right_w)
             } else {
                 Vec::new()

@@ -141,10 +141,6 @@ macro_rules! node_props {
 node_props! {
     Name => name,
     Kind => kind,
-    // lizard-only engine extension (component value table); re-sync from figcraft main when
-    // it gains an equivalent. Registered so the exhaustive node-field check compiles and the
-    // matrix travels with the node in collab.
-    ComponentMatrix => component_matrix,
     Visible => visible,
     Locked => locked,
     Opacity => opacity,
@@ -188,6 +184,12 @@ node_props! {
     Measurements => measurements,
     Board => board,
     Motion => motion,
+    // lizard-only engine extension (component value table); re-sync from figcraft main when it
+    // gains an equivalent. **Last on purpose**: the binary form numbers the variants, so a
+    // property inserted in the middle renumbers every later one and peers on different builds
+    // would read the same edit as a different property (CodeRabbit on PR #18; see the enum's
+    // "new properties go at the end" note).
+    ComponentMatrix => component_matrix,
 }
 
 /// A document-level property. Lists of entries with ids (styles, comments, variable collections,

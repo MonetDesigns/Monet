@@ -345,10 +345,41 @@ pub(super) fn share_props(doc: &mut Document, comps: &[NodeId]) -> Result<()> {
             }
         }
     }
+    // One pass over the document for every missing property instead of one `instances_of` scan
+    // per property per variant (64 variants × 1 property each used to mean 4032 scans).
+    let index = instance_index(doc, comps);
     for (name, def) in &all {
-        give_prop(doc, comps, name, def)?;
+        for c in comps {
+            if prop_defs(doc, *c).contains_key(name) {
+                continue;
+            }
+            set_prop_defs(doc, *c, None, |m| {
+                m.insert(name.clone(), def.clone());
+            })?;
+            if !takes_value(def) {
+                continue;
+            }
+            for inst in index.get(c).into_iter().flatten() {
+                if let NodeKind::Instance { props, .. } = &mut doc.get_mut(*inst)?.kind {
+                    props.entry(name.clone()).or_insert_with(|| prop_default_value(def));
+                }
+            }
+        }
     }
     Ok(())
+}
+
+/// The instances of each of `comps`, in one pass over the document.
+fn instance_index(doc: &Document, comps: &[NodeId]) -> BTreeMap<NodeId, Vec<NodeId>> {
+    let mut out: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
+    for n in doc.nodes() {
+        if let NodeKind::Instance { component, .. } = &n.kind
+            && comps.contains(component)
+        {
+            out.entry(*component).or_default().push(n.id);
+        }
+    }
+    out
 }
 
 /// Bind (or with `property: None` unbind) a layer's field to a property of its component.

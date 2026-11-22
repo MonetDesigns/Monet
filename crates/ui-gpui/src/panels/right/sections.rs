@@ -151,15 +151,16 @@ pub(crate) fn pick_dropdown_lead(
     rows: Vec<(String, &'static str, Value)>,
     lead: Option<Icon>,
 ) -> Dropdown {
-    let menu: Vec<MenuRow> = rows.iter().map(|(l, _, _)| MenuRow::row(l.clone())).collect();
+    // 每行带**行号**当 key：组件可以重名（两个 "Icon"），按显示名反查会把第二行解析成第一行。
+    let menu: Vec<MenuRow> = rows.iter().enumerate().map(|(i, (l, _, _))| MenuRow::row(l.clone()).key(i.to_string())).collect();
     let mut d = Dropdown::new(label, width, lead.map(crate::widgets::dropdown::DropLead::Icon)).fill();
     if let Some(root) = f.root.clone() {
         let cmds = f.cmds.clone();
         d = d.on_click(move |anchor, _window, cx: &mut App| {
             let rows = rows.clone();
             let cmds = cmds.clone();
-            let on_pick = Rc::new(move |label: &str, _w: &mut Window, _cx: &mut App| {
-                if let Some((_, cmd, params)) = rows.iter().find(|(l, _, _)| l == label) {
+            let on_pick = Rc::new(move |key: &str, _w: &mut Window, _cx: &mut App| {
+                if let Some((_, cmd, params)) = key.parse::<usize>().ok().and_then(|i| rows.get(i)) {
                     cmds.push(Cmd { id: cmd, params: Some(params.clone()) });
                 }
             });

@@ -13,14 +13,14 @@ pub(super) fn sync_instance_depth(doc: &mut Document, inst: NodeId, depth: usize
         return;
     }
     let Some(mut root) = doc.node(inst).cloned() else { return };
-    let NodeKind::Instance { component, props: root_props } = &root.kind else { return };
-    let component = *component;
+    let NodeKind::Instance { component, props } = &root.kind else { return };
+    let (component, root_props) = (*component, props.clone());
     let Some(comp) = doc.node(component).cloned() else { return };
     if !matches!(comp.kind, NodeKind::Component { .. }) || doc.is_ancestor(inst, component) || doc.is_ancestor(component, inst) {
         // A missing main, or an instance inside its own main (would recurse forever).
         return;
     }
-    let eff_props = effective_props(&comp, root_props);
+    let eff_props = effective_props(&comp, &root_props);
     // Old layers (kept alive for their overrides), by (parent, source), by source alone (when only
     // one layer mirrors it) and, only when those don't match, by name path.
     let (mut old, by_source, by_src) = index_old_layers(doc, inst, spare);
@@ -47,6 +47,10 @@ pub(super) fn sync_instance_depth(doc: &mut Document, inst: NodeId, depth: usize
     if let Some(r) = doc.node_mut(inst) {
         *r = fresh;
     }
+    // The main's value table: every copied layer takes the value its instance's choices resolve
+    // to. Runs before constraints, so a cell that sets a size is followed by layout like the
+    // main's own size would be.
+    remeasure.extend(apply_matrix(doc, component, &root_props, &map));
     // A resized instance: children follow their constraints (auto layout re-flows later).
     let (iw, ih) = doc.node(inst).map(|n| (n.width, n.height)).unwrap_or((comp.width, comp.height));
     if (iw - comp.width).abs() > 1e-9 || (ih - comp.height).abs() > 1e-9 {
@@ -286,6 +290,49 @@ fn apply_enclosing_props(
             }
         }
     }
+}
+
+/// Apply the main component's value table (lizard's `ComponentMatrix`) to the layers a rebuild
+/// just copied: every field resolves against the instance's choices for the axes (an unknown or
+/// missing choice falls back to the axis default, exactly as `matrixDescribe` reports), and the
+/// most specific matching cell wins. A layer that set the value itself keeps it: a cell is the
+/// main's value, an override is the instance's.
+///
+/// SOURCE NOTE (2026-11-21): lizard-only engine extension — `storytold/figcraft` main has no
+/// `component_matrix`, so there is nothing to re-sync this from until it gains one.
+///
+/// Returns the layers to re-measure (a cell may set characters or a text style).
+fn apply_matrix(doc: &mut Document, component: NodeId, props: &BTreeMap<String, Value>, map: &BTreeMap<NodeId, NodeId>) -> Vec<NodeId> {
+    let Some(matrix) = doc.node(component).map(|c| c.component_matrix.clone()) else { return Vec::new() };
+    if matrix.fields.is_empty() {
+        return Vec::new();
+    }
+    let choices = matrix.choices(props);
+    let cells: Vec<(NodeId, String, Value)> = matrix
+        .fields
+        .iter()
+        .filter_map(|f| Some((*map.get(&f.layer)?, f.field.clone(), matrix.resolve(f, &choices)?.clone())))
+        .collect();
+    let mut remeasure = Vec::new();
+    for (id, field, value) in cells {
+        let group = crate::cmd::props::override_group(&field);
+        if group == "other" || doc.node(id).is_none_or(|n| n.overrides.contains(group)) {
+            continue;
+        }
+        let before = doc.node(id).map(|n| n.overrides.clone());
+        let one = serde_json::Map::from_iter([(field, value)]);
+        // A cell the node rejects (a field it can't carry) leaves the main's value in place.
+        if crate::cmd::props::apply("component.matrix", doc, id, &one).is_ok() {
+            // `apply` records what it writes as an instance override. A table value comes from
+            // the main and is resolved again on every sync, so it must not stick as an override
+            // (that would also make the cell lose to itself on the next rebuild).
+            if let (Some(before), Some(n)) = (before, doc.node_mut(id)) {
+                n.overrides = before;
+            }
+            remeasure.push(id);
+        }
+    }
+    remeasure
 }
 
 /// Text whose characters or style differ from the main re-measures.

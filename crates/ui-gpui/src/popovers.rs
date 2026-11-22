@@ -602,11 +602,16 @@ struct PropertyCreateState {
     value: Option<Entity<TextField>>,
     /// boolean 用开关代替文本输入（Cell 让点击跨帧保持）。
     boolean: Rc<Cell<bool>>,
-    /// instanceSwap 选中的组件 id，以及候选 (显示名, id)。
-    instance: Option<u64>,
+    /// instanceSwap 选中的组件 id：body 只有 `&self`，所以必须放共享可变状态，否则选完还是 `None`，
+    /// Create 提交 `default: null` 被引擎以「takes a component id」驳回（CodeRabbit PR #18）。
+    instance: Rc<Cell<Option<u64>>>,
+    /// instanceSwap 的候选列表是否展开。
+    instance_open: Rc<Cell<bool>>,
     candidates: Vec<(String, u64)>,
-    /// 已勾选的 preferred 组件 id（Checkbox 行）。
+    /// 已勾选的 preferred 组件 id。
     preferred: Rc<RefCell<Vec<u64>>>,
+    /// Preferred instances 的候选列表是否展开（+ 按钮切换）。
+    preferred_open: Rc<Cell<bool>>,
 }
 
 /// 样式编辑器正文（egui `style_picker::editor`）：Name / Description 两个输入框 + 属性行 +
@@ -1964,15 +1969,19 @@ impl WindowState {
                 tf.set_placeholder(SharedString::from(tr("Value")));
             })),
         };
+        let first = candidates.first().map(|(_, id)| *id);
         w.prop_create = Some(PropertyCreateState {
             owner,
             kind,
             name,
             value,
             boolean: Rc::new(Cell::new(true)),
-            instance: None,
+            // instanceSwap 必须有默认组件才能建：先指向第一个候选，用户可换。
+            instance: Rc::new(Cell::new(if kind == "instanceSwap" { first } else { None })),
+            instance_open: Rc::new(Cell::new(false)),
             candidates,
             preferred: Rc::new(RefCell::new(Vec::new())),
+            preferred_open: Rc::new(Cell::new(false)),
         });
         w
     }
@@ -2011,6 +2020,7 @@ impl WindowState {
             "boolean" => {
                 let s = st.clone();
                 let on = s.boolean.get();
+                let wake = self.cmds.clone();
                 let toggle = div()
                     .w(pt(178.0))
                     .h(pt(24.0))
@@ -2019,36 +2029,74 @@ impl WindowState {
                     .items_center()
                     .cursor_pointer()
                     .child(SharedString::from(if on { tr("True") } else { tr("False") }))
-                    .on_mouse_down(gpui::MouseButton::Left, move |_e, _w, cx| {
+                    .on_mouse_down(gpui::MouseButton::Left, move |_e, _w, _cx| {
                         // 开关就地翻转：状态存在 Rc<Cell> 里，下一帧重建 body 时读取。
                         s.boolean.set(!s.boolean.get());
-                        let _ = cx;
+                        wake.wake();
                     });
                 body = body.child(div().h(pt(24.0)).w_full().mt(pt(10.0)).flex().flex_row().items_center().child(label(tr("Value").to_string())).child(toggle));
             }
             "instanceSwap" => {
-                let current = st
-                    .instance
+                let selected = st.instance.get();
+                let current = selected
                     .and_then(|id| st.candidates.iter().find(|(_, i)| *i == id).map(|(n, _)| n.clone()))
                     .unwrap_or_else(|| tr("Choose instance").to_string());
+                // Value 行本身就是选择器：点一下展开候选，选中的写回共享状态。
+                let open = st.instance_open.clone();
+                let wake = self.cmds.clone();
+                let field = div()
+                    .id("component-create-swap-value")
+                    .w(pt(178.0))
+                    .h(pt(24.0))
+                    .px(pt(6.0))
+                    .rounded(pt(5.0))
+                    .flex()
+                    .items_center()
+                    .cursor_pointer()
+                    .bg(rgba(t.hover))
+                    .text_size(pt(11.0))
+                    .text_color(rgba(t.text))
+                    .child(SharedString::from(current))
+                    .on_mouse_down(gpui::MouseButton::Left, move |_e, _w, _cx| {
+                        open.set(!open.get());
+                        wake.wake();
+                    });
                 body = body.child(
-                    div().h(pt(24.0)).w_full().mt(pt(10.0)).flex().flex_row().items_center().child(label(tr("Value").to_string()))
-                        .child(div().w(pt(178.0)).text_size(pt(11.0)).text_color(rgba(t.text)).child(SharedString::from(current))),
+                    div().h(pt(24.0)).w_full().mt(pt(10.0)).flex().flex_row().items_center().child(label(tr("Value").to_string())).child(field),
                 );
+                if st.instance_open.get() {
+                    body = body.child(self.property_create_candidates(st, false));
+                }
             }
             _ => {}
         }
 
-        // Preferred instances：只有标题行 + + 按钮（lizard `preferred_instances_field`），
-        // 点 + 才弹菜单勾选；不在 body 里铺一列复选框。
+        // Preferred instances（lizard `preferred_instances_field`）：标题行 + + 按钮，点一下展开
+        // 候选勾选。之前只有图标、没有点击处理，`preferred` 永远是空数组。
         if matches!(st.kind, "instanceSwap" | "slot") {
             let n = st.preferred.borrow().len();
-            let shown = if n == 0 { tr("Preferred instances").to_string() } else { tr("Preferred instances").to_string() };
-            body = body.child(
-                div().mt(pt(8.0)).pt(pt(8.0)).w_full().flex().flex_row().items_center()
-                    .child(div().w(pt(264.0)).pl(pt(16.0)).text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(shown)))
-                    .child(crate::widgets::icon::paint_in_slot(crate::widgets::Icon::Plus, 16.0, Some(rgba(t.icon)))),
-            );
+            let shown = if n == 0 { tr("Preferred instances").to_string() } else { format!("{} ({n})", tr("Preferred instances")) };
+            let open = st.preferred_open.clone();
+            let wake = self.cmds.clone();
+            let row = div()
+                .id("component-create-preferred")
+                .mt(pt(8.0))
+                .w_full()
+                .h(pt(24.0))
+                .flex()
+                .flex_row()
+                .items_center()
+                .cursor_pointer()
+                .child(div().w(pt(264.0)).pl(pt(16.0)).text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(shown)))
+                .child(crate::widgets::icon::paint_in_slot(crate::widgets::Icon::Plus, 16.0, Some(rgba(t.icon))))
+                .on_mouse_down(gpui::MouseButton::Left, move |_e, _w, _cx| {
+                    open.set(!open.get());
+                    wake.wake();
+                });
+            body = body.child(row);
+            if st.preferred_open.get() {
+                body = body.child(self.property_create_candidates(st, true));
+            }
         }
 
         // 底部：分隔线 + 14pt 间距 → 右对齐 150×24 Create 按钮 → 下方 16pt 留白（lizard 原样）。
@@ -2056,6 +2104,8 @@ impl WindowState {
         body = body.child(sep);
         let cmds = self.cmds.clone();
         let st2 = st.clone();
+        // instanceSwap 没有默认组件时引擎会驳回（`takes a component id`）：Create 先置灰。
+        let ready = !matches!(st.kind, "instanceSwap") || st.instance.get().is_some();
         let create = div()
             .mt(pt(14.0))
             .ml(pt(154.0))
@@ -2065,10 +2115,9 @@ impl WindowState {
             .flex()
             .items_center()
             .justify_center()
-            .cursor_pointer()
-            .bg(rgba(t.accent))
+            .when(ready, |d| d.cursor_pointer().bg(rgba(t.accent)).text_color(rgba(t.text)))
+            .when(!ready, |d| d.bg(rgba(t.hover)).text_color(rgba(t.text_secondary)))
             .text_size(pt(11.0))
-            .text_color(rgba(t.text))
             .child(tr("Create property"))
             .on_mouse_down(gpui::MouseButton::Left, move |_e, _window, cx: &mut App| {
                 let st = &st2;
@@ -2079,9 +2128,12 @@ impl WindowState {
                 let default = match st.kind {
                     "text" => st.value.as_ref().map(|v| json!(v.read(cx).value(cx))).unwrap_or(Value::Null),
                     "boolean" => json!(st.boolean.get()),
-                    "instanceSwap" => st.instance.map(|id| json!(id)).unwrap_or(Value::Null),
+                    "instanceSwap" => st.instance.get().map(|id| json!(id)).unwrap_or(Value::Null),
                     _ => Value::Null,
                 };
+                if st.kind == "instanceSwap" && default.is_null() {
+                    return;
+                }
                 let preferred: Vec<u64> = st.preferred.borrow().clone();
                 cmds.push(Cmd {
                     id: "component.addProperty",
@@ -2090,6 +2142,64 @@ impl WindowState {
             });
         body = body.child(create).child(div().h(pt(16.0)));
         body.into_any_element()
+    }
+
+    /// 创建属性弹窗里的候选组件列表：`multi` 时每行勾选进 `preferred`（可多选），否则单选出
+    /// `instance`（instanceSwap 的默认值）。列表自己滚动，不吃对话框的排版高度。
+    fn property_create_candidates(&self, st: &PropertyCreateState, multi: bool) -> AnyElement {
+        let t = tokens();
+        let mut list = div()
+            .id(if multi { "component-create-preferred-list" } else { "component-create-swap-list" })
+            .w_full()
+            .pl(pt(110.0))
+            .max_h(px(120.0))
+            .overflow_y_scroll()
+            .flex()
+            .flex_col();
+        for (name, id) in &st.candidates {
+            let id = *id;
+            let chosen = if multi { st.preferred.borrow().contains(&id) } else { st.instance.get() == Some(id) };
+            let pref = st.preferred.clone();
+            let inst = st.instance.clone();
+            let inst_open = st.instance_open.clone();
+            let wake = self.cmds.clone();
+            let row = div()
+                .h(pt(22.0))
+                .px(pt(6.0))
+                .rounded(pt(4.0))
+                .flex()
+                .items_center()
+                .gap(pt(6.0))
+                .cursor_pointer()
+                .hover(|s| s.bg(rgba(t.hover)))
+                .when(chosen, |d| d.bg(rgba(t.selected_row)))
+                .child(
+                    div()
+                        .size(pt(12.0))
+                        .rounded(pt(3.0))
+                        .border_1()
+                        .border_color(rgba(t.border))
+                        .when(chosen, |d| d.child(crate::widgets::icon::paint(crate::widgets::Icon::Check, rgba(t.text), 12.0))),
+                )
+                .child(div().text_size(pt(11.0)).text_color(rgba(t.text)).child(SharedString::from(name.clone())))
+                .on_mouse_down(gpui::MouseButton::Left, move |_e, _w, _cx| {
+                    if multi {
+                        let mut p = pref.borrow_mut();
+                        if let Some(pos) = p.iter().position(|x| *x == id) {
+                            p.remove(pos);
+                        } else {
+                            p.push(id);
+                        }
+                        drop(p);
+                    } else {
+                        inst.set(Some(id));
+                        inst_open.set(false);
+                    }
+                    wake.wake();
+                });
+            list = list.child(row);
+        }
+        list.into_any_element()
     }
 
     /// 与 Layout / 描边 / 效果设置共用同一张 `WindowState` 通用弹窗卡（header + 关闭 + 拖动），

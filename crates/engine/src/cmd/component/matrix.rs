@@ -11,8 +11,8 @@ use std::collections::BTreeMap;
 use figcraft_doc::{ComponentAxis, ComponentCell, ComponentField, ComponentMatrix, Document, Node, NodeId, NodeKind};
 use serde_json::{Value, json};
 
-use crate::components::{inside_instance, prop_default_value, variant_options, variant_set};
-use crate::params::{req_id, string};
+use crate::components::{inside_instance, variant_options, variant_set};
+use crate::params::req_id;
 use crate::{EngineError, Result, Session, bad};
 
 pub(crate) use matrix_impl::*;
@@ -58,6 +58,14 @@ use super::*;
             return Err(EngineError::Disabled(cmd.into(), crate::library::READ_ONLY.into()));
         }
         Ok(main)
+    }
+
+    /// Rebuild every instance of main `id` so the table's resolved cells reach their layers.
+    /// A new cell, a renamed option and a changed axis all change what an instance shows.
+    fn resync_instances(doc: &mut Document, id: NodeId) {
+        for inst in crate::components::instances_of(doc, id) {
+            crate::components::sync_instance(doc, inst);
+        }
     }
 
     pub(crate) fn matrix_set_axis(s: &mut Session, p: &Value) -> Result<Value> {
@@ -110,6 +118,10 @@ use super::*;
             for field in &mut matrix.fields {
                 field.cells.retain(|cell| cell.when.get(name).is_none_or(|v| options.contains(v)));
             }
+            // Fields left without a cell would keep counting against the 128-field limit while
+            // `matrixDeleteCell` can no longer reach them (their cells are gone): drop them, as
+            // a deleted axis does.
+            matrix.fields.retain(|field| !field.cells.is_empty());
         }
         let instances: Vec<NodeId> = doc
             .nodes()
@@ -127,6 +139,7 @@ use super::*;
                 props.remove(name);
             }
         }
+        resync_instances(doc, id);
         Ok(json!({"id": id, "name": name, "options": options, "default": default}))
     }
 
@@ -158,6 +171,7 @@ use super::*;
                 props.remove(name);
             }
         }
+        resync_instances(doc, id);
         Ok(json!({"id": id, "deleted": name}))
     }
 
@@ -210,6 +224,7 @@ use super::*;
                 props.insert(new_name.to_string(), value);
             }
         }
+        resync_instances(doc, id);
         Ok(json!({"id": id, "name": new_name}))
     }
 
@@ -270,6 +285,7 @@ use super::*;
                 props.insert(axis_name.to_string(), json!(new_name));
             }
         }
+        resync_instances(doc, id);
         Ok(json!({"id": id, "axis": axis_name, "option": new_name}))
     }
 
@@ -349,6 +365,7 @@ use super::*;
         } else {
             target.cells.push(ComponentCell { when: when.clone(), value: value.clone() });
         }
+        resync_instances(s.doc_mut()?, id);
         Ok(json!({"id": id, "layer": layer, "field": field, "when": when, "value": value}))
     }
 
@@ -366,6 +383,7 @@ use super::*;
             return Err(bad(cmd, "cell not found"));
         }
         matrix.fields.retain(|f| !f.cells.is_empty());
+        resync_instances(s.doc_mut()?, id);
         Ok(json!({"id": id, "layer": layer, "field": field, "when": when}))
     }
 
