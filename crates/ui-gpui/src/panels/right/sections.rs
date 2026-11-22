@@ -1642,12 +1642,13 @@ pub(crate) fn paints(
             let popups = f.popups();
             let stroke_queue = f.queue();
             let stroke_data = d.clone();
+            // 高级描边小窗的开窗行为与自动布局 dots 完全一致：window_open_button +
+            // anchored_top + open_detached_with。94616c11 曾改成 anchored_left_below + Open::At，
+            // 使卡片不再贴 Design 面板左缘、位置漂移，这里恢复。
             let dots = window_open_button("stroke", Icon::Menu, popups.is_open("stroke"), move |window, cx| {
-                let at = crate::popovers::anchored_left_below("stroke", window);
-                open_detached_with(popups.clone(), "stroke", None, cx, |_anchor, cx| {
-                    let mut w = crate::popovers::WindowState::stroke(stroke_queue.clone(), &stroke_data, cx, at);
-                    w.anchor_at(at);
-                    w
+                let top = crate::popovers::anchored_top("stroke", window);
+                open_detached_with(popups.clone(), "stroke", Some(top), cx, |anchor, cx| {
+                    crate::popovers::WindowState::stroke(stroke_queue.clone(), &stroke_data, cx, anchor)
                 });
             });
             // 第二行 = 描边对齐下拉 + **线宽字段** + 独立边宽 + 高级描边（egui `paints.rs`:
@@ -1664,7 +1665,8 @@ pub(crate) fn paints(
                         f.stroke_weight.clone().into_any_element(),
                     ),
                 ],
-                vec![sides.into_any_element(), dots],
+                // 用户：左边打开描边弹窗(dots)，右边设置描边位置(sides)。
+                vec![dots, sides.into_any_element()],
             ));
             // Custom 展开：egui `paints.rs::stroke` 的
             // `if let Some(sides) = common(doc, sel, |n| n.stroke.sides).flatten()` ——
@@ -3521,11 +3523,14 @@ pub(crate) fn header(f: &RightFields, d: &PanelData, col: f32) -> Option<gpui::D
             Some(figcraft_doc::BoolOp::Exclude) => Icon::Exclude,
             _ => Icon::Union,
         };
+        // 布尔运算按钮宽 16（与右边的 16pt 下拉箭头成组）。
         let bool_button = if visibility::bool_union_enabled(h.count) {
-            icon_cmd(bool_icon, "bool.union", json!({}), f, false)
+            IconButton::new(bool_icon).size(16.0).active(false).on_click({
+                let cmds = f.cmds.clone();
+                move |_e, _w, _cx| cmds.push(crate::panels::Cmd { id: "bool.union", params: Some(json!({})) })
+            })
         } else {
-            // 参考实现：少于两个图层时点了也不执行，按钮只是当前运算的状态图标。
-            IconButton::new(bool_icon)
+            IconButton::new(bool_icon).size(16.0)
         };
         let cur = h.bool_op.map(|o| o.label());
         let mut bool_rows: Vec<HeadRow> = Vec::new();

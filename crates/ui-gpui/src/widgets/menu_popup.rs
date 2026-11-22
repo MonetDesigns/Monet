@@ -59,7 +59,19 @@ pub enum RectAlign {
     Center,
 }
 
-/// A generic floating layer.
+/// 全项目**唯一**的弹出菜单/浮层控件。所有下拉菜单、工具栏飞出、主菜单、右键菜单、
+/// Actions 面板、取色器浮层都用它——不要另造定位/防溢出的代码。
+///
+/// 它已经具备的能力（调用方只管给锚点和内容，不要再自己算坐标）：
+/// - **对齐**：`.align(RectAlign)` —— `BottomStart`（左缘对齐按钮、默认）、`BottomEnd`（右缘
+///   对齐按钮）、`BottomCenter`（中心对齐）、`Top*` / `Left*` / `Center`。锚点是触发按钮的
+///   真实 `Bounds`，`End`/`Center` 系列会自动减去卡片自身宽度/高度再定位。
+/// - **间距**：`.gap(f32)` —— 卡片与锚点的间距，`Bottom*` 默认 4pt。
+/// - **跟随**：锚点由调用方的跨帧探针持续写入，按钮随滚动/resize 移动时菜单跟着走。
+/// - **防溢出**：`.viewport(vw, vh)` —— 上下超出时上移/内部滚动（`fit_vertical`/`fit_rows`），
+///   水平超出时贴边；`vw/vh` 为 0 时关闭。
+/// - **宽度**：`.width(Width::Anchor|Fit|Min)` —— 跟随按钮宽 / 按最宽内容 / 带下限。
+/// - **统一外观**：所有菜单共用 `menu_surface()`（深色卡面 + 阴影），墨色由 `menu_metrics` 统一。
 pub struct Menu {
     anchor: Bounds<Pixels>,
     width: Width,
