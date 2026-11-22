@@ -503,6 +503,9 @@ pub struct PaneState {
     /// 上一次按下的时间与位置（判双击）。
     last_down: Option<(Instant, Pos2)>,
 
+    /// 上一帧的时间，用于算自动平移的 dt（照搬上游 autopan.rs 的 `unstable_dt`，clamp 到 0.1 s）。
+    autopan_last: Option<Instant>,
+
     /// 左键当前是否按下（光标要变握拳）。
     primary_down: bool,
 
@@ -1157,6 +1160,8 @@ impl CanvasView {
             zoom_drag: None,
 
             last_down: None,
+
+            autopan_last: None,
 
             primary_down: false,
 
@@ -3271,6 +3276,53 @@ impl CanvasView {
         self.app.guide_cursor = None;
 
         canvas::guides::input(&mut self.app, pos, pressed, released, alt)
+    }
+
+    /// 自动平移是否该启动（照搬上游 `ui-egui/src/canvas/autopan.rs::wanted`）：左键拖着一层 /
+    /// 选框 / 正在画的形状，没有手动平移、没在编辑文字或矢量，且手势本身允许 (#2015)。
+    fn autopan_wanted(&self) -> bool {
+        if !self.primary_down || self.pan.is_some() || self.pointer.is_none() {
+            return false;
+        }
+        let Ok(ds) = self.app.session.ds() else { return false };
+        ds.text_edit.is_none() && ds.vector_edit.is_none() && self.app.session.tool.autopans(ds.view.zoom)
+    }
+
+    /// 每帧推进一次自动平移（照搬上游 `autopan.rs::pan`）：指针停在画布边缘时按
+    /// `ViewState::autopan_velocity` 的速度平移视图，并让正拖着的东西跟着文档点走。
+    /// 返回是否平移了 —— 调用方据此续帧，指针不动也持续平移。
+    fn autopan_frame(&mut self, window: &mut Window) -> bool {
+        if !self.autopan_wanted() {
+            self.autopan_last = None;
+            return false;
+        }
+        let now = Instant::now();
+        // 上游的 `unstable_dt`:卡住的一帧不能把视图一下甩出去。
+        let dt = self.autopan_last.map(|t| (now - t).as_secs_f64()).unwrap_or(1.0 / 60.0).clamp(0.0, 0.1);
+        self.autopan_last = Some(now);
+        let pos = self.local(window.mouse_position());
+        let (px, py) = (f64::from(pos.x), f64::from(pos.y));
+        let (vw, vh) = match self.app.session.ds() {
+            Ok(ds) => (ds.view.vw, ds.view.vh),
+            Err(_) => return false,
+        };
+        let (vx, vy) = figcraft_engine::ViewState::autopan_velocity(px, py, vw, vh);
+        if vx == 0.0 && vy == 0.0 {
+            return false;
+        }
+        let moved = match self.app.session.ds_mut() {
+            Ok(ds) => ds.view.autopan(px, py, dt),
+            Err(_) => return false,
+        };
+        if !moved {
+            return false;
+        }
+        if let Ok(ds) = self.app.session.ds_mut() {
+            ds.revision += 1;
+        }
+        // 视图移动后重新喂一次指针:拖着的层/选框/形状要落在指针下的新文档点上。
+        self.send(PointerKind::Move, pos, &self.mods);
+        true
     }
 
     /// 把一次指针事件交给引擎（对应原文 `pointer_event` + `session.pointer`）。
@@ -5853,6 +5905,10 @@ impl Render for CanvasView {
             canvas::guides::end_released(&mut self.app);
         }
 
+        // 自动平移（#2015）：拖到画布边缘时推进视图，并让拖着的东西跟着文档点走。
+        // 放在画布渲染之前，这样本帧就画出平移后的视图；返回 true 时本帧续帧。
+        let autopan_ticking = self.autopan_frame(window);
+
         // Motion 播放头预览：本帧让整条画布链路（渲染请求 / 当帧同步补丁 / 所有叠加层）
         // 都读到同一份求值后的文档，画完立刻还原。只替换 `Arc<Document>` 这一份，
         // 同一帧内还原；引擎的写操作仍走输入事件里的 `ds.doc`。
@@ -6033,7 +6089,7 @@ impl Render for CanvasView {
 
                 // 播放中同样要续帧：动画的每一帧都是新的一帧画面。
 
-                if in_flight || motion_playing || present_playing || duration_ticking || fac_ticking {
+                if in_flight || motion_playing || present_playing || duration_ticking || fac_ticking || autopan_ticking {
                     window.request_animation_frame();
                 }
             },

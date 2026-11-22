@@ -40,8 +40,8 @@ fn a_box_selects_like_a_marquee() {
     let inner = rect(&mut s, 20.0, 20.0, Some(frame));
     let a = rect(&mut s, 0.0, 0.0, None);
     let b = rect(&mut s, 100.0, 0.0, None);
-    // Top-level layers it touches; a frame only touched from outside isn't selected.
-    assert_eq!(area(&mut s, -10.0, -10.0, 340.0, 40.0, json!({})), sorted(vec![a, b]));
+    // Top-level layers it touches; a partly covered frame yields the layers in it (upstream rule).
+    assert_eq!(area(&mut s, -10.0, -10.0, 340.0, 40.0, json!({})), sorted(vec![inner, a, b]));
     // A negative size draws the box the other way.
     assert_eq!(area(&mut s, 130.0, 30.0, -140.0, -40.0, json!({})), sorted(vec![a, b]));
     // Covering the frame selects it.
