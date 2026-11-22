@@ -77,6 +77,22 @@ pub fn screen_bounds(app: &CanvasApp, doc: &Document, id: NodeId) -> Option<(f32
 pub const STATUS_GREEN: Color32 = Color32::from_rgb(0x14, 0xAE, 0x5C);
 pub const STATUS_GREEN_HOVER: Color32 = Color32::from_rgb(0x00, 0x99, 0x51);
 
+/// 名称文字的右端（画布坐标）。名称一旦碰到右侧图标槽，图标就不画、也不接点击。
+fn name_end(doc: &Document, id: NodeId, x0: f32, x1: f32) -> f32 {
+    let Some(n) = doc.node(id) else { return x0 };
+    let label = if matches!(n.kind, NodeKind::Component { .. } | NodeKind::ComponentSet { .. }) {
+        format!("{COMPONENT_MARK}{}", n.name)
+    } else {
+        n.name.clone()
+    };
+    x0 + text_size(&fit_with(&label, (x1 - x0).max(1.0), |s| text_size(s, regular(11.0)).x), regular(11.0)).x
+}
+
+/// 名称是否撞上状态槽（撞上就省略图标，连 hover 轮廓也不给）。
+fn name_hits_status(doc: &Document, id: NodeId, x0: f32, x1: f32, y0: f32) -> bool {
+    name_end(doc, id, x0, x1) >= name_slots(x1, y0)[0].min.x
+}
+
 /// 名称行图标槽的命中结果。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SlotHit {
@@ -97,8 +113,13 @@ pub fn status_slot_owner(app: &CanvasApp, doc: &Document, page: NodeId, pos: Pos
         if !n.kind.is_frame_like() || n.is_board_atom() {
             continue;
         }
-        let (_, y0, x1, _) = screen_bounds(app, doc, id)?;
-        if name_slots(x1, y0)[0].contains(pos) {
+        let (x0, y0, x1, _) = screen_bounds(app, doc, id)?;
+        let slot = name_slots(x1, y0)[0];
+        // 名称撞上图标时图标被省略，这里也不能命中。
+        if name_hits_status(doc, id, x0, x1, y0) {
+            continue;
+        }
+        if slot.contains(pos) {
             return Some(id);
         }
     }
@@ -117,6 +138,10 @@ pub fn slot_at(app: &CanvasApp, doc: &Document, page: NodeId, sel: &[NodeId], po
         }
         let Some((x0, y0, x1, y1)) = screen_bounds(app, doc, id) else { continue };
         let status = name_slots(x1, y0)[0];
+        // 名称文字撞上图标 → 图标被省略，不接点击。
+        if name_hits_status(doc, id, x0, x1, y0) {
+            continue;
+        }
         if status.contains(pos) {
             let has = !n.dev_status.is_none();
             return Some(if sel.contains(&id) {
@@ -270,7 +295,8 @@ pub fn draw(app: &CanvasApp, painter: &mut Painter, t: &Tokens, doc: &Document, 
         } else {
             n.name.clone()
         };
-        let shown = fit_with(&label, (edge.len - (x - tl.x)).max(20.0), |s| text_size(s, font).x);
+        // 宽度不设下限（`fit_with` 内部只夹到 1pt），长名字可以一路缩到只剩省略号。
+        let shown = fit_with(&label, (edge.len - (x - tl.x)).max(1.0), |s| text_size(s, font).x);
         let galley = painter.layout_no_wrap(shown, font, col);
         let size = galley.size();
         let end = x + size.x;
@@ -283,12 +309,14 @@ pub fn draw(app: &CanvasApp, painter: &mut Painter, t: &Tokens, doc: &Document, 
             painter.galley(pos2(x, top), galley, col);
         }
         // 名称行右侧的两个 16×16 槽：最右是开发状态按钮。没有状态时整块透明、没有悬停态；
-        // 有状态时常态绿 / 悬停深绿 + 三个点。命中和 hover 轮廓不受绘制影响。
+        // 有状态时常态绿 / 悬停深绿 + 三个点。名称文字撞上图标时，图标整个省略。
         if let Some((x0, y0, x1, y1)) = screen_bounds(app, doc, id) {
-            let slot = name_slots(x1, y0)[0];
-            if !n.dev_status.is_none() {
-                let hover_slot = app.pointer.is_some_and(|p| slot.contains(p));
-                status_slot(painter, n, slot, hover_slot);
+            if !name_hits_status(doc, id, x0, x1, y0) {
+                let slot = name_slots(x1, y0)[0];
+                if !n.dev_status.is_none() {
+                    let hover_slot = app.pointer.is_some_and(|p| slot.contains(p));
+                    status_slot(painter, n, slot, hover_slot);
+                }
             }
             if selected && matches!(n.kind, NodeKind::ComponentSet { .. }) {
                 add_variant_button(painter, add_variant_slot((x0 + x1) / 2.0, y1));
