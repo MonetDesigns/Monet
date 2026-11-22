@@ -13,14 +13,20 @@
 
 use super::data::{FlowRow, InteractionRow, PanelData, ProtoData, ScrollData};
 use super::sections::{icon_cmd, icon_row, pick_dropdown, slot};
-use crate::panels::{RightFields, RowEditCtx};
+use crate::panels::{Cmd, PROTO_EDITOR_SLOT, RightFields, RowEditCtx};
+use crate::widgets::popover::{self, popover_body, popover_window, title_text};
 use crate::widgets::{
     Icon, IconButton, PanelSection, SectionHeaderVariant, field_row, field_row_full, field_row_full_trailing, pt, rgba, sublabel_row, sublabel_row2,
     swatch, tokens,
 };
 use figcraft_i18n::tr;
-use gpui::{App, Div, IntoElement, SharedString, div, prelude::*, px};
+use gpui::{AnyElement, App, Div, IntoElement, Pixels, SharedString, Size, div, point, prelude::*, px};
 use serde_json::{Value, json};
+
+thread_local! {
+    /// 最近一次点开交互行时该行在窗口里的顶边（浮窗用它对齐，egui `editor_popover` 的 `y`）。
+    static ANCHOR_Y: std::cell::Cell<f32> = const { std::cell::Cell::new(0.0) };
+}
 
 /// Prototype 标签整页（`right_panel` 在 `right_tab == 1` 时调用）。
 pub(crate) fn panel(f: &RightFields, d: &PanelData, cx: &mut App, n: &mut usize) -> Div {
@@ -35,7 +41,7 @@ pub(crate) fn panel(f: &RightFields, d: &PanelData, cx: &mut App, n: &mut usize)
     if let Some(mine) = &p.frame_flow {
         body = body.child(flow_point_section(f, mine.as_ref(), cx, n)).child(crate::panels::sep());
     }
-    body = body.child(interactions_section(f, p, cx, n));
+    body = body.child(interactions_section(f, p));
     if let Some(scroll) = &p.scroll {
         body = body.child(crate::panels::sep()).child(scroll_section(f, scroll));
     }
@@ -249,7 +255,7 @@ fn flow_point_section(f: &RightFields, mine: Option<&FlowRow>, cx: &mut App, n: 
 // Interactions
 // ───────────────────────────────────────────────────────────────────────────────────────────────
 
-fn interactions_section(f: &RightFields, p: &ProtoData, cx: &mut App, n: &mut usize) -> PanelSection {
+fn interactions_section(f: &RightFields, p: &ProtoData) -> PanelSection {
     let Some(list) = p.interactions.as_ref() else {
         // 多选且交互不一致（egui `mixed_interactions`）：「+」把全部换成一条点击导航，
         // 「Remove all」清空。
@@ -265,7 +271,24 @@ fn interactions_section(f: &RightFields, p: &ProtoData, cx: &mut App, n: &mut us
     };
     let empty = list.is_empty();
     // 「+」= 加一条默认点击导航（egui `action_of("Navigate to")`，没有别的 frame 时退回 Back）。
-    let plus = icon_cmd(Icon::Plus, "proto.interaction.add", json!({ "trigger": { "type": "onClick" }, "action": default_navigate(p) }), f, false);
+    // 加完**立刻打开**这条交互的详情浮窗（egui `interactions` 里 `proto.interaction.add`
+    // 之后紧跟 `open_editor(ctx, Some((id, index)))`；否则新建后什么设置都看不到）。
+    let add_params = json!({ "trigger": { "type": "onClick" }, "action": default_navigate(p) });
+    let plus = {
+        let cmds = f.cmds.clone();
+        let open = f.proto_open.clone();
+        let node = p.node;
+        let new_index = list.len();
+        IconButton::new(Icon::Plus).size(24.0).on_click(move |_e, _w, _cx| {
+            cmds.push(Cmd { id: "proto.interaction.add", params: Some(add_params.clone()) });
+            if let Some(node) = node {
+                // 新交互追加在末尾；先把它记成展开项，下一帧文档更新后浮窗正好指向它。
+                *open.borrow_mut() = Some((node, new_index));
+                ANCHOR_Y.with(|a| a.set(0.0));
+            }
+            cmds.wake();
+        })
+    };
     let mut sec = PanelSection::new(tr("Interactions"))
         .variant(if empty { SectionHeaderVariant::Dim } else { SectionHeaderVariant::Normal })
         .header_trail(icon_row(vec![plus]));
@@ -275,17 +298,62 @@ fn interactions_section(f: &RightFields, p: &ProtoData, cx: &mut App, n: &mut us
     for (i, it) in list.iter().enumerate() {
         let remove = icon_cmd(Icon::Minus, "proto.interaction.remove", json!({ "index": i }), f, false);
         sec = sec.child(interaction_line(f, it, i, p.node, remove));
-        if (*f.proto_open.borrow()).is_some_and(|(node, k)| Some(node) == p.node && k == i) {
-            for row in editor_rows(f, it, i, cx, n) {
-                sec = sec.child(row);
-            }
-        }
     }
     sec
 }
 
-/// 展开的交互编辑器（egui `proto_panel.rs::editor_popover` 的 GPUI 就地版）：
-/// 触发器 / 延迟 / 转场 / 时长 / 缓动 + 动作列表。
+/// 交互详情浮窗（egui `proto_panel.rs::editor_popover`）：浮在右栏左侧的**通用弹窗控件**
+/// （`widgets::popover::Popover`），不是就地展开。`at` 的顶边优先用被点那一行的窗口 y。
+pub(crate) fn editor_popover(f: &RightFields, d: &PanelData, cx: &mut App, vp: Size<Pixels>, right_w: f32) -> Vec<AnyElement> {
+    let p = &d.proto;
+    let Some((node, k)) = f.proto_editor() else {
+        return Vec::new();
+    };
+    if p.node != Some(node) {
+        return Vec::new();
+    }
+    let Some(it) = p.interactions.as_ref().and_then(|l| l.get(k)) else {
+        return Vec::new();
+    };
+    // 浮窗和右栏正文同一帧画，槽位从 `PROTO_EDITOR_SLOT` 起，绝不与正文撞同一个编辑器实体。
+    let mut n = PROTO_EDITOR_SLOT;
+    let rows = editor_rows(f, it, k, cx, &mut n);
+    let avail = (f32::from(vp.height) - 16.0 - popover::HEADER_H - 24.0).max(160.0);
+    let mut list = popover_body();
+    for row in rows {
+        list = list.child(row);
+    }
+    let body = div().id("proto-editor-body").w_full().max_h(px(avail)).overflow_y_scroll().child(list);
+    let dismiss: std::rc::Rc<dyn Fn(&mut gpui::Window, &mut App)> = {
+        let open = f.proto_open.clone();
+        let cmds = f.cmds.clone();
+        std::rc::Rc::new(move |_, _| {
+            *open.borrow_mut() = None;
+            cmds.wake();
+        })
+    };
+    let y = ANCHOR_Y.with(|a| a.get());
+    let anchor = point(px(f32::from(vp.width) - right_w - 8.0), px(if y > 8.0 { y } else { 120.0 }));
+    let (_, card) = popover_window(popover::Open::Anchor(anchor))
+        .width(280.0)
+        .height(420.0)
+        .pad(12.0)
+        .title(title_text(tr("Interaction")))
+        .body(body)
+        .show(vp, dismiss);
+    vec![card]
+}
+
+/// 浮窗正文的池槽位：从 `PROTO_EDITOR_SLOT` 往后用，上限是整个池的末尾
+/// （`sections::slot` 是右栏正文用的，只许 0..`PROTO_EDITOR_SLOT`）。
+fn editor_slot(n: &mut usize) -> usize {
+    let s = (*n).min(crate::panels::ROW_EDITORS - 1);
+    *n += 1;
+    s
+}
+
+/// 交互详情浮窗的正文：触发器 / 延迟 / 动作列表 / 转场 / 缓动 / 时长
+/// （egui `proto_panel.rs::editor_popover` 的 body）。
 fn editor_rows(f: &RightFields, it: &InteractionRow, i: usize, cx: &mut App, n: &mut usize) -> Vec<crate::widgets::FieldRow> {
     let mut out = Vec::new();
     // ── Trigger ──
@@ -312,7 +380,7 @@ fn editor_rows(f: &RightFields, it: &InteractionRow, i: usize, cx: &mut App, n: 
     if needs_ms {
         let field = f.row_field(
             cx,
-            slot(n),
+            editor_slot(n),
             &format!("{}", ms_of(&it.trigger_json)),
             RowEditCtx {
                 cmd: "proto.interaction.set",
@@ -331,7 +399,7 @@ fn editor_rows(f: &RightFields, it: &InteractionRow, i: usize, cx: &mut App, n: 
     } else if gesture_delay {
         let field = f.row_field(
             cx,
-            slot(n),
+            editor_slot(n),
             &format!("{}", it.delay_ms),
             RowEditCtx {
                 cmd: "proto.interaction.set",
@@ -425,7 +493,7 @@ fn editor_rows(f: &RightFields, it: &InteractionRow, i: usize, cx: &mut App, n: 
     out.push(sublabel_row(tr("Duration")));
     let dur = f.row_field(
         cx,
-        slot(n),
+        editor_slot(n),
         &format!("{}", it.duration_ms),
         RowEditCtx {
             cmd: "proto.interaction.set",
@@ -459,7 +527,8 @@ fn interaction_line(
     let t = tokens();
     let open = (*f.proto_open.borrow()).is_some_and(|(n, k)| Some(n) == node && k == i);
     let glyph = IconButton::new(Icon::LinkOn).size(20.0);
-    // 点文字区域展开 / 收起编辑器（egui 是点开出浮窗，GPUI 就地展开，功能等价）。
+    // 点文字区域展开 / 收起详情浮窗（egui 是点开出浮窗）；顺便把该行的窗口 y 记下来，
+    // 让浮窗顶边贴着这一行出现，而不是每次固定位置。
     let toggler = f.proto_open.clone();
     let cmds = f.cmds.clone();
     let text = div()
@@ -474,7 +543,8 @@ fn interaction_line(
         .hover(|s| s.bg(rgba(t.hover)))
         .px(pt(4.0))
         .py(pt(2.0))
-        .on_mouse_down(gpui::MouseButton::Left, move |_e, _w, _cx| {
+        .on_mouse_down(gpui::MouseButton::Left, move |e, _w, _cx| {
+            ANCHOR_Y.with(|a| a.set(f32::from(e.position.y)));
             {
                 let mut cur = toggler.borrow_mut();
                 let same = node.is_some() && cur.is_some_and(|(n, k)| Some(n) == node && k == i);

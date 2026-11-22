@@ -8458,6 +8458,13 @@ impl Render for CanvasView {
             // 卡片里的 Easing 是下拉菜单，菜单必须画在卡片之上，否则被卡片自己盖住
             // （用户 2026-11-12「下拉菜单会被窗口遮挡」）。
             .children(if self.motion && !variables_full { self.motion_clip_popover_layer(cx, vp) } else { Vec::new() })
+            // 原型交互详情浮窗：复用同一个 `Popover` 窗口外壳（用户 2026-11-22「那个小窗口
+            // 直接用通用控件」）。排在 `popup_el` 之前——详情里的下拉菜单要画在卡片之上。
+            .children(if self.present.is_none() && self.fields.right_tab() == 1 {
+                panels::right::proto::editor_popover(&self.fields, &panel_data, cx, vp, self.right_w)
+            } else {
+                Vec::new()
+            })
             // Popups (dropdown menus, the main menu, the Actions palette) are drawn AFTER the
             // dialog layer, so a dropdown inside a dialog is not covered by it. This is the one
             // place the layer order lives, so every dropdown everywhere gets it.

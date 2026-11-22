@@ -510,7 +510,13 @@ pub(crate) struct WgslParamEdit {
 pub(crate) const WGSL_PARAM_FIELDS: usize = 12;
 
 /// 池里一个编辑器的数量上限（paint 两列 × 多行 + export + selection-colors，留足余量）。
-pub(crate) const ROW_EDITORS: usize = 48;
+///
+/// 0..[`PROTO_EDITOR_SLOT`] 归右栏正文，之后归交互详情浮窗：浮窗和右栏正文同一帧画进
+/// 两棵树，同一个编辑器实体不能同时出现在两处，槽位必须不相交。
+pub(crate) const ROW_EDITORS: usize = 64;
+
+/// 交互详情浮窗（`panels/right/proto.rs::editor_popover`）专用的槽位起点。
+pub(crate) const PROTO_EDITOR_SLOT: usize = 48;
 
 #[derive(Clone, Copy, Default)]
 pub(crate) struct PanelSel {

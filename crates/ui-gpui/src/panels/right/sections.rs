@@ -13,7 +13,7 @@ use figcraft_i18n::{tr, trf, trn};
 use super::data::{EffectRow, ExportRow, LocalStyleRow, PaintRow, PanelData, ViewData};
 use crate::canvas::geom::Color32;
 use crate::motion::{Act, Queue};
-use crate::panels::{Cmd, ROW_EDITORS, RightFields, RowEditCtx, visibility};
+use crate::panels::{Cmd, RightFields, RowEditCtx, visibility};
 use crate::widgets::{
     Checkbox, ColorField, ColorText, Dropdown, HEADER_H, Icon, IconButton, MenuRow, PAD, PanelSection, SECTION_BOTTOM, SectionHeader,
     SectionHeaderVariant, Segmented, TITLE_PT, block_row, field_row, field_row_full, field_row_full_trailing, pt, rgba, sublabel_row, sublabel_row2,
@@ -134,8 +134,10 @@ impl IntoElement for Section {
 }
 
 /// 认领一个池槽位；超出时夹到最后一个，保证不会 panic。
+/// 正文只可用 0..`PROTO_EDITOR_SLOT`：之后再往后是交互详情浮窗的槽位，同一帧撞同一个
+/// 编辑器实体会被 GPUI 拒绝（一个元素只能挂在一棵树上）。
 pub(crate) fn slot(n: &mut usize) -> usize {
-    let s = (*n).min(ROW_EDITORS - 1);
+    let s = (*n).min(crate::panels::PROTO_EDITOR_SLOT - 1);
     *n += 1;
     s
 }
