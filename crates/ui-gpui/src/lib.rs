@@ -4338,7 +4338,12 @@ impl CanvasView {
                 self.open_dev_status_menu(id, rect, cx);
                 true
             }
-            // 未选中：三个点是「先选中这个框、再打开菜单」的入口。
+            // 未选中且还没标签：这个槽没有悬停态 / 菜单，点一下直接置「待开发」。
+            canvas::frame_labels::SlotHit::Ready(id) => {
+                self.run_command("node.set", serde_json::json!({ "ids": [id.0], "props": { "devStatus": "readyForDev" } }), cx);
+                true
+            }
+            // 未选中但已有标签：先选中这个框，再打开菜单。
             canvas::frame_labels::SlotHit::Menu(id) => {
                 self.run_command("select.set", serde_json::json!({ "ids": [id.0] }), cx);
                 self.open_dev_status_menu(id, rect, cx);

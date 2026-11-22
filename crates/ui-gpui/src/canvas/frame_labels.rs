@@ -82,7 +82,9 @@ pub const STATUS_GREEN_HOVER: Color32 = Color32::from_rgb(0x00, 0x99, 0x51);
 pub enum SlotHit {
     /// 开发状态槽；`true` = 该对象已经有状态（再点一次弹菜单）。
     Status(NodeId, bool),
-    /// 未选中的对象：悬停时槽里是三个点，点一下先选中该对象、再打开菜单。
+    /// 未选中的对象、状态槽里尚未有状态：点一下直接置「待开发」（没有悬停态 / 菜单）。
+    Ready(NodeId),
+    /// 未选中的对象、已有状态：点一下先选中该对象、再打开菜单。
     Menu(NodeId),
     /// 变体组「+」。
     AddVariant(NodeId),
@@ -116,10 +118,13 @@ pub fn slot_at(app: &CanvasApp, doc: &Document, page: NodeId, sel: &[NodeId], po
         let Some((x0, y0, x1, y1)) = screen_bounds(app, doc, id) else { continue };
         let status = name_slots(x1, y0)[0];
         if status.contains(pos) {
+            let has = !n.dev_status.is_none();
             return Some(if sel.contains(&id) {
-                (SlotHit::Status(id, !n.dev_status.is_none()), status)
-            } else {
+                (SlotHit::Status(id, has), status)
+            } else if has {
                 (SlotHit::Menu(id), status)
+            } else {
+                (SlotHit::Ready(id), status)
             });
         }
         if sel.contains(&id) && matches!(n.kind, NodeKind::ComponentSet { .. }) {
@@ -151,33 +156,31 @@ pub fn label_ink(app: &CanvasApp, t: &Tokens, doc: &Document, id: NodeId, select
 }
 
 /// 开发状态按钮：
-/// - 未选中、悬停：透明底 + 三个灰点（点它选中框并弹菜单）。
-/// - 选中、无状态：透明底 + 灰色代码图标（点它置「待开发」）。
-/// - 有「待开发」状态：常态 `STATUS_GREEN` #14AE5C，悬停 `STATUS_GREEN_HOVER` #009951；
-///   图标常态是代码图标，悬停换成三个白点。其它状态仍用 `DEV_CHANGED` / `DEV_COMPLETED`。
-fn status_slot(painter: &mut Painter, t: &Tokens, n: &figcraft_doc::Node, r: Rect, hovered: bool, selected: bool) {
+/// - **没有状态**（常态）：整块透明、没有图标、没有悬停态和菜单，点一下直接置「待开发」。
+///   悬停只让下面的框显示 hover 轮廓（和悬停名称文字一样），按钮本身不起变化。
+/// - **已置待开发**：常态 `STATUS_GREEN` #14AE5C + 代码图标；悬停 `STATUS_GREEN_HOVER`
+///   #009951 + 三个白点，点一下弹菜单。其它状态仍用 `DEV_CHANGED` / `DEV_COMPLETED`。
+fn status_slot(painter: &mut Painter, n: &figcraft_doc::Node, r: Rect, hovered: bool) {
+    if n.dev_status.is_none() {
+        // 未添加标签：透明、无图标、无悬停视觉（hover 轮廓由 overlays 画在对象上）。
+        return;
+    }
     let base = match n.dev_status {
-        DevStatus::None => None,
         DevStatus::ReadyForDev if n.dev_changed => Some(DEV_CHANGED),
         DevStatus::ReadyForDev => Some(STATUS_GREEN),
         DevStatus::Completed => Some(DEV_COMPLETED),
+        DevStatus::None => unreachable!(),
     };
-    // 悬停：已置「待开发」的绿按钮换成深一档的 #009951，图标换三个白点（可点出菜单的
-    // affordance）；无状态的槽仍然透明，只是把灰图标换成灰的三个点。Changed / Completed
-    // 保留自己的状态色。
+    // 悬停「待开发」绿按钮：整块换成深一档的 #009951，图标换成三个白点。
     let fill = if hovered && n.dev_status == DevStatus::ReadyForDev && !n.dev_changed {
         Some(STATUS_GREEN_HOVER)
     } else {
         base
     };
-    if let Some(fill) = fill {
-        painter.rect_filled(r, CornerRadius::same(3), fill);
-    }
-    let ink = if fill.is_some() { Color32::WHITE } else { label_gray(t) };
-    if hovered {
+    painter.rect_filled(r, CornerRadius::same(3), fill.unwrap());
+    let ink = Color32::WHITE;
+    if hovered && n.dev_status == DevStatus::ReadyForDev && !n.dev_changed {
         more_dots(painter, r, ink);
-    } else if !selected && n.dev_status.is_none() {
-        // 未选中且无状态：不画图标，只有悬停才出现三个点（背景透明，不占视觉）。
     } else {
         // 代码图标（设计稿的 `ui-code`，13×11）：左右两个尖括号。
         let (x, y) = (r.min.x, r.min.y);
@@ -279,17 +282,13 @@ pub fn draw(app: &CanvasApp, painter: &mut Painter, t: &Tokens, doc: &Document, 
         if !renaming {
             painter.galley(pos2(x, top), galley, col);
         }
-        // 名称行右侧的两个 16×16 槽：最右是开发状态按钮。有状态 / 选中时常驻；
-        // 未选中时**悬停名称文字或槽**都显示「三个点」，点它选中并弹菜单。
+        // 名称行右侧的两个 16×16 槽：最右是开发状态按钮。没有状态时整块透明、没有悬停态；
+        // 有状态时常态绿 / 悬停深绿 + 三个点。命中和 hover 轮廓不受绘制影响。
         if let Some((x0, y0, x1, y1)) = screen_bounds(app, doc, id) {
             let slot = name_slots(x1, y0)[0];
-            let hover_slot = app.pointer.is_some_and(|p| slot.contains(p));
-            let hover_row = hover_slot || app.pointer.is_some_and(|p| label_rect.contains(p));
-            if selected || !n.dev_status.is_none() || hover_slot {
-                // 悬停按钮：换深一档的绿、图标换三个点；其余按状态 / 选中态画。
-                status_slot(painter, t, n, slot, hover_slot, selected);
-            } else if hover_row {
-                more_dots(painter, slot, label_gray(t));
+            if !n.dev_status.is_none() {
+                let hover_slot = app.pointer.is_some_and(|p| slot.contains(p));
+                status_slot(painter, n, slot, hover_slot);
             }
             if selected && matches!(n.kind, NodeKind::ComponentSet { .. }) {
                 add_variant_button(painter, add_variant_slot((x0 + x1) / 2.0, y1));
