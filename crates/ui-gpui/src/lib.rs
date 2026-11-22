@@ -3321,7 +3321,9 @@ impl CanvasView {
             ds.revision += 1;
         }
         // 视图移动后重新喂一次指针:拖着的层/选框/形状要落在指针下的新文档点上。
-        self.send(PointerKind::Move, pos, &self.mods);
+        // 先拷出修饰键，避免 &self.mods 的不可变借用和 &mut self 冲突。
+        let mods = self.mods;
+        self.send(PointerKind::Move, pos, &mods);
         true
     }
 
