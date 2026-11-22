@@ -639,7 +639,7 @@ impl<'a> Mapper<'a> {
             vd.get("styleOverrideTable").map(Kv::list).unwrap_or_default().iter().filter_map(|s| Some((num(s, "styleID")? as u64, s))).collect();
         // The per-segment settings this importer applies: a style that carries nothing else is
         // fully represented, so it isn't reported as unsupported.
-        const APPLIED: [&str; 5] = ["styleID", "strokeCap", "strokeJoin", "handleMirroring", "cornerRadius"];
+        const APPLIED: [&str; 7] = ["styleID", "strokeCap", "strokeJoin", "handleMirroring", "cornerRadius", "cornerSmoothing", "strokeCapSize"];
         let mut has_uninterpreted = false;
         let mut has_missing = false;
         for segment in &net.segments {
@@ -696,6 +696,15 @@ impl<'a> Mapper<'a> {
                 }
                 if let Some(join @ ("MITER" | "BEVEL" | "ROUND")) = st.and_then(|s| s.get("strokeJoin")).and_then(Kv::str) {
                     out["join"] = json!(join.to_ascii_lowercase());
+                }
+                // A style row's corner smoothing is a fraction, like the layer's `cornerSmoothing`.
+                if let Some(sm) = st.and_then(|s| num(s, "cornerSmoothing")).filter(|v| v.is_finite() && *v >= 0.0) {
+                    out["smoothing"] = json!(sm.min(1.0));
+                }
+                // The arrow size is a multiple of the stroke weight, like the layer's caps; it
+                // belongs to the point that draws the cap, as the cap type does.
+                if let Some(size) = st.and_then(|s| num(s, "strokeCapSize")).filter(|v| v.is_finite() && *v > 0.0) {
+                    out["capSize"] = json!(size.min(100.0));
                 }
                 out
             })

@@ -562,6 +562,35 @@ fn vectors_import_as_editable_networks() {
 }
 
 #[test]
+fn per_point_smoothing_and_cap_size_import_from_style_rows() {
+    let mut blob = square_blob();
+    // Vertex 1's style row is id 1; add both new fields to that row.
+    let mut message = tail_message();
+    {
+        let Kv::Array(nodes) = field_mut(&mut message, "nodeChanges").unwrap() else { panic!() };
+        let wave = nodes.iter_mut().find(|node| node.get("name").and_then(Kv::str) == Some("Wave")).unwrap();
+        let vd = field_mut(wave, "vectorData").unwrap();
+        let Kv::Array(rows) = field_mut(vd, "styleOverrideTable").unwrap() else { panic!() };
+        let Kv::Object(row) = rows.first_mut().unwrap() else { panic!() };
+        row.push(("cornerSmoothing", f(0.6)));
+        row.push(("strokeCapSize", f(3.0)));
+    }
+    {
+        let Kv::Array(blobs) = field_mut(&mut message, "blobs").unwrap() else { panic!() };
+        blobs[1] = o(vec![("bytes", Kv::Bytes(blob))]);
+    }
+    let (doc, warnings) = import(&canvas(&schema(), &message), "Tail").unwrap();
+    let wave = network_of(&doc, "Wave");
+    assert_eq!(wave.vertices[1].smoothing, Some(0.6));
+    assert_eq!(wave.vertices[1].cap_size, Some(3.0));
+    assert_eq!(wave.vertices[0].smoothing, None);
+    assert!(
+        !warnings.iter().any(|w| w.contains("style settings of some vector segments aren't supported")),
+        "{warnings:?}"
+    );
+}
+
+#[test]
 fn per_segment_stroke_styles_are_reported() {
     let styled_import = |segment_style: u32, extra_style_field: Option<(&'static str, Kv<'static>)>| {
         let mut blob = square_blob();

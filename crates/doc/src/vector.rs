@@ -50,11 +50,17 @@ pub struct Vertex {
     /// The join where the stroke turns at this point; `None` takes the layer's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub join: Option<StrokeJoin>,
+    /// Corner smoothing at this point (0..=1); `None` takes the layer's `cornerSmoothing`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smoothing: Option<f64>,
+    /// Size multiplier of a stroke cap drawn at this point (an arrow's size); `None` is 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cap_size: Option<f64>,
 }
 
 impl Vertex {
     pub fn new(x: f64, y: f64) -> Self {
-        Self { x, y, radius: 0.0, mirror: None, cap: None, join: None }
+        Self { x, y, radius: 0.0, mirror: None, cap: None, join: None, smoothing: None, cap_size: None }
     }
     pub fn point(&self) -> Point {
         Point::new(self.x, self.y)
@@ -628,6 +634,13 @@ impl VectorNetwork {
         let reach = self.room(s1, a1, l1, rounds).min(self.room(s2, a2, l2, rounds));
         let own = |at_a: bool, t: f64| if at_a { t } else { 1.0 - t };
         let closed = |s: usize| on_loop.get(s).copied().unwrap_or(false);
+        // A point's own smoothing overrides the layer's; both are clamped to 0..=1.
+        let smoothing = self
+            .vertices
+            .get(v)
+            .and_then(|x| x.smoothing)
+            .unwrap_or(smoothing)
+            .clamp(0.0, 1.0);
         if smoothing > 0.0
             && is_line(&c1)
             && is_line(&c2)

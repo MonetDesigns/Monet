@@ -52,6 +52,11 @@ impl Styled {
         if self.breaks(v) { StrokeCap::None } else { self.net.vertices.get(v).and_then(|x| x.cap).unwrap_or(layer) }
     }
 
+    /// The size multiplier of the cap drawn at point `v`: its own, else 1.
+    fn cap_size_at(&self, v: usize) -> f64 {
+        self.net.vertices.get(v).and_then(|x| x.cap_size).unwrap_or(1.0)
+    }
+
     /// The stroke centred at `width`.
     pub(crate) fn outline(&self, width: f64, props: &StrokeProps) -> BezPath {
         let mut out = BezPath::new();
@@ -103,9 +108,9 @@ impl Styled {
         for (k, run) in self.runs.iter().filter(|r| !r.closed).enumerate() {
             let start = self.cap_at(run.start, if k == 0 { props.cap_start } else { StrokeCap::None });
             let end = self.cap_at(run.end, if k == last { props.cap_end } else { StrokeCap::None });
-            for (at_end, cap) in [(false, start), (true, end)] {
+            for (at_end, cap, vertex) in [(false, start, run.start), (true, end, run.end)] {
                 if cap.is_arrow()
-                    && let Some(head) = crate::arrowhead(&run.path, cap, weight, at_end)
+                    && let Some(head) = crate::arrowhead_sized(&run.path, cap, weight, at_end, self.cap_size_at(vertex))
                 {
                     out.extend(head.elements().iter().copied());
                 }
