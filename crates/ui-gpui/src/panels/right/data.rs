@@ -1381,7 +1381,14 @@ pub fn read_vector(doc: &Document, ve: &figcraft_engine::vectoredit::VectorEdit)
     let round = |v: f64| (v * 100.0).round() / 100.0;
     let net = vectoredit::network(doc, ve.id);
     let pts = net.map(|n| vectoredit::selected_points(n, ve)).unwrap_or_default();
-    let pos = vectoredit::selection_position(doc, ve);
+    // X / Y are the coordinate the selected points share (within 1e-6), not the selection box's
+    // top-left: `vector.edit.position` sets each point's own coordinate, so a Mixed field has to
+    // read each point's own value before it can offer a relative edit.
+    let parent_pts = vectoredit::selected_parent_points(doc, ve);
+    let shared = |axis: fn(&figcraft_geom::Point) -> f64| {
+        let first = parent_pts.first().map(axis)?;
+        parent_pts.iter().all(|p| (axis(p) - first).abs() < 1e-6).then(|| round(first))
+    };
     let b = vectoredit::transform::point_box(doc, ve).filter(|b| b.points.len() > 1);
     let (bw, bh) = match &b {
         Some(b) => (Some(round(b.width)), Some(round(b.height))),
@@ -1408,8 +1415,8 @@ pub fn read_vector(doc: &Document, ve: &figcraft_engine::vectoredit::VectorEdit)
     VectorData {
         count: pts.len(),
         has_selection: !ve.vertices.is_empty() || !ve.segments.is_empty(),
-        x: pos.map(|p| round(p.x)),
-        y: pos.map(|p| round(p.y)),
+        x: shared(|p| p.x),
+        y: shared(|p| p.y),
         w: bw,
         h: bh,
         radius: same(pts.iter().map(|v| vertex(v).map(|x| x.radius))).flatten().map(round),
