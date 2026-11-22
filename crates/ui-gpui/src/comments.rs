@@ -56,6 +56,15 @@ impl MentionPick {
     }
 }
 
+/// Insert the picked @mention into the composer's live text and dismiss the picker. Shared by
+/// the keyboard (Enter/Tab) and a click on a suggestion row.
+pub(crate) fn insert_pick(ui: &CommentState, name: &str) {
+    let mut u = ui.borrow_mut();
+    let range = u.mention.range;
+    let _ = insert_mention(&mut u.composer_text, range, name);
+    u.mention = MentionPick::default();
+}
+
 #[derive(Clone, Copy, Debug)]
 struct PinDrag {
     id: u64,
@@ -826,15 +835,8 @@ impl Overlay {
                 let _ = cx;
             }
             PendingAct::MentionPick if pick_active => {
-                let (name, range) = {
-                    let u = self.ui.borrow();
-                    (u.mention.names.get(u.mention.sel).cloned().unwrap_or_default(), u.mention.range)
-                };
-                // Insert into the live state text (the source of truth for submit), exactly where
-                // the @query was typed. Upstream rewrites the field and moves the caret here.
-                let mut u = self.ui.borrow_mut();
-                insert_mention(&mut u.composer_text, range, &name);
-                u.mention = MentionPick::default();
+                let name = self.ui.borrow().mention.names.get(self.ui.borrow().mention.sel).cloned().unwrap_or_default();
+                insert_pick(&self.ui, &name);
                 let _ = cx;
             }
             PendingAct::Submit => self.submit(cx),
@@ -1041,33 +1043,92 @@ impl Overlay {
     }
 
     /// The shared composer. Its text lives in `draft_field` (reply / draft) or `edit_field`.
+    /// The @mention picker is rendered below it (egui `composer`), showing the names Enter/Tab
+    /// will insert — never a bare input with a hidden picker.
     fn composer(&mut self, hint: SharedString, cx: &mut App) -> Div {
+        let t = tokens();
         let editing = self.ui.borrow().editing.is_some();
         let field = if editing { self.edit_field.clone() } else { self.draft_field.clone() };
         let slot = if editing { 1u8 } else { 0u8 };
-        setup_field(&field, slot, &self.ui, &self.people, &self.me, hint, cx);
         let root = self.root.clone();
+        setup_field(&field, slot, &self.ui, &self.people, &self.me, hint, &root, cx);
         let send = div()
             .flex_none()
             .size(pt(24.0))
             .rounded_full()
-            .bg(rgba(tokens().accent))
+            .bg(rgba(t.accent))
             .flex()
             .items_center()
             .justify_center()
             .cursor_pointer()
             .on_mouse_down(MouseButton::Left, move |_, _, cx: &mut App| root.update(cx, |cv, cx| cv.submit_comment(cx)))
-            .child(div().text_size(pt(14.0)).text_color(rgba(tokens().accent_on)).child("↑"));
-        div().flex().flex_row().items_center().gap(pt(8.0)).child(field).child(send)
+            .child(div().text_size(pt(14.0)).text_color(rgba(t.accent_on)).child("↑"));
+        let mut wrap = div().flex().flex_col().gap(pt(4.0)).child(div().flex().flex_row().items_center().gap(pt(8.0)).child(field).child(send));
+
+        // The @mention candidates (egui `composer`: avatar + name, 26 pt rows, selected/hover
+        // fill, click inserts). `setup_field` already collected the matches into `mention`.
+        let (active, names, sel) = {
+            let u = self.ui.borrow();
+            let m = &u.mention;
+            (m.field == slot && m.active(), m.names.clone(), m.sel)
+        };
+        if active {
+            let mut list = div().flex().flex_col().rounded(pt(5.0)).overflow_hidden();
+            for (i, name) in names.iter().enumerate() {
+                let ui = self.ui.clone();
+                let chosen = name.clone();
+                let root = self.root.clone();
+                list = list.child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(pt(8.0))
+                        .h(pt(26.0))
+                        .px(pt(6.0))
+                        .rounded(pt(5.0))
+                        .bg(rgba(if i == sel { t.selected_row } else { t.hover }))
+                        .cursor_pointer()
+                        .on_mouse_down(MouseButton::Left, move |_, _, cx: &mut App| {
+                            let ui = ui.clone();
+                            let chosen = chosen.clone();
+                            // Route through the view so this click follows the exact same
+                            // mention-insert path as Enter/Tab, with a proper Context to notify.
+                            root.update(cx, move |cv, cx| {
+                                cv.insert_comment_mention(ui, &chosen, cx);
+                            });
+                        })
+                        .child(avatar_div(name, 9.0))
+                        .child(div().text_size(pt(12.0)).text_color(rgba(t.text)).child(name.clone())),
+                );
+            }
+            wrap = wrap.child(list);
+        }
+        wrap
     }
 }
 
-fn setup_field(field: &Entity<crate::widgets::TextField>, slot: u8, ui: &CommentState, people: &[String], me: &str, hint: SharedString, cx: &mut App) {
+fn setup_field(
+    field: &Entity<crate::widgets::TextField>,
+    slot: u8,
+    ui: &CommentState,
+    people: &[String],
+    me: &str,
+    hint: SharedString,
+    root: &Entity<crate::CanvasView>,
+    cx: &mut App,
+) {
     let people = people.to_vec();
     let me = me.to_string();
     let u = ui.clone();
+    // Enter is consumed by the focused TextEdit and never reaches the canvas' key handler, so
+    // post from the field's own commit callback — exactly like the Actions palette's search box.
+    let root = root.clone();
     field.update(cx, |tf, cx| {
         tf.set_placeholder(hint);
+        tf.set_on_commit(move |_text, _w, cx| {
+            root.update(cx, |cv, cx| cv.submit_comment(cx));
+        });
         tf.set_on_change(move |text, _w, cx: &mut App| {
             let cursor = text.chars().count();
             let found = mention_query(text, cursor);

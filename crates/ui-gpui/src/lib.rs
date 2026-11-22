@@ -3979,6 +3979,13 @@ impl CanvasView {
         }
     }
 
+    /// A3: insert a picked @mention name into the composer's live text (shared by the keyboard
+    /// MentionPick path and a click on a suggestion row).
+    pub(crate) fn insert_comment_mention(&mut self, ui: comments::CommentState, name: &str, cx: &mut Context<Self>) {
+        comments::insert_pick(&ui, name);
+        cx.notify();
+    }
+
     /// A3: apply a pin hit-test result. Returns true when the pointer was consumed.
     fn apply_pin_action(&mut self, action: comments::PinAction, cx: &mut Context<Self>) -> bool {
         match action {
@@ -4995,18 +5002,19 @@ impl Render for CanvasView {
                 // `keys`): mention arrows, Enter to post, Escape to close.
                 if this.comment_overlay.is_some() {
                     let key = e.keystroke.key.as_str();
+                    // The canvas key handler receives GPUI's raw names (`up`/`down`/`enter`);
+                    // TextEdit rewrites them to `arrowup`/`arrowdown` only in its own handler.
                     let act = match key {
                         "escape" => Some(comments::PendingAct::Cancel),
-                        "enter" if !e.keystroke.modifiers.shift => {
-                            if this.fields.comment_ui().borrow().mention.active() {
-                                Some(comments::PendingAct::MentionPick)
-                            } else {
-                                Some(comments::PendingAct::Submit)
-                            }
+                        // Enter/mention-pick are handled by the focused field's `on_commit`
+                        // (see comments::setup_field) — the canvas never sees them. Keep here
+                        // only as a fallback for when the field is not focused.
+                        "enter" if !e.keystroke.modifiers.shift && this.fields.comment_ui().borrow().mention.active() => {
+                            Some(comments::PendingAct::MentionPick)
                         }
                         "tab" if this.fields.comment_ui().borrow().mention.active() => Some(comments::PendingAct::MentionPick),
-                        "arrowdown" if this.fields.comment_ui().borrow().mention.active() => Some(comments::PendingAct::MentionDown),
-                        "arrowup" if this.fields.comment_ui().borrow().mention.active() => Some(comments::PendingAct::MentionUp),
+                        "down" if this.fields.comment_ui().borrow().mention.active() => Some(comments::PendingAct::MentionDown),
+                        "up" if this.fields.comment_ui().borrow().mention.active() => Some(comments::PendingAct::MentionUp),
                         _ => None,
                     };
                     if let Some(a) = act {
@@ -5035,8 +5043,8 @@ impl Render for CanvasView {
                 // nothing is being typed (egui `comments::keys`).
                 if this.comment_overlay.is_none() && this.app.session.tool.tool == figcraft_engine::ToolId::Comment {
                     let dir = match e.keystroke.key.as_str() {
-                        "arrowdown" => Some(1),
-                        "arrowup" => Some(-1),
+                        "down" => Some(1),
+                        "up" => Some(-1),
                         _ => None,
                     };
                     if let Some(dir) = dir {
