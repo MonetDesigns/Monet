@@ -7,9 +7,9 @@
 //! 因此旋转帧的标签仍放在几何算出的角点，但保持水平（记为已知限制）。
 //!
 //! 名称的颜色与位置按 2026-11-22 设计稿（Groups 231 / 232 / 234 / 235）：
-//! 未选中 / 常态 / 悬停一律用同一个灰，只有选中才换成该对象更深一档的主题色；
-//! 名称文字框的底边距对象上边缘 [`LABEL_GAP`]；名称行右侧留两个 16×16 图标槽
-//! （[`name_slots`]，最右是开发状态，另一个是预留位，见 `docs/canvas-frame-label.md`）。
+//! 普通帧未选中 / 常态 / 悬停用同一个灰，选中才换成更深一档的强调色；组件 / 组件集一直是
+//! 设计稿里那个紫。名称文字框的底边距对象上边缘 [`LABEL_GAP`]；名称行右侧留两个 16×16
+//! 图标槽（[`name_slots`]，最右是开发状态，另一个是预留位，见 `docs/canvas-frame-label.md`）。
 
 use figcraft_doc::{DevStatus, Document, NodeId, NodeKind};
 use figcraft_geom::Point;
@@ -33,7 +33,7 @@ pub const SLOT_SIZE: f32 = 16.0;
 pub const SLOT_OUTSET: f32 = 2.0;
 /// 两个图标槽之间的间距（设计稿 2）。
 pub const SLOT_GAP: f32 = 2.0;
-/// 图标槽顶边在对象上边缘**之上**的距离（设计稿 6，槽底因此压进对象 10）。
+/// 图标槽底边在对象上边缘**之上**的距离（设计稿 6）：两个槽与名称同一行，坐在对象上边缘外面。
 pub const SLOT_ABOVE: f32 = 6.0;
 /// 变体组「+」的顶边：对象下边缘 + 尺寸框 7 + 尺寸框高 17 + 间距 4。
 pub const ADD_VARIANT_TOP: f32 = 28.0;
@@ -42,9 +42,10 @@ pub const COMPONENT_MARK: &str = "\u{2756} ";
 
 /// 名称行右侧两个 16×16 图标槽的矩形（画布坐标）：`[0]` 是最右边的开发状态槽，
 /// `[1]` 是第二个槽（本轮不画内容，位置记在 `docs/canvas-frame-label.md`）。
+/// 槽**坐在对象上边缘之外**：底边距上边缘 [`SLOT_ABOVE`]，与名称文字同一行。
 pub fn name_slots(x1: f32, y0: f32) -> [Rect; 2] {
     let right = x1 + SLOT_OUTSET - SLOT_SIZE;
-    let y = y0 - SLOT_ABOVE;
+    let y = y0 - SLOT_ABOVE - SLOT_SIZE;
     let first = Rect::from_min_size(pos2(right, y), vec2(SLOT_SIZE, SLOT_SIZE));
     let second = Rect::from_min_size(pos2(right - SLOT_GAP - SLOT_SIZE, y), vec2(SLOT_SIZE, SLOT_SIZE));
     [first, second]
@@ -83,8 +84,7 @@ pub enum SlotHit {
 
 /// 在画布坐标 `pos` 上找名称行图标槽：返回命中项与它的矩形（菜单要按它定位）。
 ///
-/// 只认**选中**的顶层帧：未选中时槽不画，也不该抢走对象右上角角手柄的按下；
-/// 角手柄（8×8，中心在对象右上角）那一小块永远让给手柄。
+/// 只认**选中**的顶层帧：未选中时槽不画，也不该抢走对象的任何按下。
 pub fn slot_at(app: &CanvasApp, doc: &Document, page: NodeId, sel: &[NodeId], pos: Pos2) -> Option<(SlotHit, Rect)> {
     for id in super::rulers::boards(doc, page) {
         if !sel.contains(&id) {
@@ -96,8 +96,7 @@ pub fn slot_at(app: &CanvasApp, doc: &Document, page: NodeId, sel: &[NodeId], po
         }
         let Some((x0, y0, x1, y1)) = screen_bounds(app, doc, id) else { continue };
         let status = name_slots(x1, y0)[0];
-        let handle = Rect::from_center_size(pos2(x1, y0), vec2(8.0, 8.0));
-        if status.contains(pos) && !handle.contains(pos) {
+        if status.contains(pos) {
             return Some((SlotHit::Status(id, !n.dev_status.is_none()), status));
         }
         if matches!(n.kind, NodeKind::ComponentSet { .. }) {
@@ -115,18 +114,16 @@ pub fn label_gray(t: &Tokens) -> Color32 {
     if t.dark { Color32::from_white_alpha(67) } else { Color32::from_black_alpha(67) }
 }
 
-/// 名称的颜色：选中 = 该对象更深一档的主题色（组件紫 / 普通层强调色 / 插槽粉 / 图标橙），
-/// 其余一律灰。
+/// 名称的颜色：组件 / 组件集**一直**是设计稿里那个紫（选中与否都不变）；插槽、图标层同理
+/// 用自己的身份色；普通帧未选中 / 常态 / 悬停用灰，只有选中才换成更深一档的强调色。
 pub fn label_ink(app: &CanvasApp, t: &Tokens, doc: &Document, id: NodeId, selected: bool) -> Color32 {
     let Some(n) = doc.node(id) else { return label_gray(t) };
-    if !selected {
-        return label_gray(t);
-    }
     match n.kind {
         NodeKind::Component { .. } | NodeKind::ComponentSet { .. } => COMPONENT_TEXT,
         NodeKind::Icon { .. } => ICON,
         _ if figcraft_engine::components::is_slot(doc, id) => SLOT,
-        _ => app.accent(),
+        _ if selected => app.accent(),
+        _ => label_gray(t),
     }
 }
 
@@ -230,8 +227,8 @@ pub fn draw(app: &CanvasApp, painter: &mut Painter, t: &Tokens, doc: &Document, 
         if !renaming {
             painter.galley(pos2(x, top), galley, col);
         }
-        // 名称行右侧的两个 16×16 槽：最右是开发状态（有状态就铺底色，否则只有灰图标），
-        // 选中时才画，免得未选中的对象右上角多一块可点区域（会抢走角手柄的按下）。
+        // 名称行右侧的两个 16×16 槽：最右是开发状态（有状态就铺底色，否则只有灰图标）。
+        // 槽整块坐在对象上边缘外面，所以只在选中时才画，未选中不占地方也不抢按下。
         if let Some((x0, y0, x1, y1)) = screen_bounds(app, doc, id) {
             if selected || !n.dev_status.is_none() {
                 status_slot(painter, t, n, name_slots(x1, y0)[0]);
@@ -284,14 +281,15 @@ mod tests {
     }
 
     /// 名称行右侧两个槽（设计稿 Groups 231 / 234 / 235）：最右槽的右边比对象右边缘多 2，
-    /// 槽顶在对象上边缘之上 6，两槽间距 2。
+    /// 槽**底边**在对象上边缘之上 6（整块坐在对象外面，与名称同一行），两槽间距 2。
     #[test]
     fn the_name_row_slots_sit_on_the_objects_top_right() {
         let [status, reserved] = name_slots(305.0, 200.0);
-        assert_eq!((status.min.x, status.min.y, status.width(), status.height()), (291.0, 194.0, 16.0, 16.0));
-        assert_eq!((reserved.min.x, reserved.min.y), (273.0, 194.0));
+        assert_eq!((status.min.x, status.min.y, status.width(), status.height()), (291.0, 178.0, 16.0, 16.0));
+        assert_eq!((reserved.min.x, reserved.min.y), (273.0, 178.0));
         assert_eq!(status.min.x - reserved.max.x, 2.0, "两槽间距 2");
         assert_eq!(status.max.x, 305.0 + 2.0, "最右槽右边 = 对象右边缘 + 2");
+        assert_eq!(status.max.y, 200.0 - 6.0, "槽底边 = 对象上边缘 − 6");
     }
 
     /// 变体组的「+」：16×16、水平居中，顶边 = 对象下边缘 + 尺寸框 7 + 框高 17 + 间距 4。
