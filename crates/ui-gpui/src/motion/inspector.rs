@@ -77,12 +77,10 @@ pub fn panel(
     let presets_open = ui.presets_open;
     let plus_q = queue.clone();
     let plus_root = root.clone();
-    // 照抄通用下拉控件：按钮真实矩形 + 跨帧探针，不用 mouse_position()。
-    let plus_anchor = crate::widgets::dropdown::menu_anchor("motion-add-clip");
-    let plus_cell = plus_anchor.cell();
-    let plus_click_anchor = plus_anchor.clone();
-    let plus = IconButton::new(Icon::Plus).on_click(move |_e, _window, cx| {
-        let rect = plus_cell.get().unwrap_or_else(|| gpui::Bounds { origin: gpui::Point::new(px(0.0), px(0.0)), size: gpui::size(px(24.0), px(24.0)) });
+    // 照抄 `Dropdown`：.menu(key) + on_click_at 收按钮真实矩形。
+    let plus_key = "motion-add-clip";
+    let plus_anchor = crate::widgets::dropdown::menu_anchor(plus_key);
+    let plus = IconButton::new(Icon::Plus).menu(plus_key).on_click_at(move |rect, _window, cx| {
         let rows: Vec<MenuRow> = ClipKind::ALL.iter().map(|k| MenuRow::row(k.name())).collect();
         let q = plus_q.clone();
         let on_pick = std::rc::Rc::new(move |label: &str, _w: &mut Window, _cx: &mut App| {
@@ -90,9 +88,10 @@ pub fn panel(
                 q.push(Act::AddClip(layer, *kind));
             }
         });
-        plus_root.update(cx, |cv, cx| cv.open_menu_fit(plus_click_anchor.clone(), rect, rows, on_pick, cx));
+        let anchor = plus_anchor.clone();
+        plus_root.update(cx, move |cv, cx| cv.open_menu_fit(anchor, rect, rows, on_pick, cx));
     });
-    let plus = crate::popovers::with_button_bounds(plus, plus_anchor.cell());
+    let plus = plus.into_any_element();
     let mut anim_section = panel_section(tr("Animation")).header_trail(
         div()
             .flex()

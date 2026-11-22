@@ -39,21 +39,12 @@ fn push(f: &RightFields, id: &'static str, params: Value) {
     f.cmds.push(Cmd { id, params: Some(params) });
 }
 
-/// 24 pt 切换按钮：与通用 `IconButton` 同外观，字形走统一图标枚举入口。
+/// 24 pt 切换按钮：直接用通用 `IconButton`（同一套外观与字形入口）。
 pub(crate) fn named_icon_toggle(icon: Icon, active: bool, on_click: impl Fn() + 'static) -> gpui::AnyElement {
-    let t = tokens();
-    let ink = if active { rgba(t.accent) } else { rgba(t.icon) };
-    div()
-        .size(pt(24.0))
-        .rounded(pt(5.0))
-        .flex()
-        .items_center()
-        .justify_center()
-        .cursor_pointer()
-        .when(active, |d| d.bg(rgba(t.selected_row)))
-        .when(!active, |d| d.hover(|s| s.bg(rgba(t.hover))))
-        .child(crate::widgets::icon::paint_in_slot(icon, 24.0, Some(ink)))
-        .on_mouse_down(MouseButton::Left, move |_e, _w, _cx| on_click())
+    crate::widgets::icon_button::IconButton::new(icon)
+        .size(24.0)
+        .active(active)
+        .on_click(move |_e, _w, _cx| on_click())
         .into_any_element()
 }
 
@@ -142,6 +133,7 @@ pub(crate) fn slot(n: &mut usize) -> usize {
 
 /// 一个「点开菜单选中即推命令」的下拉（egui `menu_popup` + `menu_item`）。
 /// `rows`: (显示名, 选中后推的命令 id, 命令额外参数)。`cmds` 句柄 clone 进 `on_pick`。
+#[track_caller]
 pub(crate) fn pick_dropdown_lead(
     f: &RightFields,
     label: impl Into<SharedString>,
@@ -149,10 +141,18 @@ pub(crate) fn pick_dropdown_lead(
     rows: Vec<(String, &'static str, Value)>,
     lead: Option<Icon>,
 ) -> Dropdown {
+    let label = label.into();
     let menu: Vec<MenuRow> = rows.iter().map(|(l, _, _)| MenuRow::row(l.clone())).collect();
-    let mut d = Dropdown::new(label, width, lead.map(crate::widgets::dropdown::DropLead::Icon)).fill();
+    // 登记锚点：与 `Dropdown` 原生的 `.menu(key)` 同一套探针，菜单跟随按钮、按钮移动即关闭。
+    // key = 调用点位置 + 显示文案：跨帧绝对稳定（不依赖渲染顺序 / 每帧序号），
+    // 同一调用点的不同行由文案区分；打开的那个按钮因此能每帧写回自己的矩形。
+    let loc = std::panic::Location::caller();
+    let key = format!("pick:{}:{}:{}", loc.file(), loc.line(), label);
+    let anchor_handle = crate::widgets::dropdown::menu_anchor(&key);
+    let mut d = Dropdown::new(label, width, lead.map(crate::widgets::dropdown::DropLead::Icon)).fill().menu(key);
     if let Some(root) = f.root.clone() {
         let cmds = f.cmds.clone();
+        let anchor_handle = anchor_handle.clone();
         d = d.on_click(move |anchor, _window, cx: &mut App| {
             let rows = rows.clone();
             let cmds = cmds.clone();
@@ -161,12 +161,17 @@ pub(crate) fn pick_dropdown_lead(
                     cmds.push(Cmd { id: cmd, params: Some(params.clone()) });
                 }
             });
-            root.update(cx, |cv, cx| cv.open_menu(anchor, Some(width.max(120.0)), menu.clone(), on_pick, cx));
+            let anchor_handle = anchor_handle.clone();
+            let menu = menu.clone();
+            root.update(cx, move |cv, cx| {
+                cv.open_dropdown_menu(Some(anchor_handle), anchor, Some(width.max(120.0)), menu, on_pick, cx);
+            });
         });
     }
     d
 }
 
+#[track_caller]
 pub(crate) fn pick_dropdown(f: &RightFields, label: impl Into<SharedString>, width: f32, rows: Vec<(String, &'static str, Value)>) -> Dropdown {
     pick_dropdown_lead(f, label, width, rows, None)
 }
@@ -888,13 +893,11 @@ fn menu_icon(f: &RightFields, icon: Icon, _width: f32, rows: Vec<(String, &'stat
     let menu: Vec<MenuRow> = rows.iter().map(|(l, _, _)| MenuRow::row(l.clone())).collect();
     let cmds = f.cmds.clone();
     let root = f.root.clone();
-    // 下拉行为：按钮真实矩形 + 跨帧探针，绝不用 mouse_position()。
-    let anchored = crate::menu_rows::AnchoredMenu::new(format!("menu-icon-{icon:?}"));
-    let click_anchor = anchored.anchor.clone();
-    let click_cell = anchored.cell.clone();
-    let btn = IconButton::new(icon).size(24.0).active(active).on_click(move |_e, _window, cx: &mut App| {
+    // 照抄 `Dropdown`：.menu(key) 登记探针，on_click_at 收到按钮真实矩形。
+    let key = format!("menu-icon-{icon:?}");
+    let anchor = crate::widgets::dropdown::menu_anchor(&key);
+    let btn = IconButton::new(icon).size(24.0).active(active).menu(key).on_click_at(move |rect, _window, cx: &mut App| {
         let Some(root) = root.clone() else { return };
-        let rect = click_cell.get().unwrap_or_else(|| Bounds { origin: Point::new(px(0.0), px(0.0)), size: size(px(24.0), px(24.0)) });
         let rows = rows.clone();
         let cmds = cmds.clone();
         let on_pick = Rc::new(move |label: &str, _w: &mut Window, _cx: &mut App| {
@@ -903,21 +906,17 @@ fn menu_icon(f: &RightFields, icon: Icon, _width: f32, rows: Vec<(String, &'stat
             }
         });
         let menu = menu.clone();
-        let anchor = click_anchor.clone();
+        let anchor = anchor.clone();
         root.update(cx, move |cv, cx| cv.open_menu_fit(anchor, rect, menu, on_pick, cx));
     });
-    anchored.wrap(btn)
+    btn.into_any_element()
 }
 
-/// 一颗「常驻图标 + 点开通用悬浮菜单」的按钮。触发字形走资源名（`typ-settings` 这类没有
-/// `Icon` 枚举变体的字形也能用），菜单行的 icon / checked / separator 全部由统一的
-/// [`MenuRow`]（= [`crate::menu_card::Item`]) 配置 —— 与右键菜单、工具栏飞出、主菜单同一套项模型。
+/// 一颗「常驻图标 + 点开通用悬浮菜单」的按钮：直接复用通用 `IconButton` 的锚点能力
+/// （与 `Dropdown` 同一套：canvas 探针量自身矩形 → `open_menu_fit`，按钮下方 4pt 右对齐，
+/// 按钮移动即关闭）。菜单行的 icon / checked / separator 全由统一的 [`MenuRow`] 配置。
 ///
 /// `on_pick` 收到的是行的 key（调用方用 `.key()` 指定稳定键），不依赖显示文案，翻译后仍准。
-///
-/// 锚点：`key` 要跨帧稳定，`MenuAnchor` 持一个跨帧 cell，按钮每帧把真实矩形写进去。点击时
-/// 用同一个 cell 播种 `open_menu_fit`，于是菜单左缘对齐按钮左缘、顶边在按钮底 + 4pt、
-/// 宽度按最宽行（用户 2026-11-20）。不再用 `mouse_position()` —— 那是点击点，不是按钮框。
 fn named_icon_menu(
     f: &RightFields,
     key: &'static str,
@@ -927,28 +926,19 @@ fn named_icon_menu(
     on_pick: Rc<dyn Fn(&str, &mut Window, &mut App)>,
 ) -> gpui::AnyElement {
     let root = f.root.clone();
-    let t = tokens();
-    let ink = if active { rgba(t.accent) } else { rgba(t.icon) };
     let anchor = crate::widgets::dropdown::menu_anchor(key);
-    let cell = anchor.cell();
-    let click_anchor = anchor.clone(); // 闭包要拥有，探针用另一个 clone
-    let btn = div()
-        .size(pt(24.0))
-        .rounded(pt(5.0))
-        .flex()
-        .items_center()
-        .justify_center()
-        .cursor_pointer()
-        .when(active, |d| d.bg(rgba(t.selected_row)))
-        .when(!active, |d| d.hover(|s| s.bg(rgba(t.hover))))
-        .child(crate::widgets::icon::paint_in_slot(trigger, 24.0, Some(ink)))
-        .on_mouse_down(MouseButton::Left, move |_e, _window, cx: &mut App| {
+    crate::widgets::icon_button::IconButton::new(trigger)
+        .size(24.0)
+        .active(active)
+        .menu(key)
+        .on_click_at(move |rect, _window, cx: &mut App| {
             let Some(root) = root.clone() else { return };
-            // 探针 cell 已被按钮每帧写入真实矩形；首帧还没量到才回落到空，由 open 端播种。
-            let rect = cell.get().unwrap_or_else(|| Bounds { origin: Point::new(px(0.0), px(0.0)), size: size(px(24.0), px(24.0)) });
-            root.update(cx, |cv, cx| cv.open_menu_fit(click_anchor.clone(), rect, menu.clone(), on_pick.clone(), cx));
-        });
-    crate::popovers::with_button_bounds(btn, anchor.cell())
+            let anchor = anchor.clone();
+            let menu = menu.clone();
+            let on_pick = on_pick.clone();
+            root.update(cx, move |cv, cx| cv.open_menu_fit(anchor, rect, menu, on_pick, cx));
+        })
+        .into_any_element()
 }
 
 /// 带勾选 / 单选列的菜单按钮：`MenuRow::checked` 是通用的「勾选列」（egui `ui.selectable_label`）。
@@ -971,13 +961,11 @@ fn checked_menu_icon(
         .collect();
     let cmds = f.cmds.clone();
     let root = f.root.clone();
-    // 下拉行为：按钮真实矩形 + 跨帧探针，绝不用 mouse_position()。
-    let anchored = crate::menu_rows::AnchoredMenu::new(format!("checked-menu-icon-{icon:?}"));
-    let click_anchor = anchored.anchor.clone();
-    let click_cell = anchored.cell.clone();
-    let btn = IconButton::new(icon).size(24.0).active(active).on_click(move |_e, _window, cx: &mut App| {
+    // 照抄 `Dropdown`：.menu(key) + on_click_at 收按钮真实矩形。
+    let key = format!("checked-menu-icon-{icon:?}");
+    let anchor = crate::widgets::dropdown::menu_anchor(&key);
+    let btn = IconButton::new(icon).size(24.0).active(active).menu(key).on_click_at(move |rect, _window, cx: &mut App| {
         let Some(root) = root.clone() else { return };
-        let rect = click_cell.get().unwrap_or_else(|| Bounds { origin: Point::new(px(0.0), px(0.0)), size: size(px(24.0), px(24.0)) });
         let menu = menu.clone();
         let rows = rows.clone();
         let cmds = cmds.clone();
@@ -986,10 +974,10 @@ fn checked_menu_icon(
                 cmds.push(Cmd { id: cmd, params: Some(params.clone()) });
             }
         });
-        let anchor = click_anchor.clone();
+        let anchor = anchor.clone();
         root.update(cx, move |cv, cx| cv.open_menu_fit(anchor, rect, menu, on_pick, cx));
     });
-    anchored.wrap(btn)
+    btn.into_any_element()
 }
 
 /// 整行描边按钮（egui `wide_button`）：Design 区底部导出与页面导出共用。
@@ -1758,16 +1746,15 @@ fn wgsl_material_rows(f: &RightFields, d: &PanelData, col: f32, cx: &mut App) ->
 /// 有多少个菜单项；选中文件后其参数才在下方就地展开（由 `d.wgsl.path` 驱动，见 `effects()`）。
 /// 菜单项每次点开时现扫固定目录，增删文件立刻反映，无需重编译。
 fn add_effect_menu(f: &RightFields) -> gpui::AnyElement {
-    let anchored = crate::menu_rows::AnchoredMenu::new("add-effect-menu");
-    let click_anchor = anchored.anchor.clone();
-    let click_cell = anchored.cell.clone();
-    let mut b = IconButton::new(Icon::Plus).size(24.0);
+    // 照抄 `Dropdown`：.menu(key) + on_click_at 收按钮真实矩形。
+    let key = "add-effect-menu";
+    let anchor = crate::widgets::dropdown::menu_anchor(key);
+    let mut b = IconButton::new(Icon::Plus).size(24.0).menu(key);
     if let Some(root) = f.root.clone() {
+        let anchor = anchor.clone();
         let cmds = f.cmds.clone();
-        b = b.on_click(move |_e, _window, cx: &mut App| {
-            let rect = click_cell.get().unwrap_or_else(|| Bounds { origin: Point::new(px(0.0), px(0.0)), size: size(px(24.0), px(24.0)) });
-            // `on_click` 是 `Fn`，每次点击都要给 on_pick 一份独立的队列句柄，故这里重新 clone
-            // （不能直接把外层的 `cmds` 移进内层闭包）。与 `pick_dropdown` 同构。
+        b = b.on_click_at(move |rect, _window, cx: &mut App| {
+            // 每次点击都要给 on_pick 一份独立的队列句柄，故这里重新 clone。与 `pick_dropdown` 同构。
             let cmds = cmds.clone();
             // 7 种内置效果：与 `Effect::TYPES` 同源，选中即加一条该类型效果。
             let mut items: Vec<(String, &'static str, Value)> =
@@ -1794,11 +1781,11 @@ fn add_effect_menu(f: &RightFields) -> gpui::AnyElement {
                     cmds.push(Cmd { id: cmd, params: Some(params.clone()) });
                 }
             });
-            let anchor = click_anchor.clone();
+            let anchor = anchor.clone();
             root.update(cx, move |cv, cx| cv.open_menu_fit(anchor, rect, rows, on_pick, cx));
         });
     }
-    anchored.wrap(b)
+    b.into_any_element()
 }
 
 /// 效果行的方框：点开弹出「效果设置」小窗（egui `effect_settings` 的设置项搬进浮层），
@@ -3394,12 +3381,19 @@ fn head_pick(rows: Vec<HeadRow>, cmds: crate::panels::Cmds) -> Rc<dyn Fn(&str, &
 /// 还接着 `FRAME_PRESETS`，每个分类前一条分隔线（`kind_items` + preset 列表）。
 fn head_dropdown(f: &RightFields, label: String, rows: Vec<HeadRow>) -> Dropdown {
     let menu = head_menu(&rows);
-    let mut d = Dropdown::new(label, 86.0, None);
+    // 登记锚点：菜单跟随按钮、按钮移动即关闭（与 `Dropdown` 原生 `.menu()` 同一套）。
+    let key = "head-type-dropdown";
+    let anchor_handle = crate::widgets::dropdown::menu_anchor(key);
+    let mut d = Dropdown::new(label, 86.0, None).menu(key);
     if let Some(root) = f.root.clone() {
         let cmds = f.cmds.clone();
         d = d.on_click(move |anchor, _window, cx: &mut App| {
             let on_pick = head_pick(rows.clone(), cmds.clone());
-            root.update(cx, |cv, cx| cv.open_menu(anchor, Some(260.0), menu.clone(), on_pick, cx));
+            let anchor_handle = anchor_handle.clone();
+            let menu = menu.clone();
+            root.update(cx, move |cv, cx| {
+                cv.open_dropdown_menu(Some(anchor_handle), anchor, Some(260.0), menu, on_pick, cx);
+            });
         });
     }
     d
@@ -3410,20 +3404,17 @@ fn head_menu_button(f: &RightFields, icon: Icon, side: f32, _width: f32, rows: V
     let menu = head_menu(&rows);
     let cmds = f.cmds.clone();
     let root = f.root.clone();
-    // 照抄 `named_icon_menu` 的锚点机制：按钮真实矩形 + 跨帧探针，绝不用 mouse_position()。
+    // 照抄 `Dropdown`：.menu(key) + on_click_at 收按钮真实矩形。
     let key = format!("head-menu-{icon:?}-{side}");
-    let anchor = crate::widgets::dropdown::menu_anchor(key);
-    let cell = anchor.cell();
-    let click_anchor = anchor.clone();
-    let btn = IconButton::new(icon).size(side).on_click(move |_e, _window, cx: &mut App| {
+    let anchor = crate::widgets::dropdown::menu_anchor(&key);
+    let btn = IconButton::new(icon).size(side).menu(key).on_click_at(move |rect, _window, cx: &mut App| {
         let Some(root) = root.clone() else { return };
-        let rect = cell.get().unwrap_or_else(|| Bounds { origin: Point::new(px(0.0), px(0.0)), size: size(px(side), px(side)) });
         let on_pick = head_pick(rows.clone(), cmds.clone());
-        let anchor = click_anchor.clone();
+        let anchor = anchor.clone();
         let menu = menu.clone();
         root.update(cx, move |cv, cx| cv.open_menu_fit(anchor, rect, menu, on_pick, cx));
     });
-    crate::popovers::with_button_bounds(btn, anchor.cell())
+    btn.into_any_element()
 }
 
 /// 「Create link」：参考实现 `menus::invoke("text.link")` 先弹输入框拿 URL，再执行 `text.link`。
@@ -4454,18 +4445,15 @@ fn local_styles_add_button(f: &RightFields, d: &PanelData) -> gpui::AnyElement {
     let create_params: Vec<Value> = ITEMS.iter().map(|(_, ctype, _)| ls_create_params(d, ctype, "")).collect();
     let root = f.root.clone();
     let cmds = f.cmds.clone();
-    // 照抄 `named_icon_menu`：按钮真实矩形 + 跨帧探针，不用 mouse_position()。
-    let anchor = crate::widgets::dropdown::menu_anchor("local-styles-add");
-    let cell = anchor.cell();
-    let click_anchor = anchor.clone();
-    let btn = IconButton::new(Icon::Plus).size(24.0).on_click(move |_e, _window, cx: &mut App| {
+    // 照抄 `Dropdown`：.menu(key) + on_click_at 收按钮真实矩形。
+    let key = "local-styles-add";
+    let anchor = crate::widgets::dropdown::menu_anchor(key);
+    let btn = IconButton::new(Icon::Plus).size(24.0).menu(key).on_click_at(move |rect, _window, cx: &mut App| {
         let rows: Vec<MenuRow> = ITEMS.iter().map(|r| MenuRow::row(r.0)).collect();
         let Some(root) = root.clone() else { return };
-        let rect = cell.get().unwrap_or_else(|| Bounds { origin: Point::new(px(0.0), px(0.0)), size: size(px(24.0), px(24.0)) });
-        // `on_click` 是 `Fn`，捕获的 `cmds` 不能直接 move 进内层回调，先克隆一份。
         let cmds = cmds.clone();
         let create_params = create_params.clone();
-        let anchor = click_anchor.clone();
+        let anchor = anchor.clone();
         root.update(cx, move |cv, cx| {
             cv.open_menu_fit(
                 anchor,
@@ -4480,7 +4468,7 @@ fn local_styles_add_button(f: &RightFields, d: &PanelData) -> gpui::AnyElement {
             );
         });
     });
-    crate::popovers::with_button_bounds(btn, anchor.cell())
+    btn.into_any_element()
 }
 
 /// Page 节「Local styles」里的一行（egui `style_picker::local_styles` 的 Style 行，1:1）：

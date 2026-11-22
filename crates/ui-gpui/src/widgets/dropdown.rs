@@ -90,12 +90,14 @@ pub fn menu_anchor(key: impl Into<String>) -> MenuAnchor {
     MenuAnchor::new(key)
 }
 
-/// 开关「当前活动的下拉菜单」：只有活动 key（且 x 对得上）的按钮每帧写探针。
+/// 开关「当前活动的下拉菜单」：只有活动 key 的按钮每帧写探针。
+/// `x` 保留在签名里只为兼容既有调用；匹配只看 key —— 按钮横向移动（改窗口宽度）时
+/// 探针必须继续写，否则菜单检测不到「按钮已移动」，也就不会关闭。
 pub fn set_active_menu(key: Option<(String, f32)>) {
     ACTIVE.with(|a| *a.borrow_mut() = key);
 }
-fn active_matches(key: &str, x: f32) -> bool {
-    ACTIVE.with(|a| matches!(&*a.borrow(), Some((k, sx)) if k == key && (sx - x).abs() < 1.0))
+pub(crate) fn active_matches(key: &str, _x: f32) -> bool {
+    ACTIVE.with(|a| matches!(&*a.borrow(), Some((k, _)) if k == key))
 }
 
 /// The lead a dropdown may carry (`ui-egui`'s `DropLead`).
@@ -240,4 +242,21 @@ pub fn dropdown(label: impl Into<SharedString>, width: f32, lead: Option<Icon>) 
 /// `ui-egui::dropdown_lead`: the same button with an icon **or a colour dot** before the label.
 pub fn dropdown_lead(label: impl Into<SharedString>, width: f32, lead: Option<DropLead>) -> Dropdown {
     Dropdown::new(label, width, lead)
+}
+
+#[cfg(test)]
+mod anchor_tests {
+    use super::{active_matches, set_active_menu};
+
+    #[test]
+    fn the_open_anchor_keeps_matching_after_it_moves() {
+        // 打开后按钮横向 / 纵向移动，探针必须继续匹配（否则它停写、菜单永远关不掉）。
+        set_active_menu(Some(("pick:foo".to_string(), 100.0)));
+        assert!(active_matches("pick:foo", 100.0), "原位应匹配");
+        assert!(active_matches("pick:foo", 250.0), "横向移动后仍应匹配");
+        assert!(active_matches("pick:foo", -40.0), "反向移动后仍应匹配");
+        assert!(!active_matches("pick:bar", 100.0), "别的 key 不匹配");
+        set_active_menu(None);
+        assert!(!active_matches("pick:foo", 100.0), "没有活动菜单时不匹配");
+    }
 }

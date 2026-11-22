@@ -45,40 +45,14 @@ pub(crate) fn trigger_moved(open: gpui::Bounds<gpui::Pixels>, live: gpui::Bounds
         || (f32::from(live.origin.y) - f32::from(open.origin.y)).abs() > 1.0
 }
 
-/// 给一个按钮挂「下拉行为」：按钮真实矩形通过跨帧探针上报，点击时用它当锚点开菜单。
-/// 这是所有左键下拉菜单唯一的开窗方式 —— 绝不从 `mouse_position()` 取锚点。
-///
-/// 返回 `(带探针的按钮元素, 点击时调用的开窗回调所需的一切)`；实际开窗需要 root 实体，
-/// 调用处把 `on_click` 里拿到的 `rect` 交给 `open_menu_fit(anchor, rect, rows, on_pick, cx)`。
-pub(crate) struct AnchoredMenu {
-    /// 按钮每帧写入真实矩形的探针 cell。
-    pub cell: Rc<std::cell::Cell<Option<gpui::Bounds<gpui::Pixels>>>>,
-    /// 开窗时要传给 `open_menu_fit` 的跨帧锚点。
-    pub anchor: crate::widgets::dropdown::MenuAnchor,
-}
-
-impl AnchoredMenu {
-    /// `key` 必须跨帧稳定（同一按钮每帧同一个值）。
-    pub fn new(key: impl Into<String>) -> Self {
-        let anchor = crate::widgets::dropdown::menu_anchor(key);
-        Self { cell: anchor.cell(), anchor }
-    }
-
-    /// 点击那一帧的锚点矩形；首帧探针还没量到时给一个 24×24 的兜底（按钮尺寸）。
-    pub fn rect(&self) -> gpui::Bounds<gpui::Pixels> {
-        self.cell.get().unwrap_or_else(|| gpui::Bounds {
-            origin: gpui::Point::new(px(0.0), px(0.0)),
-            size: gpui::size(px(24.0), px(24.0)),
-        })
-    }
-
-    /// 把探针包到按钮元素里（绝对定位、不占空间）。
-    pub fn wrap<E>(&self, el: E) -> gpui::AnyElement
-    where
-        E: gpui::IntoElement,
-        E::Element: gpui::ParentElement + gpui::Styled,
-    {
-        crate::popovers::with_button_bounds(el, self.cell.clone())
+/// 弹层落位：按钮触发的下拉右缘对齐按钮右缘（`BottomEnd`），
+/// 鼠标点触发的右键菜单仍从左往右下展开（`BottomStart`）。
+/// 判据：按钮有跨帧探针，或锚点本身是有真实宽度的矩形（≥ 16pt）；指针只有 0/1pt 宽。
+pub(crate) fn menu_align(has_probe: bool, anchor_width: f32) -> crate::widgets::RectAlign {
+    if has_probe || anchor_width >= 16.0 {
+        crate::widgets::RectAlign::BottomEnd
+    } else {
+        crate::widgets::RectAlign::BottomStart
     }
 }
 
@@ -301,6 +275,19 @@ mod tests {
         assert!(trigger_moved(at, dropped), "按钮纵向移动就关");
         let resized = gpui::Bounds { size: size(px(120.0), px(24.0)), ..at };
         assert!(!trigger_moved(at, resized), "只有宽度变化不算位置移动");
+    }
+
+    #[test]
+    fn dropdowns_align_right_and_context_menus_align_left() {
+        use crate::widgets::RectAlign;
+        // 按钮（有探针 / 有真实宽度）→ 右缘对齐按钮右缘。
+        assert_eq!(menu_align(true, 1.0), RectAlign::BottomEnd);
+        assert_eq!(menu_align(false, 86.0), RectAlign::BottomEnd);
+        assert_eq!(menu_align(false, 16.0), RectAlign::BottomEnd);
+        // 鼠标点（0/1pt 宽、无探针）→ 仍从左往右下展开。
+        assert_eq!(menu_align(false, 0.0), RectAlign::BottomStart);
+        assert_eq!(menu_align(false, 1.0), RectAlign::BottomStart);
+        assert_eq!(menu_align(false, 15.0), RectAlign::BottomStart);
     }
 
     #[test]

@@ -136,26 +136,17 @@ fn add_property_button(f: &RightFields, c: &ComponentData) -> gpui::AnyElement {
     let candidates = c.component_candidates.clone();
     let slot_layer = c.slot_layer;
     let used_names: Vec<String> = c.defs.iter().map(|d| d.name.clone()).chain(c.variants.iter().map(|(n, _)| n.clone())).collect();
-    // 下拉行为：按钮真实矩形 + 跨帧探针，不用 mouse_position()。
-    let anchored = crate::menu_rows::AnchoredMenu::new(key);
-    let click_anchor = anchored.anchor.clone();
-    let click_cell = anchored.cell.clone();
-    let btn = div()
+    // 纯图标按钮：用带锚点能力的 IconButton（照抄 Dropdown 的探针机制）。
+    let anchor = crate::widgets::dropdown::menu_anchor(key);
+    let btn = crate::widgets::icon_button::IconButton::new(Icon::Plus)
+        .size(24.0)
         .id(SharedString::from(format!("window-open-{key}")))
-        .size(pt(24.0))
-        .rounded(pt(5.0))
-        .flex()
-        .items_center()
-        .justify_center()
-        .cursor_pointer()
-        .hover(|s| s.bg(rgba(t.hover)))
-        .child(crate::widgets::icon::paint(Icon::Plus, rgba(t.icon), 16.0))
-        .on_mouse_down(gpui::MouseButton::Left, move |_e, _window, cx: &mut App| {
+        .menu(key)
+        .on_click_at(move |rect, _window, cx: &mut App| {
             let Some(root) = root.clone() else { return };
             let candidates = candidates.clone();
             let used_names = used_names.clone();
             let slot_layer = slot_layer.clone();
-            let rect = click_cell.get().unwrap_or_else(|| gpui::Bounds { origin: gpui::Point::new(px(0.0), px(0.0)), size: gpui::size(px(24.0), px(24.0)) });
             // Slot creation stays on the Frame row's "Make slot" flow: the component-level
             // add menu has no Frame to bind, and engine add_prop requires a `layer`.
             let rows: Vec<crate::widgets::menu::MenuRow> = [("Variant", "variant"), ("Text", "text"), ("Boolean", "boolean"), ("Instance swap", "instanceSwap")]
@@ -181,10 +172,10 @@ fn add_property_button(f: &RightFields, c: &ComponentData) -> gpui::AnyElement {
                 }
                 cmds.push(crate::panels::Cmd { id: "component.addProperty", params: Some(params) });
             });
-            let anchor = click_anchor.clone();
+            let anchor = anchor.clone();
             root.update(cx, move |cv, cx| cv.open_menu_fit(anchor, rect, rows, on_pick, cx));
         });
-    anchored.wrap(btn)
+    btn.into_any_element()
 }
 
 /// 属性下面的「当前变体」：组件/组件集列出了变体属性 → 每个属性的默认值/候选。

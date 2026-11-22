@@ -26,10 +26,14 @@
 
 use crate::widgets::icon::{Icon, paint as paint_icon};
 use crate::widgets::{RADIUS, SLOT, pt, rgba, tokens};
-use gpui::{App, ClickEvent, Div, ElementId, IntoElement, Stateful, Window, div, prelude::*};
+use gpui::{App, Bounds, ClickEvent, Div, ElementId, IntoElement, MouseDownEvent, Pixels, Stateful, Window, div, prelude::*};
+use std::cell::Cell;
+use std::rc::Rc;
 
 /// The click callback; kept as an alias so the struct field stays readable.
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
+/// 与 `Dropdown::OnClick` 同款：回调收到**按钮自己的矩形**（菜单锚点），不是指针位置。
+type ClickAtHandler = Rc<dyn Fn(Bounds<Pixels>, &mut Window, &mut App)>;
 
 std::thread_local! {
     /// Per-frame sequence used to hand every icon button a *stable* `ElementId`.
@@ -75,12 +79,16 @@ pub struct IconButton {
     /// Explicit glyph size; `None` uses 16 pt for a full-size button and 12 pt for a compact one.
     glyph: Option<f32>,
     on_click: Option<ClickHandler>,
+    /// 照抄 `Dropdown`：点击回调收到按钮自身矩形（canvas 探针每帧测量）。
+    on_click_at: Option<ClickAtHandler>,
+    /// 下拉弹窗的锚点 key；登记后探针每帧上报自身矩形，菜单跟随。
+    menu_key: Option<String>,
 }
 
 impl IconButton {
     /// A 24 pt icon button for `icon`.
     pub fn new(icon: Icon) -> Self {
-        Self { icon, size: SLOT, active: false, custom_id: None, glyph: None, on_click: None }
+        Self { icon, size: SLOT, active: false, custom_id: None, glyph: None, on_click: None, on_click_at: None, menu_key: None }
     }
 
     /// The button's square side in points (24 or 32; the design's two sizes).
@@ -115,6 +123,20 @@ impl IconButton {
         self.on_click = Some(Box::new(f));
         self
     }
+
+    /// 登记为下拉触发按钮：`key` 必须跨帧稳定；探针每帧上报自身矩形，菜单跟随。
+    /// 与 `Dropdown::menu` 完全同款。
+    pub fn menu(mut self, key: impl Into<String>) -> Self {
+        self.menu_key = Some(key.into());
+        self
+    }
+
+    /// 点击回调收到**按钮自身矩形**（不是指针位置）——与 `Dropdown::on_click` 完全同款。
+    /// 下拉菜单用它当锚点，位置就永远贴在按钮下方，不会跟鼠标跑。
+    pub fn on_click_at(mut self, f: impl Fn(Bounds<Pixels>, &mut Window, &mut App) + 'static) -> Self {
+        self.on_click_at = Some(Rc::new(f));
+        self
+    }
 }
 
 impl IntoElement for IconButton {
@@ -131,6 +153,13 @@ impl IntoElement for IconButton {
         // 而 `.id()` 正是把 `Div` 升级成 `Stateful<Div>` 的唯一公开入口。
         let id = self.custom_id.unwrap_or_else(next_stable_id);
 
+        // 照抄 `Dropdown`：一个 canvas 探针每帧量自己的矩形，点击时把该矩形交给回调。
+        // 这样下拉菜单拿到的是按钮框，不是指针位置 —— 不再有「菜单跟鼠标跑」。
+        let hit = Rc::new(Cell::new(None::<Bounds<Pixels>>));
+        let hit_click = hit.clone();
+        let anchor = self.menu_key.clone().map(crate::widgets::dropdown::MenuAnchor::new);
+        let on_click_at = self.on_click_at;
+
         crate::widgets::dbg_frame(div(), 0x0A84FF)
             .id(id)
             .size(pt(self.size))
@@ -139,9 +168,32 @@ impl IntoElement for IconButton {
             .items_center()
             .justify_center()
             .cursor_pointer()
+            .relative()
             .when(self.active, |d| d.bg(rgba(t.selected_row)))
             .when(!self.active, |d| d.hover(|s| s.bg(rgba(t.hover))).active(|s| s.bg(rgba(t.pressed))))
             .child(paint_icon(self.icon, glyph_color, glyph).into_any_element())
+            .child(
+                gpui::canvas(
+                    move |bounds, _window, _cx| {
+                        hit.set(Some(bounds));
+                        if let Some(a) = &anchor {
+                            if crate::widgets::dropdown::active_matches(a.key(), f32::from(bounds.origin.x)) {
+                                a.seed(bounds);
+                            }
+                        }
+                    },
+                    |_bounds, _, _window, _cx| {},
+                )
+                .absolute()
+                .size_full(),
+            )
             .when_some(self.on_click, |d, cb| d.on_click(cb))
+            .when_some(on_click_at, |d, cb| {
+                d.on_mouse_down(gpui::MouseButton::Left, move |_e: &MouseDownEvent, window, cx| {
+                    if let Some(rect) = hit_click.get() {
+                        cb(rect, window, cx);
+                    }
+                })
+            })
     }
 }

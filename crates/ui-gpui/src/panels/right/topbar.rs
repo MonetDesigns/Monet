@@ -75,16 +75,32 @@ fn people(f: &RightFields, live: &LiveData) -> Div {
         let cmds = f.cmds.clone();
         let root = f.root.clone();
         let spotlighting = live.spotlighting;
-        // 下拉行为：按钮真实矩形 + 跨帧探针，不用 mouse_position()。
-        let anchored = crate::menu_rows::AnchoredMenu::new("right-me-avatar");
-        let click_anchor = anchored.anchor.clone();
-        let click_cell = anchored.cell.clone();
+        // 手画头像按钮：照抄 `Dropdown` 的 canvas 探针拿自身矩形（非 IconButton 的特例）。
+        let anchor = crate::widgets::dropdown::menu_anchor("right-me-avatar");
+        let open_anchor = anchor.clone();
+        let hit = std::rc::Rc::new(std::cell::Cell::new(None::<gpui::Bounds<gpui::Pixels>>));
+        let hit_click = hit.clone();
+        let probe_anchor = anchor.clone();
         let av = div()
             .id("right-me-avatar")
             .cursor_pointer()
+            .child(
+                gpui::canvas(
+                    move |bounds: gpui::Bounds<gpui::Pixels>, _w, _cx| {
+                        hit.set(Some(bounds));
+                        if crate::widgets::dropdown::active_matches(probe_anchor.key(), f32::from(bounds.origin.x)) {
+                            probe_anchor.seed(bounds);
+                        }
+                    },
+                    |_b, _, _w, _cx| {},
+                )
+                .absolute()
+                .size_full(),
+            )
+            .relative()
             .on_mouse_down(MouseButton::Left, move |_: &MouseDownEvent, _window, cx: &mut App| {
                 let Some(root) = root.clone() else { return };
-                let rect = click_cell.get().unwrap_or_else(|| gpui::Bounds { origin: gpui::Point::new(px(0.0), px(0.0)), size: gpui::size(px(24.0), px(24.0)) });
+                let Some(rect) = hit_click.get() else { return };
                 let label = if spotlighting { tr("Stop spotlighting") } else { tr("Spotlight me") };
                 let rows = vec![crate::widgets::MenuRow::row(label)];
                 let cmds = cmds.clone();
@@ -92,11 +108,11 @@ fn people(f: &RightFields, live: &LiveData) -> Div {
                 let on_pick = Rc::new(move |_: &str, _w: &mut Window, _cx: &mut App| {
                     cmds.push(Cmd { id: "collab.spotlight", params: Some(json!({ "on": on })) });
                 });
-                let anchor = click_anchor.clone();
+                let anchor = open_anchor.clone();
                 root.update(cx, move |cv, cx| cv.open_menu_fit(anchor, rect, rows, on_pick, cx));
             })
             .child(me);
-        row = row.child(anchored.wrap(av));
+        row = row.child(av);
     } else {
         row = row.child(me);
     }
@@ -139,12 +155,11 @@ fn people(f: &RightFields, live: &LiveData) -> Div {
     let cmds = f.cmds.clone();
     let root = f.root.clone();
     let menu_rows = rows.clone();
-    let anchored = crate::menu_rows::AnchoredMenu::new("right-follow-chevron");
-    let click_anchor = anchored.anchor.clone();
-    let click_cell = anchored.cell.clone();
-    let chevron = IconButton::new(Icon::ChevronDown).size(24.0).on_click(move |_e, _window, cx: &mut App| {
+    // 照抄 `Dropdown`：.menu(key) + on_click_at 收按钮真实矩形。
+    let key = "right-follow-chevron";
+    let anchor = crate::widgets::dropdown::menu_anchor(key);
+    let chevron = IconButton::new(Icon::ChevronDown).size(24.0).menu(key).on_click_at(move |rect, _window, cx: &mut App| {
         let Some(root) = root.clone() else { return };
-        let rect = click_cell.get().unwrap_or_else(|| gpui::Bounds { origin: gpui::Point::new(px(0.0), px(0.0)), size: gpui::size(px(24.0), px(24.0)) });
         let ids = ids.clone();
         let cmds = cmds.clone();
         let rows = rows.clone();
@@ -153,11 +168,11 @@ fn people(f: &RightFields, live: &LiveData) -> Div {
             let Some(client) = ids.get(pos).copied().flatten() else { return };
             cmds.push(Cmd { id: "collab.follow", params: Some(json!({ "client": client })) });
         });
-        let anchor = click_anchor.clone();
+        let anchor = anchor.clone();
         let menu_rows = menu_rows.clone();
         root.update(cx, move |cv, cx| cv.open_menu_fit(anchor, rect, menu_rows, on_pick, cx));
     });
-    row.child(div().ml(pt(2.0))).child(anchored.wrap(chevron))
+    row.child(div().ml(pt(2.0))).child(chevron.into_any_element())
 }
 
 /// 一个头像：24 pt 的圆 + 首字母（egui `avatar()`：`initials` + `text_on(fill)`）。
@@ -190,9 +205,12 @@ fn present(f: &RightFields) -> AnyElement {
     });
     let menu_cmds = f.cmds.clone();
     let root = f.root.clone();
-    let anchored = crate::menu_rows::AnchoredMenu::new("right-present-menu");
-    let click_anchor = anchored.anchor.clone();
-    let click_cell = anchored.cell.clone();
+    // 手画 ▾ 按钮：照抄 `Dropdown` 的 canvas 探针拿自身矩形（非 IconButton 的特例）。
+    let anchor = crate::widgets::dropdown::menu_anchor("right-present-menu");
+    let open_anchor = anchor.clone();
+    let hit = std::rc::Rc::new(std::cell::Cell::new(None::<gpui::Bounds<gpui::Pixels>>));
+    let hit_click = hit.clone();
+    let probe_anchor = anchor.clone();
     // ▾ 下拉宽 16（用户指定）；与前面 ▶ 图标距离 0。
     let menu = div()
         .id("right-present-menu")
@@ -204,9 +222,23 @@ fn present(f: &RightFields) -> AnyElement {
         .rounded(pt(5.0))
         .cursor_pointer()
         .hover(|s| s.bg(rgba(t.hover)))
+        .relative()
+        .child(
+            gpui::canvas(
+                move |bounds: gpui::Bounds<gpui::Pixels>, _w, _cx| {
+                    hit.set(Some(bounds));
+                    if crate::widgets::dropdown::active_matches(probe_anchor.key(), f32::from(bounds.origin.x)) {
+                        probe_anchor.seed(bounds);
+                    }
+                },
+                |_b, _, _w, _cx| {},
+            )
+            .absolute()
+            .size_full(),
+        )
         .on_mouse_down(MouseButton::Left, move |_: &MouseDownEvent, _window, cx: &mut App| {
             let Some(root) = root.clone() else { return };
-            let rect = click_cell.get().unwrap_or_else(|| gpui::Bounds { origin: gpui::Point::new(px(0.0), px(0.0)), size: gpui::size(px(16.0), px(24.0)) });
+            let Some(rect) = hit_click.get() else { return };
             let rows = vec![
                 crate::widgets::MenuRow::row(tr("Present")).trail(crate::main_menu::shortcut_text("proto.present").unwrap_or_default()),
                 crate::widgets::MenuRow::row(tr("Preview")),
@@ -222,11 +254,10 @@ fn present(f: &RightFields) -> AnyElement {
                 };
                 cmds.push(Cmd { id: cmd, params: Some(json!({})) });
             });
-            let anchor = click_anchor.clone();
+            let anchor = open_anchor.clone();
             root.update(cx, move |cv, cx| cv.open_menu_fit(anchor, rect, rows, on_pick, cx));
         })
         .child(crate::widgets::icon::paint(Icon::ChevronDown, rgba(t.text_secondary), 10.0));
-    let menu = anchored.wrap(menu);
     // ▶ 与 ▾ 距离 0（用户指定：带下拉时下拉与前面图标距离 0）。
     div().flex().flex_row().items_center().child(play.into_any_element()).child(menu).into_any_element()
 }

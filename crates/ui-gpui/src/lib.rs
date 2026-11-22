@@ -7553,10 +7553,13 @@ impl Render for CanvasView {
                             window.defer(cx, move |_window, cx| me.update(cx, |cv, cx| cv.close_popup(cx)));
                         }
                     }
-                    // 落位：按钮下方 4pt，右缘对齐按钮右缘（BottomEnd）。主菜单走
-                    // `Popup::MainMenu`，那里单独用 BottomStart 左对齐，不受这里影响。
+                    // 落位规则（用户 2026-11-21）：
+                    //   · 挂在按钮上的下拉 → 按钮下方 4pt、**右缘对齐按钮右缘**（BottomEnd）；
+                    //   · 鼠标点触发的右键菜单 → 仍从指针向右下展开（BottomStart）。
+                    // 判据是锚点本身：按钮是一个有真实宽度的矩形（≥ 16pt），
+                    // 指针菜单只有 0/1pt 宽。主菜单走 `Popup::MainMenu`，单独用 BottomStart。
+                    let align = crate::menu_rows::menu_align(probe.is_some(), f32::from(anchor.size.width));
                     if !moved {
-                        let align = crate::widgets::RectAlign::BottomEnd;
                         if *fit_width {
                             els.push(menu_popup_fit_aligned(live, rows.clone(), on_pick.clone(), dismiss.clone(), vw, vh, align));
                         } else {
