@@ -346,9 +346,30 @@ fn node_outline_at(doc: &Document, n: &Node, depth: usize) -> Option<(BezPath, F
             Some((p, FillRule::Winding))
         }
         NodeKind::Vector { network } => {
+            let drawn = figcraft_doc::geometry::drawn_network(network, n.corners.smoothing);
+            let net = drawn.as_ref();
+            if network.regions.iter().any(|r| r.fills.is_some() || r.paint_space.is_some()) {
+                let mut areas = BezPath::new();
+                for (i, region) in net.regions.iter().enumerate() {
+                    let paints = region.fills.as_deref().unwrap_or(&n.fills);
+                    if !paints.iter().any(|p| p.visible) {
+                        continue;
+                    }
+                    let Some(path) = net.region_path(i) else { continue };
+                    let even_odd = region.winding == figcraft_doc::WindingRule::EvenOdd;
+                    if let Ok(normalized) = figcraft_pathops::normalized(&path, even_odd) {
+                        areas.extend(normalized.elements().iter().copied());
+                    } else {
+                        // Invalid geometry still gets the renderer's best-effort path.
+                        areas.extend(path.elements().iter().copied());
+                    }
+                }
+                let silhouette = figcraft_pathops::simplify(&areas).unwrap_or(areas);
+                return Some((silhouette, FillRule::Winding));
+            }
             let rule =
                 if network.regions.iter().any(|r| r.winding == figcraft_doc::WindingRule::EvenOdd) { FillRule::EvenOdd } else { FillRule::Winding };
-            Some((network.fill_path(), rule))
+            Some((net.fill_path(), rule))
         }
         _ => figcraft_doc::geometry::shape_path(n).map(|p| (p, FillRule::Winding)),
     }

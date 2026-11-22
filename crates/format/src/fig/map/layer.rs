@@ -637,16 +637,22 @@ impl<'a> Mapper<'a> {
         };
         let styles: BTreeMap<u64, &Kv> =
             vd.get("styleOverrideTable").map(Kv::list).unwrap_or_default().iter().filter_map(|s| Some((num(s, "styleID")? as u64, s))).collect();
+        // The per-segment settings this importer applies: a style that carries nothing else is
+        // fully represented, so it isn't reported as unsupported.
+        const APPLIED: [&str; 5] = ["styleID", "strokeCap", "strokeJoin", "handleMirroring", "cornerRadius"];
         let mut has_uninterpreted = false;
         let mut has_missing = false;
         for segment in &net.segments {
             if segment.style == 0 {
                 continue;
             }
-            if styles.contains_key(&u64::from(segment.style)) {
-                has_uninterpreted = true;
-            } else {
-                has_missing = true;
+            match styles.get(&u64::from(segment.style)) {
+                Some(style) => {
+                    if style.keys().into_iter().any(|k| !APPLIED.contains(&k)) {
+                        has_uninterpreted = true;
+                    }
+                }
+                None => has_missing = true,
             }
         }
         if has_uninterpreted {
@@ -684,6 +690,9 @@ impl<'a> Mapper<'a> {
                     Some("ANGLE_AND_LENGTH") => out["mirror"] = json!("angleAndLength"),
                     Some("NONE") => out["mirror"] = json!("none"),
                     _ => {}
+                }
+                if let Some(cap) = st.and_then(|s| s.get("strokeCap")).and_then(Kv::str).and_then(point_cap) {
+                    out["cap"] = json!(cap);
                 }
                 if let Some(join @ ("MITER" | "BEVEL" | "ROUND")) = st.and_then(|s| s.get("strokeJoin")).and_then(Kv::str) {
                     out["join"] = json!(join.to_ascii_lowercase());
@@ -825,6 +834,22 @@ pub(super) fn cap_name(cap: &str) -> &str {
         "ARROW_EQUILATERAL" => "TRIANGLE_ARROW",
         c => c,
     }
+}
+
+/// A per-point stroke cap as the document names it (`StrokeCap`'s own spelling), or `None` for a
+/// value the document has no cap for.
+fn point_cap(cap: &str) -> Option<&'static str> {
+    Some(match cap {
+        "NONE" => "none",
+        "ROUND" => "round",
+        "SQUARE" => "square",
+        "ARROW_LINES" => "lineArrow",
+        "ARROW_EQUILATERAL" => "triangleArrow",
+        "REVERSED_TRIANGLE" => "reversedTriangle",
+        "CIRCLE_FILLED" => "circleFilled",
+        "DIAMOND_FILLED" => "diamondFilled",
+        _ => return None,
+    })
 }
 
 /// The layer kind (and how the warning names it) that a layer the editor has no counterpart for

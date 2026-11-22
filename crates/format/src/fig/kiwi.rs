@@ -160,6 +160,14 @@ impl<'s> Kv<'s> {
             _ => None,
         }
     }
+
+    /// The field names of an object, in the order read (empty for anything else).
+    pub fn keys(&self) -> Vec<&'s str> {
+        match self {
+            Kv::Object(f) => f.iter().map(|(n, _)| *n).collect(),
+            _ => Vec::new(),
+        }
+    }
 }
 
 /// A bounds-checked reader over kiwi bytes.
