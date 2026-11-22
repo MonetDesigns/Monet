@@ -181,7 +181,7 @@ pub(super) fn overlays(
             }
         }
         let labelled = focus.is_none() && (n.kind.is_frame_like() || matches!(n.kind, NodeKind::Section { .. })) && !n.is_board_atom();
-        if labelled && let Some(q) = super::frame_labels::draw(app, painter, t, &doc, *c, sel.contains(c), ds.hover == Some(*c), renaming == Some(*c))
+        if labelled && let Some(q) = super::frame_labels::draw(app, painter, t, &doc, *c, sel.contains(c), renaming == Some(*c))
         {
             labels.push((*c, q.map(|p| app.to_page(p))));
         }
@@ -551,21 +551,23 @@ fn transform_box(
         // Keep the requested layer-colour background, but choose a legible foreground: a light
         // Yellow (#FFCC00) with white text was ~1.5:1. Dark ink on light fills, white on dark.
         let fg = contrasting_ink(col);
-        return Some(pill_with_bg(painter, pos2(cx, bottom + 9.0), Align2::CENTER_TOP, label, col, fg, col));
+        // 尺寸框：顶边在对象下边缘下方 7（2026-11-22 设计稿），左右各 6、上下各 2 的内边距
+        // （设计稿 61×17 的块 = 49 的文字 + 6+6 / 13 + 2+2），圆角 3。
+        return Some(pill_with_bg(painter, pos2(cx, bottom + 7.0), Align2::CENTER_TOP, label, col, fg, col, 6.0));
     }
     None
 }
 
 /// 画布读数：`col` 底色的 pill 上白字（返回 pill 区域）。
 pub(super) fn pill(painter: &mut Painter, at: Pos2, align: Align2, text: String, col: Color32) -> Rect {
-    pill_with_bg(painter, at, align, text, col, Color32::WHITE, under_white(col))
+    pill_with_bg(painter, at, align, text, col, Color32::WHITE, under_white(col), 4.0)
 }
 
-fn pill_with_bg(painter: &mut Painter, at: Pos2, align: Align2, text: String, _col: Color32, fg: Color32, bg: Color32) -> Rect {
+fn pill_with_bg(painter: &mut Painter, at: Pos2, align: Align2, text: String, _col: Color32, fg: Color32, bg: Color32, pad_x: f32) -> Rect {
     let galley = painter.layout_no_wrap(text, semibold(11.0), fg);
-    let r = align.anchor_size(at, galley.size() + vec2(8.0, 4.0));
+    let r = align.anchor_size(at, galley.size() + vec2(pad_x * 2.0, 4.0));
     painter.rect_filled(r, CornerRadius::same(3), bg);
-    painter.galley(r.min + vec2(4.0, 2.0), galley, fg);
+    painter.galley(r.min + vec2(pad_x, 2.0), galley, fg);
     r
 }
 

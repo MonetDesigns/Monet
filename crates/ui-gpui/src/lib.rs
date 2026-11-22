@@ -3648,7 +3648,8 @@ impl CanvasView {
     /// 必须补上 `dock().canvas_origin()`。egui 的 `canvas.rect.min` 本身就是窗口原点、
     /// 不需要这一步 —— 这正是原来输入框位置不对的原因。
     ///
-    /// 矩形公式逐项照抄 egui：`x = area.min.x`、`y = area.max.y - 16`、
+    /// 矩形公式：`x = area.min.x`、`y = area.min.y`（= 静态文字顶，命中区的顶边；底边是
+    /// 对象上边缘上方 `LABEL_GAP`，2026-11-22 设计稿）、
     /// `w = (text_w + 24).max(area.width).clamp(80, 480)`（宽度用真实量算，
     /// 不再是「字符数 × 6.5」的估算）。高度用 `LABEL_H`（18 = 静态行盒），不是 egui 的 16。
     fn label_rename_rect(&self, window: &Window, id: Option<figcraft_doc::NodeId>) -> Option<(f32, f32, f32)> {
@@ -3675,20 +3676,20 @@ impl CanvasView {
 
         let mut min_x = f32::MAX;
         let mut max_x = f32::MIN;
-        let mut max_y = f32::MIN;
+        let mut min_y = f32::MAX;
 
         for p in quad {
             let s = self.app.to_screen(p.x, p.y);
             min_x = min_x.min(s.x);
             max_x = max_x.max(s.x);
-            max_y = max_y.max(s.y);
+            min_y = min_y.min(s.y);
         }
 
         if min_x == f32::MAX {
             return None;
         }
 
-        let (x, y, w) = inline_input::label_rename_rect(min_x, max_x, max_y, f32::from(text_w), ox, oy);
+        let (x, y, w) = inline_input::label_rename_rect(min_x, min_y, max_x, f32::from(text_w), ox, oy);
         Some((x, y, w))
     }
 
@@ -4314,6 +4315,56 @@ impl CanvasView {
         self.pointer = Some(self.local(pointer));
         self.tool_flyout = None;
         self.open_context_items(pos, items, cx);
+    }
+
+    /// 名称行右侧 16×16 图标槽的按下（画布标签层里画的，命中在这里先吃掉）。
+    ///
+    /// 最右的槽是开发状态：没有状态时点一下直接置「待开发」（绿色，圆角 3）；已有状态时
+    /// 在槽下方 6、水平居中弹出菜单（在开发模式中打开 / 移除状态）。变体组另有一个
+    /// 尺寸框下方 4 的「+」，点一下给这个组件集加一个变体。返回 `true` 表示这次按下已被
+    /// 按钮处理，不再走画布的命中（选框 / 拖动）。
+    fn label_slot_press(&mut self, pos: Pos2, cx: &mut Context<Self>) -> bool {
+        let hit = {
+            let Ok(ds) = self.app.session.ds() else { return false };
+            canvas::frame_labels::slot_at(&self.app, &ds.doc, ds.page, &ds.selection, pos)
+        };
+        let Some((hit, rect)) = hit else { return false };
+        match hit {
+            canvas::frame_labels::SlotHit::Status(id, has) => {
+                if !has {
+                    self.run_command("node.set", serde_json::json!({ "ids": [id.0], "props": { "devStatus": "readyForDev" } }), cx);
+                    return true;
+                }
+                let open = tr("Open in developer mode");
+                let remove = tr("Remove status");
+                let rows = vec![MenuRow::row(open), MenuRow::row(remove)];
+                // 菜单与按钮水平居中：锚点左边 = 槽中心 - 菜单宽 / 2；菜单顶边 = 锚点底 + 4，
+                // 所以锚点底取槽底 + 2，菜单正好落在槽下方 6。
+                let w = 180.0;
+                let (ox, oy) = self.dock().canvas_origin();
+                let anchor = Bounds { origin: gpui::point(px(rect.center().x - w / 2.0 + ox), px(rect.max.y + 2.0 + oy)), size: size(px(1.0), px(0.0)) };
+                let me = cx.entity();
+                let on_pick = Rc::new(move |label: &str, _w: &mut Window, cx: &mut App| {
+                    if label == open {
+                        me.update(cx, |cv, cx| {
+                            cv.run_command("select.set", serde_json::json!({ "ids": [id.0] }), cx);
+                            cv.fields.set_right_tab(2);
+                            cx.notify();
+                        });
+                    } else if label == remove {
+                        me.update(cx, |cv, cx| {
+                            cv.run_command("node.set", serde_json::json!({ "ids": [id.0], "props": { "devStatus": "none" } }), cx)
+                        });
+                    }
+                });
+                self.open_menu(anchor, Some(w), rows, on_pick, cx);
+                true
+            }
+            canvas::frame_labels::SlotHit::AddVariant(id) => {
+                self.run_command("component.addVariant", serde_json::json!({ "id": id.0 }), cx);
+                true
+            }
+        }
     }
 
     /// The Pages-panel row's right-click menu. Flat four rows, so it uses the same `MenuRow` +
@@ -6164,6 +6215,15 @@ impl Render for CanvasView {
                     this.pointer = Some(pos);
 
                     this.primary_down = true;
+
+                    // 名称行右侧的 16×16 图标槽（开发状态 / 变体组「+」）画在标签层里，
+                    // 命中先在这里吃掉，否则会变成一次画布按下（选框 / 拖动）。
+
+                    if !this.space && !this.zoom_key && this.label_slot_press(pos, cx) {
+                        cx.notify();
+
+                        return;
+                    }
 
                     // Prototype 连线：ghost / 「+」手柄 / 曲线，原文 `proto_canvas::input` 在
                     // 参考线与各类手柄之前先跑。
