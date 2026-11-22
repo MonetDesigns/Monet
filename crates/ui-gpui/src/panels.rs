@@ -510,7 +510,13 @@ pub(crate) struct WgslParamEdit {
 pub(crate) const WGSL_PARAM_FIELDS: usize = 12;
 
 /// 池里一个编辑器的数量上限（paint 两列 × 多行 + export + selection-colors，留足余量）。
-pub(crate) const ROW_EDITORS: usize = 48;
+///
+/// 0..[`PROTO_EDITOR_SLOT`] 归右栏正文，之后归交互详情浮窗：浮窗和右栏正文同一帧画进
+/// 两棵树，同一个编辑器实体不能同时出现在两处，槽位必须不相交。
+pub(crate) const ROW_EDITORS: usize = 64;
+
+/// 交互详情浮窗（`panels/right/proto.rs::editor_popover`）专用的槽位起点。
+pub(crate) const PROTO_EDITOR_SLOT: usize = 48;
 
 #[derive(Clone, Copy, Default)]
 pub(crate) struct PanelSel {
@@ -790,6 +796,10 @@ pub(crate) struct RightFields {
     /// Blend-mode row reveal (egui `paints.rs::appearance`'s `blend_open` local flag): the
     /// Appearance header's blend button toggles this, and the blend dropdown row shows only when set.
     blend_open: std::rc::Rc<std::cell::RefCell<bool>>,
+    /// 组件集面板里「变体属性的值列表」展开状态（记录已展开的属性名）。
+    /// 对应 lizard `properties_ui` 的 `ui.data::<bool>(expanded_id)`；GPUI 没有 egui 的
+    /// `ui.data`，放在这里跨帧保存。
+    variant_expanded: std::rc::Rc<std::cell::RefCell<Vec<String>>>,
     /// 取色器 AA 对比上下文的最新快照，由 `right_panel` 每帧从 `PanelData` 灌入。
     contrast: Rc<std::cell::RefCell<right::data::ContrastContext>>,
     /// The root view, set once after construction so fields can open menus through it.
@@ -1380,6 +1390,7 @@ impl RightFields {
             // Blend-mode dropdown: a button that opens the blend menu on click (egui `dropdown`).
             blend_label: std::cell::RefCell::new(SharedString::from(tr("Normal"))),
             blend_open: std::rc::Rc::new(std::cell::RefCell::new(false)),
+            variant_expanded: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
             contrast: Rc::new(std::cell::RefCell::new(right::data::ContrastContext::default())),
             root: None,
             popup_slot: Rc::new(std::cell::RefCell::new(Vec::new())),

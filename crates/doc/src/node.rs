@@ -2,6 +2,8 @@
 
 use crate::NodeId;
 use crate::anim::motion::NodeMotion;
+// lizard-only engine extension; re-sync from figcraft main when it gains an equivalent.
+use crate::component_matrix::ComponentMatrix;
 use crate::props::{
     AutoLayout, ChildLayout, Constraints, Corners, Effect, EffectKind, ExportSetting, LayoutGrid, SPREAD_MITER_LIMIT, StrokeAlign, StrokeCap,
     StrokeProps,
@@ -63,7 +65,30 @@ pub enum PropDef {
     Slot {
         #[serde(default)]
         preferred: Vec<NodeId>,
+        // lizard-only engine extension; re-sync from figcraft main when it gains equivalents.
+        #[serde(default, flatten)]
+        settings: SlotSettings,
     },
+}
+
+/// Editing guidance for a component slot. Limits and preferred instances never reject content.
+/// SOURCE NOTE (2026-11-21): ported from brava-group/lizard main `crates/doc/src/node.rs`;
+/// storytold/figcraft main has no SlotSettings. Re-sync from figcraft when it gains one.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SlotSettings {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_layers: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_layers: Option<u32>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub only_preferred: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub show_empty: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fill_counter_axis: bool,
 }
 
 /// A component's properties in the order they show: the names in `order` first (as they were
@@ -517,6 +542,11 @@ pub struct Node {
     pub exports: Vec<ExportSetting>,
     #[serde(default, skip_serializing_if = "is_default")]
     pub interactions: Vec<Interaction>,
+    /// Component value table (lizard-only engine extension, see `component_matrix.rs`).
+    /// SOURCE NOTE: from brava-group/lizard main; figcraft main has no such field — re-sync
+    /// from figcraft when it gains one.
+    #[serde(default, skip_serializing_if = "ComponentMatrix::is_empty")]
+    pub component_matrix: ComponentMatrix,
     /// Motion (keyframe) animation: property tracks and clips. Empty for most nodes.
     #[serde(default, skip_serializing_if = "NodeMotion::is_empty")]
     pub motion: NodeMotion,
@@ -701,6 +731,7 @@ impl Node {
             dev_resources: Vec::new(),
             measurements: Vec::new(),
             board: None,
+            component_matrix: crate::ComponentMatrix::default(),
         }
     }
 

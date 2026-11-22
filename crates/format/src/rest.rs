@@ -890,7 +890,7 @@ impl<'a> Ctx<'a> {
                         self.slot_defaults.insert((owner, name.clone()), d);
                     }
                     self.slot_notes(d);
-                    PropDef::Slot { preferred: Vec::new() }
+                    PropDef::Slot { preferred: Vec::new(), settings: Default::default() }
                 }
                 _ => {
                     self.warn("unknown component property types were skipped");

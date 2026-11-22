@@ -13,14 +13,14 @@ pub(super) fn sync_instance_depth(doc: &mut Document, inst: NodeId, depth: usize
         return;
     }
     let Some(mut root) = doc.node(inst).cloned() else { return };
-    let NodeKind::Instance { component, props: root_props } = &root.kind else { return };
-    let component = *component;
+    let NodeKind::Instance { component, props } = &root.kind else { return };
+    let (component, root_props) = (*component, props.clone());
     let Some(comp) = doc.node(component).cloned() else { return };
     if !matches!(comp.kind, NodeKind::Component { .. }) || doc.is_ancestor(inst, component) || doc.is_ancestor(component, inst) {
         // A missing main, or an instance inside its own main (would recurse forever).
         return;
     }
-    let eff_props = effective_props(&comp, root_props);
+    let eff_props = effective_props(&comp, &root_props);
     // Old layers (kept alive for their overrides), by (parent, source), by source alone (when only
     // one layer mirrors it) and, only when those don't match, by name path.
     let (mut old, by_source, by_src) = index_old_layers(doc, inst, spare);
@@ -34,7 +34,7 @@ pub(super) fn sync_instance_depth(doc: &mut Document, inst: NodeId, depth: usize
         let nid = doc.alloc_id();
         map.insert(s, nid);
     }
-    let Copies { nodes: new_nodes, nested, mut remeasure } = copy_layers(doc, inst, &src, &map, &old, &edited, eff_props);
+    let Copies { nodes: new_nodes, nested, mut remeasure } = copy_layers(doc, inst, component, &src, &map, &old, &edited, eff_props);
     for n in new_nodes {
         let (id, parent) = (n.id, n.parent);
         if insert_linked(doc, n).is_err()
@@ -47,6 +47,10 @@ pub(super) fn sync_instance_depth(doc: &mut Document, inst: NodeId, depth: usize
     if let Some(r) = doc.node_mut(inst) {
         *r = fresh;
     }
+    // The main's value table: every copied layer takes the value its instance's choices resolve
+    // to. Runs before constraints, so a cell that sets a size is followed by layout like the
+    // main's own size would be.
+    remeasure.extend(apply_matrix(doc, component, &root_props, &map));
     // A resized instance: children follow their constraints (auto layout re-flows later).
     let (iw, ih) = doc.node(inst).map(|n| (n.width, n.height)).unwrap_or((comp.width, comp.height));
     if (iw - comp.width).abs() > 1e-9 || (ih - comp.height).abs() > 1e-9 {
@@ -132,6 +136,7 @@ struct Copies {
 fn copy_layers(
     doc: &Document,
     inst: NodeId,
+    component: NodeId,
     src: &[NodeId],
     map: &BTreeMap<NodeId, NodeId>,
     old: &BTreeMap<NodeId, std::sync::Arc<Node>>,
@@ -139,7 +144,7 @@ fn copy_layers(
     props: BTreeMap<String, Value>,
 ) -> Copies {
     let mut enclosing: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::from([(inst, vec![inst])]);
-    let mut inst_props: BTreeMap<NodeId, BTreeMap<String, Value>> = BTreeMap::from([(inst, props)]);
+    let mut inst_props: BTreeMap<NodeId, (NodeId, BTreeMap<String, Value>)> = BTreeMap::from([(inst, (component, props))]);
     let mut out = Copies { nodes: Vec::new(), nested: Vec::new(), remeasure: Vec::new() };
     for s in src {
         let Some(orig) = doc.node(*s) else { continue };
@@ -164,12 +169,12 @@ fn copy_layers(
             // No longer a slot in the main: it mirrors the main again.
             n.overrides.remove(SLOT);
         }
-        // Component properties: the main layer's bindings use this instance's values; layers of
-        // nested instances use the nested instance's values (one level per source hop).
+        // Bindings use the enclosing instance of their defining component, even when slot
+        // content has fewer source hops than enclosing instances.
         let enc = enclosing.get(&parent).cloned().unwrap_or_default();
         apply_enclosing_props(doc, &mut n, orig, &enc, &inst_props);
         if let NodeKind::Instance { component: c, props } = &n.kind {
-            inst_props.insert(nid, props.clone());
+            inst_props.insert(nid, (*c, props.clone()));
             let mut e = enc;
             e.push(nid);
             enclosing.insert(nid, e);
@@ -253,14 +258,28 @@ fn rebuild_nested(doc: &mut Document, nested: Vec<NodeId>, old: &BTreeMap<NodeId
     }
 }
 
-fn apply_enclosing_props(doc: &Document, n: &mut Node, orig: &Node, enc: &[NodeId], inst_props: &BTreeMap<NodeId, BTreeMap<String, Value>>) {
+/// Apply bindings from their defining components, preserving explicit overrides and letting
+/// nearer source layers take precedence. Slot content need not have one source hop per instance.
+fn apply_enclosing_props(
+    doc: &Document,
+    n: &mut Node,
+    orig: &Node,
+    enc: &[NodeId],
+    inst_props: &BTreeMap<NodeId, (NodeId, BTreeMap<String, Value>)>,
+) {
     let mut chain: Vec<&Node> = vec![orig];
     while chain.len() < enc.len() {
         let Some(next) = chain.last().and_then(|c| c.source).and_then(|x| doc.node(x)) else { break };
         chain.push(next);
     }
     for (j, level) in chain.iter().enumerate().rev() {
-        let Some(props) = enc.get(j).and_then(|e| inst_props.get(e)) else { continue };
+        if level.prop_refs.is_empty() {
+            continue;
+        }
+        let Some(owner) = owning_component(doc, level.id) else { continue };
+        // Instance-owned slot content skips a source hop through the slot's component. Match
+        // the binding's defining component, not the position in the enclosing instance chain.
+        let Some((_, props)) = enc.iter().rev().filter_map(|e| inst_props.get(e)).find(|(component, _)| *component == owner) else { continue };
         for (field, prop) in &level.prop_refs {
             let g = field_group(field);
             if n.overrides.contains(g) || (j > 0 && orig.overrides.contains(g)) {
@@ -271,6 +290,49 @@ fn apply_enclosing_props(doc: &Document, n: &mut Node, orig: &Node, enc: &[NodeI
             }
         }
     }
+}
+
+/// Apply the main component's value table (lizard's `ComponentMatrix`) to the layers a rebuild
+/// just copied: every field resolves against the instance's choices for the axes (an unknown or
+/// missing choice falls back to the axis default, exactly as `matrixDescribe` reports), and the
+/// most specific matching cell wins. A layer that set the value itself keeps it: a cell is the
+/// main's value, an override is the instance's.
+///
+/// SOURCE NOTE (2026-11-21): lizard-only engine extension — `storytold/figcraft` main has no
+/// `component_matrix`, so there is nothing to re-sync this from until it gains one.
+///
+/// Returns the layers to re-measure (a cell may set characters or a text style).
+fn apply_matrix(doc: &mut Document, component: NodeId, props: &BTreeMap<String, Value>, map: &BTreeMap<NodeId, NodeId>) -> Vec<NodeId> {
+    let Some(matrix) = doc.node(component).map(|c| c.component_matrix.clone()) else { return Vec::new() };
+    if matrix.fields.is_empty() {
+        return Vec::new();
+    }
+    let choices = matrix.choices(props);
+    let cells: Vec<(NodeId, String, Value)> = matrix
+        .fields
+        .iter()
+        .filter_map(|f| Some((*map.get(&f.layer)?, f.field.clone(), matrix.resolve(f, &choices)?.clone())))
+        .collect();
+    let mut remeasure = Vec::new();
+    for (id, field, value) in cells {
+        let group = crate::cmd::props::override_group(&field);
+        if group == "other" || doc.node(id).is_none_or(|n| n.overrides.contains(group)) {
+            continue;
+        }
+        let before = doc.node(id).map(|n| n.overrides.clone());
+        let one = serde_json::Map::from_iter([(field, value)]);
+        // A cell the node rejects (a field it can't carry) leaves the main's value in place.
+        if crate::cmd::props::apply("component.matrix", doc, id, &one).is_ok() {
+            // `apply` records what it writes as an instance override. A table value comes from
+            // the main and is resolved again on every sync, so it must not stick as an override
+            // (that would also make the cell lose to itself on the next rebuild).
+            if let (Some(before), Some(n)) = (before, doc.node_mut(id)) {
+                n.overrides = before;
+            }
+            remeasure.push(id);
+        }
+    }
+    remeasure
 }
 
 /// Text whose characters or style differ from the main re-measures.
@@ -321,6 +383,28 @@ fn index_old_layers(doc: &Document, inst: NodeId, spare: BTreeMap<NodeId, std::s
     (old, by_source, by_src)
 }
 
+/// The `ChildLayout` of an instance's rebuilt root. Its placement is its own (absolute position,
+/// grid cell, min and max). `sizing_h` / `sizing_v` serve two roles: how a frame sizes its own
+/// content (Hug, Fixed), which follows the main unless the instance overrides its size (measured in
+/// Figma: a plain instance turns Fixed when its main does and back to Hug with it; a typed width
+/// stays), and Fill in an auto layout parent, which is the instance's own and is kept.
+fn instance_child_layout(doc: &Document, root: &Node, comp: &Node) -> figcraft_doc::ChildLayout {
+    let mut cl = root.child_layout.clone();
+    // One "size" override covers both axes, as in Figma ("Reset size"): it keeps both.
+    if root.overrides.contains("size") || root.overrides.contains("resizing") {
+        return cl;
+    }
+    let in_flow = root.parent.and_then(|p| doc.node(p)).is_some_and(|p| p.layout.is_some());
+    let take = |own: &mut figcraft_doc::Sizing, main: figcraft_doc::Sizing| {
+        if !(in_flow && *own == figcraft_doc::Sizing::Fill) && main != figcraft_doc::Sizing::Fill {
+            *own = main;
+        }
+    };
+    take(&mut cl.sizing_h, comp.child_layout.sizing_h);
+    take(&mut cl.sizing_v, comp.child_layout.sizing_v);
+    cl
+}
+
 /// The rebuilt root of instance `inst` of `comp`.
 fn fresh_root(doc: &Document, root: &mut Node, comp: &Node, inst: NodeId, component: NodeId, map: &BTreeMap<NodeId, NodeId>) -> Node {
     // Root: follows the main except its own placement, name, size and overrides.
@@ -336,7 +420,7 @@ fn fresh_root(doc: &Document, root: &mut Node, comp: &Node, inst: NodeId, compon
     let nested_copy = inside_instance(doc, inst);
     fresh.source = if nested_copy { root.source } else { Some(component) };
     fresh.constraints = root.constraints;
-    fresh.child_layout = root.child_layout.clone();
+    fresh.child_layout = instance_child_layout(doc, root, comp);
     fresh.interactions = root.interactions.clone();
     fresh.exports = root.exports.clone();
     fresh.prop_refs = root.prop_refs.clone();
@@ -373,16 +457,6 @@ fn fresh_root(doc: &Document, root: &mut Node, comp: &Node, inst: NodeId, compon
         follow_variant_resizing(&mut fresh.child_layout, &prev.child_layout, &comp.child_layout);
     }
     carry_overrides(root, &mut fresh, Carry::Root);
-    // A size the instance derives from its content or its parent (hug / fill) is its own: the
-    // main's nominal size only fills in for axes the instance sizes itself.
-    if !root.overrides.contains("size") {
-        if fresh.child_layout.sizing_h != Sizing::Fixed {
-            fresh.width = root.width;
-        }
-        if fresh.child_layout.sizing_v != Sizing::Fixed {
-            fresh.height = root.height;
-        }
-    }
     fresh
 }
 

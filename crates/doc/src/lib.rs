@@ -14,6 +14,8 @@ mod board_mindmap;
 pub use board_mindmap::{MIND_GAP_X, MIND_GAP_Y, MIND_MAX_DEPTH, MIND_MAX_NODES, MindBox, mind_layout};
 pub mod board_route;
 pub mod colors;
+// lizard-only engine extension; re-sync from figcraft main when it gains an equivalent.
+pub mod component_matrix;
 pub mod comments;
 pub mod facilitation;
 pub mod geometry;
@@ -34,6 +36,9 @@ pub use anim::*;
 pub use board::*;
 pub use board_route::{END_GAP, MAX_RUNS, RouteEnd, attach_points, attached_sides, path_handles, reshaped, route_along, route_points};
 pub use colors::*;
+// lizard-only engine extension (component value table); see component_matrix.rs source note.
+// Re-sync from figcraft main when it gains an equivalent.
+pub use component_matrix::*;
 pub use comments::*;
 pub use facilitation::*;
 pub use figcraft_color as color;
@@ -979,6 +984,13 @@ impl Document {
             // A connector (or label) copied with what it joins joins the copies.
             if let Some(b) = c.board.as_mut() {
                 b.remap(map);
+            }
+            // A value table binds fields of its own component's layers: copied along, it targets
+            // the copies (a field whose layer stayed behind keeps pointing at the original).
+            for f in &mut c.component_matrix.fields {
+                if let Some(m) = map.get(&f.layer) {
+                    f.layer = *m;
+                }
             }
             // A pattern tiling a layer of the copy tiles the copy's layer.
             for p in c.fills.iter_mut().chain(c.strokes.iter_mut()) {

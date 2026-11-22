@@ -379,7 +379,7 @@ pub fn tick(st: &mut PresentState, geom: Option<&Geom>, now: f64) {
         };
         if let Some((id, k, r)) = at_start.iter().find_map(|(id, r)| drags(*id).map(|k| (*id, k, *r))) {
             let it = evaluated.node(id).and_then(|n| n.interactions.get(k)).cloned();
-            if st.fire_node(id, k, now) {
+            if st.fire_from(id, k, Some(r), now, true) {
                 st.press = None;
                 let fdur = it.as_ref().map_or(0.0, |it| f64::from(it.duration_ms) / 1000.0);
                 let (dir, len) = it.as_ref().map_or(((0.0, 0.0), 1.0), |it| {
@@ -412,8 +412,10 @@ pub fn tick(st: &mut PresentState, geom: Option<&Geom>, now: f64) {
                 return;
             }
             if !dragged {
-                if let Some((id, k, _)) = pick(&|t| *t == Trigger::OnClick) {
-                    if st.fire_node(id, k, now) {
+                if let Some((id, k, r)) = pick(&|t| *t == Trigger::OnClick) {
+                    // 热区矩形一起传：OpenOverlay 的锚点（Manual / anchor_to）取自它，丢了就
+                    // 退回屏幕居中，浮层位置就会错（eGUI 的 onClick 传 `Some(r)`）。
+                    if st.fire_from(id, k, Some(r), now, true) {
                         return;
                     }
                 }

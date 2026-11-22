@@ -8,7 +8,7 @@ use super::{
     req_string, req_targets, set_boolean_default, slot_edited, slots_of, string, takes_value, targets, variant_conflicts, variant_name,
     variant_options, variant_props, variant_set,
 };
-use crate::components::prop_list;
+use crate::components::{instance_prop_list, prop_list};
 
 /// Whether instance `id` has a component property `name` that a `kind` variable can drive (a
 /// boolean property takes a boolean variable, a text or variant property a string one).
@@ -291,28 +291,95 @@ pub(super) fn add_prop_for(cmd: &str, s: &mut Session, p: &Value) -> Result<Valu
             if !layer_node.as_ref().is_some_and(|n| matches!(n.kind, NodeKind::Frame)) {
                 return Err(bad(cmd, "a slot is a frame inside the component: select one (or pass `layer`)"));
             }
-            PropDef::Slot { preferred: preferred_arg(cmd, doc, p)? }
+            PropDef::Slot { preferred: preferred_arg(cmd, doc, p)?, settings: Default::default() }
         }
         _ => return Err(bad(cmd, "type: boolean|text|instanceSwap|variant|slot")),
     };
-    for c in &comps {
-        set_prop_defs(doc, *c, None, |m| {
-            m.insert(name.clone(), def.clone());
-        })?;
-        // Existing instances get the default.
-        if !takes_value(&def) {
-            continue;
-        }
-        for inst in instances_of(doc, *c) {
-            if let NodeKind::Instance { props, .. } = &mut doc.get_mut(inst)?.kind {
-                props.entry(name.clone()).or_insert_with(|| prop_default_value(&def));
-            }
-        }
-    }
+    give_prop(doc, &comps, &name, &def)?;
     if let Some(l) = layer {
         bind(cmd, doc, l, Some(&name), None)?;
     }
     Ok(json!({"id": owner.id(), "name": name}))
+}
+
+/// Give each of components `comps` that lacks it property `name` (`def`), and their existing
+/// instances its default.
+///
+/// SOURCE NOTE (2026-11-21): from storytold/figcraft main
+/// `crates/engine/src/cmd/component/props.rs`; Monet had this inlined in `add_prop` only.
+fn give_prop(doc: &mut Document, comps: &[NodeId], name: &str, def: &PropDef) -> Result<()> {
+    for c in comps {
+        if prop_defs(doc, *c).contains_key(name) {
+            continue;
+        }
+        set_prop_defs(doc, *c, None, |m| {
+            m.insert(name.to_string(), def.clone());
+        })?;
+        if !takes_value(def) {
+            continue;
+        }
+        for inst in instances_of(doc, *c) {
+            if let NodeKind::Instance { props, .. } = &mut doc.get_mut(inst)?.kind {
+                props.entry(name.to_string()).or_insert_with(|| prop_default_value(def));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Give every one of components `comps` (the variants of a set) the properties any of them has:
+/// a set's properties belong to all its variants, as `component.addProperty` gives them, so one
+/// made on a component before it was combined stays on an instance switched to another variant.
+/// A variant that has a property of that name keeps its own.
+///
+/// SOURCE NOTE (2026-11-21): from storytold/figcraft main; Monet's `make_variant_set` did not
+/// share properties across the variants it combined.
+pub(super) fn share_props(doc: &mut Document, comps: &[NodeId]) -> Result<()> {
+    let mut all: Vec<(String, PropDef)> = Vec::new();
+    for c in comps {
+        if let Some(NodeKind::Component { props, prop_order, .. }) = doc.node(*c).map(|n| &n.kind) {
+            for (k, d) in ordered_props(props, prop_order) {
+                if !all.iter().any(|(n, _)| n == k) {
+                    all.push((k.clone(), d.clone()));
+                }
+            }
+        }
+    }
+    // One pass over the document for every missing property instead of one `instances_of` scan
+    // per property per variant (64 variants × 1 property each used to mean 4032 scans).
+    let index = instance_index(doc, comps);
+    for (name, def) in &all {
+        for c in comps {
+            if prop_defs(doc, *c).contains_key(name) {
+                continue;
+            }
+            set_prop_defs(doc, *c, None, |m| {
+                m.insert(name.clone(), def.clone());
+            })?;
+            if !takes_value(def) {
+                continue;
+            }
+            for inst in index.get(c).into_iter().flatten() {
+                if let NodeKind::Instance { props, .. } = &mut doc.get_mut(*inst)?.kind {
+                    props.entry(name.clone()).or_insert_with(|| prop_default_value(def));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The instances of each of `comps`, in one pass over the document.
+fn instance_index(doc: &Document, comps: &[NodeId]) -> BTreeMap<NodeId, Vec<NodeId>> {
+    let mut out: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
+    for n in doc.nodes() {
+        if let NodeKind::Instance { component, .. } = &n.kind
+            && comps.contains(component)
+        {
+            out.entry(*component).or_default().push(n.id);
+        }
+    }
+    out
 }
 
 /// Bind (or with `property: None` unbind) a layer's field to a property of its component.
@@ -514,7 +581,7 @@ pub(super) fn edit_prop(s: &mut Session, p: &Value) -> Result<Value> {
         },
         None => def.clone(),
     };
-    if let (Some(list), PropDef::Slot { preferred } | PropDef::InstanceSwap { preferred, .. }) = (preferred, &mut new_def) {
+    if let (Some(list), PropDef::Slot { preferred, .. } | PropDef::InstanceSwap { preferred, .. }) = (preferred, &mut new_def) {
         *preferred = list;
     }
     for c in &comps {
@@ -580,7 +647,7 @@ fn def_json(name: &str, d: &PropDef) -> Value {
         PropDef::Text { default } => json!({"name": name, "type": "text", "default": default}),
         PropDef::InstanceSwap { default, preferred } => json!({"name": name, "type": "instanceSwap", "default": default, "preferred": preferred}),
         PropDef::Variant { options, default } => json!({"name": name, "type": "variant", "default": default, "options": options}),
-        PropDef::Slot { preferred } => json!({"name": name, "type": "slot", "preferred": preferred}),
+        PropDef::Slot { preferred, .. } => json!({"name": name, "type": "slot", "preferred": preferred}),
     }
 }
 
@@ -606,7 +673,8 @@ pub(crate) fn describe_props(doc: &Document, id: NodeId) -> Value {
     }
     // Slots: the frames (on a main) or this instance's copy, with whether it holds its own content.
     let slots = slots_of(doc, if values.is_some() { id } else { variant_set(doc, comp).unwrap_or(comp) });
-    for (k, d) in prop_list(doc, comp) {
+    let defs = if values.is_some() { instance_prop_list(doc, comp) } else { prop_list(doc, comp) };
+    for (k, d) in defs {
         let mut v = def_json(&k, &d);
         if !takes_value(&d) {
             let layers: Vec<NodeId> = slots.iter().filter(|(_, n)| *n == k).map(|(l, _)| *l).collect();

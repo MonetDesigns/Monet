@@ -887,6 +887,15 @@ pub struct ComponentProp {
     pub value: String,
     /// 可选值：variant 的候选值、swap 的候选（显示名 + 提交值，逗号 id）。
     pub options: Vec<(String, Value)>,
+    /// instanceSwap / slot 的 preferred 组件 id（swap 下拉优先分组；slot 填充优先）。
+    /// 对应 lizard `instance_props` 的 `PropDef::InstanceSwap { preferred }` / `Slot { preferred }`。
+    pub preferred: Vec<u64>,
+    /// slot 属性对应的槽节点 id（实例里的副本），供 `instance.slotInsert` / `resetSlot`。
+    pub slot_id: Option<NodeId>,
+    /// slot 是否已由实例自己填过内容（`slot_edited`）；未填时显示主组件默认内容。
+    pub slot_edited: bool,
+    /// slot 当前内容层数（`slot_edited` 时用于 "N layers" 文案）。
+    pub slot_layers: usize,
 }
 
 /// Component / Instance 面板（egui `component_panel::instance_section`）。
@@ -917,6 +926,63 @@ pub struct ComponentData {
     pub component_candidates: Vec<(NodeId, String)>,
     /// 组件/组件集内的第一个 Frame（新建 slot 属性时引擎要求一个 frame 作 layer）。
     pub slot_layer: Option<NodeId>,
+
+    // ── 变体面板（对照 lizard-main `component_panel.rs::variant_ui`）──────────────
+    /// 实例自身的节点 id（`main_id` 是主组件；More 菜单的命令要作用在实例上）。
+    pub instance_id: Option<NodeId>,
+    /// 实例里「暴露属性」的嵌套实例：节点 id + 名字 + 它们各自的属性（lizard `exposed_copies`）。
+    /// id 必须留着：属性命令要打在**那一个嵌套副本**上，否则会写到外层实例的同名属性。
+    pub exposed_instances: Vec<(NodeId, String, Vec<ComponentProp>)>,
+    /// 选中节点所属的变体集（Component 变体时有值；ComponentSet 为自身；其它 None）。
+    pub set_id: Option<NodeId>,
+    /// 选中的是变体集本体（`variant_ui` 与 `properties_ui` 的分派依据）。
+    pub owner_is_set: bool,
+    /// 变体集第一个子组件：共享属性定义从它读（lizard `properties_ui::first`）。
+    pub first_variant_id: Option<NodeId>,
+    /// 左上角默认变体 id：Current variant 区的默认值列以它为准。
+    pub default_variant_id: Option<NodeId>,
+    /// 默认变体（左上角）自己的属性值（`variant_props(该变体名)`）。Properties 里变体属性的
+    /// 默认值要取这里，不能拿候选值的首项顶替 —— 两者顺序无关，值可以不同。
+    pub variant_defaults: std::collections::BTreeMap<String, String>,
+    /// 选中变体自己的属性值（`variant_props(name)` 解析 "Size=Large, State=Hover"）。
+    /// `variant_ui` 的 Current variant 区逐行显示/编辑这些值。
+    pub own_variant_props: Vec<(String, Vec<String>, String)>,
+    /// 变体节点原始名字（改值时用它重建 "Property=Value, ..." 再走 `node.set`）。
+    pub own_variant_name: String,
+    /// 变体值冲突分组（lizard 的黄色提示）。
+    pub variant_conflicts: Vec<Vec<NodeId>>,
+    /// 可否 Add variant（引擎 `can_add_variant`）。
+    pub can_add_variant: bool,
+}
+
+/// 选中「组件内 / 实例内的普通图层」时，属性绑定与覆盖的数据（lizard `component_panel.rs`
+/// 的 `text_value_ui` / `visibility_value_ui` / `scoped_property_row` / `overrides_ui`）。
+/// 这些能力在 Monet 之前完全没接：`bindProperty` / `makeSlot` / `removeSlot` / `resetOverride`
+/// 在右栏代码里出现次数都是 0。
+#[derive(Clone, Debug, PartialEq)]
+pub struct BindingData {
+    pub node: NodeId,
+    /// 图层是否在实例里（→ 显示 Overrides 节）。
+    pub in_instance: bool,
+    /// 所属组件 id（在组件内时）。
+    pub owner: Option<NodeId>,
+    /// 组件的属性定义（名称 + kind），绑定菜单据此过滤可绑类型。
+    pub props: Vec<(String, &'static str)>,
+    /// 已绑定的字段 → 属性名（`prop_refs`）。
+    pub bound: Vec<(String, String)>,
+    /// 实例内图层的覆盖组（已过滤 `OVERRIDE_GROUPS`）。
+    pub overrides: Vec<String>,
+    pub is_slot: bool,
+    pub slot_name: Option<String>,
+    /// 全部组件（slot 填充 / 绑定菜单候选）。
+    pub components: Vec<(NodeId, String)>,
+    /// `text` / `frame` / `instance` / `other`
+    pub kind: &'static str,
+    pub visible: bool,
+    /// 是否显示 slot 绑定行（Frame 在组件内、非实例）。
+    pub show_slot_row: bool,
+    /// 是否显示 mainComponent 绑定行（嵌套实例在组件内、非实例）。
+    pub show_main_component_row: bool,
 }
 
 /// 组件/组件集的一行属性定义（抄 lizard `component_panel.rs::properties_ui`）。
@@ -929,6 +995,165 @@ pub struct ComponentDef {
     pub default: String,
     /// swap 候选的 (显示名, node id 字符串)。
     pub options: Vec<(String, u64)>,
+    /// slot / instanceSwap 的 preferred 组件 id（lizard `PropDef::Slot/InstanceSwap { preferred }`）。
+    pub preferred: Vec<u64>,
+}
+
+/// 读一个实例的属性行（lizard `instance_props`）：变体属性 + bool/text/swap/slot。
+/// 主实例与 `exposed_copies`（实例里暴露属性的嵌套实例）共用这一份读取。
+pub fn read_props_of_instance(doc: &Document, instance: NodeId, components: &[(NodeId, String)]) -> Vec<ComponentProp> {
+    use figcraft_engine::components;
+    let Some(n) = doc.node(instance) else { return Vec::new() };
+    let figcraft_doc::NodeKind::Instance { component, props } = &n.kind else { return Vec::new() };
+    let mut out: Vec<ComponentProp> = Vec::new();
+    // 变体属性。
+    if let Some(set) = components::variant_set(doc, *component) {
+        let current = doc.node(*component).map(|c| components::variant_props(&c.name)).unwrap_or_default();
+        for (k, vals) in components::variant_options(doc, set) {
+            out.push(ComponentProp {
+                name: k.clone(),
+                kind: "variant",
+                value: current.get(&k).cloned().unwrap_or_default(),
+                options: vals.into_iter().map(|v| (v.clone(), serde_json::json!(v))).collect(),
+                preferred: Vec::new(),
+                slot_id: None,
+                slot_edited: false,
+                slot_layers: 0,
+            });
+        }
+    }
+    // bool / text / swap / slot。
+    let slots = components::slots_of(doc, instance);
+    // 实例只列被图层读取的属性（上游 instance_prop_list，#2022），不显示已删变体留下的死属性。
+    for (k, d) in components::instance_prop_list(doc, *component) {
+        let v = props.get(&k).cloned().unwrap_or_else(|| components::prop_default_value(&d));
+        match &d {
+            figcraft_doc::PropDef::Boolean { .. } => out.push(ComponentProp {
+                name: k.clone(),
+                kind: "boolean",
+                value: v.as_bool().unwrap_or(false).to_string(),
+                options: Vec::new(),
+                preferred: Vec::new(),
+                slot_id: None,
+                slot_edited: false,
+                slot_layers: 0,
+            }),
+            figcraft_doc::PropDef::Text { .. } => out.push(ComponentProp {
+                name: k.clone(),
+                kind: "text",
+                value: v.as_str().unwrap_or_default().to_string(),
+                options: Vec::new(),
+                preferred: Vec::new(),
+                slot_id: None,
+                slot_edited: false,
+                slot_layers: 0,
+            }),
+            figcraft_doc::PropDef::InstanceSwap { preferred, .. } => {
+                let options = preferred
+                    .iter()
+                    .chain(components.iter().map(|(i, _)| i))
+                    .filter_map(|c| doc.node(*c).map(|x| (x.name.clone(), serde_json::json!(c.0))))
+                    .collect();
+                let cur = figcraft_engine::params::id_of(&v);
+                out.push(ComponentProp {
+                    name: k.clone(),
+                    kind: "swap",
+                    value: cur.and_then(|c| doc.node(c)).map(|x| x.name.clone()).unwrap_or_else(|| tr("None").into()),
+                    options,
+                    preferred: preferred.iter().map(|p| p.0).collect(),
+                    slot_id: None,
+                    slot_edited: false,
+                    slot_layers: 0,
+                });
+            }
+            figcraft_doc::PropDef::Slot { preferred, .. } => {
+                let slot_id = slots.iter().find(|(_, name)| name == &k).map(|(sid, _)| *sid);
+                let edited = slot_id.map(|sid| components::slot_edited(doc, sid)).unwrap_or(false);
+                let layers = slot_id.and_then(|sid| doc.node(sid)).map(|n| n.children.len()).unwrap_or(0);
+                out.push(ComponentProp {
+                    name: k.clone(),
+                    kind: "slot",
+                    value: String::new(),
+                    options: Vec::new(),
+                    preferred: preferred.iter().map(|p| p.0).collect(),
+                    slot_id,
+                    slot_edited: edited,
+                    slot_layers: layers,
+                });
+            }
+            figcraft_doc::PropDef::Variant { .. } => {}
+        }
+    }
+    out
+}
+
+/// 读「组件内 / 实例内普通图层」的绑定与覆盖数据（lizard `component_panel.rs` 末尾那段：
+/// Frame→slot、嵌套实例→mainComponent、实例内图层→overrides）。单选才读。
+pub fn read_binding(doc: &Document, ids: &[NodeId]) -> Option<BindingData> {
+    use figcraft_engine::components;
+    let [id] = ids else { return None };
+    let n = doc.node(*id)?;
+    // 组件/组件集本身由 `read_component` 处理，这里只接普通图层。
+    if matches!(n.kind, figcraft_doc::NodeKind::Component { .. } | figcraft_doc::NodeKind::ComponentSet { .. }) {
+        return None;
+    }
+    let owner = components::owning_component(doc, *id).filter(|c| *c != *id);
+    let in_instance = components::inside_instance(doc, *id);
+    // 不在任何组件里、也不在实例里，就没有绑定可谈。**在实例里就一定有覆盖可看**：页面上的
+    // 实例（没有 Component 祖先）同样要出 Overrides 节 —— 之前这里 `let owner = owner?` 直接
+    // 返回 None，页面实例里选中的图层右侧什么都没有。
+    if owner.is_none() && !in_instance {
+        return None;
+    }
+    let is_slot = components::is_slot(doc, *id);
+    let kind = match &n.kind {
+        figcraft_doc::NodeKind::Text(_) => "text",
+        figcraft_doc::NodeKind::Frame => "frame",
+        figcraft_doc::NodeKind::Instance { .. } => "instance",
+        _ => "other",
+    };
+    // 组件属性定义（绑定菜单的候选）：绑定行只有组件里的图层才有，所以只按 owner 读。
+    let props = owner
+        .map(|owner| {
+            components::prop_list(doc, owner)
+                .into_iter()
+                .map(|(name, d)| {
+                    let k = match d {
+                        figcraft_doc::PropDef::Boolean { .. } => "boolean",
+                        figcraft_doc::PropDef::Text { .. } => "text",
+                        figcraft_doc::PropDef::InstanceSwap { .. } => "instanceSwap",
+                        figcraft_doc::PropDef::Variant { .. } => "variant",
+                        figcraft_doc::PropDef::Slot { .. } => "slot",
+                    };
+                    (name, k)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let bound: Vec<(String, String)> = n.prop_refs.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let overrides: Vec<String> = n
+        .overrides
+        .iter()
+        .filter(|g| components::OVERRIDE_GROUPS.contains(&g.as_str()))
+        .cloned()
+        .collect();
+    Some(BindingData {
+        node: *id,
+        in_instance,
+        owner,
+        props,
+        bound,
+        overrides,
+        is_slot,
+        slot_name: components::slot_name(doc, *id),
+        components: list_components(doc),
+        kind,
+        visible: n.visible,
+        // Frame 在组件内（非实例）才能 Make slot / 绑 slot。
+        show_slot_row: owner.is_some() && kind == "frame" && !in_instance,
+        // 嵌套实例在组件内（非实例）才能绑 mainComponent。
+        show_main_component_row: owner.is_some() && kind == "instance" && !in_instance,
+    })
 }
 
 /// 读 Component 面板的数据。
@@ -962,6 +1187,17 @@ pub fn read_component(doc: &Document, ids: &[NodeId]) -> Option<ComponentData> {
                 variants: Vec::new(),
                 component_candidates,
                 slot_layer: None,
+                instance_id: Some(*id),
+                exposed_instances: Vec::new(),
+                own_variant_name: String::new(),
+                set_id: None,
+                owner_is_set: false,
+                first_variant_id: None,
+                default_variant_id: None,
+                variant_defaults: Default::default(),
+                own_variant_props: Vec::new(),
+                variant_conflicts: Vec::new(),
+                can_add_variant: false,
             };
             // 主组件（或变体集）的描述。
             out.description = [Some(*component), set]
@@ -975,54 +1211,14 @@ pub fn read_component(doc: &Document, ids: &[NodeId]) -> Option<ComponentData> {
                 })
                 .find(|d| !d.is_empty())
                 .unwrap_or_default();
-            // 变体属性。
-            if let Some(set) = set {
-                let current = doc.node(*component).map(|c| components::variant_props(&c.name)).unwrap_or_default();
-                for (k, vals) in components::variant_options(doc, set) {
-                    out.props.push(ComponentProp {
-                        name: k.clone(),
-                        kind: "variant",
-                        value: current.get(&k).cloned().unwrap_or_default(),
-                        options: vals.into_iter().map(|v| (v.clone(), serde_json::json!(v))).collect(),
-                    });
-                }
-            }
-            // bool / text / swap / slot 属性。
-            if let figcraft_doc::NodeKind::Component { props: defs, .. } = &doc.node(*component)?.kind {
-                for (k, d) in defs {
-                    let v = props.get(k).cloned().unwrap_or_else(|| components::prop_default_value(d));
-                    match d {
-                        figcraft_doc::PropDef::Boolean { .. } => out.props.push(ComponentProp {
-                            name: k.clone(),
-                            kind: "boolean",
-                            value: v.as_bool().unwrap_or(false).to_string(),
-                            options: Vec::new(),
-                        }),
-                        figcraft_doc::PropDef::Text { .. } => out.props.push(ComponentProp {
-                            name: k.clone(),
-                            kind: "text",
-                            value: v.as_str().unwrap_or_default().to_string(),
-                            options: Vec::new(),
-                        }),
-                        figcraft_doc::PropDef::InstanceSwap { preferred, .. } => {
-                            let options = preferred
-                                .iter()
-                                .chain(out.components.iter().map(|(i, _)| i))
-                                .filter_map(|c| doc.node(*c).map(|x| (x.name.clone(), serde_json::json!(c.0))))
-                                .collect();
-                            let cur = figcraft_engine::params::id_of(&v);
-                            out.props.push(ComponentProp {
-                                name: k.clone(),
-                                kind: "swap",
-                                value: cur.and_then(|c| doc.node(c)).map(|x| x.name.clone()).unwrap_or_else(|| tr("None").into()),
-                                options,
-                            });
-                        }
-                        // Slot 的填充走 `slot_fill`（挑选组件填进去），此轮只标注出来。
-                        figcraft_doc::PropDef::Slot { .. } => {
-                            out.props.push(ComponentProp { name: k.clone(), kind: "slot", value: String::new(), options: Vec::new() })
-                        }
-                        figcraft_doc::PropDef::Variant { .. } => {}
+            // 变体属性 + bool/text/swap/slot 属性（抽成函数，供主实例和 exposed copies 共用）。
+            out.props = read_props_of_instance(doc, *id, &out.components);
+            // 暴露属性的嵌套实例（lizard `exposed_copies`）：节点 id + 名字 + 它们各自的属性。
+            if !nested {
+                for c in components::exposed_copies(doc, *id) {
+                    if let Some(cn) = doc.node(c) {
+                        let props = read_props_of_instance(doc, c, &out.components);
+                        out.exposed_instances.push((c, cn.name.clone(), props));
                     }
                 }
             }
@@ -1044,13 +1240,36 @@ pub fn read_component(doc: &Document, ids: &[NodeId]) -> Option<ComponentData> {
                 slot_layer: first_frame(doc, *id),
                 defs,
                 variants,
+                // 组件集本体：`properties_ui` 路径，属性定义直接可编辑；无「当前变体」区。
+                set_id: Some(*id),
+                owner_is_set: true,
+                first_variant_id: first,
+                default_variant_id: components::default_variant(doc, *id),
+                variant_defaults: variant_defaults_of(doc, components::default_variant(doc, *id)),
+                variant_conflicts: components::variant_conflicts(doc, *id),
+                can_add_variant: figcraft_engine::cmd::component::can_add_variant(doc, *id),
                 ..Default::default()
             })
         }
         figcraft_doc::NodeKind::Component { description, props, .. } => {
             let defs = read_defs(doc, *id);
-            let variants = components::variant_set(doc, *id).map(|set| components::variant_options(doc, set)).unwrap_or_default();
+            let set = components::variant_set(doc, *id);
+            let variants = set.map(|s| components::variant_options(doc, s)).unwrap_or_default();
             let _ = props; // defs 已从节点读到
+
+            // 变体（属于某个 set）→ `variant_ui`：显示当前变体的属性值，不是属性定义列表。
+            // 属性值来自节点名字里的 "Property=Value, ..."（引擎 `variant_props`）。
+            let own_variant_props = match set {
+                Some(s) => {
+                    let pairs = components::variant_props(&n.name);
+                    variants
+                        .iter()
+                        .map(|(name, vals)| (name.clone(), vals.clone(), pairs.get(name).cloned().unwrap_or_default()))
+                        .collect()
+                }
+                None => Vec::new(),
+            };
+            let owner = set.unwrap_or(*id);
             Some(ComponentData {
                 title: tr("Component"),
                 description: description.clone(),
@@ -1060,6 +1279,22 @@ pub fn read_component(doc: &Document, ids: &[NodeId]) -> Option<ComponentData> {
                 slot_layer: first_frame(doc, *id),
                 defs,
                 variants,
+                set_id: set,
+                owner_is_set: false,
+                first_variant_id: set.and_then(|s| {
+                    doc.node(s).and_then(|sn| {
+                        sn.children
+                            .iter()
+                            .copied()
+                            .find(|c| matches!(doc.node(*c).map(|cn| &cn.kind), Some(figcraft_doc::NodeKind::Component { .. })))
+                    })
+                }),
+                default_variant_id: set.and_then(|s| components::default_variant(doc, s)),
+                variant_defaults: variant_defaults_of(doc, set.and_then(|s| components::default_variant(doc, s))),
+                variant_conflicts: set.map(|s| components::variant_conflicts(doc, s)).unwrap_or_default(),
+                can_add_variant: figcraft_engine::cmd::component::can_add_variant(doc, owner),
+                own_variant_props,
+                own_variant_name: n.name.clone(),
                 ..Default::default()
             })
         }
@@ -1067,9 +1302,38 @@ pub fn read_component(doc: &Document, ids: &[NodeId]) -> Option<ComponentData> {
     }
 }
 
+/// 把变体名字里的 `Property=Old` 换成 `Property=New`（其它段原样保留）。
+/// 引擎 `variant_props` 用 `,` 分段、`=` 分键值，`setVariantValue` 在 storytold/figcraft
+/// 中不存在，走 `node.set {props:{name}}`（`KEYS` 里 name 可写）。
+pub fn variant_name_with_value(name: &str, property: &str, value: &str) -> String {
+    let mut out: Vec<String> = name
+        .split(',')
+        .map(|seg| {
+            let seg = seg.trim();
+            match seg.split_once('=') {
+                Some((k, _)) if k.trim() == property => format!("{}={}", property, value),
+                _ => seg.to_string(),
+            }
+        })
+        .collect();
+    if !out.iter().any(|seg| seg.split_once('=').is_some_and(|(k, _)| k.trim() == property)) {
+        out.push(format!("{}={}", property, value));
+    }
+    out.join(", ")
+}
+
 /// 组件子树里第一个 Frame（slot 属性的 layer 候选）。
 fn first_frame(doc: &Document, root: NodeId) -> Option<NodeId> {
     doc.subtree(root).into_iter().find(|id| doc.node(*id).is_some_and(|n| matches!(n.kind, figcraft_doc::NodeKind::Frame)))
+}
+
+/// 某个变体（通常是左上角的默认变体）自己的属性值：`variant_props("Size=Large, State=Hover")`。
+/// Properties 里每个变体属性的「默认值」显示的是默认变体的值，不是候选值列表的第一项。
+fn variant_defaults_of(doc: &Document, variant: Option<NodeId>) -> std::collections::BTreeMap<String, String> {
+    variant
+        .and_then(|v| doc.node(v))
+        .map(|n| figcraft_engine::components::variant_props(&n.name))
+        .unwrap_or_default()
 }
 
 /// 从一个组件节点读它的属性定义（供右栏 Properties 节增删/改名/默认值）。
@@ -1080,27 +1344,34 @@ fn read_defs(doc: &Document, id: NodeId) -> Vec<ComponentDef> {
     figcraft_doc::ordered_props(props, prop_order)
         .into_iter()
         .map(|(name, d)| {
-            let (kind, default, options) = match d {
-                figcraft_doc::PropDef::Boolean { default } => ("boolean", if *default { tr("True") } else { tr("False") }.to_string(), Vec::new()),
-                figcraft_doc::PropDef::Text { default } => ("text", default.clone(), Vec::new()),
+            let (kind, default, options, preferred) = match d {
+                figcraft_doc::PropDef::Boolean { default } => {
+                    ("boolean", if *default { tr("True") } else { tr("False") }.to_string(), Vec::new(), Vec::new())
+                }
+                figcraft_doc::PropDef::Text { default } => ("text", default.clone(), Vec::new(), Vec::new()),
                 figcraft_doc::PropDef::InstanceSwap { default, preferred } => (
                     "instanceSwap",
                     doc.node(*default).map(|n| n.name.clone()).unwrap_or_else(|| tr("Missing").into()),
+                    // 候选：preferred 在前，然后全部组件。
                     preferred
                         .iter()
                         .copied()
                         .chain(doc.nodes().filter_map(|n| matches!(n.kind, figcraft_doc::NodeKind::Component { .. }).then_some(n.id)))
                         .filter_map(|c| doc.node(c).map(|n| (n.name.clone(), c.0)))
                         .collect(),
+                    preferred.iter().map(|p| p.0).collect(),
                 ),
-                figcraft_doc::PropDef::Variant { default, options } => ("variant", default.clone(), options.iter().map(|v| (v.clone(), 0)).collect()),
-                figcraft_doc::PropDef::Slot { preferred } => (
+                figcraft_doc::PropDef::Variant { default, options } => {
+                    ("variant", default.clone(), options.iter().map(|v| (v.clone(), 0)).collect(), Vec::new())
+                }
+                figcraft_doc::PropDef::Slot { preferred, .. } => (
                     "slot",
                     String::new(),
                     preferred.iter().copied().filter_map(|c| doc.node(c).map(|n| (n.name.clone(), c.0))).collect(),
+                    preferred.iter().map(|p| p.0).collect(),
                 ),
             };
-            ComponentDef { name: name.clone(), kind, default, options }
+            ComponentDef { name: name.clone(), kind, default, options, preferred }
         })
         .collect()
 }
@@ -1527,6 +1798,10 @@ pub struct PanelData {
     pub dev: DevModeData,
     /// Component / Instance 面板；`None` = 选中的不是组件相关节点。
     pub component: Option<ComponentData>,
+    /// 组件内 / 实例内普通图层的属性绑定与覆盖；`None` = 不需要显示绑定节。
+    pub binding: Option<BindingData>,
+    /// 多选主组件且可以合并成变体集时的 ids（lizard `combine_ui`）；否则空。
+    pub combine_ids: Vec<NodeId>,
     /// A3: the Comments panel's rows (already filtered/sorted/searched).
     pub comments: Vec<crate::comments::CommentRow>,
     /// A3: the current user (for unread dots).
@@ -1857,6 +2132,9 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
 
     // ── Component / Instance（egui `component_panel::instance_section`）──
     d.component = read_component(doc, ids);
+    d.binding = read_binding(doc, ids);
+    // 多选主组件 → 「Combine as variants」按钮（lizard `combine_ui`）。
+    d.combine_ids = if ids.len() >= 2 && figcraft_engine::cmd::component::can_combine_variants(doc, ids) { ids.to_vec() } else { Vec::new() };
 
     d.fills = paint_rows(doc, ids, true);
     d.strokes = paint_rows(doc, ids, false);

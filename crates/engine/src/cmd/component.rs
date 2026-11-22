@@ -17,6 +17,9 @@ use crate::params::{boolean, get, id, id_of, num, req_id, req_num, req_string, r
 use crate::{EngineError, Result, Session, bad, spec};
 
 mod instance;
+// lizard-only engine extension (component value table); re-sync from figcraft main when it
+// gains equivalents. See crates/engine/src/cmd/component/matrix.rs.
+mod matrix;
 mod props;
 mod variants;
 
@@ -26,6 +29,31 @@ use props::{add_prop, bind_prop, delete_prop, edit_prop, set_props};
 pub(crate) use props::{apply_prop_bindings, check_prop_binding, describe_props};
 use variants::{add_variant, combine, create_set};
 pub use variants::{can_add_variant, can_combine_variants, can_create_set};
+
+/// LIZARD-ONLY engine command (see the SOURCE NOTE on its `spec!` above). Re-sync from
+/// storytold/figcraft main if/when it gains an equivalent.
+fn set_variant_value(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "component.setVariantValue";
+    let id = req_id(cmd, p, "id")?;
+    let property = req_string(cmd, p, "property")?;
+    let value = req_string(cmd, p, "value")?.trim().to_string();
+    if value.is_empty() || value.contains([',', '=']) {
+        return Err(bad(cmd, "`value` must be non-empty without ',' or '='"));
+    }
+    let doc = s.doc_mut()?;
+    if doc.is_remote(id) || inside_instance(doc, id) {
+        return Err(bad(cmd, "the variant is read-only"));
+    }
+    let set = variant_set(doc, id).ok_or_else(|| bad(cmd, "`id` must be a variant in a component set"))?;
+    let order: Vec<String> = variant_options(doc, set).into_iter().map(|(name, _)| name).collect();
+    if !order.contains(&property) {
+        return Err(bad(cmd, format!("unknown variant property `{property}`")));
+    }
+    let mut pairs = variant_props(&doc.get(id)?.name);
+    pairs.insert(property, value);
+    doc.get_mut(id)?.name = variant_name(&pairs, &order);
+    Ok(json!({"id": id}))
+}
 
 /// `component.hideWhenPublishing`: the leading `.` of the names of this file's components and
 /// sets (those `ids` are or are in), put on or taken off.
@@ -92,6 +120,18 @@ pub fn specs() -> Vec<CommandSpec> {
             "{id? (component set, variant, or a main component not in a set yet: it becomes a set of itself and the new variant), property?, value?}  (duplicates the variant; `property`=`value` names the new one)",
             true,
             add_variant
+        ),
+        // SOURCE NOTE (2026-11-21): `component.setVariantValue` is a LIZARD-ONLY engine command
+        // (brava-group/lizard main, crates/engine/src/cmd/component.rs). storytold/figcraft main
+        // has no such command — it edits a variant by rewriting the node name via `node.set`.
+        // Ported here so the Design panel's Current variant section can set one value directly.
+        // When figcraft gains an equivalent, re-sync from figcraft and drop this note.
+        spec!(
+            "component.setVariantValue",
+            "Set variant value",
+            "{id (variant), property, value}  (changes only this variant's value for the named property)",
+            true,
+            set_variant_value
         ),
         spec!("instance.create", "Create instance", "{component (component or set: its default variant), x?, y?, parent?}", true, |s, p| {
             let cmd = "instance.create";
@@ -267,6 +307,43 @@ pub fn specs() -> Vec<CommandSpec> {
             edit_prop
         ),
         spec!("component.deleteProperty", "Delete component property", "{id? (component or set), name}", true, delete_prop),
+        // lizard-only engine extension (component value table); re-sync from figcraft main
+        // when it gains equivalents. Functions live in cmd/component/matrix.rs.
+        spec!(
+            "component.matrixSetAxis", "Set component axis",
+            "{id (main component), name, options: [strings], default?}  Creates or replaces one local axis; existing instance choices stay when valid",
+            true, matrix::matrix_set_axis
+        ),
+        spec!(
+            "component.matrixRenameAxis", "Rename component axis",
+            "{id (main component), name, newName}  Preserves cells and instance choices",
+            true, matrix::matrix_rename_axis
+        ),
+        spec!(
+            "component.matrixRenameOption", "Rename component option",
+            "{id (main component), axis, option, newName}  Preserves cells and instance choices",
+            true, matrix::matrix_rename_option
+        ),
+        spec!(
+            "component.matrixDeleteAxis", "Delete component axis",
+            "{id (main component), name}  Also removes cells conditioned on that axis",
+            true, matrix::matrix_delete_axis
+        ),
+        spec!(
+            "component.matrixSetCell", "Set component value cell",
+            "{id (main component), layer (id in component, or the main itself), field (node.set key), when: {axis: option}, value}  The most specific matching cell wins; equal-specificity overlaps are refused",
+            true, matrix::matrix_set_cell
+        ),
+        spec!(
+            "component.matrixDeleteCell", "Delete component value cell",
+            "{id (main component), layer, field, when: {axis: option}}",
+            true, matrix::matrix_delete_cell
+        ),
+        spec!(
+            "component.matrixDescribe", "Describe component matrix",
+            "{id (main component or instance)}  Returns axes, fields, selected choices and resolved values",
+            false, matrix::matrix_describe
+        ),
         spec!(
             "component.bindProperty",
             "Bind layer to property",

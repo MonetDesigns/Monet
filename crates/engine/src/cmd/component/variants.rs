@@ -77,6 +77,8 @@ fn make_variant_set(cmd: &str, doc: &mut Document, ids: &[NodeId]) -> Result<Nod
             node.name = format!("Property 1={}", if k == 0 { "Default".to_string() } else { format!("Variant{}", k + 1) });
         }
     }
+    // 变体共享属性（上游 share_props）：组合成 set 后，任一变体有的属性出现在所有变体上。
+    super::props::share_props(doc, ids)?;
     Ok(set)
 }
 
