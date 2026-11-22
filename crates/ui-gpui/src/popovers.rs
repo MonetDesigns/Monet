@@ -677,6 +677,12 @@ struct ColorState {
     uid: usize,
     /// 色板（饱和度/明度）是否正在拖动。
     sv_drag: Rc<Cell<bool>>,
+    /// 方形色域 / 环状色域切换。环状色域按 .fig Frame 209 的 208/176 色相环 + 内部三角绘制。
+    ring: Rc<Cell<bool>>,
+    /// 环状色域拖动分区：`None` 未拖动，`Some(0)` 外环调色相，`Some(1)` 内部三角调饱和度/明度。
+    ring_drag: Rc<Cell<Option<u8>>>,
+    /// 三角色域拖动开始时的色相（拖动过程中色相必须保持不变）。
+    ring_hue: Rc<Cell<f32>>,
     /// 渐变色阶的拖动状态：每帧重建 UI，必须存在 ColorState 里才能跨帧。
     grad_drag: Rc<Cell<Option<usize>>>,
     grad_press: Rc<Cell<Option<Point<Pixels>>>>,
@@ -3088,6 +3094,9 @@ impl WindowState {
                 NEXT.fetch_add(1, Ordering::Relaxed)
             },
             sv_drag: Rc::new(Cell::new(false)),
+            ring: Rc::new(Cell::new(false)),
+            ring_drag: Rc::new(Cell::new(None)),
+            ring_hue: Rc::new(Cell::new(0.0)),
             grad_drag: Rc::new(Cell::new(None)),
             grad_press: Rc::new(Cell::new(None)),
             grad_moved: Rc::new(Cell::new(false)),
@@ -3553,7 +3562,7 @@ impl WindowState {
         let sv_hit_win = sv_hit.clone();
         let sv_pick_down = sv_pick.clone();
         let sv_pick_win = sv_pick.clone();
-        let spectrum = div()
+        let square_spectrum = div()
             .relative()
             .w(pt(SPECTRUM))
             .h(pt(SPECTRUM))
@@ -3640,6 +3649,11 @@ impl WindowState {
                 let v = 1.0 - ((f32::from(e.position.y) - f32::from(b.origin.y)) / f32::from(b.size.height).max(1.0)).clamp(0.0, 1.0);
                 sv_pick_down(hue, s, v, window, cx);
             });
+        let spectrum = if c.ring.get() {
+            ring_spectrum(c, hsb, current, pick.clone()).into_any_element()
+        } else {
+            square_spectrum.into_any_element()
+        };
 
         // ② 色相滑轨：通用 `Slider`（受控：拖动回调写回颜色，下一帧按新色相重算位置），
         //    轨道整条自绘成 6 段 60° 线性渐变。
@@ -4192,6 +4206,17 @@ impl WindowState {
                     window.refresh();
                 }
             });
+        // 环状色域切换：紧挨水滴按钮，24 pt 图标按钮；选中态由 ring 单元格驱动。
+        let ring = c.ring.clone();
+        let ring_wake = self.cmds.clone();
+        let ring_btn = IconButton::new(Icon::Ellipse)
+            .id(SharedString::from(format!("color-ring-{}", c.uid)))
+            .active(c.ring.get())
+            .on_click(move |_, window, _| {
+                ring.set(!ring.get());
+                ring_wake.wake();
+                window.refresh();
+            });
         div()
             .w(pt(PANEL_W))
             .h(pt(40.0))
@@ -4202,7 +4227,7 @@ impl WindowState {
             .items_center()
             .justify_between()
             .child(tabs)
-            .child(div().flex().items_center().gap(pt(4.0)).child(blend_btn))
+            .child(div().flex().items_center().gap(pt(4.0)).child(blend_btn).child(ring_btn))
     }
 
     /// 渐变类型：线性 / 径向 / 角度 / 菱形。Figma 的渐变面板用**下拉菜单**切类型，
@@ -6610,6 +6635,221 @@ fn hsb_color(h: f32, s: f32, b: f32) -> Color32 {
     crate::widgets::swatch::color32(figcraft_color::Hsb { h, s, b }.to_color())
 }
 
+// ── 环状取色器（.fig Frame 209）─────────────────────────────────────────────────────────────
+// 外环直径 208 / 内径 176（环宽 16），中心 (104,104)；色相从正右方 0° 顺时针递增，与 HSB
+// 0=红、60=黄、120=绿、180=青、240=蓝、300=品红一致。内部三角是内接圆的三顶点：
+// 纯色顶点在色相方向，白顶点在 hue-120°，黑顶点在 hue+120°（Frame 221/Vector 的读数）。
+const RING_R: f32 = 104.0;
+const RING_INNER_R: f32 = 88.0;
+const RING_TRI_R: f32 = 88.0;
+
+fn hue_at(dx: f32, dy: f32) -> f32 {
+    dy.atan2(dx).to_degrees().rem_euclid(360.0)
+}
+
+fn ring_point(cx: f32, cy: f32, r: f32, hue: f32) -> (f32, f32) {
+    let a = hue.to_radians();
+    (cx + r * a.cos(), cy + r * a.sin())
+}
+
+/// 返回 `[纯色, 白, 黑]` 三顶点。**三角形固定不随色相旋转**：
+/// `.fig` Frame 221 的 `Affine([0,1,-1,0,192,16])` 是容器自身的 90° 固定变换，
+/// 把内部 Vector 的 `(88,0)/(11.79,132)/(164.21,132)` 映到 `(192,104)/(60,27.8)/(60,180.2)`。
+/// 即纯色顶点固定在正右、白顶点在左上、黑顶点在左下；色相只改变填充色和外环手柄位置。
+fn ring_triangle(cx: f32, cy: f32) -> [(f32, f32); 3] {
+    let half = RING_TRI_R * 3.0f32.sqrt() * 0.5;
+    [(cx + RING_TRI_R, cy), (cx - RING_TRI_R * 0.5, cy - half), (cx - RING_TRI_R * 0.5, cy + half)]
+}
+
+/// 三角形重心坐标 `wa/wb/wc`：A=纯色、B=白、C=黑。`s=wa/(wa+wb)`、`v=wa+wb`。
+fn ring_bary(p: (f32, f32), tri: &[(f32, f32); 3]) -> [f32; 3] {
+    let cross = |a: (f32, f32), b: (f32, f32)| a.0 * b.1 - a.1 * b.0;
+    let den = cross((tri[1].0 - tri[0].0, tri[1].1 - tri[0].1), (tri[2].0 - tri[0].0, tri[2].1 - tri[0].1));
+    if den.abs() < 0.0001 {
+        return [0.0, 0.0, 1.0];
+    }
+    let wa = cross((tri[1].0 - p.0, tri[1].1 - p.1), (tri[2].0 - p.0, tri[2].1 - p.1)) / den;
+    let wb = cross((tri[2].0 - p.0, tri[2].1 - p.1), (tri[0].0 - p.0, tri[0].1 - p.1)) / den;
+    [wa, wb, 1.0 - wa - wb]
+}
+
+fn ring_sv(weights: [f32; 3]) -> (f32, f32) {
+    let v = (weights[0] + weights[1]).clamp(0.0, 1.0);
+    let s = if v > 0.0001 { (weights[0] / v).clamp(0.0, 1.0) } else { 0.0 };
+    (s, v)
+}
+
+fn ring_point_from_sv(tri: &[(f32, f32); 3], s: f32, v: f32) -> (f32, f32) {
+    let wa = s * v;
+    let wb = (1.0 - s) * v;
+    let wc = 1.0 - v;
+    (
+        tri[0].0 * wa + tri[1].0 * wb + tri[2].0 * wc,
+        tri[0].1 * wa + tri[1].1 * wb + tri[2].1 * wc,
+    )
+}
+
+/// 外环 120 段扇形 + 内部三角 16×16 重心网格。用实色小三角替代 GPUI 缺失的锥形渐变。
+fn paint_ring(window: &mut Window, bounds: Bounds<Pixels>, hue: f32) {
+    let bx = f32::from(bounds.origin.x);
+    let by = f32::from(bounds.origin.y);
+    let cx = bx + RING_R;
+    let cy = by + RING_R;
+    let segments = 120;
+    for i in 0..segments {
+        let h0 = i as f32 * 360.0 / segments as f32;
+        let h1 = (i + 1) as f32 * 360.0 / segments as f32 + 0.05;
+        let o0 = ring_point(cx, cy, RING_R, h0);
+        let o1 = ring_point(cx, cy, RING_R, h1);
+        let i1 = ring_point(cx, cy, RING_INNER_R, h1);
+        let i0 = ring_point(cx, cy, RING_INNER_R, h0);
+        let mut b = gpui::PathBuilder::fill();
+        b.move_to(point(px(o0.0), px(o0.1)));
+        b.line_to(point(px(o1.0), px(o1.1)));
+        b.line_to(point(px(i1.0), px(i1.1)));
+        b.line_to(point(px(i0.0), px(i0.1)));
+        b.close();
+        if let Ok(path) = b.build() {
+            window.paint_path(path, rgba(hsb_color((h0 + h1) * 0.5, 1.0, 1.0)));
+        }
+    }
+    let tri = ring_triangle(cx, cy);
+    let n = 16;
+    let at = |wa: usize, wb: usize| {
+        let a = wa as f32 / n as f32;
+        let b = wb as f32 / n as f32;
+        let c = 1.0 - a - b;
+        (
+            tri[0].0 * a + tri[1].0 * b + tri[2].0 * c,
+            tri[0].1 * a + tri[1].1 * b + tri[2].1 * c,
+        )
+    };
+    for i in 0..n {
+        for j in 0..n - i {
+            let p0 = at(i, j);
+            let p1 = at(i + 1, j);
+            let p2 = at(i, j + 1);
+            let (s, v) = ring_sv([(i as f32 + 0.33) / n as f32, (j as f32 + 0.33) / n as f32, 0.0]);
+            let mut b = gpui::PathBuilder::fill();
+            b.move_to(point(px(p0.0), px(p0.1)));
+            b.line_to(point(px(p1.0), px(p1.1)));
+            b.line_to(point(px(p2.0), px(p2.1)));
+            b.close();
+            if let Ok(path) = b.build() {
+                window.paint_path(path, rgba(hsb_color(hue, s, v)));
+            }
+            if i + j + 1 < n {
+                let p3 = at(i + 1, j + 1);
+                let (s2, v2) = ring_sv([(i as f32 + 0.66) / n as f32, (j as f32 + 0.66) / n as f32, 0.0]);
+                let mut b = gpui::PathBuilder::fill();
+                b.move_to(point(px(p1.0), px(p1.1)));
+                b.line_to(point(px(p3.0), px(p3.1)));
+                b.line_to(point(px(p2.0), px(p2.1)));
+                b.close();
+                if let Ok(path) = b.build() {
+                    window.paint_path(path, rgba(hsb_color(hue, s2, v2)));
+                }
+            }
+        }
+    }
+}
+
+/// 环状色域元素：外环拖色相、内部三角拖饱和度/明度，布局与方形色域同为 208×208。
+fn ring_spectrum(c: &ColorState, hsb: figcraft_color::Hsb, current: Color32, pick: Rc<dyn Fn(Color32, &mut Window, &mut App)>) -> gpui::Div {
+    let hit: Rc<Cell<Option<Bounds<Pixels>>>> = Rc::new(Cell::new(None));
+    let prepaint = hit.clone();
+    let click_hit = hit.clone();
+    let move_hit = hit.clone();
+    let drag_down = c.ring_drag.clone();
+    let drag_win = c.ring_drag.clone();
+    let drag_up = c.ring_drag.clone();
+    let start_hue_down = c.ring_hue.clone();
+    let start_hue_win = c.ring_hue.clone();
+    let keep = (hsb.s, hsb.b);
+    let hue = hsb.h;
+    let pick = {
+        let pick = pick;
+        let cur = c.current.clone();
+        let cache = c.hsb_cache.clone();
+        Rc::new(move |h: f32, s: f32, v: f32, window: &mut Window, cx: &mut App| {
+            let a = cur.get().0[3];
+            let color = hsb_color(h, s, v).with_alpha(a);
+            cache.set(Some((h, s, v, color.0)));
+            pick(color, window, cx);
+        })
+    };
+    let move_pick = pick.clone();
+    let click_pick = pick.clone();
+    let canvas = gpui::canvas(
+        move |bounds, _, _| prepaint.set(Some(bounds)),
+        move |bounds, _, window, _| {
+            paint_ring(window, bounds, hue);
+            let dragging = drag_win.clone();
+            let hit = move_hit.clone();
+            let pick = move_pick.clone();
+            let start_hue = start_hue_win.clone();
+            window.on_mouse_event(move |e: &MouseMoveEvent, phase, window, cx| {
+                if !phase.bubble() || dragging.get().is_none() {
+                    return;
+                }
+                let Some(b) = hit.get() else { return };
+                let x = f32::from(e.position.x) - f32::from(b.origin.x);
+                let y = f32::from(e.position.y) - f32::from(b.origin.y);
+                if dragging.get() == Some(0) {
+                    let h = hue_at(x - RING_R, y - RING_R);
+                    pick(h, keep.0, keep.1, window, cx);
+                } else {
+                    let h = start_hue.get();
+                    let tri = ring_triangle(RING_R, RING_R);
+                    let weights = ring_bary((x, y), &tri);
+                    if weights.iter().all(|w| *w >= -0.02) {
+                        let (s, v) = ring_sv(weights);
+                        pick(h, s, v, window, cx);
+                    }
+                }
+            });
+            let dragging = drag_up.clone();
+            window.on_mouse_event(move |_e: &gpui::MouseUpEvent, phase, _, _| {
+                if phase.bubble() {
+                    dragging.set(None);
+                }
+            });
+        },
+    );
+    let tri = ring_triangle(RING_R, RING_R);
+    let sv = ring_point_from_sv(&tri, hsb.s, hsb.b);
+    let ring_knob = ring_point(RING_R, RING_R, (RING_R + RING_INNER_R) * 0.5, hue);
+    div()
+        .relative()
+        .w(pt(SPECTRUM))
+        .h(pt(SPECTRUM))
+        .child(canvas.size_full())
+        .child(picker_knob(ring_knob.0, ring_knob.1, Color32::WHITE))
+        .child(picker_knob(sv.0, sv.1, current.with_alpha(255)))
+        .on_mouse_down(MouseButton::Left, move |e, window, cx| {
+            let Some(b) = click_hit.get() else { return };
+            let x = f32::from(e.position.x) - f32::from(b.origin.x);
+            let y = f32::from(e.position.y) - f32::from(b.origin.y);
+            let dx = x - RING_R;
+            let dy = y - RING_R;
+            let r = (dx * dx + dy * dy).sqrt();
+            if (RING_INNER_R - 4.0..=RING_R + 4.0).contains(&r) {
+                drag_down.set(Some(0));
+                let h = hue_at(dx, dy);
+                click_pick(h, keep.0, keep.1, window, cx);
+                return;
+            }
+            let tri = ring_triangle(RING_R, RING_R);
+            let weights = ring_bary((x, y), &tri);
+            if weights.iter().all(|w| *w >= -0.02) {
+                drag_down.set(Some(1));
+                start_hue_down.set(hue);
+                let (s, v) = ring_sv(weights);
+                click_pick(hue, s, v, window, cx);
+            }
+        })
+}
+
 /// 断点行的通用输入控件：位置百分比（`number_field`）+ 颜色行（`ColorField` 的两个裸编辑器，
 /// Hex 与透明度都走 `color_row_editors`，数值行为 / 范围 / 拖「%」全在通用控件里）。
 fn stop_fields(
@@ -7101,5 +7341,20 @@ mod tests {
             assert_eq!(v.get("type").and_then(Value::as_str), Some(ty), "type tag for {ty}");
             assert!(v.as_object().unwrap().len() < 16, "{ty} carries too many fields: {v}");
         }
+    }
+
+    #[test]
+    fn ring_picker_maps_hue_and_triangle_sv() {
+        assert_eq!(hue_at(1.0, 0.0), 0.0);
+        assert!((hue_at(0.0, -1.0) - 270.0).abs() < 0.001);
+        let tri = ring_triangle(RING_R, RING_R);
+        assert!((tri[0].0 - (RING_R + RING_TRI_R)).abs() < 0.001, "hue 0 的纯色顶点在正右方");
+        assert!(tri[1].1 < RING_R && tri[2].1 > RING_R, "白顶点在上、黑顶点在下");
+        let (s, v) = ring_sv([0.5, 0.25, 0.25]);
+        assert!((s - 2.0 / 3.0).abs() < 0.001 && (v - 0.75).abs() < 0.001);
+        let p = ring_point_from_sv(&tri, s, v);
+        let w = ring_bary(p, &tri);
+        let (s2, v2) = ring_sv(w);
+        assert!((s2 - s).abs() < 0.001 && (v2 - v).abs() < 0.001, "sv → 点 → sv 往返一致");
     }
 }
