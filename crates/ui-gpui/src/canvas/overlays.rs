@@ -188,7 +188,9 @@ pub(super) fn overlays(
     }
 
     // ── Hover 轮廓（测量时改为用红色标出被量的框）。
-    if let Some(h) = ds.hover
+    // 名称行右侧的开发状态按钮也算「悬停在这个框上」：和悬停名称文字得到同一条 hover 轮廓。
+    let hover = ds.hover.or_else(|| app.pointer.and_then(|p| super::frame_labels::status_slot_owner(app, &doc, page, p)));
+    if let Some(h) = hover
         && !sel.contains(&h)
         && matches!(app.session.tool.tool, ToolId::Move | ToolId::Scale)
         && app.session.prefs.highlight_on_hover

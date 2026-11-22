@@ -20,7 +20,7 @@ use super::painter::{Painter, text_size};
 use super::rulers::status_badge;
 use crate::app::CanvasApp;
 use crate::bidi::fit_with;
-use crate::theme::{COMPONENT, COMPONENT_TEXT, DEV_CHANGED, DEV_COMPLETED, DEV_READY, SLOT, Tokens, stroke};
+use crate::theme::{COMPONENT, COMPONENT_TEXT, DEV_CHANGED, DEV_COMPLETED, SLOT, Tokens, stroke};
 
 /// 文字身份色（图标层用橙色；这里先留接口）。
 pub const ICON: Color32 = Color32::from_rgb(0xFF, 0xB3, 0x4D);
@@ -73,6 +73,10 @@ pub fn screen_bounds(app: &CanvasApp, doc: &Document, id: NodeId) -> Option<(f32
     ))
 }
 
+/// 开发状态按钮的两个绿：常态（待开发标签）与悬停（可点出菜单）。
+pub const STATUS_GREEN: Color32 = Color32::from_rgb(0x14, 0xAE, 0x5C);
+pub const STATUS_GREEN_HOVER: Color32 = Color32::from_rgb(0x00, 0x99, 0x51);
+
 /// 名称行图标槽的命中结果。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SlotHit {
@@ -82,6 +86,21 @@ pub enum SlotHit {
     Menu(NodeId),
     /// 变体组「+」。
     AddVariant(NodeId),
+}
+
+/// 指针所在的名称行状态槽属于哪个对象（用于让按钮和名称文字共享同一个 hover 轮廓）。
+pub fn status_slot_owner(app: &CanvasApp, doc: &Document, page: NodeId, pos: Pos2) -> Option<NodeId> {
+    for id in super::rulers::boards(doc, page).into_iter().rev() {
+        let Some(n) = doc.node(id) else { continue };
+        if !n.kind.is_frame_like() || n.is_board_atom() {
+            continue;
+        }
+        let (_, y0, x1, _) = screen_bounds(app, doc, id)?;
+        if name_slots(x1, y0)[0].contains(pos) {
+            return Some(id);
+        }
+    }
+    None
 }
 
 /// 在画布坐标 `pos` 上找名称行图标槽：返回命中项与它的矩形（菜单要按它定位）。
@@ -131,23 +150,40 @@ pub fn label_ink(app: &CanvasApp, t: &Tokens, doc: &Document, id: NodeId, select
     }
 }
 
-/// 开发状态槽：有状态时铺底色（绿 / 橙 / 灰，圆角 3）+ 白图标，无状态时只有一枚灰图标
-/// （背景透明，可点）。
-fn status_slot(painter: &mut Painter, t: &Tokens, n: &figcraft_doc::Node, r: Rect) {
-    let fill = match n.dev_status {
+/// 开发状态按钮：
+/// - 未选中、悬停：透明底 + 三个灰点（点它选中框并弹菜单）。
+/// - 选中、无状态：透明底 + 灰色代码图标（点它置「待开发」）。
+/// - 有「待开发」状态：常态 `STATUS_GREEN` #14AE5C，悬停 `STATUS_GREEN_HOVER` #009951；
+///   图标常态是代码图标，悬停换成三个白点。其它状态仍用 `DEV_CHANGED` / `DEV_COMPLETED`。
+fn status_slot(painter: &mut Painter, t: &Tokens, n: &figcraft_doc::Node, r: Rect, hovered: bool, selected: bool) {
+    let base = match n.dev_status {
         DevStatus::None => None,
         DevStatus::ReadyForDev if n.dev_changed => Some(DEV_CHANGED),
-        DevStatus::ReadyForDev => Some(DEV_READY),
+        DevStatus::ReadyForDev => Some(STATUS_GREEN),
         DevStatus::Completed => Some(DEV_COMPLETED),
+    };
+    // 悬停：已置「待开发」的绿按钮换成深一档的 #009951，图标换三个白点（可点出菜单的
+    // affordance）；无状态的槽仍然透明，只是把灰图标换成灰的三个点。Changed / Completed
+    // 保留自己的状态色。
+    let fill = if hovered && n.dev_status == DevStatus::ReadyForDev && !n.dev_changed {
+        Some(STATUS_GREEN_HOVER)
+    } else {
+        base
     };
     if let Some(fill) = fill {
         painter.rect_filled(r, CornerRadius::same(3), fill);
     }
     let ink = if fill.is_some() { Color32::WHITE } else { label_gray(t) };
-    // 代码图标（设计稿的 `ui-code`，13×11）：左右两个尖括号。
-    let (x, y) = (r.min.x, r.min.y);
-    painter.add_shape(vec![pos2(x + 6.0, y + 4.5), pos2(x + 2.5, y + 8.0), pos2(x + 6.0, y + 11.5)], false, Color32::TRANSPARENT, stroke(ink, 1.0));
-    painter.add_shape(vec![pos2(x + 10.0, y + 4.5), pos2(x + 13.5, y + 8.0), pos2(x + 10.0, y + 11.5)], false, Color32::TRANSPARENT, stroke(ink, 1.0));
+    if hovered {
+        more_dots(painter, r, ink);
+    } else if !selected && n.dev_status.is_none() {
+        // 未选中且无状态：不画图标，只有悬停才出现三个点（背景透明，不占视觉）。
+    } else {
+        // 代码图标（设计稿的 `ui-code`，13×11）：左右两个尖括号。
+        let (x, y) = (r.min.x, r.min.y);
+        painter.add_shape(vec![pos2(x + 6.0, y + 4.5), pos2(x + 2.5, y + 8.0), pos2(x + 6.0, y + 11.5)], false, Color32::TRANSPARENT, stroke(ink, 1.0));
+        painter.add_shape(vec![pos2(x + 10.0, y + 4.5), pos2(x + 13.5, y + 8.0), pos2(x + 10.0, y + 11.5)], false, Color32::TRANSPARENT, stroke(ink, 1.0));
+    }
 }
 
 /// 未选中时悬停名称行（名称文字或图标槽）显示的「三个点」——点它选中对象并弹菜单。
@@ -243,13 +279,15 @@ pub fn draw(app: &CanvasApp, painter: &mut Painter, t: &Tokens, doc: &Document, 
         if !renaming {
             painter.galley(pos2(x, top), galley, col);
         }
-        // 名称行右侧的两个 16×16 槽：最右是开发状态（有状态就铺底色，否则只有灰图标）。
-        // 选中的对象常驻；未选中时**悬停名称文字或槽**都显示「三个点」，点它选中并弹菜单。
+        // 名称行右侧的两个 16×16 槽：最右是开发状态按钮。有状态 / 选中时常驻；
+        // 未选中时**悬停名称文字或槽**都显示「三个点」，点它选中并弹菜单。
         if let Some((x0, y0, x1, y1)) = screen_bounds(app, doc, id) {
             let slot = name_slots(x1, y0)[0];
-            let hover_row = app.pointer.is_some_and(|p| label_rect.contains(p) || slot.contains(p));
-            if selected || !n.dev_status.is_none() {
-                status_slot(painter, t, n, slot);
+            let hover_slot = app.pointer.is_some_and(|p| slot.contains(p));
+            let hover_row = hover_slot || app.pointer.is_some_and(|p| label_rect.contains(p));
+            if selected || !n.dev_status.is_none() || hover_slot {
+                // 悬停按钮：换深一档的绿、图标换三个点；其余按状态 / 选中态画。
+                status_slot(painter, t, n, slot, hover_slot, selected);
             } else if hover_row {
                 more_dots(painter, slot, label_gray(t));
             }
@@ -308,6 +346,13 @@ mod tests {
         assert_eq!(status.min.x - reserved.max.x, 2.0, "两槽间距 2");
         assert_eq!(status.max.x, 305.0 + 2.0, "最右槽右边 = 对象右边缘 + 2");
         assert_eq!(status.max.y, 200.0 - 6.0, "槽底边 = 对象上边缘 − 6");
+    }
+
+    /// 开发状态按钮的两个绿（用户 2026-11-22 指定）：常态 #14AE5C，悬停 #009951。
+    #[test]
+    fn the_status_button_has_its_two_greens() {
+        assert_eq!(STATUS_GREEN.to_array(), [0x14, 0xAE, 0x5C, 255]);
+        assert_eq!(STATUS_GREEN_HOVER.to_array(), [0x00, 0x99, 0x51, 255]);
     }
 
     /// 变体组的「+」：16×16、水平居中，顶边 = 对象下边缘 + 尺寸框 7 + 框高 17 + 间距 4。
