@@ -19,7 +19,7 @@ use super::geom::*;
 use super::painter::{Painter, text_size};
 use super::rulers::status_badge;
 use crate::app::CanvasApp;
-use crate::bidi::fit_with;
+use crate::bidi::{ELLIPSIS, fit_with};
 use crate::theme::{COMPONENT, COMPONENT_TEXT, DEV_CHANGED, DEV_COMPLETED, SLOT, Tokens, stroke};
 
 /// 文字身份色（图标层用橙色；这里先留接口）。
@@ -33,6 +33,20 @@ pub const SLOT_SIZE: f32 = 16.0;
 pub const SLOT_OUTSET: f32 = 2.0;
 /// 两个图标槽之间的间距（设计稿 2）。
 pub const SLOT_GAP: f32 = 2.0;
+/// 名称文字与右侧图标槽之间留出的空隙（给省略号收尾）。
+pub const NAME_GAP: f32 = 4.0;
+
+/// 名称文字是否撞上状态图标（图标常驻；撞上就整个不画名称，而不是丢图标）。
+fn name_hits_status(doc: &Document, id: NodeId, x: f32, width: f32, x1: f32, y0: f32) -> bool {
+    let Some(n) = doc.node(id) else { return false };
+    let label = if matches!(n.kind, NodeKind::Component { .. } | NodeKind::ComponentSet { .. }) {
+        format!("{COMPONENT_MARK}{}", n.name)
+    } else {
+        n.name.clone()
+    };
+    let shown = fit_with(&label, width, |s| text_size(s, regular(11.0)).x);
+    x + text_size(&shown, regular(11.0)).x >= name_slots(x1, y0)[0].min.x - NAME_GAP
+}
 /// 图标槽底边在对象上边缘**之上**的距离（设计稿 6）：两个槽与名称同一行，坐在对象上边缘外面。
 pub const SLOT_ABOVE: f32 = 6.0;
 /// 变体组「+」的顶边：对象下边缘 + 尺寸框 7 + 尺寸框高 17 + 间距 4。
@@ -77,22 +91,6 @@ pub fn screen_bounds(app: &CanvasApp, doc: &Document, id: NodeId) -> Option<(f32
 pub const STATUS_GREEN: Color32 = Color32::from_rgb(0x14, 0xAE, 0x5C);
 pub const STATUS_GREEN_HOVER: Color32 = Color32::from_rgb(0x00, 0x99, 0x51);
 
-/// 名称文字的右端（画布坐标）。名称一旦碰到右侧图标槽，图标就不画、也不接点击。
-fn name_end(doc: &Document, id: NodeId, x0: f32, x1: f32) -> f32 {
-    let Some(n) = doc.node(id) else { return x0 };
-    let label = if matches!(n.kind, NodeKind::Component { .. } | NodeKind::ComponentSet { .. }) {
-        format!("{COMPONENT_MARK}{}", n.name)
-    } else {
-        n.name.clone()
-    };
-    x0 + text_size(&fit_with(&label, (x1 - x0).max(1.0), |s| text_size(s, regular(11.0)).x), regular(11.0)).x
-}
-
-/// 名称是否撞上状态槽（撞上就省略图标，连 hover 轮廓也不给）。
-fn name_hits_status(doc: &Document, id: NodeId, x0: f32, x1: f32, y0: f32) -> bool {
-    name_end(doc, id, x0, x1) >= name_slots(x1, y0)[0].min.x
-}
-
 /// 名称行图标槽的命中结果。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum SlotHit {
@@ -113,12 +111,8 @@ pub fn status_slot_owner(app: &CanvasApp, doc: &Document, page: NodeId, pos: Pos
         if !n.kind.is_frame_like() || n.is_board_atom() {
             continue;
         }
-        let (x0, y0, x1, _) = screen_bounds(app, doc, id)?;
+        let (_, y0, x1, _) = screen_bounds(app, doc, id)?;
         let slot = name_slots(x1, y0)[0];
-        // 名称撞上图标时图标被省略，这里也不能命中。
-        if name_hits_status(doc, id, x0, x1, y0) {
-            continue;
-        }
         if slot.contains(pos) {
             return Some(id);
         }
@@ -138,10 +132,6 @@ pub fn slot_at(app: &CanvasApp, doc: &Document, page: NodeId, sel: &[NodeId], po
         }
         let Some((x0, y0, x1, y1)) = screen_bounds(app, doc, id) else { continue };
         let status = name_slots(x1, y0)[0];
-        // 名称文字撞上图标 → 图标被省略，不接点击。
-        if name_hits_status(doc, id, x0, x1, y0) {
-            continue;
-        }
         if status.contains(pos) {
             let has = !n.dev_status.is_none();
             return Some(if sel.contains(&id) {
@@ -214,13 +204,11 @@ fn status_slot(painter: &mut Painter, n: &figcraft_doc::Node, r: Rect, hovered: 
     }
 }
 
-/// 未选中时悬停名称行（名称文字或图标槽）显示的「三个点」——点它选中对象并弹菜单。
-/// 灰色实心圆点，与名称的灰同源；居中排在 16×16 槽里。
+/// 悬停已置标签的状态按钮时显示的「…」——直接用省略号字形（和名称截断同一个字符），
+/// 由画布的文字管线绘制，不手画圆点。居中排在 16×16 槽里。
 fn more_dots(painter: &mut Painter, r: Rect, ink: Color32) {
     let c = r.center();
-    for dx in [-4.0, 0.0, 4.0] {
-        painter.circle_filled(pos2(c.x + dx, c.y), 1.5, ink);
-    }
+    painter.text(pos2(c.x, c.y), Align2::CENTER_CENTER, ELLIPSIS, regular(13.0), ink);
 }
 
 /// 变体组「+」按钮：组件紫底、圆角 3、白色十字（设计稿 10×10 的加号）。
@@ -296,7 +284,10 @@ pub fn draw(app: &CanvasApp, painter: &mut Painter, t: &Tokens, doc: &Document, 
             n.name.clone()
         };
         // 宽度不设下限（`fit_with` 内部只夹到 1pt），长名字可以一路缩到只剩省略号。
-        let shown = fit_with(&label, (edge.len - (x - tl.x)).max(1.0), |s| text_size(s, font).x);
+        // 图标（若存在）常驻；如果名称文字撞上图标，就整个不画名称，而不是丢图标。
+        let max_w = (edge.len - (x - tl.x)).max(1.0);
+        let shown = fit_with(&label, max_w, |s| text_size(s, font).x);
+        let name_collides = screen_bounds(app, doc, id).is_some_and(|(_, y0, x1, _)| name_hits_status(doc, id, x, max_w, x1, y0));
         let galley = painter.layout_no_wrap(shown, font, col);
         let size = galley.size();
         let end = x + size.x;
@@ -305,18 +296,17 @@ pub fn draw(app: &CanvasApp, painter: &mut Painter, t: &Tokens, doc: &Document, 
         // 重命名框直接用这个顶边，所以两态永远重合。
         let label_rect = Rect::from_min_max(pos2(tl.x, top), pos2(end, tl.y - LABEL_GAP));
         // 同上：几何（`area`）仍按 galley 量出来的宽度算，只是不落笔。
-        if !renaming {
+        // 名称撞上右侧图标时整个不画（图标常驻）；命中区仍保留，双击改名照旧可用。
+        if !renaming && !name_collides {
             painter.galley(pos2(x, top), galley, col);
         }
         // 名称行右侧的两个 16×16 槽：最右是开发状态按钮。没有状态时整块透明、没有悬停态；
-        // 有状态时常态绿 / 悬停深绿 + 三个点。名称文字撞上图标时，图标整个省略。
+        // 有状态时常态绿 / 悬停深绿 + 省略号。图标常驻，长名称会被截短给它让位。
         if let Some((x0, y0, x1, y1)) = screen_bounds(app, doc, id) {
-            if !name_hits_status(doc, id, x0, x1, y0) {
-                let slot = name_slots(x1, y0)[0];
-                if !n.dev_status.is_none() {
-                    let hover_slot = app.pointer.is_some_and(|p| slot.contains(p));
-                    status_slot(painter, n, slot, hover_slot);
-                }
+            let slot = name_slots(x1, y0)[0];
+            if !n.dev_status.is_none() {
+                let hover_slot = app.pointer.is_some_and(|p| slot.contains(p));
+                status_slot(painter, n, slot, hover_slot);
             }
             if selected && matches!(n.kind, NodeKind::ComponentSet { .. }) {
                 add_variant_button(painter, add_variant_slot((x0 + x1) / 2.0, y1));
