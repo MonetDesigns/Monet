@@ -24,7 +24,14 @@ pub(crate) fn section(f: &RightFields, d: &PanelData, cx: &mut App, n: &mut usiz
     // visibility_value_ui / scoped_property_row / overrides_ui）。之前这里直接 `?` 返回 None，
     // 所以选组件里的图层什么都不显示。
     let Some(c) = d.component.as_ref() else {
-        return d.binding.as_ref().map(|b| binding_section(f, b));
+        if let Some(b) = d.binding.as_ref() {
+            return Some(binding_section(f, b));
+        }
+        // 多选主组件 → 「Combine as variants」（lizard `combine_ui`）。
+        if !d.combine_ids.is_empty() {
+            return Some(combine_section(f, d));
+        }
+        return None;
     };
     if c.is_instance {
         return Some(instance_section(f, c, cx, n));
@@ -156,9 +163,12 @@ fn property_rows(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut usize
     ));
 
     // ── ① 变体属性（lizard `properties_ui` 的 variants 循环）────────────────────
-    // 默认值取左上角默认变体；每行可改属性名/默认值、删除、展开值列表。
+    // 行：类型图标 + 可改名 + 默认值下拉 + 展开按钮 + 删除。
+    // 展开后是**值列表**：每个值一个可改名输入框（改 → editProperty value/newValue），
+    // 末尾 + 加一个新值（addVariant property/value）。之前只做了弹窗改默认值，
+    // 值的重命名 / 新增完全没接（用户反复指出）。
     for (name, values) in &c.variants {
-        // lizard: 默认值取左上角默认变体；本快照未逐变体存值，退到候选首项。
+        // 默认值：取默认变体（左上角）里该属性的值。快照未逐变体存值，用候选首项兜底。
         let default = values.first().cloned().unwrap_or_default();
         let name_edit = f.row_field(
             cx,
@@ -181,15 +191,77 @@ fn property_rows(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut usize
             .map(|v| (v.clone(), "component.editProperty", json!({ "id": owner.0, "name": name, "default": v })))
             .collect();
         let dd = pick_dropdown(f, default.clone(), 0.0, rows);
-        let trigger = format!("component-prop-{}", name);
-        let settings = property_settings_button(f, &trigger, owner.0, name, "variant", default, values.iter().map(|v| (v.clone(), 0)).collect());
+        // 展开按钮（lizard `summary.settings_clicked`：切换展开，不弹窗）。
+        let expanded = f.variant_expanded.borrow().iter().any(|n| n == name);
+        let expanded_ref = f.variant_expanded.clone();
+        let toggle_name = name.clone();
+        let wake = f.cmds.clone();
+        let toggle = div()
+            .id(SharedString::from(format!("variant-expand-{name}")))
+            .size(pt(24.0))
+            .rounded(pt(5.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_pointer()
+            .when(expanded, |d| d.bg(rgba(t.selected_row)))
+            .when(!expanded, |d| d.hover(|s| s.bg(rgba(t.hover))))
+            .child(crate::widgets::icon::paint(Icon::Settings, rgba(t.icon), 16.0))
+            .on_mouse_down(gpui::MouseButton::Left, move |_e, _w, _cx| {
+                let mut list = expanded_ref.borrow_mut();
+                if let Some(pos) = list.iter().position(|n| n == &toggle_name) {
+                    list.remove(pos);
+                } else {
+                    list.push(toggle_name.clone());
+                }
+                drop(list);
+                wake.wake();
+            });
         let delete = icon_cmd(Icon::Minus, "component.deleteProperty", json!({ "id": owner.0, "name": name }), f, false);
         let mut line = div().flex().flex_row().items_center().gap(pt(8.0)).w_full();
         line = line
             .child(crate::widgets::icon::paint_in_slot(Icon::ComponentSet, 14.0, Some(rgba(t.text_secondary))))
             .child(div().w(px(84.0)).flex_none().child(name_edit))
             .child(div().flex_1().min_w(px(0.0)).child(dd));
-        out.push(field_row_full_trailing(line, vec![settings, delete.into_any_element()]));
+        out.push(field_row_full_trailing(line, vec![toggle.into_any_element(), delete.into_any_element()]));
+
+        // 展开：值列表（可改名）+ 加值。
+        if expanded {
+            let mut vrow = div().flex().flex_row().flex_wrap().gap(pt(6.0)).w_full().pl(pt(22.0)).pb(pt(4.0));
+            for v in values {
+                let edit = f.row_field(
+                    cx,
+                    slot(n),
+                    v,
+                    RowEditCtx {
+                        cmd: "component.editProperty",
+                        params: json!({ "id": owner.0, "name": name, "value": v }),
+                        key: "newValue",
+                        scale: 1.0,
+                        string_value: true,
+                        paint: None,
+                        nest: None,
+                        nest_key: None,
+                        paint_color: None,
+                    },
+                );
+                vrow = vrow.child(div().w(px(86.0)).child(edit));
+            }
+            // 加值：新值名 "Value N"，避开已有值。
+            let fresh_value = (values.len() + 1..)
+                .map(|k| format!("Value {k}"))
+                .find(|cand| !values.iter().any(|v| v == cand))
+                .unwrap_or_else(|| format!("Value {}", values.len() + 1));
+            let add = icon_cmd(
+                Icon::Plus,
+                "component.addVariant",
+                json!({ "id": owner.0, "property": name, "value": fresh_value }),
+                f,
+                false,
+            );
+            vrow = vrow.child(add);
+            out.push(field_row_full(vrow));
+        }
     }
 
     // ── ② 共享属性（lizard `shared` 循环）───────────────────────────────────────
@@ -230,14 +302,7 @@ fn property_rows(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut usize
         let value: gpui::AnyElement = match def.kind {
             "boolean" => {
                 let on = def.default == tr("True");
-                icon_cmd(
-                    Icon::Check,
-                    "component.editProperty",
-                    json!({ "id": owner.0, "name": def.name, "default": !on }),
-                    f,
-                    on,
-                )
-                .into_any_element()
+                checkbox_cmd(on, "component.editProperty", json!({ "id": owner.0, "name": def.name, "default": !on }), f)
             }
             "text" => f
                 .row_field(
@@ -257,13 +322,38 @@ fn property_rows(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut usize
                     },
                 )
                 .into_any_element(),
+            // instanceSwap 默认值：带搜索的组件列表（组件多时必须能搜）。
             "instanceSwap" => {
-                let rows: Vec<(String, &'static str, Value)> = def
+                let trigger = format!("idef-{}", def.name);
+                let is_open = f.popups().is_open(&trigger);
+                let popups = f.popups();
+                let cmds = f.cmds.clone();
+                let dname = def.name.clone();
+                let rows: Vec<crate::popovers::Row> = def
                     .options
                     .iter()
-                    .map(|(label, id)| (label.clone(), "component.editProperty", json!({ "id": owner.0, "name": def.name, "default": id })))
+                    .map(|(label, id)| {
+                        crate::popovers::Row::new(
+                            label.clone(),
+                            "component.editProperty",
+                            json!({ "id": owner.0, "name": dname.clone(), "default": id }),
+                        )
+                    })
                     .collect();
-                pick_dropdown(f, def.default.clone(), 0.0, rows).into_any_element()
+                let trig2 = trigger.clone();
+                let shown = def.default.clone();
+                window_open_button(&trigger, Icon::Instance, is_open, move |window, cx| {
+                    let top = crate::popovers::anchored_top(&trig2, window);
+                    let trig3 = trig2.clone();
+                    let popups = popups.clone();
+                    let cmds = cmds.clone();
+                    let rows = rows.clone();
+                    let dname = dname.clone();
+                    open_detached_with(popups, trig3, Some(top), cx, move |anchor, cx| {
+                        crate::popovers::WindowState::component_search(cmds.clone(), cx, dname.clone(), rows.clone(), anchor)
+                    })
+                })
+                .into_any_element()
             }
             _ => div().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(def.default.clone())).into_any_element(),
         };
@@ -276,6 +366,37 @@ fn property_rows(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut usize
             .child(div().w(px(84.0)).flex_none().child(name_edit))
             .child(div().flex_1().min_w(px(0.0)).child(value));
         out.push(field_row_full_trailing(line, vec![settings, delete.into_any_element()]));
+
+        // instanceSwap / slot 的 preferred 组件行（lizard `properties_ui` 里
+        // `PropDef::Slot { preferred } | InstanceSwap { preferred, .. }` 那段）：
+        // 勾选后随属性定义一起保存（`component.editProperty { preferred: [ids] }`）。
+        if matches!(def.kind, "slot" | "instanceSwap") {
+            let current_pref = def.preferred.clone();
+            let label = if current_pref.is_empty() {
+                tr("No preferred components").to_string()
+            } else {
+                format!("{} preferred", current_pref.len())
+            };
+            let mut pref_rows: Vec<(String, &'static str, Value)> = Vec::new();
+            for (cid, cname) in &c.components {
+                let on = current_pref.contains(&cid.0);
+                let mut next: Vec<u64> = current_pref.iter().filter(|x| **x != cid.0).cloned().collect();
+                if !on {
+                    next.push(cid.0);
+                }
+                pref_rows.push((
+                    format!("{}{}", if on { "✓ " } else { "" }, cname),
+                    "component.editProperty",
+                    json!({ "id": owner.0, "name": def.name, "preferred": next }),
+                ));
+            }
+            let dd = pick_dropdown(f, label, 0.0, pref_rows);
+            out.push(field_row_full(
+                div().flex().flex_row().items_center().gap(pt(8.0)).w_full().pl(pt(22.0))
+                    .child(div().text_size(pt(10.0)).text_color(rgba(t.text_secondary)).child(tr("Preferred")))
+                    .child(div().flex_1().min_w(px(0.0)).child(dd)),
+            ));
+        }
     }
 
     // ── ③ Add variant（lizard `can_add_variant` → 按钮）────────────────────────
@@ -529,11 +650,7 @@ fn instance_prop_row(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut u
         .child(crate::widgets::icon::paint_in_slot(p_icon, 14.0, Some(rgba(t.text_secondary))))
         .child(SharedString::from(p.name.clone()));
     let control: gpui::AnyElement = match p.kind {
-        "boolean" => {
-            let on = p.value == "true";
-            let btn = icon_cmd(Icon::Check, "instance.setProperties", json!({ "properties": { p.name.clone(): !on } }), f, on);
-            div().flex().flex_row().items_center().child(btn).into_any_element()
-        }
+        "boolean" => checkbox_cmd(p.value == "true", "instance.setProperties", json!({ "properties": { p.name.clone(): p.value != "true" } }), f),
         "text" => f
             .row_field(
                 cx,
@@ -552,13 +669,47 @@ fn instance_prop_row(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut u
                 },
             )
             .into_any_element(),
-        "variant" | "swap" => {
+        "variant" => {
             let rows: Vec<(String, &'static str, Value)> = p
                 .options
                 .iter()
                 .map(|(label, value)| (label.clone(), "instance.setProperties", json!({ "properties": { p.name.clone(): value.clone() } })))
                 .collect();
             pick_dropdown(f, p.value.clone(), 0.0, rows).into_any_element()
+        }
+        // swap：带搜索的组件列表（lizard `swap_picker` / `comp_search`）。组件多时
+        // 平铺下拉根本没法用（图标库几百个组件），所以换成搜索窗。
+        "swap" => {
+            let trigger = format!("swap-{}", p.name);
+            let is_open = f.popups().is_open(&trigger);
+            let popups = f.popups();
+            let cmds = f.cmds.clone();
+            let pname = p.name.clone();
+            let rows: Vec<crate::popovers::Row> = p
+                .options
+                .iter()
+                .map(|(label, value)| {
+                    crate::popovers::Row::new(
+                        label.clone(),
+                        "instance.setProperties",
+                        json!({ "properties": { pname.clone(): value.clone() } }),
+                    )
+                })
+                .collect();
+            let trig2 = trigger.clone();
+            let shown = p.value.clone();
+            window_open_button(&trigger, Icon::Instance, is_open, move |window, cx| {
+                let top = crate::popovers::anchored_top(&trig2, window);
+                let trig3 = trig2.clone();
+                let popups = popups.clone();
+                let cmds = cmds.clone();
+                let rows = rows.clone();
+                let pname = pname.clone();
+                open_detached_with(popups, trig3, Some(top), cx, move |anchor, cx| {
+                    crate::popovers::WindowState::component_search(cmds.clone(), cx, pname.clone(), rows.clone(), anchor)
+                })
+            })
+            .into_any_element()
         }
         "slot" => slot_fill_control(f, c, p),
         _ => div().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(p.value.clone())).into_any_element(),
@@ -625,12 +776,59 @@ fn instance_more_button(f: &RightFields, c: &ComponentData) -> gpui::AnyElement 
         .into_any_element()
 }
 
+/// 多选主组件时的「Combine as variants」按钮（lizard `combine_ui`）。
+fn combine_section(f: &RightFields, d: &PanelData) -> PanelSection {
+    let t = tokens();
+    let ids: Vec<u64> = d.combine_ids.iter().map(|i| i.0).collect();
+    let label = tr("Combine as variants");
+    let btn = div()
+        .id("combine-as-variants")
+        .h(pt(24.0))
+        .px(pt(10.0))
+        .rounded(pt(5.0))
+        .flex()
+        .items_center()
+        .gap(pt(6.0))
+        .cursor_pointer()
+        .hover(|s| s.bg(rgba(t.hover)))
+        .child(crate::widgets::icon::paint_in_slot(Icon::ComponentSet, 14.0, Some(rgba(t.icon))))
+        .child(div().text_size(pt(11.0)).text_color(rgba(t.text)).child(SharedString::from(label)))
+        .on_mouse_down(gpui::MouseButton::Left, {
+            let cmds = f.cmds.clone();
+            move |_e, _w, _cx| {
+                cmds.push(crate::panels::Cmd { id: "component.combineVariants", params: Some(json!({ "ids": ids.clone() })) });
+            }
+        });
+    PanelSection::new(tr("Component")).child(field_row_full(btn))
+}
+
 /// 组件内 / 实例内图层的属性绑定与覆盖（lizard `component_panel.rs` 末尾）：
 /// - 在实例里 → Overrides 节（每组一行 + 单组重置 + 全部重置）。
 /// - 在组件里 → Component property 节：Visible / Text / Instance / Slot 各一行的绑定下拉。
 fn binding_section(f: &RightFields, b: &BindingData) -> PanelSection {
     let t = tokens();
     let mut sec = PanelSection::new(tr("Component property"));
+
+    // ── Slot（选中实例里的槽，lizard `slot_section`）────────────────────────────
+    // 显示槽的属性名 + 填充下拉（preferred 组件在前 + 全部组件 + Reset slot）。
+    if b.in_instance && b.is_slot {
+        let name = b.slot_name.clone().unwrap_or_default();
+        sec = sec.child(field_row_full(
+            div().flex().flex_row().items_center().gap(pt(6.0))
+                .child(crate::widgets::icon::paint_in_slot(Icon::Slot, 14.0, Some(rgba(t.text_secondary))))
+                .child(div().text_size(pt(11.0)).text_color(rgba(t.text)).child(SharedString::from(name.clone()))),
+        ));
+        let edited = b.overrides.iter().any(|g| g == "slot");
+        let label = if edited { tr("Own content").to_string() } else { tr("Default content").to_string() };
+        let mut rows: Vec<(String, &'static str, Value)> = b
+            .components
+            .iter()
+            .map(|(cid, cname)| (cname.clone(), "instance.slotInsert", json!({ "id": b.node.0, "component": cid.0 })))
+            .collect();
+        rows.push((tr("Reset slot").to_string(), "instance.resetSlot", json!({ "id": b.node.0 })));
+        let dd = pick_dropdown(f, label, 0.0, rows);
+        sec = sec.child(field_row_full(div().flex().flex_row().items_center().gap(pt(8.0)).w_full().pl(pt(20.0)).child(dd)));
+    }
 
     // ── Overrides（实例内图层）──────────────────────────────────────────────
     if b.in_instance && !b.overrides.is_empty() {
@@ -770,6 +968,35 @@ fn slot_fill_control(f: &RightFields, c: &ComponentData, p: &ComponentProp) -> g
         rows.push((tr("Reset slot").to_string(), "instance.resetSlot", json!({ "id": slot_id.0 })));
     }
     pick_dropdown(f, label, 0.0, rows).into_any_element()
+}
+
+/// 布尔属性的勾选框（lizard `widgets::checkbox`）：方框 + 勾 + True/False。
+/// GPUI 没有通用 checkbox 控件，这里按项目现有图标按钮的尺寸画一个。
+fn checkbox_cmd(on: bool, cmd: &'static str, params: Value, f: &RightFields) -> gpui::AnyElement {
+    let cmds = f.cmds.clone();
+    let t = tokens();
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(pt(6.0))
+        .cursor_pointer()
+        .on_mouse_down(gpui::MouseButton::Left, move |_e, _w, _cx| {
+            cmds.push(crate::panels::Cmd { id: cmd, params: Some(params.clone()) });
+        })
+        .child(
+            div()
+                .size(pt(14.0))
+                .rounded(pt(3.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .when(on, |d| d.bg(rgba(t.accent)))
+                .when(!on, |d| d.border_1().border_color(rgba(t.border)))
+                .when(on, |d| d.child(crate::widgets::icon::paint(Icon::Check, rgba(t.text), 10.0))),
+        )
+        .child(div().text_size(pt(11.0)).text_color(rgba(t.text)).child(SharedString::from(if on { tr("True") } else { tr("False") })))
+        .into_any_element()
 }
 
 fn plain_label(text: &'static str) -> Div {

@@ -796,6 +796,10 @@ pub(crate) struct RightFields {
     /// Blend-mode row reveal (egui `paints.rs::appearance`'s `blend_open` local flag): the
     /// Appearance header's blend button toggles this, and the blend dropdown row shows only when set.
     blend_open: std::rc::Rc<std::cell::RefCell<bool>>,
+    /// 组件集面板里「变体属性的值列表」展开状态（记录已展开的属性名）。
+    /// 对应 lizard `properties_ui` 的 `ui.data::<bool>(expanded_id)`；GPUI 没有 egui 的
+    /// `ui.data`，放在这里跨帧保存。
+    variant_expanded: std::rc::Rc<std::cell::RefCell<Vec<String>>>,
     /// 取色器 AA 对比上下文的最新快照，由 `right_panel` 每帧从 `PanelData` 灌入。
     contrast: Rc<std::cell::RefCell<right::data::ContrastContext>>,
     /// The root view, set once after construction so fields can open menus through it.
@@ -1386,6 +1390,7 @@ impl RightFields {
             // Blend-mode dropdown: a button that opens the blend menu on click (egui `dropdown`).
             blend_label: std::cell::RefCell::new(SharedString::from(tr("Normal"))),
             blend_open: std::rc::Rc::new(std::cell::RefCell::new(false)),
+            variant_expanded: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
             contrast: Rc::new(std::cell::RefCell::new(right::data::ContrastContext::default())),
             root: None,
             popup_slot: Rc::new(std::cell::RefCell::new(Vec::new())),

@@ -970,6 +970,8 @@ pub struct BindingData {
     pub overrides: Vec<String>,
     pub is_slot: bool,
     pub slot_name: Option<String>,
+    /// 全部组件（slot 填充 / 绑定菜单候选）。
+    pub components: Vec<(NodeId, String)>,
     /// `text` / `frame` / `instance` / `other`
     pub kind: &'static str,
     pub visible: bool,
@@ -989,6 +991,8 @@ pub struct ComponentDef {
     pub default: String,
     /// swap 候选的 (显示名, node id 字符串)。
     pub options: Vec<(String, u64)>,
+    /// slot / instanceSwap 的 preferred 组件 id（lizard `PropDef::Slot/InstanceSwap { preferred }`）。
+    pub preferred: Vec<u64>,
 }
 
 /// 读一个实例的属性行（lizard `instance_props`）：变体属性 + bool/text/swap/slot。
@@ -1130,6 +1134,7 @@ pub fn read_binding(doc: &Document, ids: &[NodeId]) -> Option<BindingData> {
         overrides,
         is_slot,
         slot_name: components::slot_name(doc, *id),
+        components: list_components(doc),
         kind,
         visible: n.visible,
         // Frame 在组件内（非实例）才能 Make slot / 绑 slot。
@@ -1315,27 +1320,34 @@ fn read_defs(doc: &Document, id: NodeId) -> Vec<ComponentDef> {
     figcraft_doc::ordered_props(props, prop_order)
         .into_iter()
         .map(|(name, d)| {
-            let (kind, default, options) = match d {
-                figcraft_doc::PropDef::Boolean { default } => ("boolean", if *default { tr("True") } else { tr("False") }.to_string(), Vec::new()),
-                figcraft_doc::PropDef::Text { default } => ("text", default.clone(), Vec::new()),
+            let (kind, default, options, preferred) = match d {
+                figcraft_doc::PropDef::Boolean { default } => {
+                    ("boolean", if *default { tr("True") } else { tr("False") }.to_string(), Vec::new(), Vec::new())
+                }
+                figcraft_doc::PropDef::Text { default } => ("text", default.clone(), Vec::new(), Vec::new()),
                 figcraft_doc::PropDef::InstanceSwap { default, preferred } => (
                     "instanceSwap",
                     doc.node(*default).map(|n| n.name.clone()).unwrap_or_else(|| tr("Missing").into()),
+                    // 候选：preferred 在前，然后全部组件。
                     preferred
                         .iter()
                         .copied()
                         .chain(doc.nodes().filter_map(|n| matches!(n.kind, figcraft_doc::NodeKind::Component { .. }).then_some(n.id)))
                         .filter_map(|c| doc.node(c).map(|n| (n.name.clone(), c.0)))
                         .collect(),
+                    preferred.iter().map(|p| p.0).collect(),
                 ),
-                figcraft_doc::PropDef::Variant { default, options } => ("variant", default.clone(), options.iter().map(|v| (v.clone(), 0)).collect()),
+                figcraft_doc::PropDef::Variant { default, options } => {
+                    ("variant", default.clone(), options.iter().map(|v| (v.clone(), 0)).collect(), Vec::new())
+                }
                 figcraft_doc::PropDef::Slot { preferred, .. } => (
                     "slot",
                     String::new(),
                     preferred.iter().copied().filter_map(|c| doc.node(c).map(|n| (n.name.clone(), c.0))).collect(),
+                    preferred.iter().map(|p| p.0).collect(),
                 ),
             };
-            ComponentDef { name: name.clone(), kind, default, options }
+            ComponentDef { name: name.clone(), kind, default, options, preferred }
         })
         .collect()
 }
@@ -1764,6 +1776,8 @@ pub struct PanelData {
     pub component: Option<ComponentData>,
     /// 组件内 / 实例内普通图层的属性绑定与覆盖；`None` = 不需要显示绑定节。
     pub binding: Option<BindingData>,
+    /// 多选主组件且可以合并成变体集时的 ids（lizard `combine_ui`）；否则空。
+    pub combine_ids: Vec<NodeId>,
     /// A3: the Comments panel's rows (already filtered/sorted/searched).
     pub comments: Vec<crate::comments::CommentRow>,
     /// A3: the current user (for unread dots).
@@ -2095,6 +2109,8 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
     // ── Component / Instance（egui `component_panel::instance_section`）──
     d.component = read_component(doc, ids);
     d.binding = read_binding(doc, ids);
+    // 多选主组件 → 「Combine as variants」按钮（lizard `combine_ui`）。
+    d.combine_ids = if ids.len() >= 2 && figcraft_engine::cmd::component::can_combine_variants(doc, ids) { ids.to_vec() } else { Vec::new() };
 
     d.fills = paint_rows(doc, ids, true);
     d.strokes = paint_rows(doc, ids, false);

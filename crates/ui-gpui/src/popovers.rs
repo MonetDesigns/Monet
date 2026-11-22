@@ -123,6 +123,9 @@ pub(crate) enum WindowKind {
     CornerSmoothing,
     /// 字体选择窗：Typography 的字体族控件打开，列表每项用它自己的字体渲染名称做预览。
     FontPicker,
+    /// 组件搜索窗：实例 swap / 组件集 instanceSwap 默认值用它（lizard `swap_picker` /
+    /// `comp_search`）：带搜索框的组件列表，行点击推调用方给的命令。
+    ComponentSearch,
 }
 
 /// One clickable row of a list window (a variable, a style, a create action).
@@ -2101,6 +2104,25 @@ impl WindowState {
         w
     }
 
+    /// 组件搜索窗（lizard `swap_picker` / `comp_search`）：带搜索框的组件列表。
+    /// 每行的命令由调用方给（`instance.setProperties` 或 `component.editProperty`），
+    /// 所以一个窗同时服务实例 swap 和组件集的 instanceSwap 默认值。
+    pub(crate) fn component_search(
+        cmds: Cmds,
+        cx: &mut App,
+        title: impl Into<SharedString>,
+        rows: Vec<Row>,
+        anchor: Point<Pixels>,
+    ) -> Self {
+        let mut w = Self::base(WindowKind::ComponentSearch, title, cmds, Open::Anchor(anchor));
+        w.width = 240.0;
+        w.height = 340.0;
+        w.pad = 0.0;
+        w.rows = rows;
+        w.add_search(cx, "Search components");
+        w
+    }
+
     /// 字体选择窗：列表每项显示字体名，并用该字体自身渲染（名字即预览）。
     pub(crate) fn font_picker(cmds: Cmds, cx: &mut App, current: Option<&str>, anchor: Point<Pixels>) -> Self {
         let mut w = Self::base(WindowKind::FontPicker, tr("Font family"), cmds, Open::Anchor(anchor));
@@ -3212,6 +3234,7 @@ impl WindowState {
             | WindowKind::CornerSmoothing
             | WindowKind::ComponentProperty
             | WindowKind::ComponentPropertyCreate
+            | WindowKind::ComponentSearch
             | WindowKind::ExportSettings
             | WindowKind::FontPicker => title_text(self.title.clone()).into_any_element(),
             // Type settings 的标题栏就是三页签（截图顶部没有单独的 "Type settings" 标题文字），
@@ -3293,6 +3316,7 @@ impl WindowState {
             WindowKind::ComponentPropertyCreate => self.property_create_body(cx),
             WindowKind::Color => self.color_body(cx),
             WindowKind::CornerSmoothing => self.corner_smoothing_body(),
+            WindowKind::ComponentSearch => self.list_element(cx, body_h),
             WindowKind::FontPicker => self.list_element(cx, body_h),
             WindowKind::Layout
             | WindowKind::Stroke
