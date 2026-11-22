@@ -109,6 +109,32 @@ pub fn fold_cached(operands: &[(BezPath, BoolOp)]) -> Option<BezPath> {
     }
 }
 
+fn rounded() -> &'static Mutex<PathCache> {
+    static C: OnceLock<Mutex<PathCache>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(PathCache::new(512)))
+}
+
+/// A boolean group's result as it is drawn: the fold of `operands` ([`fold_cached`]), then the
+/// group's corner `radius` and `smoothing` on every corner still sharp. The rounded result has its
+/// own cache keyed by the folded path plus both settings, so scrubbing the radius never redoes the
+/// fold or puts a rounded path where the fold would find it.
+pub fn result_cached(operands: &[(BezPath, BoolOp)], radius: f64, smoothing: f64) -> Option<BezPath> {
+    let folded = fold_cached(operands)?;
+    if !(radius.is_finite() && radius > 0.0) {
+        return Some(folded);
+    }
+    let mut h = DefaultHasher::new();
+    hash_path(&folded, &mut h);
+    (radius.to_bits(), smoothing.to_bits(), 0x52u8).hash(&mut h);
+    let key = h.finish();
+    if let Some(p) = locked(rounded()).get(key) {
+        return Some((*p).clone());
+    }
+    let out = figcraft_pathops::round_corners(&folded, radius, smoothing);
+    locked(rounded()).insert(key, Arc::new(out.clone()));
+    Some(out)
+}
+
 /// `keys[i]`: the cache key of the fold of operands `0..=i`.
 fn fold_keys(operands: &[(BezPath, BoolOp)]) -> Vec<u64> {
     let mut h = DefaultHasher::new();
