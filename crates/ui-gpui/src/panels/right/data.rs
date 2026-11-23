@@ -35,6 +35,16 @@ pub struct PaintRow {
     pub bind_field: String,
     /// 该字段可绑定的颜色变量名列表（点绑定按钮时弹出的菜单）。
     pub variables: Vec<String>,
+    /// 图片填充：当前图片键与原始字节（上传新图时走 `image.replace` 的真实命令）。
+    pub image: Option<(String, Option<figcraft_doc::ImageData>)>,
+    /// 图片预览的直 RGBA 像素（渲染器产出，取色器只负责包成贴图）。
+    pub image_preview: Option<(u32, u32, Vec<u8>)>,
+    /// 图片自带的色彩配置描述。
+    pub image_profile: Option<String>,
+    /// 文件里保存的图片调整预设。
+    pub image_presets: Vec<(String, figcraft_color::ImageFilters)>,
+    /// 可作为图案源、且与当前选区无关的图层（组件 + 顶层图层，最多 64 个）。
+    pub pattern_sources: Vec<(u64, String)>,
 }
 
 /// 一个 effect 行（egui `effects.rs::effects`）。
@@ -1922,10 +1932,60 @@ fn paint_bind_key(n: &figcraft_doc::Node, fills: bool, index: usize) -> String {
     }
 }
 
+/// 图片填充的快照：原始字节留着给 `image.replace`，预览在右栏侧就栅格化成直 RGBA，
+/// 取色器只把字节包成贴图，不在浮层里再碰文档。
+fn image_snapshot(
+    doc: &Document,
+    paint: &Paint,
+) -> (Option<(String, Option<figcraft_doc::ImageData>)>, Option<(u32, u32, Vec<u8>)>, Option<String>) {
+    let figcraft_color::PaintKind::Image(img) = &paint.kind else {
+        return (None, None, None);
+    };
+    let data = doc.images.get(&img.image).cloned();
+    let profile = figcraft_render::images::profile_name(&img.image, data.as_ref());
+    let preview = crate::render_stack::on_render_stack(|| {
+        let pix = figcraft_render::images::shown(
+            &img.image,
+            data.as_ref(),
+            &figcraft_color::ImageFilters::default(),
+            doc.color_profile,
+            208.0,
+        )?;
+        Some((pix.width(), pix.height(), figcraft_render::to_rgba8(&pix)))
+    })
+    .flatten();
+    (Some((img.image.clone(), data)), preview, profile)
+}
+
+/// 图案源：组件 + 当前页顶层图层，排除与选区互为祖先的（自己的子层不能平铺自己）。
+fn paint_pattern_sources(doc: &Document, ids: &[NodeId]) -> Vec<(u64, String)> {
+    let top = doc.pages.first().and_then(|p| doc.node(*p)).map(|p| p.children.clone()).unwrap_or_default();
+    let comps = doc.nodes().filter(|n| matches!(n.kind, NodeKind::Component { .. })).map(|n| n.id);
+    let mut out = Vec::new();
+    for id in comps.chain(top) {
+        if ids.iter().any(|t| doc.is_ancestor(*t, id) || doc.is_ancestor(id, *t)) {
+            continue;
+        }
+        if out.iter().any(|(o, _)| *o == id.0) {
+            continue;
+        }
+        if let Some(n) = doc.node(id) {
+            out.push((id.0, n.name.clone()));
+        }
+        if out.len() >= 64 {
+            break;
+        }
+    }
+    out
+}
+
 fn paint_rows(doc: &Document, ids: &[NodeId], fills: bool) -> Option<Vec<PaintRow>> {
     let list = common(doc, ids, |n| if fills { n.fills.clone() } else { n.strokes.clone() })?;
     let color_vars: Vec<String> =
         doc.variables.variables.iter().filter(|v| v.kind == figcraft_doc::VariableType::Color).map(|v| v.name.clone()).collect();
+    let pattern_sources = paint_pattern_sources(doc, ids);
+    let image_presets: Vec<(String, figcraft_color::ImageFilters)> =
+        doc.image_presets.iter().map(|p| (p.name.clone(), p.filters)).collect();
     Some(
         list.iter()
             .enumerate()
@@ -1935,6 +1995,7 @@ fn paint_rows(doc: &Document, ids: &[NodeId], fills: bool) -> Option<Vec<PaintRo
                     Some(c) => (true, c.to_hex()),
                     None => (false, crate::widgets::paint_name(p).to_string()),
                 };
+                let (image, image_preview, image_profile) = image_snapshot(doc, p);
                 let key = ids.first().and_then(|id| doc.node(*id)).map(|n| paint_bind_key(n, fills, index)).unwrap_or_default();
                 let bound = ids
                     .first()
@@ -1953,6 +2014,11 @@ fn paint_rows(doc: &Document, ids: &[NodeId], fills: bool) -> Option<Vec<PaintRo
                     bound,
                     bind_field: key,
                     variables: color_vars.clone(),
+                    image,
+                    image_preview,
+                    image_profile,
+                    image_presets: image_presets.clone(),
+                    pattern_sources: pattern_sources.clone(),
                 }
             })
             .collect(),

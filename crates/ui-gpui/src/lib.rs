@@ -5620,7 +5620,12 @@ impl Render for CanvasView {
                     paint.kind =
                         figcraft_color::PaintKind::Gradient(figcraft_color::Gradient::default_for(figcraft_color::GradientKind::Linear, base));
                 }
-                let picker = popovers::PaintPicker { paint, on_write: std::rc::Rc::new(|_, _, _| {}), styles: Vec::new() };
+                let picker = popovers::PaintPicker {
+                    paint,
+                    on_write: std::rc::Rc::new(|_, _, _| {}),
+                    styles: Vec::new(),
+                    extras: popovers::PaintPickerExtras::default(),
+                };
                 let w = popovers::WindowState::color(
                     cx,
                     gpui::point(px(160.0), px(60.0)),

@@ -567,6 +567,19 @@ fn model_color(model: usize, v: [f64; 3], c: Color32) -> Color32 {
     picker_c32(col.with_alpha(a))
 }
 
+/// 图片 / 图案页需要的文档侧快照：命令目标、图片预览字节和可选来源列表。
+#[derive(Clone, Default)]
+pub(crate) struct PaintPickerExtras {
+    pub ids: Vec<figcraft_doc::NodeId>,
+    pub fills: bool,
+    pub index: usize,
+    pub image: Option<(String, Option<figcraft_doc::ImageData>)>,
+    pub image_preview: Option<(u32, u32, Vec<u8>)>,
+    pub image_profile: Option<String>,
+    pub image_presets: Vec<(String, figcraft_color::ImageFilters)>,
+    pub pattern_sources: Vec<(u64, String)>,
+}
+
 /// The paint a Fill/Stroke row's picker edits. Lets the picker switch the paint kind and its
 /// blend mode in place (ui-egui `show`'s type segments and blend dropdown).
 #[derive(Clone)]
@@ -576,6 +589,7 @@ pub(crate) struct PaintPicker {
     pub on_write: Rc<dyn Fn(figcraft_color::Paint, &mut Window, &mut App)>,
     /// 该 paint 所在的样式列表（填充/描边）。取色器头部的「+」用它弹出样式面板。
     pub styles: Vec<Row>,
+    pub extras: PaintPickerExtras,
 }
 
 /// 样式编辑器的一行属性（egui `property_row`）：paint 带 14×14 色板，其余带类型图标。
@@ -669,6 +683,20 @@ struct ColorState {
     blend_anchor: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// 渐变类型下拉的触发矩形（菜单开着时 `Some`）。
     grad_kind_anchor: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// 图片 / 图案页各下拉的锚点（打开时由通用 menu 在窗口根弹出）。
+    image_mode_anchor: Rc<Cell<Option<Bounds<Pixels>>>>,
+    image_preset_anchor: Rc<Cell<Option<Bounds<Pixels>>>>,
+    pattern_source_anchor: Rc<Cell<Option<Bounds<Pixels>>>>,
+    pattern_tile_anchor: Rc<Cell<Option<Bounds<Pixels>>>>,
+    pattern_align_anchor: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// 图片页还没选文件时的占位态；选中真实图片后自动关掉。
+    image_pending: Rc<Cell<bool>>,
+    /// 图片预设「另存为」的输入框（跨帧复用，输入不被下一帧清掉）。
+    image_preset_name: Entity<TextEdit>,
+    /// 是否正在给当前图片调整另存预设。
+    image_naming: Rc<Cell<bool>>,
+    /// 取色器图片预览贴图：按图片键缓存，不在每帧重建 GPU 纹理。
+    image_texture: Rc<RefCell<Option<(String, (u32, u32), Arc<RenderImage>)>>>,
     /// 取色器自己的子浮层：点击渐变断点颜色 / 头部「+」时，在本卡片**左边**再开一张卡，
     /// 不占 root 的单槽，因此取色器本身不会被替换掉。
     sub: Rc<RefCell<Option<Box<WindowState>>>>,
@@ -3087,6 +3115,15 @@ impl WindowState {
             swatch_anchor,
             blend_anchor,
             grad_kind_anchor: Rc::new(Cell::new(None)),
+            image_mode_anchor: Rc::new(Cell::new(None)),
+            image_preset_anchor: Rc::new(Cell::new(None)),
+            pattern_source_anchor: Rc::new(Cell::new(None)),
+            pattern_tile_anchor: Rc::new(Cell::new(None)),
+            pattern_align_anchor: Rc::new(Cell::new(None)),
+            image_pending: Rc::new(Cell::new(false)),
+            image_preset_name: cx.new(|cx| TextEdit::new(cx)),
+            image_naming: Rc::new(Cell::new(false)),
+            image_texture: Rc::new(RefCell::new(None)),
             sub: Rc::new(RefCell::new(None)),
             nested: false,
             uid: {
@@ -3406,7 +3443,10 @@ impl WindowState {
         if c.paint.is_some() && !c.nested {
             h += 40.0;
         }
-        let grad = matches!(c.paint_state.as_ref().map(|s| s.borrow().kind.clone()), Some(figcraft_color::PaintKind::Gradient(_)));
+        let kind = c.paint_state.as_ref().map(|s| s.borrow().kind.clone());
+        let grad = matches!(kind, Some(figcraft_color::PaintKind::Gradient(_)));
+        let image = matches!(kind, Some(figcraft_color::PaintKind::Image(_))) || c.image_pending.get();
+        let pattern = matches!(kind, Some(figcraft_color::PaintKind::Pattern(_)));
         if grad {
             // 类型行 48 + 预览条 8/48 + 「断点」标题 8/32 + 每行 32 + 底部 12
             let stops = c
@@ -3418,6 +3458,18 @@ impl WindowState {
                 })
                 .unwrap_or(2) as f32;
             h += 48.0 + 8.0 + 48.0 + 8.0 + 32.0 + stops * 32.0 + 12.0;
+        } else if image {
+            // 预览格 150 + 缩放行 32 + 配置 18 + 预设 30 + 7 条调整 168 + 色板
+            h += 150.0 + 32.0 + 18.0 + 30.0 + 7.0 * 24.0;
+            let n = page_colors().len().max(recent_colors().len());
+            let rows = n.div_ceil(CHITS_PER_ROW).clamp(1, 3) as f32;
+            h += 1.0 + 11.0 + 24.0 + 4.0 + rows * CHIT_PITCH - (CHIT_PITCH - CHIT) + 12.0;
+        } else if pattern {
+            // 来源 32 + 平铺 32 + 数值 32 + 色板
+            h += 96.0;
+            let n = page_colors().len().max(recent_colors().len());
+            let rows = n.div_ceil(CHITS_PER_ROW).clamp(1, 3) as f32;
+            h += 1.0 + 11.0 + 24.0 + 4.0 + rows * CHIT_PITCH - (CHIT_PITCH - CHIT) + 12.0;
         } else {
             // 对比度 48 + 色域 208 + 两条 16pt 滑轨 + 12pt 间距（共 44）+ 数值 40 + 色板
             h += 48.0 + SPECTRUM + 44.0 + 40.0;
@@ -3990,6 +4042,279 @@ impl WindowState {
             );
         }
 
+        // 图片缩放方式：Crop 走真实的 `image.crop`，其余写回 paint 的 scale_mode。
+        if let Some(anchor) = c.image_mode_anchor.get()
+            && let (Some(p), Some(state)) = (&c.paint, &c.paint_state)
+        {
+            let labels = ["Fill", "Fit", "Crop", "Tile"];
+            let active = match &state.borrow().kind {
+                figcraft_color::PaintKind::Image(i) => match i.scale_mode {
+                    figcraft_color::ImageScaleMode::Fill => 0,
+                    figcraft_color::ImageScaleMode::Fit => 1,
+                    figcraft_color::ImageScaleMode::Crop => 2,
+                    figcraft_color::ImageScaleMode::Tile => 3,
+                },
+                _ => 0,
+            };
+            let rows: Vec<MenuRow> = labels.iter().map(|l| MenuRow::row(SharedString::from(tr(l))).checked(Some(*l == labels[active]))).collect();
+            let write = p.on_write.clone();
+            let st = state.clone();
+            let cmds = self.cmds.clone();
+            let extras = p.extras.clone();
+            let close = c.image_mode_anchor.clone();
+            let close_for_dismiss = close.clone();
+            let on_pick: Rc<dyn Fn(&str, &mut Window, &mut App)> = Rc::new(move |label, window, cx| {
+                if let Some(i) = labels.iter().position(|l| tr(l) == label) {
+                    if i == 2 && extras.fills && !extras.ids.is_empty() {
+                        cmds.push(Cmd {
+                            id: "image.crop",
+                            params: Some(json!({ "ids": extras.ids, "index": extras.index })),
+                        });
+                    } else {
+                        let mode = [figcraft_color::ImageScaleMode::Fill, figcraft_color::ImageScaleMode::Fit, figcraft_color::ImageScaleMode::Crop, figcraft_color::ImageScaleMode::Tile][i];
+                        let mut np = st.borrow().clone();
+                        if let figcraft_color::PaintKind::Image(img) = &mut np.kind {
+                            img.scale_mode = mode;
+                        }
+                        write(np, window, cx);
+                    }
+                }
+                close.set(None);
+            });
+            let dismiss = {
+                let close = close_for_dismiss.clone();
+                Rc::new(move |_: &mut Window, _: &mut App| close.set(None))
+            };
+            self.push_overlay(
+                menu_popup_in(anchor, Some(100.0), rows, on_pick, dismiss.clone(), f32::from(self.viewport.width), f32::from(self.viewport.height)),
+                dismiss,
+            );
+        }
+
+        // 图片调整预设：内置 + 文件内保存的预设 + 另存为（引擎命令，不造新名字）。
+        if let Some(anchor) = c.image_preset_anchor.get()
+            && let (Some(p), Some(state)) = (&c.paint, &c.paint_state)
+        {
+            let current = match &state.borrow().kind {
+                figcraft_color::PaintKind::Image(i) => i.filters,
+                _ => figcraft_color::ImageFilters::NONE,
+            };
+            let mut labels: Vec<String> = figcraft_color::ImageFilters::PRESETS
+                .iter()
+                .filter(|(id, ..)| *id != "reset")
+                .map(|(_, label, _)| tr(label).to_string())
+                .collect();
+            let saved: Vec<String> = p.extras.image_presets.iter().map(|(name, _)| name.clone()).collect();
+            labels.extend(saved.iter().cloned());
+            let active = figcraft_color::ImageFilters::PRESETS
+                .iter()
+                .filter(|(id, ..)| *id != "reset")
+                .find(|(_, _, f)| *f == current)
+                .map(|(_, label, _)| tr(label).to_string())
+                .or_else(|| p.extras.image_presets.iter().find(|(_, f)| *f == current).map(|(n, _)| n.clone()))
+                .unwrap_or_default();
+            let mut rows: Vec<MenuRow> = labels.iter().map(|l| MenuRow::row(SharedString::from(l.clone())).checked(Some(*l == active))).collect();
+            rows.push(MenuRow::row(SharedString::from(tr("Save as preset…"))).separator());
+            let cmds = self.cmds.clone();
+            let p_extras_ids = p.extras.ids.clone();
+            let p_extras_fills = p.extras.fills;
+            let p_extras_index = p.extras.index;
+            let name_ed = c.image_preset_name.clone();
+            let naming = c.image_naming.clone();
+            let saved_count = saved.len();
+            let close = c.image_preset_anchor.clone();
+            let close_for_dismiss = close.clone();
+            let on_pick: Rc<dyn Fn(&str, &mut Window, &mut App)> = Rc::new(move |label, window, cx| {
+                if label == tr("Save as preset…") {
+                    name_ed.update(cx, |ed, _| ed.set_value(format!("Preset {}", saved_count + 1)));
+                    naming.set(true);
+                } else if let Some((id, _, _)) = figcraft_color::ImageFilters::PRESETS.iter().find(|(_, l, _)| tr(l) == label) {
+                    cmds.push(Cmd {
+                        id: "image.adjust",
+                        params: Some(json!({
+                            "ids": p_extras_ids,
+                            "target": if p_extras_fills { "fill" } else { "stroke" },
+                            "index": p_extras_index,
+                            "preset": id,
+                        })),
+                    });
+                } else if saved.iter().any(|n| n == label) {
+                    cmds.push(Cmd {
+                        id: "image.adjust",
+                        params: Some(json!({
+                            "ids": p_extras_ids,
+                            "target": if p_extras_fills { "fill" } else { "stroke" },
+                            "index": p_extras_index,
+                            "preset": label,
+                        })),
+                    });
+                }
+                close.set(None);
+            });
+            let dismiss = {
+                let close = close_for_dismiss.clone();
+                Rc::new(move |_: &mut Window, _: &mut App| close.set(None))
+            };
+            self.push_overlay(
+                menu_popup_in(anchor, Some(152.0), rows, on_pick, dismiss.clone(), f32::from(self.viewport.width), f32::from(self.viewport.height)),
+                dismiss,
+            );
+        }
+
+        // 图案来源：真实 `fill.pattern` 命令；来源不能是选区自身或其子层。
+        if let Some(anchor) = c.pattern_source_anchor.get()
+            && let (Some(p), Some(state)) = (&c.paint, &c.paint_state)
+        {
+            let sources = p.extras.pattern_sources.clone();
+            let current = match &state.borrow().kind {
+                figcraft_color::PaintKind::Pattern(pt) => pt.source,
+                _ => 0,
+            };
+            let rows: Vec<MenuRow> = sources
+                .iter()
+                .map(|(id, name)| MenuRow::row(SharedString::from(name.clone())).checked(Some(*id == current)))
+                .collect();
+            let cmds = self.cmds.clone();
+            let write = p.on_write.clone();
+            let st = state.clone();
+            let extras = p.extras.clone();
+            let close = c.pattern_source_anchor.clone();
+            let close_for_dismiss = close.clone();
+            let on_pick: Rc<dyn Fn(&str, &mut Window, &mut App)> = Rc::new(move |label, window, cx| {
+                if let Some((id, _)) = sources.iter().find(|(_, name)| name == label) {
+                    let pt = match &st.borrow().kind {
+                        figcraft_color::PaintKind::Pattern(pt) => pt.clone(),
+                        _ => figcraft_color::PatternPaint::new(*id),
+                    };
+                    let tile = match pt.tile {
+                        figcraft_color::PatternTile::Grid => "grid",
+                        figcraft_color::PatternTile::HorizontalHex => "horizontalHex",
+                        figcraft_color::PatternTile::VerticalHex => "verticalHex",
+                    };
+                    let align = match pt.align {
+                        figcraft_color::PatternAlign::Start => "start",
+                        figcraft_color::PatternAlign::Center => "center",
+                        figcraft_color::PatternAlign::End => "end",
+                    };
+                    if extras.fills && !extras.ids.is_empty() {
+                        cmds.push(Cmd {
+                            id: "fill.pattern",
+                            params: Some(json!({
+                                "source": id,
+                                "ids": extras.ids,
+                                "index": extras.index,
+                                "tile": tile,
+                                "scale": pt.scale,
+                                "spacing": [pt.spacing.0, pt.spacing.1],
+                                "align": align,
+                            })),
+                        });
+                    } else {
+                        let mut np = st.borrow().clone();
+                        if let figcraft_color::PaintKind::Pattern(pat) = &mut np.kind {
+                            pat.source = *id;
+                        }
+                        write(np, window, cx);
+                    }
+                }
+                close.set(None);
+            });
+            let dismiss = {
+                let close = close_for_dismiss.clone();
+                Rc::new(move |_: &mut Window, _: &mut App| close.set(None))
+            };
+            self.push_overlay(
+                menu_popup_in(anchor, Some(208.0), rows, on_pick, dismiss.clone(), f32::from(self.viewport.width), f32::from(self.viewport.height)),
+                dismiss,
+            );
+        }
+
+        // 图案平铺方式：写回同一份 paint 的 tile 字段。
+        if let Some(anchor) = c.pattern_tile_anchor.get()
+            && let (Some(p), Some(state)) = (&c.paint, &c.paint_state)
+        {
+            let labels = [tr("Grid"), tr("Horizontal hex"), tr("Vertical hex")];
+            let values = [
+                figcraft_color::PatternTile::Grid,
+                figcraft_color::PatternTile::HorizontalHex,
+                figcraft_color::PatternTile::VerticalHex,
+            ];
+            let active = match &state.borrow().kind {
+                figcraft_color::PaintKind::Pattern(pt) => match pt.tile {
+                    figcraft_color::PatternTile::Grid => 0,
+                    figcraft_color::PatternTile::HorizontalHex => 1,
+                    figcraft_color::PatternTile::VerticalHex => 2,
+                },
+                _ => 0,
+            };
+            let rows: Vec<MenuRow> = labels.iter().enumerate().map(|(i, l)| MenuRow::row(SharedString::from(*l)).checked(Some(i == active))).collect();
+            let write = p.on_write.clone();
+            let st = state.clone();
+            let close = c.pattern_tile_anchor.clone();
+            let close_for_dismiss = close.clone();
+            let on_pick: Rc<dyn Fn(&str, &mut Window, &mut App)> = Rc::new(move |label, window, cx| {
+                if let Some(i) = labels.iter().position(|l| *l == label) {
+                    let mut np = st.borrow().clone();
+                    if let figcraft_color::PaintKind::Pattern(pt) = &mut np.kind {
+                        pt.tile = values[i];
+                    }
+                    write(np, window, cx);
+                }
+                close.set(None);
+            });
+            let dismiss = {
+                let close = close_for_dismiss.clone();
+                Rc::new(move |_: &mut Window, _: &mut App| close.set(None))
+            };
+            self.push_overlay(
+                menu_popup_in(anchor, Some(120.0), rows, on_pick, dismiss.clone(), f32::from(self.viewport.width), f32::from(self.viewport.height)),
+                dismiss,
+            );
+        }
+
+        // 图案对齐：写回同一份 paint 的 align 字段。
+        if let Some(anchor) = c.pattern_align_anchor.get()
+            && let (Some(p), Some(state)) = (&c.paint, &c.paint_state)
+        {
+            let labels = [tr("Start"), tr("Center"), tr("End")];
+            let values = [
+                figcraft_color::PatternAlign::Start,
+                figcraft_color::PatternAlign::Center,
+                figcraft_color::PatternAlign::End,
+            ];
+            let active = match &state.borrow().kind {
+                figcraft_color::PaintKind::Pattern(pt) => match pt.align {
+                    figcraft_color::PatternAlign::Start => 0,
+                    figcraft_color::PatternAlign::Center => 1,
+                    figcraft_color::PatternAlign::End => 2,
+                },
+                _ => 0,
+            };
+            let rows: Vec<MenuRow> = labels.iter().enumerate().map(|(i, l)| MenuRow::row(SharedString::from(*l)).checked(Some(i == active))).collect();
+            let write = p.on_write.clone();
+            let st = state.clone();
+            let close = c.pattern_align_anchor.clone();
+            let close_for_dismiss = close.clone();
+            let on_pick: Rc<dyn Fn(&str, &mut Window, &mut App)> = Rc::new(move |label, window, cx| {
+                if let Some(i) = labels.iter().position(|l| *l == label) {
+                    let mut np = st.borrow().clone();
+                    if let figcraft_color::PaintKind::Pattern(pt) = &mut np.kind {
+                        pt.align = values[i];
+                    }
+                    write(np, window, cx);
+                }
+                close.set(None);
+            });
+            let dismiss = {
+                let close = close_for_dismiss.clone();
+                Rc::new(move |_: &mut Window, _: &mut App| close.set(None))
+            };
+            self.push_overlay(
+                menu_popup_in(anchor, Some(80.0), rows, on_pick, dismiss.clone(), f32::from(self.viewport.width), f32::from(self.viewport.height)),
+                dismiss,
+            );
+        }
+
         // ── 组装（顺序与 Figma 一致：类型条 → 渐变编辑 / 或纯色编辑）
         // 渐变页只保留「类型行 + 预览条 + 断点列表」，不再带色域/色相/透明度/色板，
         // 否则切换后旧内容全留在上面（用户 2026-11-19）。
@@ -4004,7 +4329,35 @@ impl WindowState {
         if c.paint.is_some() && !c.nested {
             col = col.child(self.picker_toolbar(c));
         }
-        if is_grad {
+        let is_image = matches!(kind_now, Some(figcraft_color::PaintKind::Image(_))) || (c.image_pending.get() && c.paint.is_some());
+        let is_pattern = matches!(kind_now, Some(figcraft_color::PaintKind::Pattern(_)));
+        if is_image {
+            let img = match &kind_now {
+                Some(figcraft_color::PaintKind::Image(i)) => Some(i.clone()),
+                _ => None,
+            };
+            c.image_pending.set(img.is_none());
+            if let (Some(p), Some(state)) = (&c.paint, &c.paint_state) {
+                col = col.child(self.image_well(c, p, img.as_ref()));
+                if let Some(i) = &img {
+                    for el in self.image_controls(cx, c, p, state, i) {
+                        col = col.child(el);
+                    }
+                }
+            }
+            col = col.child(swatch_panel);
+        } else if is_pattern {
+            let pat = match &kind_now {
+                Some(figcraft_color::PaintKind::Pattern(pt)) => Some(pt.clone()),
+                _ => None,
+            };
+            if let (Some(p), Some(state), Some(pt)) = (&c.paint, &c.paint_state, &pat) {
+                for el in self.pattern_controls(cx, c, p, state, pt) {
+                    col = col.child(el);
+                }
+            }
+            col = col.child(swatch_panel);
+        } else if is_grad {
             if let (Some(p), Some(state)) = (&c.paint, &c.paint_state) {
                 let grad = match &state.borrow().kind {
                     figcraft_color::PaintKind::Gradient(g) => Some(g.clone()),
@@ -4182,6 +4535,393 @@ impl WindowState {
         col.into_any_element()
     }
 
+    /// 图片预览格：棋盘底 + 当前图片按原比例居中，下面挂真实的系统文件选择按钮。
+    fn image_well(&self, c: &ColorState, p: &PaintPicker, img: Option<&figcraft_color::ImagePaint>) -> AnyElement {
+        let t = tokens();
+        let cmds = self.cmds.clone();
+        let extras = p.extras.clone();
+        let tex = c.image_texture.clone();
+        let key = img.map(|i| i.image.clone()).unwrap_or_default();
+        let preview = extras.image_preview.clone();
+        let canvas = gpui::canvas(
+            |_, _, _| {},
+            move |bounds, _, window, _| {
+                let frame = Bounds {
+                    origin: point(px(f32::from(bounds.origin.x) + 1.0), px(f32::from(bounds.origin.y) + 1.0)),
+                    size: size(px((f32::from(bounds.size.width) - 2.0).max(1.0)), px((f32::from(bounds.size.height) - 2.0).max(1.0))),
+                };
+                crate::widgets::swatch::checker(window, frame, 8.0);
+                let stale = tex.borrow().as_ref().is_none_or(|(k, _, _)| k != &key);
+                if stale
+                    && let Some((w, h, rgba)) = &preview
+                {
+                    *tex.borrow_mut() = Some((key.clone(), (*w, *h), crate::canvas::render_worker::wrap_rgba(*w, *h, rgba.clone())));
+                }
+                if let Some((_, (iw, ih), image)) = tex.borrow().as_ref() {
+                    let (fw, fh) = (f32::from(frame.size.width), f32::from(frame.size.height));
+                    let k = (fw / *iw as f32).min(fh / *ih as f32);
+                    let w = *iw as f32 * k;
+                    let h = *ih as f32 * k;
+                    let rect = Bounds {
+                        origin: point(px(f32::from(frame.origin.x) + (fw - w) * 0.5), px(f32::from(frame.origin.y) + (fh - h) * 0.5)),
+                        size: size(px(w), px(h)),
+                    };
+                    let _ = window.paint_image(rect, Corners::default(), image.clone(), 0, false);
+                }
+            },
+        );
+        div()
+            .w(pt(PANEL_W))
+            .h(pt(150.0))
+            .px(pt(16.0))
+            .flex()
+            .flex_col()
+            .gap(pt(8.0))
+            .child(
+                div()
+                    .h(pt(110.0))
+                    .border_1()
+                    .border_color(rgba(t.border))
+                    .rounded(pt(4.0))
+                    .overflow_hidden()
+                    .child(canvas.size_full()),
+            )
+            .child(
+                div()
+                    .h(pt(24.0))
+                    .px(pt(8.0))
+                    .rounded(pt(4.0))
+                    .border_1()
+                    .border_color(rgba(t.border))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .text_size(pt(11.0))
+                    .text_color(rgba(t.text))
+                    .hover(|s| s.bg(rgba(t.hover)))
+                    .child(tr("Upload from computer"))
+                    .on_mouse_down(MouseButton::Left, move |_, _, _| {
+                        let Some(path) = rfd::FileDialog::new().set_title(tr("Choose image")).add_filter(tr("Images"), &["png", "jpg", "jpeg", "webp", "gif", "tif", "tiff"]).pick_file() else {
+                            return;
+                        };
+                        if extras.ids.is_empty() {
+                            return;
+                        }
+                        cmds.push(Cmd {
+                            id: "image.replace",
+                            params: Some(json!({
+                                "ids": extras.ids,
+                                "target": if extras.fills { "fill" } else { "stroke" },
+                                "index": extras.index,
+                                "path": path.to_string_lossy(),
+                            })),
+                        });
+                    }),
+            )
+            .into_any_element()
+    }
+
+    /// 图片填充控制：缩放方式 / 旋转 / 色彩配置 / 调整预设 / 七条调整滑条。
+    fn image_controls(
+        &self,
+        cx: &mut App,
+        c: &ColorState,
+        p: &PaintPicker,
+        state: &Rc<RefCell<figcraft_color::Paint>>,
+        img: &figcraft_color::ImagePaint,
+    ) -> Vec<AnyElement> {
+        let t = tokens();
+        let cmds = self.cmds.clone();
+        let write = p.on_write.clone();
+        let st = state.clone();
+        let mode_anchor = c.image_mode_anchor.clone();
+        let mode = match img.scale_mode {
+            figcraft_color::ImageScaleMode::Fill => "Fill",
+            figcraft_color::ImageScaleMode::Fit => "Fit",
+            figcraft_color::ImageScaleMode::Crop => "Crop",
+            figcraft_color::ImageScaleMode::Tile => "Tile",
+        };
+        let mode_row = div()
+            .w(pt(PANEL_W))
+            .h(pt(32.0))
+            .px(pt(16.0))
+            .flex()
+            .items_center()
+            .gap(pt(8.0))
+            .child(dropdown::Dropdown::new(mode, 100.0, None).on_click(move |rect: Bounds<Pixels>, window, _| {
+                mode_anchor.set(Some(rect));
+                window.refresh();
+            }))
+            .child(IconButton::new(Icon::Rotate).size(24.0).on_click({
+                let write = write.clone();
+                let st = st.clone();
+                move |_, window, cx| {
+                    let mut np = st.borrow().clone();
+                    if let figcraft_color::PaintKind::Image(i) = &mut np.kind {
+                        i.rotation = (i.rotation + 1) % 4;
+                    }
+                    write(np, window, cx);
+                }
+            }));
+        let profile = p.extras.image_profile.clone().unwrap_or_else(|| tr("Unknown — treated as sRGB").to_string());
+        let profile_row = div()
+            .w(pt(PANEL_W))
+            .h(pt(18.0))
+            .px(pt(16.0))
+            .flex()
+            .items_center()
+            .text_size(pt(11.0))
+            .text_color(rgba(t.text_secondary))
+            .child(format!("Color profile: {profile}"));
+        let preset_anchor = c.image_preset_anchor.clone();
+        let current_preset = figcraft_color::ImageFilters::PRESETS
+            .iter()
+            .filter(|(id, ..)| *id != "reset")
+            .find(|(_, _, f)| *f == img.filters)
+            .map(|(_, label, _)| tr(label).to_string())
+            .or_else(|| p.extras.image_presets.iter().find(|(_, f)| *f == img.filters).map(|(n, _)| n.clone()))
+            .unwrap_or_else(|| if img.filters.is_identity() { tr("No preset").to_string() } else { tr("Custom").to_string() });
+        let mut preset_row = div()
+            .w(pt(PANEL_W))
+            .h(pt(30.0))
+            .px(pt(16.0))
+            .flex()
+            .items_center()
+            .gap(pt(8.0))
+            .child(dropdown::Dropdown::new(current_preset, 152.0, None).on_click(move |rect: Bounds<Pixels>, window, _| {
+                preset_anchor.set(Some(rect));
+                window.refresh();
+            }));
+        let reset_write = write.clone();
+        let reset_state = st.clone();
+        preset_row = preset_row.child(
+            div()
+                .h(pt(22.0))
+                .px(pt(8.0))
+                .rounded(pt(4.0))
+                .border_1()
+                .border_color(rgba(t.border))
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .text_size(pt(11.0))
+                .text_color(rgba(t.text))
+                .child(tr("Reset"))
+                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                    let mut np = reset_state.borrow().clone();
+                    if let figcraft_color::PaintKind::Image(i) = &mut np.kind {
+                        i.filters = figcraft_color::ImageFilters::NONE;
+                    }
+                    reset_write(np, window, cx);
+                }),
+        );
+        let mut out: Vec<AnyElement> = vec![mode_row.into_any_element(), profile_row.into_any_element(), preset_row.into_any_element()];
+        if c.image_naming.get() {
+            let name = c.image_preset_name.clone();
+            let naming = c.image_naming.clone();
+            let save_cmds = self.cmds.clone();
+            let filters = img.filters;
+            name.update(cx, |ed, _| {
+                ed.set_on_commit(move |text, window, cx| {
+                    let text = text.trim();
+                    if !text.is_empty() {
+                        save_cmds.push(Cmd {
+                            id: "image.savePreset",
+                            params: Some(json!({ "name": text, "filters": filters })),
+                        });
+                        window.refresh();
+                    }
+                    naming.set(false);
+                });
+            });
+            out.push(
+                div()
+                    .w(pt(PANEL_W))
+                    .h(pt(28.0))
+                    .px(pt(16.0))
+                    .flex()
+                    .items_center()
+                    .gap(pt(8.0))
+                    .child(div().w(pt(136.0)).child(name.clone()))
+                    .child(
+                        div()
+                            .h(pt(22.0))
+                            .px(pt(8.0))
+                            .rounded(pt(4.0))
+                            .bg(rgba(t.accent))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .text_size(pt(11.0))
+                            .text_color(rgba(t.text))
+                            .child(tr("Save"))
+                            .on_mouse_down(MouseButton::Left, move |_, window, _| {
+                                // TextEdit 失焦即提交；按钮只负责让输入离开焦点。
+                                window.blur();
+                            }),
+                    )
+                    .into_any_element(),
+            );
+        }
+        let filter_rows: [(&str, fn(&mut figcraft_color::ImageFilters, f32)); 7] = [
+            ("Exposure", |f, v| f.exposure = v),
+            ("Contrast", |f, v| f.contrast = v),
+            ("Saturation", |f, v| f.saturation = v),
+            ("Temperature", |f, v| f.temperature = v),
+            ("Tint", |f, v| f.tint = v),
+            ("Highlights", |f, v| f.highlights = v),
+            ("Shadows", |f, v| f.shadows = v),
+        ];
+        let values = [
+            img.filters.exposure,
+            img.filters.contrast,
+            img.filters.saturation,
+            img.filters.temperature,
+            img.filters.tint,
+            img.filters.highlights,
+            img.filters.shadows,
+        ];
+        for ((label, setter), value) in filter_rows.into_iter().zip(values) {
+            let fw = write.clone();
+            let fs = st.clone();
+            let slider = crate::widgets::Slider::new(value, -1.0, 1.0)
+                .id(SharedString::from(format!("image-filter-{label}")))
+                .step(0.01)
+                .on_change(move |v, window, cx| {
+                    let mut np = fs.borrow().clone();
+                    if let figcraft_color::PaintKind::Image(i) = &mut np.kind {
+                        setter(&mut i.filters, v);
+                    }
+                    fw(np, window, cx);
+                })
+                .render();
+            out.push(
+                div()
+                    .w(pt(PANEL_W))
+                    .h(pt(24.0))
+                    .px(pt(16.0))
+                    .flex()
+                    .items_center()
+                    .gap(pt(8.0))
+                    .child(div().w(pt(72.0)).flex_none().text_size(pt(11.0)).text_color(rgba(t.text)).child(tr(label)))
+                    .child(div().flex_1().min_w(pt(0.0)).child(slider))
+                    .into_any_element(),
+            );
+        }
+        out
+    }
+
+    /// 图案填充控制：来源 / 平铺方式 / 对齐 / 比例 / 横纵间距。
+    fn pattern_controls(
+        &self,
+        cx: &mut App,
+        c: &ColorState,
+        p: &PaintPicker,
+        state: &Rc<RefCell<figcraft_color::Paint>>,
+        pat: &figcraft_color::PatternPaint,
+    ) -> Vec<AnyElement> {
+        let t = tokens();
+        let cmds = self.cmds.clone();
+        let write = p.on_write.clone();
+        let st = state.clone();
+        let source_anchor = c.pattern_source_anchor.clone();
+        let source_name = p
+            .extras
+            .pattern_sources
+            .iter()
+            .find(|(id, _)| *id == pat.source)
+            .map(|(_, n)| n.clone())
+            .unwrap_or_else(|| tr("Missing layer").to_string());
+        let source_dropdown = dropdown::Dropdown::new(source_name, 208.0, None).on_click(move |rect: Bounds<Pixels>, window, _| {
+            source_anchor.set(Some(rect));
+            window.refresh();
+        });
+        let tile_anchor = c.pattern_tile_anchor.clone();
+        let tile_label = match pat.tile {
+            figcraft_color::PatternTile::Grid => tr("Grid"),
+            figcraft_color::PatternTile::HorizontalHex => tr("Horizontal hex"),
+            figcraft_color::PatternTile::VerticalHex => tr("Vertical hex"),
+        };
+        let tile_dropdown = dropdown::Dropdown::new(tile_label, 120.0, Some(dropdown::DropLead::Icon(Icon::ViewGrid))).on_click(move |rect: Bounds<Pixels>, window, _| {
+            tile_anchor.set(Some(rect));
+            window.refresh();
+        });
+        let align_anchor = c.pattern_align_anchor.clone();
+        let align_label = match pat.align {
+            figcraft_color::PatternAlign::Start => tr("Start"),
+            figcraft_color::PatternAlign::Center => tr("Center"),
+            figcraft_color::PatternAlign::End => tr("End"),
+        };
+        let align_dropdown = dropdown::Dropdown::new(align_label, 80.0, None).on_click(move |rect: Bounds<Pixels>, window, _| {
+            align_anchor.set(Some(rect));
+            window.refresh();
+        });
+        let mut out: Vec<AnyElement> = vec![
+            div()
+                .w(pt(PANEL_W))
+                .h(pt(32.0))
+                .px(pt(16.0))
+                .flex()
+                .items_center()
+                .child(source_dropdown)
+                .into_any_element(),
+            div()
+                .w(pt(PANEL_W))
+                .h(pt(32.0))
+                .px(pt(16.0))
+                .flex()
+                .items_center()
+                .gap(pt(8.0))
+                .child(tile_dropdown)
+                .child(align_dropdown)
+                .into_any_element(),
+        ];
+        let number = |cx: &mut App, value: f64, suffix: &'static str, lo: f64, hi: f64, setter: std::rc::Rc<dyn Fn(&mut figcraft_color::PatternPaint, f64)>| {
+            let field = number_field_ranged(cx, 64.0, Some(value), suffix, 1.0, Slot::None, Some(lo), Some(hi));
+            let fw = write.clone();
+            let fs = st.clone();
+            field.update(cx, move |tf, _| {
+                tf.set_on_commit(move |text, window, cx| {
+                    let Ok(v) = text.trim().trim_end_matches('%').parse::<f64>() else { return };
+                    let mut np = fs.borrow().clone();
+                    if let figcraft_color::PaintKind::Pattern(pt) = &mut np.kind {
+                        setter(pt, v);
+                    }
+                    fw(np, window, cx);
+                });
+            });
+            field
+        };
+        let (lo, hi) = figcraft_color::PatternPaint::SCALE_RANGE;
+        let scale = number(cx, pat.scale * 100.0, "%", lo * 100.0, hi * 100.0, std::rc::Rc::new(move |pt, v| {
+            pt.scale = (v / 100.0).clamp(lo, hi)
+        }));
+        let gap_x = number(cx, pat.spacing.0, "", 0.0, figcraft_color::PatternPaint::MAX_SPACING, std::rc::Rc::new(|pt, v| {
+            pt.spacing.0 = v.clamp(0.0, figcraft_color::PatternPaint::MAX_SPACING)
+        }));
+        let gap_y = number(cx, pat.spacing.1, "", 0.0, figcraft_color::PatternPaint::MAX_SPACING, std::rc::Rc::new(|pt, v| {
+            pt.spacing.1 = v.clamp(0.0, figcraft_color::PatternPaint::MAX_SPACING)
+        }));
+        out.push(
+            div()
+                .w(pt(PANEL_W))
+                .h(pt(32.0))
+                .px(pt(16.0))
+                .flex()
+                .items_center()
+                .gap(pt(8.0))
+                .child(scale)
+                .child(gap_x)
+                .child(gap_y)
+                .into_any_element(),
+        );
+        let _ = cmds;
+        out
+    }
+
     /// 填充类型条（对齐 EGUI `colorpicker.rs::paint_type_row`）：
     /// 纯色 / 渐变 / 图片 / 图案 四格 24 pt 图标按钮 + 右侧混合模式按钮，底边 1 px 分隔。
     fn picker_toolbar(&self, c: &ColorState) -> gpui::Div {
@@ -4196,6 +4936,7 @@ impl WindowState {
         let write = c.paint.as_ref().map(|p| p.on_write.clone());
         let state = c.paint_state.clone();
         let grad_kind = c.grad_kind.clone();
+        let image_pending = c.image_pending.clone();
         let mut tabs = div().flex().items_center().gap(pt(4.0));
         let icons = [
             (0usize, PickerIcon::Solid, None),
@@ -4217,15 +4958,22 @@ impl WindowState {
             let write_b = write.clone();
             let state_b = state.clone();
             let gk = grad_kind.clone();
+            let pending = image_pending.clone();
             b = b.on_mouse_down(MouseButton::Left, move |_, window, cx| {
                 let (Some(w), Some(st)) = (write_b.as_ref(), state_b.as_ref()) else { return };
                 let cur = st.borrow().clone();
                 let base = cur.preview_color();
+                if i == 2 && !matches!(cur.kind, figcraft_color::PaintKind::Image(_)) {
+                    pending.set(true);
+                    window.refresh();
+                    return;
+                }
+                pending.set(false);
                 let mut np = cur;
                 np.kind = match i {
                     0 => figcraft_color::PaintKind::Solid { color: base },
                     1 => figcraft_color::PaintKind::Gradient(figcraft_color::Gradient::default_for(GRADIENT_KINDS[gk.get().min(3)], base)),
-                    2 => figcraft_color::Paint::image("", figcraft_color::ImageScaleMode::Fill).kind,
+                    2 => np.kind.clone(),
                     _ => figcraft_color::PaintKind::Pattern(figcraft_color::PatternPaint::new(0)),
                 };
                 w(np, window, cx);
@@ -5072,7 +5820,7 @@ impl WindowState {
                                     cmds.push(Cmd { id: "style.update", params: Some(json!({ "style": sid, "value": ps })) });
                                 }
                             };
-                            let picker = PaintPicker { paint: all[idx].clone(), on_write: Rc::new(write), styles: Vec::new() };
+                            let picker = PaintPicker { paint: all[idx].clone(), on_write: Rc::new(write), styles: Vec::new(), extras: PaintPickerExtras::default() };
                             let on_pick: Rc<dyn Fn(crate::canvas::geom::Color32, &mut Window, &mut App)> = Rc::new(|_, _, _| {});
                             // 走右栏统一的打开入口：触发标识 + 再点关闭 + 精确顶部一套逻辑。
                             crate::panels::right::sections::open_detached_with(
@@ -5147,7 +5895,7 @@ impl WindowState {
                         }
                         write_cmds.push(Cmd { id: "style.update", params: Some(json!({ "style": write_sid, "value": ps })) });
                     });
-                    let pick = PaintPicker { paint: paint.clone(), on_write: write, styles: Vec::new() };
+                    let pick = PaintPicker { paint: paint.clone(), on_write: write, styles: Vec::new(), extras: PaintPickerExtras::default() };
                     let on_pick: Rc<dyn Fn(crate::canvas::geom::Color32, &mut Window, &mut App)> = Rc::new(|_, _, _| {});
                     let open_cmds = self.cmds.clone();
                     // 跨帧稳定探针：与右栏色块同一机制，按下即量到真实顶部。
@@ -7059,7 +7807,7 @@ fn open_stop_color(
             write(full, window, cx);
         })
     };
-    let picker = PaintPicker { paint: figcraft_color::Paint::solid(color), on_write: write_back, styles: Vec::new() };
+    let picker = PaintPicker { paint: figcraft_color::Paint::solid(color), on_write: write_back, styles: Vec::new(), extras: PaintPickerExtras::default() };
     let on_pick: Rc<dyn Fn(Color32, &mut Window, &mut App)> = Rc::new(|_, _, _| {});
     let mut child = WindowState::color_nested(cx, at, picker_c32(color), Some(picker), Default::default(), on_pick, cmds.clone());
     child.anchor_to_button_top(at.y);
