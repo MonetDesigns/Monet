@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use super::geom::*;
 use super::outline::{crisp_line, draw_outline, node_quad, outline_colour, quad, stroke};
-use super::painter::Painter;
+use super::painter::{Painter, text_size};
 use super::rulers::fmt;
 use crate::app::CanvasApp;
 use crate::theme::{COMPONENT, SLOT, Tokens, stroke as s};
@@ -570,9 +570,18 @@ pub(super) fn pill(painter: &mut Painter, at: Pos2, align: Align2, text: String,
     pill_with_bg(painter, at, align, text, col, Color32::WHITE, under_white(col), 4.0)
 }
 
+/// 尺寸框铁律：背景块宽度 = 文字实测宽 + 左右固定边距（各 `pad_x`），高度 = 文字高 + 上下各 2；
+/// 圆角 3。文字宽度用当前字号逐字量，不写死任何总宽 —— 数字位数不同框就跟着变。
+pub(super) fn pill_rect(text: &str, at: Pos2, align: Align2, pad_x: f32) -> (Rect, Vec2) {
+    let galley_size = text_size(text, semibold(11.0));
+    let size = galley_size + vec2(pad_x * 2.0, 4.0);
+    (align.anchor_size(at, size), galley_size)
+}
+
 fn pill_with_bg(painter: &mut Painter, at: Pos2, align: Align2, text: String, _col: Color32, fg: Color32, bg: Color32, pad_x: f32) -> Rect {
     let galley = painter.layout_no_wrap(text, semibold(11.0), fg);
-    let r = align.anchor_size(at, galley.size() + vec2(pad_x * 2.0, 4.0));
+    // 用同一套「字宽 + 固定边距」公式算框，字号/边距改一处两处同步。
+    let (r, _) = pill_rect(&galley.text, at, align, pad_x);
     painter.rect_filled(r, CornerRadius::same(3), bg);
     painter.galley(r.min + vec2(pad_x, 2.0), galley, fg);
     r
@@ -598,4 +607,19 @@ fn under_white(col: Color32) -> Color32 {
 /// 一条闭合四边形轮廓（供其它模块用）。
 pub(super) fn _quad(painter: &mut Painter, q: [Pos2; 4], st: Stroke) {
     quad(painter, q, st);
+}
+
+#[cfg(test)]
+mod size_pill_tests {
+    use super::pill_rect;
+    use crate::canvas::geom::{Align2, pos2};
+
+    /// 尺寸框宽度 = 文字实测宽 + 左右各 6，高度 = 文字高 + 上下各 2；位数变化框跟着变。
+    #[test]
+    fn size_pill_width_follows_text_with_fixed_margins() {
+        let (short, _) = pill_rect("1 × 1", pos2(0.0, 0.0), Align2::CENTER_TOP, 6.0);
+        let (long, _) = pill_rect("1000 × 1000", pos2(0.0, 0.0), Align2::CENTER_TOP, 6.0);
+        assert!(long.width() > short.width() + 20.0, "{} vs {}", long.width(), short.width());
+        assert_eq!(short.height(), long.height()); // 上下边距固定 2
+    }
 }

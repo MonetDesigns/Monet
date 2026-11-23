@@ -74,11 +74,11 @@ pub fn add_variant_slot(center_x: f32, y1: f32) -> Rect {
     Rect::from_min_size(pos2(center_x - SLOT_SIZE / 2.0, y1 + ADD_VARIANT_TOP), vec2(SLOT_SIZE, SLOT_SIZE))
 }
 
-/// 这个节点是否挂「+」加变体：组件集本体，或组件集里的某个变体（选中变体时也挂加号，
-/// 与组件集一致）。`component.addVariant` 接受变体 id，引擎自己解析回它所属的 set。
-fn can_add_variant(doc: &Document, n: &figcraft_doc::Node) -> bool {
-    matches!(n.kind, NodeKind::ComponentSet { .. })
-        || (matches!(n.kind, NodeKind::Component { .. }) && figcraft_engine::components::variant_set(doc, n.id).is_some())
+/// 这个节点是否挂「+」加变体：组件集本体，或任意组件（含变体）。组件集里的变体与集本体
+/// 一样挂加号；独立组件也挂（点一下就会变成它自己的集），与右栏 `can_add_variant` 一致。
+/// `component.addVariant` 接受变体 id，引擎自己解析回它所属的 set。
+fn can_add_variant(n: &figcraft_doc::Node) -> bool {
+    matches!(n.kind, NodeKind::ComponentSet { .. } | NodeKind::Component { .. })
 }
 
 /// 对象四角（含旋转）在屏幕上的包围盒 `(x0, y0, x1, y1)`。
@@ -161,7 +161,7 @@ pub fn slot_at(app: &CanvasApp, doc: &Document, page: NodeId, sel: &[NodeId], po
                 (SlotHit::Ready(id), status)
             });
         }
-        if sel.contains(&id) && can_add_variant(doc, n) {
+        if sel.contains(&id) && can_add_variant(n) {
             let add = add_variant_slot((x0 + x1) / 2.0, y1);
             if add.contains(pos) {
                 return Some((SlotHit::AddVariant(id), add));
@@ -328,7 +328,7 @@ pub fn draw(app: &CanvasApp, painter: &mut Painter, t: &Tokens, doc: &Document, 
                     status_slot(painter, n, slot, hover_slot);
                 }
             }
-            if selected && can_add_variant(doc, n) {
+            if selected && can_add_variant(n) {
                 add_variant_button(painter, add_variant_slot((x0 + x1) / 2.0, y1));
             }
         }
