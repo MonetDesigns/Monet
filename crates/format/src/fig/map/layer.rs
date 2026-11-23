@@ -637,16 +637,22 @@ impl<'a> Mapper<'a> {
         };
         let styles: BTreeMap<u64, &Kv> =
             vd.get("styleOverrideTable").map(Kv::list).unwrap_or_default().iter().filter_map(|s| Some((num(s, "styleID")? as u64, s))).collect();
+        // The per-segment settings this importer applies: a style that carries nothing else is
+        // fully represented, so it isn't reported as unsupported.
+        const APPLIED: [&str; 7] = ["styleID", "strokeCap", "strokeJoin", "handleMirroring", "cornerRadius", "cornerSmoothing", "strokeCapSize"];
         let mut has_uninterpreted = false;
         let mut has_missing = false;
         for segment in &net.segments {
             if segment.style == 0 {
                 continue;
             }
-            if styles.contains_key(&u64::from(segment.style)) {
-                has_uninterpreted = true;
-            } else {
-                has_missing = true;
+            match styles.get(&u64::from(segment.style)) {
+                Some(style) => {
+                    if style.keys().into_iter().any(|k| !APPLIED.contains(&k)) {
+                        has_uninterpreted = true;
+                    }
+                }
+                None => has_missing = true,
             }
         }
         if has_uninterpreted {
@@ -668,6 +674,10 @@ impl<'a> Mapper<'a> {
             size.zip(norm).filter(|(s, n)| s.is_finite() && *n > 1e-9).map_or(1.0, |(s, n)| s / n)
         };
         let (sx, sy) = (scale("x"), scale("y"));
+        // A vector made from a rounded shape keeps its corner radius on the node, not on the
+        // points: apply it to every point that has none of its own, so the outline rounds as it
+        // does in the file (a point's own radius still wins).
+        let layer_radius = v.len("cornerRadius").filter(|r| *r > 0.0);
         let vertices: Vec<Value> = net
             .vertices
             .iter()
@@ -676,7 +686,8 @@ impl<'a> Mapper<'a> {
                 let st = style(p.style);
                 // Point radii are lengths in this row's space, unlike the normalized positions.
                 // An override/derived row already carries the instance's scale.
-                if let Some(r) = st.and_then(|s| num(s, "cornerRadius")).and_then(|r| scaled(r, radius_scale)).filter(|r| *r > 0.0) {
+                let point = st.and_then(|s| num(s, "cornerRadius")).and_then(|r| scaled(r, radius_scale)).filter(|r| *r > 0.0);
+                if let Some(r) = point.or(layer_radius) {
                     out["radius"] = json!(r);
                 }
                 match st.and_then(|s| s.get("handleMirroring")).and_then(Kv::str) {
@@ -685,8 +696,20 @@ impl<'a> Mapper<'a> {
                     Some("NONE") => out["mirror"] = json!("none"),
                     _ => {}
                 }
+                if let Some(cap) = st.and_then(|s| s.get("strokeCap")).and_then(Kv::str).and_then(point_cap) {
+                    out["cap"] = json!(cap);
+                }
                 if let Some(join @ ("MITER" | "BEVEL" | "ROUND")) = st.and_then(|s| s.get("strokeJoin")).and_then(Kv::str) {
                     out["join"] = json!(join.to_ascii_lowercase());
+                }
+                // A style row's corner smoothing is a fraction, like the layer's `cornerSmoothing`.
+                if let Some(sm) = st.and_then(|s| num(s, "cornerSmoothing")).filter(|v| v.is_finite() && *v >= 0.0) {
+                    out["smoothing"] = json!(sm.min(1.0));
+                }
+                // The arrow size is a multiple of the stroke weight, like the layer's caps; it
+                // belongs to the point that draws the cap, as the cap type does.
+                if let Some(size) = st.and_then(|s| num(s, "strokeCapSize")).filter(|v| v.is_finite() && *v > 0.0) {
+                    out["capSize"] = json!(size.min(100.0));
                 }
                 out
             })
@@ -825,6 +848,22 @@ pub(super) fn cap_name(cap: &str) -> &str {
         "ARROW_EQUILATERAL" => "TRIANGLE_ARROW",
         c => c,
     }
+}
+
+/// A per-point stroke cap as the document names it (`StrokeCap`'s own spelling), or `None` for a
+/// value the document has no cap for.
+fn point_cap(cap: &str) -> Option<&'static str> {
+    Some(match cap {
+        "NONE" => "none",
+        "ROUND" => "round",
+        "SQUARE" => "square",
+        "ARROW_LINES" => "lineArrow",
+        "ARROW_EQUILATERAL" => "triangleArrow",
+        "REVERSED_TRIANGLE" => "reversedTriangle",
+        "CIRCLE_FILLED" => "circleFilled",
+        "DIAMOND_FILLED" => "diamondFilled",
+        _ => return None,
+    })
 }
 
 /// The layer kind (and how the warning names it) that a layer the editor has no counterpart for

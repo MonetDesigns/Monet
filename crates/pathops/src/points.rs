@@ -52,6 +52,11 @@ impl Styled {
         if self.breaks(v) { StrokeCap::None } else { self.net.vertices.get(v).and_then(|x| x.cap).unwrap_or(layer) }
     }
 
+    /// The size multiplier of the cap drawn at point `v`: its own, else 1.
+    fn cap_size_at(&self, v: usize) -> f64 {
+        self.net.vertices.get(v).and_then(|x| x.cap_size).unwrap_or(1.0)
+    }
+
     /// The stroke centred at `width`.
     pub(crate) fn outline(&self, width: f64, props: &StrokeProps) -> BezPath {
         let mut out = BezPath::new();
@@ -66,10 +71,23 @@ impl Styled {
         }
         // Each point's own join: a short corner along its two segments stroked with that join.
         let reach = (width * 0.05).max(0.2);
+        // Segments per point, built once (a scan of every segment per point is quadratic); like `incident`, a loop segment counts at its `a` end only.
+        // Only points that draw a join of their own get a list.
+        let mut incident: std::collections::HashMap<usize, Vec<(usize, bool)>> =
+            (0..self.net.vertices.len()).filter(|v| self.breaks(*v)).map(|v| (v, Vec::new())).collect();
+        for (i, s) in self.net.segments.iter().enumerate() {
+            if let Some(list) = incident.get_mut(&s.a) {
+                list.push((i, true));
+            }
+            if s.b != s.a
+                && let Some(list) = incident.get_mut(&s.b)
+            {
+                list.push((i, false));
+            }
+        }
         for (v, x) in self.net.vertices.iter().enumerate() {
             let Some(join) = x.join.filter(|_| self.breaks(v)) else { continue };
-            let inc = self.net.incident(v);
-            let [(s1, a1), (s2, a2)] = inc.as_slice() else { continue };
+            let Some([(s1, a1), (s2, a2)]) = incident.get(&v).map(Vec::as_slice) else { continue };
             let (Some(d1), Some(d2)) = (self.net.tangent_out(*s1, *a1), self.net.tangent_out(*s2, *a2)) else { continue };
             let p = x.point();
             let mut corner = BezPath::new();
@@ -90,9 +108,9 @@ impl Styled {
         for (k, run) in self.runs.iter().filter(|r| !r.closed).enumerate() {
             let start = self.cap_at(run.start, if k == 0 { props.cap_start } else { StrokeCap::None });
             let end = self.cap_at(run.end, if k == last { props.cap_end } else { StrokeCap::None });
-            for (at_end, cap) in [(false, start), (true, end)] {
+            for (at_end, cap, vertex) in [(false, start, run.start), (true, end, run.end)] {
                 if cap.is_arrow()
-                    && let Some(head) = crate::arrowhead(&run.path, cap, weight, at_end)
+                    && let Some(head) = crate::arrowhead_sized(&run.path, cap, weight, at_end, self.cap_size_at(vertex))
                 {
                     out.extend(head.elements().iter().copied());
                 }

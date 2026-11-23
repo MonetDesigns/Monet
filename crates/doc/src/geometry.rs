@@ -29,8 +29,9 @@ pub fn shape_path(n: &Node) -> Option<BezPath> {
             p
         }
         NodeKind::Vector { network } => {
-            let f = network.fill_path();
-            if f.elements().is_empty() { network.stroke_path() } else { f }
+            let net = drawn_network(network, c.smoothing);
+            let f = net.fill_path();
+            if f.elements().is_empty() { net.stroke_path() } else { f }
         }
         NodeKind::Text(_) => figcraft_geom::rounded_rect(w, h, [0.0; 4], 0.0),
         NodeKind::Page { .. } | NodeKind::Group | NodeKind::BooleanOp { .. } => return None,
@@ -40,7 +41,7 @@ pub fn shape_path(n: &Node) -> Option<BezPath> {
 /// The open/closed path strokes follow (vector networks stroke every segment, filled or not).
 pub fn stroke_geometry(n: &Node) -> Option<BezPath> {
     match &n.kind {
-        NodeKind::Vector { network } => Some(network.stroke_path()),
+        NodeKind::Vector { network } => Some(drawn_network(network, n.corners.smoothing).stroke_path()),
         _ => shape_path(n),
     }
 }
@@ -96,7 +97,7 @@ fn hits_node_itself(doc: &Document, id: NodeId, n: &Node, pt: Point, tol: f64, o
 /// [`VectorNetwork::fill_contains`](crate::VectorNetwork::fill_contains): even-odd when any region asks for it).
 fn fills_point(n: &Node, path: &BezPath, lp: Point) -> bool {
     match &n.kind {
-        NodeKind::Vector { network } => network.fill_contains(lp),
+        NodeKind::Vector { network } => drawn_network(network, n.corners.smoothing).fill_contains(lp),
         _ => path.winding(lp) != 0,
     }
 }

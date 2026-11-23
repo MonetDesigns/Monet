@@ -1,10 +1,4 @@
 //! Path simplification that keeps to its input where kurbo's fit would shoot past it.
-//!
-//! Ported from upstream figcraft. kurbo's `simplify_bezpath` fits two common pointer shapes with a
-//! curve that runs far
-//! off the samples: a stroke that goes out and back to the point it left (kurbo keeps a reversal
-//! as a smooth join) and nearly collinear samples (kurbo measures its error across the path, not
-//! along it). That is the "the circle suddenly flies off" report.
 
 use kurbo::{BezPath, ParamCurve, ParamCurveNearest, PathEl, PathSeg, Point, Vec2};
 
@@ -17,10 +11,19 @@ const STRAY: f64 = 2.0;
 /// `path` simplified to within `accuracy` by kurbo's [`simplify_bezpath`], kept from straying
 /// far from `path` where kurbo's fit does.
 ///
-/// The path is cut where it turns back by more than a right angle, each run between the cuts is
-/// simplified on its own, and the runs are joined again, so a reversal stays a sharp corner. Each
-/// fitted run is then measured against the run it replaces, and one that strays more than twice
-/// `accuracy` from it is kept as it was instead.
+/// Two inputs made kurbo's fit shoot far past the path it simplified (#1741, a Pencil stroke with
+/// a spike off it), and both are common in pointer samples:
+/// - A join where the path turns straight back (samples going down and back up the same line):
+///   kurbo keeps two segments in one smooth fit when their tangents are parallel whichever way
+///   they point (`|cross| <= |dot| * angle_thresh`), so it fits a smooth curve through the cusp.
+///   The path is cut where it turns back by more than a right angle, each run between the cuts is
+///   simplified on its own, and the runs are joined again, so the turn stays a sharp corner. Any
+///   other join that isn't straight within kurbo's threshold is a corner to kurbo already, so the
+///   cut changes nothing there.
+/// - A run of nearly collinear segments: kurbo measures its error across the path, not along it, so
+///   a fitted cubic whose handle runs hundreds of units on along the line passes its check. Each
+///   fitted run is measured against the run it replaces, and one that strays more than
+///   twice `accuracy` from it is kept as it was instead.
 ///
 /// Subpaths and closes are kept, and a closing segment stays implicit, as kurbo leaves it.
 ///

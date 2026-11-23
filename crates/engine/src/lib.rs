@@ -238,6 +238,8 @@ mod boolean_cap_tests;
 #[cfg(test)]
 mod booleans_tests;
 #[cfg(test)]
+mod boolean_radius_tests;
+#[cfg(test)]
 mod bound_alpha_tests;
 #[cfg(test)]
 mod branch_live_tests;
