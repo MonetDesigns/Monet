@@ -3203,7 +3203,7 @@ mod cmd_queue_tests {
 /// `if`（或 `section_header(..., empty)`），防止装配层再次退化成「无条件全画」。
 #[cfg(test)]
 mod visibility_tests {
-    use super::{HeaderSel, PanelSel, visibility};
+    use super::{HeaderSel, PanelSel, point_axis_value, visibility};
 
     /// `参考实现 right.rs::header` 的分支：Frame / Group / Text / 形状 / 组件 / 已选矢量点。
     #[test]

@@ -558,9 +558,9 @@ fn transform_box(
         // Keep the requested layer-colour background, but choose a legible foreground: a light
         // Yellow (#FFCC00) with white text was ~1.5:1. Dark ink on light fills, white on dark.
         let fg = contrasting_ink(col);
-        // 尺寸框：顶边在对象下边缘下方 7（2026-11-22 设计稿），左右各 6、上下各 2 的内边距
-        // （设计稿 61×17 的块 = 49 的文字 + 6+6 / 13 + 2+2），圆角 3。
-        return Some(pill_with_bg(painter, pos2(cx, bottom + 7.0), Align2::CENTER_TOP, label, col, fg, col, 6.0));
+        // 尺寸框铁律：文字框顶边距对象下边缘 9；背景块距文字上下各 2、左右各 6，圆角 3。
+        // （`pill_with_bg` 的 `+ vec2(pad_x*2, 4)` 与 `galley` 的 `+2` 纵向内缩即上下 2。）
+        return Some(pill_with_bg(painter, pos2(cx, bottom + 9.0), Align2::CENTER_TOP, label, col, fg, col, 6.0));
     }
     None
 }

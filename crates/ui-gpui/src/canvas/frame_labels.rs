@@ -54,7 +54,7 @@ fn name_hits_status(doc: &Document, id: NodeId, x: f32, x1: f32, y0: f32) -> boo
 /// 图标槽底边在对象上边缘**之上**的距离（设计稿 6）：两个槽与名称同一行，坐在对象上边缘外面。
 pub const SLOT_ABOVE: f32 = 6.0;
 /// 变体组「+」的顶边：对象下边缘 + 尺寸框 7 + 尺寸框高 17 + 间距 4。
-pub const ADD_VARIANT_TOP: f32 = 28.0;
+pub const ADD_VARIANT_TOP: f32 = 30.0;
 /// 组件 / 组件集名称的前缀：❖ 加一个空格（设计稿；改名时不显示）。
 pub const COMPONENT_MARK: &str = "\u{2756} ";
 
@@ -72,6 +72,13 @@ pub fn name_slots(x1: f32, y0: f32) -> [Rect; 2] {
 /// 变体组「+」按钮的矩形：16×16，水平居中在对象上，顶边 = 对象下边缘 + [`ADD_VARIANT_TOP`]。
 pub fn add_variant_slot(center_x: f32, y1: f32) -> Rect {
     Rect::from_min_size(pos2(center_x - SLOT_SIZE / 2.0, y1 + ADD_VARIANT_TOP), vec2(SLOT_SIZE, SLOT_SIZE))
+}
+
+/// 这个节点是否挂「+」加变体：组件集本体，或组件集里的某个变体（选中变体时也挂加号，
+/// 与组件集一致）。`component.addVariant` 接受变体 id，引擎自己解析回它所属的 set。
+fn can_add_variant(doc: &Document, n: &figcraft_doc::Node) -> bool {
+    matches!(n.kind, NodeKind::ComponentSet { .. })
+        || (matches!(n.kind, NodeKind::Component { .. }) && figcraft_engine::components::variant_set(doc, n.id).is_some())
 }
 
 /// 对象四角（含旋转）在屏幕上的包围盒 `(x0, y0, x1, y1)`。
@@ -154,7 +161,7 @@ pub fn slot_at(app: &CanvasApp, doc: &Document, page: NodeId, sel: &[NodeId], po
                 (SlotHit::Ready(id), status)
             });
         }
-        if sel.contains(&id) && matches!(n.kind, NodeKind::ComponentSet { .. }) {
+        if sel.contains(&id) && can_add_variant(doc, n) {
             let add = add_variant_slot((x0 + x1) / 2.0, y1);
             if add.contains(pos) {
                 return Some((SlotHit::AddVariant(id), add));
@@ -321,7 +328,7 @@ pub fn draw(app: &CanvasApp, painter: &mut Painter, t: &Tokens, doc: &Document, 
                     status_slot(painter, n, slot, hover_slot);
                 }
             }
-            if selected && matches!(n.kind, NodeKind::ComponentSet { .. }) {
+            if selected && can_add_variant(doc, n) {
                 add_variant_button(painter, add_variant_slot((x0 + x1) / 2.0, y1));
             }
         }
@@ -385,11 +392,11 @@ mod tests {
         assert_eq!(STATUS_GREEN_HOVER.to_array(), [0x00, 0x99, 0x51, 255]);
     }
 
-    /// 变体组的「+」：16×16、水平居中，顶边 = 对象下边缘 + 尺寸框 7 + 框高 17 + 间距 4。
+    /// 变体组的「+」：16×16、水平居中，顶边 = 对象下边缘 + 尺寸框 9 + 框高 17 + 间距 4 = 30。
     #[test]
     fn the_add_variant_button_sits_below_the_size_pill() {
         let r = add_variant_slot(200.0, 403.0);
-        assert_eq!((r.min.x, r.min.y, r.width(), r.height()), (192.0, 431.0, 16.0, 16.0));
+        assert_eq!((r.min.x, r.min.y, r.width(), r.height()), (192.0, 433.0, 16.0, 16.0));
         assert_eq!(r.center().x, 200.0);
     }
 }
