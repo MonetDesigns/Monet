@@ -81,6 +81,7 @@ const BRANCH_INDEX: &str = "branches/index.json";
 /// Most branches a file keeps: making more is refused, extra entries in a file are skipped.
 pub const MAX_BRANCHES: usize = 100;
 /// Deflate level of JSON members (see [`json_options`]).
+/// Compression level for the JSON members the local `.fig` writer and legacy fixtures emit.
 const JSON_LEVEL: i64 = 3;
 
 #[derive(Debug)]

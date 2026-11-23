@@ -14,8 +14,9 @@ pub fn shape_path(n: &Node) -> Option<BezPath> {
         | NodeKind::Component { .. }
         | NodeKind::ComponentSet { .. }
         | NodeKind::Instance { .. }
-        | NodeKind::Icon { .. }
         | NodeKind::Section { .. } => figcraft_geom::rounded_rect(w, h, c.radii, c.smoothing),
+        // Icon layers are Monet-only and drawn as their box.
+        NodeKind::Icon { .. } => figcraft_geom::rounded_rect(w, h, c.radii, c.smoothing),
         NodeKind::Slice => figcraft_geom::rounded_rect(w, h, [0.0; 4], 0.0),
         NodeKind::Ellipse { start, sweep, inner } => figcraft_geom::ellipse(w, h, *start, *sweep, *inner),
         NodeKind::Polygon { count } => figcraft_geom::smoothed_polygon(&figcraft_geom::polygon_points(w, h, *count), c.radii[0], c.smoothing),
@@ -83,18 +84,33 @@ fn hits_node_itself(doc: &Document, id: NodeId, n: &Node, pt: Point, tol: f64, o
             let half = (n.stroke.weight / 2.0).max(tol_l * STROKE_REACH);
             lp.x >= -half && lp.x <= n.width + half && lp.y.abs() <= half
         }
-        NodeKind::Frame
-        | NodeKind::Component { .. }
-        | NodeKind::ComponentSet { .. }
-        | NodeKind::Instance { .. }
-        | NodeKind::Icon { .. }
-        | NodeKind::Section { .. } => n.local_rect().inflate(tol_l, tol_l).contains(lp),
+        NodeKind::Frame | NodeKind::Component { .. } | NodeKind::ComponentSet { .. } | NodeKind::Instance { .. } | NodeKind::Section { .. } => {
+            n.local_rect().inflate(tol_l, tol_l).contains(lp)
+        }
+        NodeKind::Vector { network } if network.regions.iter().any(|r| r.fills.is_some() || r.paint_space.is_some()) => {
+            let drawn = drawn_network(network, n.corners.smoothing);
+            let net = drawn.as_ref();
+            if !outline {
+                for (i, region) in net.regions.iter().enumerate().rev() {
+                    let paints = region.fills.as_deref().unwrap_or(&n.fills);
+                    if paints.iter().any(|p| p.visible) && net.region_contains(i, lp) {
+                        return true;
+                    }
+                }
+            }
+            let path = net.stroke_path();
+            let has_fill = net.regions.iter().any(|region| region.fills.as_deref().unwrap_or(&n.fills).iter().any(|paint| paint.visible));
+            let stroke_only = n.has_visible_stroke() && !has_fill;
+            let reach = (n.stroke.max_weight() / 2.0).max(if stroke_only { tol_l * STROKE_REACH } else { tol_l });
+            path.bounding_box().inflate(reach, reach).contains(lp) && near_path(&path, lp, reach)
+        }
         _ => shape_path(n).is_some_and(|path| hits_path(n, &path, lp, tol_l, !outline && is_closed(n) && fills_point(n, &path, lp))),
     }
 }
 
 /// Whether the fill of `n`, drawn as `path`, covers `lp` (vectors follow the rule of
-/// [`VectorNetwork::fill_contains`](crate::VectorNetwork::fill_contains): even-odd when any region asks for it).
+/// [`VectorNetwork::fill_contains`](crate::VectorNetwork::fill_contains) on the network as drawn: even-odd when any
+/// region asks for it).
 fn fills_point(n: &Node, path: &BezPath, lp: Point) -> bool {
     match &n.kind {
         NodeKind::Vector { network } => drawn_network(network, n.corners.smoothing).fill_contains(lp),
@@ -138,7 +154,7 @@ fn near_path(path: &BezPath, p: Point, dist: f64) -> bool {
 /// boolean groups are hit where their `result` is.
 pub fn hit_leaf(doc: &Document, page: NodeId, pt: Point, tol: f64, result: BoolResult) -> Option<NodeId> {
     let p = doc.node(page)?;
-    p.children.iter().rev().find_map(|c| hit_rec(doc, *c, pt, tol, 0, result, None).filter(|_| !masked_out(doc, p, *c, pt)))
+    p.children.iter().rev().find_map(|c| hit_rec(doc, *c, pt, tol, 0, result, None, HitOpts::default()).filter(|_| !masked_out(doc, p, *c, pt)))
 }
 
 /// Whether child `c` of `parent` is masked at `pt`: a visible mask below it (the nearest mask
@@ -161,7 +177,7 @@ fn covers(doc: &Document, id: NodeId, n: &Node, pt: Point, depth: usize) -> bool
 
 /// Like [`hit_leaf`], but only within layer `root` (it included).
 pub fn hit_in(doc: &Document, root: NodeId, pt: Point, tol: f64, result: BoolResult) -> Option<NodeId> {
-    hit_rec(doc, root, pt, tol, 0, result, None)
+    hit_rec(doc, root, pt, tol, 0, result, None, HitOpts::default())
 }
 
 /// [`hit_leaf`] (or [`hit_in`] for a `root` that isn't a page) in outline mode: shapes are hit
@@ -171,8 +187,8 @@ pub fn hit_in(doc: &Document, root: NodeId, pt: Point, tol: f64, result: BoolRes
 /// when it shows them, and every layer on the edge of its box when it shows object bounds.
 pub fn hit_outlines(doc: &Document, root: NodeId, pt: Point, tol: f64, result: BoolResult, also: OutlineHits) -> Option<NodeId> {
     match doc.node(root) {
-        Some(p) if p.is_page() => p.children.iter().rev().find_map(|c| hit_rec(doc, *c, pt, tol, 0, result, Some(also))),
-        _ => hit_rec(doc, root, pt, tol, 0, result, Some(also)),
+        Some(p) if p.is_page() => p.children.iter().rev().find_map(|c| hit_rec(doc, *c, pt, tol, 0, result, Some(also), HitOpts::default())),
+        _ => hit_rec(doc, root, pt, tol, 0, result, Some(also), HitOpts::default()),
     }
 }
 
@@ -190,13 +206,30 @@ fn on_box_edge(doc: &Document, id: NodeId, n: &Node, pt: Point, tol: f64) -> boo
     r.inflate(tol, tol).contains(lp) && !(r.width() > 2.0 * tol && r.height() > 2.0 * tol && r.inflate(-tol, -tol).contains(lp))
 }
 
-fn hit_rec(doc: &Document, id: NodeId, pt: Point, tol: f64, depth: usize, result: BoolResult, also: Option<OutlineHits>) -> Option<NodeId> {
+/// Options for the hit tests that the plain pick never sets.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HitOpts {
+    /// Reach locked layers (and what a locked frame holds) too. A click, hover or marquee never
+    /// does; the Select layer list does.
+    pub locked: bool,
+}
+
+fn hit_rec(
+    doc: &Document,
+    id: NodeId,
+    pt: Point,
+    tol: f64,
+    depth: usize,
+    result: BoolResult,
+    also: Option<OutlineHits>,
+    opts: HitOpts,
+) -> Option<NodeId> {
     if depth > 512 {
         return None;
     }
     let n = doc.node(id)?;
     let outline = also.is_some();
-    if (!n.visible && !also.is_some_and(|a| a.hidden)) || n.locked {
+    if (!n.visible && !also.is_some_and(|a| a.hidden)) || n.locked && !opts.locked {
         return None;
     }
     if let NodeKind::Section { contents_hidden: true } = n.kind {
@@ -214,7 +247,7 @@ fn hit_rec(doc: &Document, id: NodeId, pt: Point, tol: f64, depth: usize, result
         return None;
     }
     for c in n.paint_order().rev() {
-        if let Some(h) = hit_rec(doc, c, pt, tol, depth + 1, result, also).filter(|_| !masked_out(doc, n, c, pt)) {
+        if let Some(h) = hit_rec(doc, c, pt, tol, depth + 1, result, also, opts).filter(|_| !masked_out(doc, n, c, pt)) {
             return Some(h);
         }
     }
@@ -225,14 +258,20 @@ fn hit_rec(doc: &Document, id: NodeId, pt: Point, tol: f64, depth: usize, result
     None
 }
 
-/// Every visible, unlocked layer under `pt` (page coordinates) with its depth below the page, in
-/// layer-tree order (each layer before what it contains, the front-most first): what
-/// "Select layer" in the context menu lists. Clip content is honoured; boolean groups (hit where
-/// their `result` is) and sections with hidden contents count as one layer.
+/// Every visible, unlocked layer under `pt`: [`layers_at_opts`] with the default options.
 pub fn layers_at(doc: &Document, page: NodeId, pt: Point, tol: f64, result: BoolResult) -> Vec<(NodeId, usize)> {
-    fn rec(doc: &Document, id: NodeId, pt: Point, tol: f64, depth: usize, result: BoolResult, out: &mut Vec<(NodeId, usize)>) {
+    layers_at_opts(doc, page, pt, tol, result, HitOpts::default())
+}
+
+/// Every visible layer under `pt` (page coordinates) with its depth below the page, in
+/// layer-tree order (each layer before what it contains, the front-most first): what
+/// "Select layer" in the context menu lists. Locked layers are left out unless `opts.locked`.
+/// Clip content is honoured; boolean groups (hit where their `result` is) and sections with
+/// hidden contents count as one layer.
+pub fn layers_at_opts(doc: &Document, page: NodeId, pt: Point, tol: f64, result: BoolResult, opts: HitOpts) -> Vec<(NodeId, usize)> {
+    fn rec(doc: &Document, id: NodeId, pt: Point, tol: f64, depth: usize, result: BoolResult, opts: HitOpts, out: &mut Vec<(NodeId, usize)>) {
         let Some(n) = doc.node(id) else { return };
-        if !n.visible || n.locked || depth > 512 {
+        if !n.visible || n.locked && !opts.locked || depth > 512 {
             return;
         }
         let clips = n.clip && n.kind.is_frame_like();
@@ -242,14 +281,14 @@ pub fn layers_at(doc: &Document, page: NodeId, pt: Point, tol: f64, result: Bool
         let at = out.len();
         let whole = matches!(n.kind, NodeKind::BooleanOp { .. } | NodeKind::Section { contents_hidden: true });
         if whole {
-            if hit_rec(doc, id, pt, tol, depth, result, None).is_some() {
+            if hit_rec(doc, id, pt, tol, depth, result, None, opts).is_some() {
                 out.push((id, depth));
             }
             return;
         }
         for c in n.paint_order().rev() {
             let before = out.len();
-            rec(doc, c, pt, tol, depth + 1, result, out);
+            rec(doc, c, pt, tol, depth + 1, result, opts, out);
             if out.len() > before && masked_out(doc, n, c, pt) {
                 out.truncate(before);
             }
@@ -262,7 +301,7 @@ pub fn layers_at(doc: &Document, page: NodeId, pt: Point, tol: f64, result: Bool
     if let Some(p) = doc.node(page) {
         for c in p.children.iter().rev() {
             let before = out.len();
-            rec(doc, *c, pt, tol, 0, result, &mut out);
+            rec(doc, *c, pt, tol, 0, result, opts, &mut out);
             if out.len() > before && masked_out(doc, p, *c, pt) {
                 out.truncate(before);
             }
@@ -341,14 +380,15 @@ pub fn enter_target(doc: &Document, leaf: NodeId, selection: &[NodeId]) -> NodeI
     inner.unwrap_or_else(|| select_target(doc, leaf, selection, false))
 }
 
-/// Nodes on `page` whose world bounds intersect `rect` (marquee): top-level children, or the
-/// children of top-level frames when the marquee starts inside a frame (`within`).
+/// Nodes a marquee over `rect` touches, one level only: the children of `within` (a focus view's
+/// frame), or the top-level layers of `page`. Frames are not opened or enclosed here; see
+/// [`marquee_select`] for a plain marquee.
 pub fn marquee(doc: &Document, page: NodeId, rect: Rect, within: Option<NodeId>) -> Vec<NodeId> {
     let parent = within.unwrap_or(page);
     doc.node(parent).map(|p| marquee_children(doc, p, rect)).unwrap_or_default()
 }
 
-/// Nodes on `page` a Cmd/Ctrl marquee selects: the innermost layers whose bounds touch `rect`
+/// Nodes on `page` a Cmd/Ctrl marquee selects: the innermost layers the marquee touches
 /// (frames, groups and instances are looked into; a container none of whose children are touched
 /// counts itself; boolean groups count as one shape).
 pub fn marquee_deep(doc: &Document, page: NodeId, rect: Rect) -> Vec<NodeId> {
@@ -435,7 +475,6 @@ fn path_touches_rect(n: &Node, path: &BezPath, xf: figcraft_geom::Affine, rect: 
     }
     is_closed(n) && fills_point(n, path, xf.inverse() * tl)
 }
-
 
 /// Whether a marquee takes a touched top-level layer whole, opens it for the layers in it, or skips it.
 enum Touch {
