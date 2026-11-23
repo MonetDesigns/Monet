@@ -1,8 +1,10 @@
 <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-<path d="M3 8L8 3L13 8L8 13L3 8Z" fill="black"/>
 <mask id="stroke0_840_549" maskUnits="userSpaceOnUse" x="2" y="2" width="12" height="12" fill="black">
 <rect fill="white" x="2" y="2" width="12" height="12"/>
-<path d="M3 8L8 3L13 8L8 13L3 8Z"/>
+<path d="M8 2.1L10.2 4.3L8 6.5L5.8 4.3L8 2.1Z"/>
+<path d="M11.7 5.8L13.9 8L11.7 10.2L9.5 8L11.7 5.8Z"/>
+<path d="M8 9.5L10.2 11.7L8 13.9L5.8 11.7L8 9.5Z"/>
+<path d="M4.3 5.8L6.5 8L4.3 10.2L2.1 8L4.3 5.8Z"/>
 </mask>
-<path d="M3 8L8 3L13 8L8 13L3 8Z" stroke-width="1" stroke-linejoin="round" stroke="black" mask="url(#stroke0_840_549)"/>
+<path d="M8 2.1L10.2 4.3L8 6.5L5.8 4.3L8 2.1ZM11.7 5.8L13.9 8L11.7 10.2L9.5 8L11.7 5.8ZM8 9.5L10.2 11.7L8 13.9L5.8 11.7L8 9.5ZM4.3 5.8L6.5 8L4.3 10.2L2.1 8L4.3 5.8Z" stroke-width="1" stroke-linejoin="round" stroke="black" mask="url(#stroke0_840_549)"/>
 </svg>

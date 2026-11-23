@@ -31,12 +31,14 @@ use handles::DRAG_SLOP_PX;
 /// 顶层画框的「本体」：文档里它和画布一样（按下是框选），只有标题文字能选中它。
 ///
 /// 自动布局的画框例外——它的本体就是设计面，点本体直接选中。
+/// 组件集（含变体的大组件）即使带了自动布局也算本体背景：它和画布一样，
+/// 只有名称文字（或按住 Ctrl 穿透）才选中，本体悬停不画误导性的描边。
 pub(crate) fn frame_background(doc: &Document, page: NodeId, leaf: NodeId) -> bool {
     doc.node(leaf).is_some_and(|n| {
         n.parent == Some(page)
             && n.kind.is_frame_like()
             && !n.children.is_empty()
-            && n.layout.is_none()
+            && (n.layout.is_none() || matches!(n.kind, NodeKind::ComponentSet { .. }))
             && !crate::widgets::is_widget(n)
             && !n.is_board_atom()
     })
@@ -802,5 +804,46 @@ mod draw_style_tests {
         assert!(t.draw_style(ToolId::Brush).is_some());
         assert!(t.draw_style(ToolId::Pencil).is_some());
         assert!(t.draw_style(ToolId::Move).is_none());
+    }
+}
+
+#[cfg(test)]
+mod frame_background_tests {
+    use super::frame_background;
+    use figcraft_doc::{AutoLayout, Document, NodeKind};
+
+    /// 顶层画框本体 == 画布：有子物体、无 layout 时算背景；空画框不算（要能选中拖动）。
+    #[test]
+    fn a_populated_plain_frame_is_background_but_an_empty_one_is_not() {
+        let mut d = Document::new("x");
+        let page = d.first_page().unwrap();
+        let full = d.create(page, NodeKind::Frame, "Full", 0.0, 0.0, 100.0, 100.0).unwrap();
+        d.create(full, NodeKind::Rectangle, "child", 0.0, 0.0, 10.0, 10.0).unwrap();
+        let empty = d.create(page, NodeKind::Frame, "Empty", 0.0, 0.0, 100.0, 100.0).unwrap();
+        assert!(frame_background(&d, page, full));
+        assert!(!frame_background(&d, page, empty));
+    }
+
+    /// 自动布局 frame 的本体是设计面：不算背景（点本体直接选中）。
+    #[test]
+    fn an_auto_layout_frame_body_is_not_background() {
+        let mut d = Document::new("x");
+        let page = d.first_page().unwrap();
+        let frame = d.create(page, NodeKind::Frame, "Auto", 0.0, 0.0, 100.0, 100.0).unwrap();
+        d.create(frame, NodeKind::Rectangle, "child", 0.0, 0.0, 10.0, 10.0).unwrap();
+        d.get_mut(frame).unwrap().layout = Some(AutoLayout::default());
+        assert!(!frame_background(&d, page, frame));
+    }
+
+    /// 组件集（含变体的大组件）即使带 layout 也算本体背景：悬停/点击都只认名称文字，
+    /// 与「本体悬停无描边、Ctrl 穿透选中」保持一致。
+    #[test]
+    fn a_component_set_is_background_even_with_auto_layout() {
+        let mut d = Document::new("x");
+        let page = d.first_page().unwrap();
+        let set = d.create(page, NodeKind::ComponentSet { description: String::new() }, "Set", 0.0, 0.0, 100.0, 100.0).unwrap();
+        d.create(set, NodeKind::Component { description: String::new(), props: Default::default(), prop_order: Vec::new() }, "variant", 0.0, 0.0, 10.0, 10.0).unwrap();
+        d.get_mut(set).unwrap().layout = Some(AutoLayout::default());
+        assert!(frame_background(&d, page, set), "组件集本体即使带 layout 也算背景");
     }
 }
