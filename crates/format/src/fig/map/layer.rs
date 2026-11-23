@@ -674,6 +674,10 @@ impl<'a> Mapper<'a> {
             size.zip(norm).filter(|(s, n)| s.is_finite() && *n > 1e-9).map_or(1.0, |(s, n)| s / n)
         };
         let (sx, sy) = (scale("x"), scale("y"));
+        // A vector made from a rounded shape keeps its corner radius on the node, not on the
+        // points: apply it to every point that has none of its own, so the outline rounds as it
+        // does in the file (a point's own radius still wins).
+        let layer_radius = v.len("cornerRadius").filter(|r| *r > 0.0);
         let vertices: Vec<Value> = net
             .vertices
             .iter()
@@ -682,7 +686,8 @@ impl<'a> Mapper<'a> {
                 let st = style(p.style);
                 // Point radii are lengths in this row's space, unlike the normalized positions.
                 // An override/derived row already carries the instance's scale.
-                if let Some(r) = st.and_then(|s| num(s, "cornerRadius")).and_then(|r| scaled(r, radius_scale)).filter(|r| *r > 0.0) {
+                let point = st.and_then(|s| num(s, "cornerRadius")).and_then(|r| scaled(r, radius_scale)).filter(|r| *r > 0.0);
+                if let Some(r) = point.or(layer_radius) {
                     out["radius"] = json!(r);
                 }
                 match st.and_then(|s| s.get("handleMirroring")).and_then(Kv::str) {

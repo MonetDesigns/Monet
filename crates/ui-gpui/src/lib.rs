@@ -661,6 +661,10 @@ pub struct PaneState {
     /// 是哪一个」，控件状态由它自己保留。
     dialog: Option<dialogs::DialogState>,
 
+    /// 打开文件后待查缺失字体的文档（`ui-egui/src/dialogs/missing_fonts.rs::check_later` 的
+    /// `font_checks`）：字体索引完成、且没有别的对话框在等时才查，免得先报一堆「全缺」。
+    font_checks: Vec<u64>,
+
     /// 原型演示（None = 未打开）。
     present: Option<present::PresentState>,
     /// 演示标签栏（eGUI `app.ui.presents`）：每个演示一个 tab，切回设计保留播放器状态。
@@ -1277,6 +1281,8 @@ impl CanvasView {
             board_fac: std::rc::Rc::new(std::cell::RefCell::new(board_facilitate::State::default())),
 
             dialog: None,
+
+            font_checks: Vec::new(),
 
             present: None,
             present_tabs: Vec::new(),
@@ -3746,8 +3752,38 @@ impl CanvasView {
     /// A12：导入报告的判定与数据在 [`dialogs::import_report_data`]（纯函数、可单测）；
     /// 这里只负责在命令成功后把它交给通用对话框壳。
     fn capture_import_report(&mut self, command: &str, params: &serde_json::Value, result: &serde_json::Value, cx: &mut Context<Self>) {
+        // 字体检查与导入报告一样，都在「命令成功后」这里收敛（egui `app/commands.rs` 的
+        // `missing_fonts::check_later`）。字体索引在后台完成，这里只入队 uid，等索引完成后
+        // 再查，免得刚打开就把所有字体报成缺失。
+        if matches!(command, "file.open" | "file.openRecent" | "file.import")
+            && result.get("summary").is_some()
+            && let Ok(ds) = self.app.session.ds()
+        {
+            let uid = ds.uid;
+            if !self.font_checks.contains(&uid) {
+                self.font_checks.push(uid);
+            }
+        }
         if let Some(data) = dialogs::import_report_data(command, params, result) {
             self.open_dialog(dialogs::Kind::ImportReport, &data, cx);
+        }
+    }
+
+    /// 打开文件后入队的文档，等字体索引完成、且没有别的对话框在等时才查缺失字体
+    /// （egui `missing_fonts::list_when_known`）。没有缺失就安静跳过，不弹空清单。
+    fn sync_font_checks(&mut self, cx: &mut Context<Self>) {
+        if self.font_checks.is_empty() || self.dialog.is_some() || !figcraft_text::installed_fonts_known() {
+            return;
+        }
+        let uid = self.font_checks.remove(0);
+        let has_missing = {
+            let Ok(ds) = self.app.session.ds() else { return };
+            ds.uid == uid && !figcraft_engine::fonts::missing(&ds.doc).is_empty()
+        };
+        if has_missing {
+            let _ = self.app.session.execute("text.missingFonts", &serde_json::json!({}));
+            self.stamp_ui_requests();
+            cx.notify();
         }
     }
 
@@ -5621,6 +5657,10 @@ impl Render for CanvasView {
         // 要等到下一帧才看得见。播放中的续帧也由这里推进时钟。
 
         self.sync_motion(cx);
+
+        // 字体索引在后台完成：打开文件后入队的缺失字体检查到这里才可能弹窗。
+
+        self.sync_font_checks(cx);
 
         // 引擎 ui_requests：先消费命令留下的 UI 请求（切标签 / 开面板），再同步 Dev Mode。
 
