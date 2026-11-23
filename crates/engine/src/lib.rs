@@ -17,6 +17,7 @@ pub mod catalog;
 pub mod cmd;
 mod content;
 mod dev;
+pub mod devices;
 pub mod events;
 mod extensions;
 pub mod fonts;

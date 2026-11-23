@@ -914,7 +914,12 @@ impl DeviceRotation {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PrototypeSettings {
+    /// The device **family** (e.g. `iPhone 17`), from the external devices catalogue. Older
+    /// documents may hold a variant name here; [`model`](Self::model) still resolves those.
     pub device: String,
+    /// The chosen variant inside the family (e.g. `iPhone 17 Pro`). Empty = the family's default.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub variant: String,
     pub background: figcraft_color::Color,
     /// Applies to devices that turn (phones and tablets).
     pub rotation: DeviceRotation,
@@ -935,6 +940,7 @@ impl Default for PrototypeSettings {
     fn default() -> Self {
         Self {
             device: "None".into(),
+            variant: String::new(),
             background: figcraft_color::Color::from_rgb8_const(0x1E, 0x1E, 0x1E),
             rotation: DeviceRotation::Portrait,
             color: String::new(),
@@ -949,65 +955,62 @@ fn is_custom_default(s: &[f64; 2]) -> bool {
 }
 
 /// A colour a device model comes in (its body; the glass around the screen stays black).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeviceColor {
-    pub name: &'static str,
+    pub name: String,
     pub rgb: [u8; 3],
 }
 
-const fn c(name: &'static str, r: u8, g: u8, b: u8) -> DeviceColor {
-    DeviceColor { name, rgb: [r, g, b] }
-}
-
 /// A device prototypes are presented on: its name and screen size in points (held upright).
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// Owned (`String` / `Vec`) so an externally configured device catalogue can supply it.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Device {
-    pub name: &'static str,
+    pub name: String,
     pub width: f64,
     pub height: f64,
     /// It can be turned to landscape (phones and tablets; laptops and desktops can't).
     pub rotates: bool,
     /// The colours it comes in, the default first (none for a custom size: just a screen).
-    pub colors: &'static [DeviceColor],
+    pub colors: Vec<DeviceColor>,
 }
 
 impl PrototypeSettings {
     /// The devices to pick from ("None" presents the frame at its own size).
-    pub const DEVICES: [Device; 19] = [
+    pub fn fallback_devices() -> Vec<Device> { let c = |name: &str, r: u8, g: u8, b: u8| DeviceColor { name: name.into(), rgb: [r, g, b] }; vec![
         Device {
-            name: "iPhone 17",
+            name: "iPhone 17".into(),
             width: 402.0,
             height: 874.0,
             rotates: true,
-            colors: &[c("Black", 0x38, 0x39, 0x3D), c("White", 0xE9, 0xE9, 0xE5)],
+            colors: vec![c("Black", 0x38, 0x39, 0x3D), c("White", 0xE9, 0xE9, 0xE5)],
         },
         Device {
-            name: "iPhone 17 Pro",
+            name: "iPhone 17 Pro".into(),
             width: 402.0,
             height: 874.0,
             rotates: true,
-            colors: &[c("Black", 0x38, 0x39, 0x3D), c("Silver", 0xD7, 0xD7, 0xD5)],
+            colors: vec![c("Black", 0x38, 0x39, 0x3D), c("Silver", 0xD7, 0xD7, 0xD5)],
         },
         Device {
-            name: "iPhone 17 Pro Max",
+            name: "iPhone 17 Pro Max".into(),
             width: 440.0,
             height: 956.0,
             rotates: true,
-            colors: &[c("Black", 0x38, 0x39, 0x3D), c("Silver", 0xD7, 0xD7, 0xD5)],
+            colors: vec![c("Black", 0x38, 0x39, 0x3D), c("Silver", 0xD7, 0xD7, 0xD5)],
         },
         Device {
-            name: "iPhone Air",
+            name: "iPhone Air".into(),
             width: 420.0,
             height: 912.0,
             rotates: true,
-            colors: &[c("Black", 0x38, 0x39, 0x3D), c("Silver", 0xD7, 0xD7, 0xD5)],
+            colors: vec![c("Black", 0x38, 0x39, 0x3D), c("Silver", 0xD7, 0xD7, 0xD5)],
         },
         Device {
-            name: "iPhone 16",
+            name: "iPhone 16".into(),
             width: 393.0,
             height: 852.0,
             rotates: true,
-            colors: &[
+            colors: vec![
                 c("Black", 0x3A, 0x3B, 0x3F),
                 c("White", 0xEE, 0xED, 0xE8),
                 c("Pink", 0xEC, 0xBF, 0xCB),
@@ -1016,104 +1019,105 @@ impl PrototypeSettings {
             ],
         },
         Device {
-            name: "iPhone 16 Pro",
+            name: "iPhone 16 Pro".into(),
             width: 402.0,
             height: 874.0,
             rotates: true,
-            colors: &[c("Black", 0x3B, 0x3A, 0x38), c("White", 0xEC, 0xEB, 0xE6)],
+            colors: vec![c("Black", 0x3B, 0x3A, 0x38), c("White", 0xEC, 0xEB, 0xE6)],
         },
         Device {
-            name: "iPhone 16 Pro Max",
+            name: "iPhone 16 Pro Max".into(),
             width: 440.0,
             height: 956.0,
             rotates: true,
-            colors: &[c("Black", 0x3B, 0x3A, 0x38), c("White", 0xEC, 0xEB, 0xE6), c("Natural", 0xBF, 0xB9, 0xAF), c("Sand", 0xC6, 0xAC, 0x8F)],
+            colors: vec![c("Black", 0x3B, 0x3A, 0x38), c("White", 0xEC, 0xEB, 0xE6), c("Natural", 0xBF, 0xB9, 0xAF), c("Sand", 0xC6, 0xAC, 0x8F)],
         },
         Device {
-            name: "iPhone 16 Plus",
+            name: "iPhone 16 Plus".into(),
             width: 430.0,
             height: 932.0,
             rotates: true,
-            colors: &[c("Black", 0x3A, 0x3B, 0x3F), c("White", 0xEE, 0xED, 0xE8)],
+            colors: vec![c("Black", 0x3A, 0x3B, 0x3F), c("White", 0xEE, 0xED, 0xE8)],
         },
         Device {
-            name: "iPhone 15 Pro",
+            name: "iPhone 15 Pro".into(),
             width: 393.0,
             height: 852.0,
             rotates: true,
-            colors: &[c("Black", 0x3B, 0x3A, 0x38), c("Silver", 0xD7, 0xD7, 0xD5)],
+            colors: vec![c("Black", 0x3B, 0x3A, 0x38), c("Silver", 0xD7, 0xD7, 0xD5)],
         },
         Device {
-            name: "iPhone 15 Pro Max",
+            name: "iPhone 15 Pro Max".into(),
             width: 430.0,
             height: 932.0,
             rotates: true,
-            colors: &[c("Black", 0x3B, 0x3A, 0x38), c("Silver", 0xD7, 0xD7, 0xD5)],
+            colors: vec![c("Black", 0x3B, 0x3A, 0x38), c("Silver", 0xD7, 0xD7, 0xD5)],
         },
         Device {
-            name: "iPhone 15 Plus",
+            name: "iPhone 15 Plus".into(),
             width: 430.0,
             height: 932.0,
             rotates: true,
-            colors: &[c("Black", 0x3A, 0x3B, 0x3F), c("White", 0xEE, 0xED, 0xE8)],
+            colors: vec![c("Black", 0x3A, 0x3B, 0x3F), c("White", 0xEE, 0xED, 0xE8)],
         },
         Device {
-            name: "iPhone 14 Pro",
+            name: "iPhone 14 Pro".into(),
             width: 393.0,
             height: 852.0,
             rotates: true,
-            colors: &[c("Black", 0x3B, 0x3A, 0x38), c("Silver", 0xD7, 0xD7, 0xD5)],
+            colors: vec![c("Black", 0x3B, 0x3A, 0x38), c("Silver", 0xD7, 0xD7, 0xD5)],
         },
         Device {
-            name: "iPhone 14 Pro Max",
+            name: "iPhone 14 Pro Max".into(),
             width: 430.0,
             height: 932.0,
             rotates: true,
-            colors: &[c("Black", 0x3B, 0x3A, 0x38), c("Silver", 0xD7, 0xD7, 0xD5)],
+            colors: vec![c("Black", 0x3B, 0x3A, 0x38), c("Silver", 0xD7, 0xD7, 0xD5)],
         },
         Device {
-            name: "iPhone 14",
+            name: "iPhone 14".into(),
             width: 390.0,
             height: 844.0,
             rotates: true,
-            colors: &[c("Black", 0x3A, 0x3B, 0x3F), c("White", 0xEE, 0xED, 0xE8)],
+            colors: vec![c("Black", 0x3A, 0x3B, 0x3F), c("White", 0xEE, 0xED, 0xE8)],
         },
         Device {
-            name: "Android Compact",
+            name: "Android Compact".into(),
             width: 412.0,
             height: 917.0,
             rotates: true,
-            colors: &[c("Black", 0x2E, 0x2F, 0x33), c("Silver", 0xD6, 0xD8, 0xDB), c("Green", 0xA6, 0xC0, 0xA3)],
+            colors: vec![c("Black", 0x2E, 0x2F, 0x33), c("Silver", 0xD6, 0xD8, 0xDB), c("Green", 0xA6, 0xC0, 0xA3)],
         },
         Device {
-            name: "Android Medium",
+            name: "Android Medium".into(),
             width: 700.0,
             height: 840.0,
             rotates: true,
-            colors: &[c("Black", 0x2E, 0x2F, 0x33), c("Silver", 0xD6, 0xD8, 0xDB)],
+            colors: vec![c("Black", 0x2E, 0x2F, 0x33), c("Silver", 0xD6, 0xD8, 0xDB)],
         },
         Device {
-            name: "iPad mini",
+            name: "iPad mini".into(),
             width: 744.0,
             height: 1133.0,
             rotates: true,
-            colors: &[c("Grey", 0x6A, 0x6B, 0x6F), c("Silver", 0xE0, 0xE1, 0xE3), c("Blue", 0x9C, 0xB1, 0xC9), c("Purple", 0xC6, 0xBC, 0xD7)],
+            colors: vec![c("Grey", 0x6A, 0x6B, 0x6F), c("Silver", 0xE0, 0xE1, 0xE3), c("Blue", 0x9C, 0xB1, 0xC9), c("Purple", 0xC6, 0xBC, 0xD7)],
         },
         Device {
-            name: "MacBook Air",
+            name: "MacBook Air".into(),
             width: 1280.0,
             height: 832.0,
             rotates: false,
-            colors: &[c("Silver", 0xC9, 0xCA, 0xCE), c("Grey", 0x7B, 0x7C, 0x80), c("Dark blue", 0x2E, 0x33, 0x3D), c("Cream", 0xE0, 0xD9, 0xCB)],
+            colors: vec![c("Silver", 0xC9, 0xCA, 0xCE), c("Grey", 0x7B, 0x7C, 0x80), c("Dark blue", 0x2E, 0x33, 0x3D), c("Cream", 0xE0, 0xD9, 0xCB)],
         },
         Device {
-            name: "Desktop",
+            name: "Desktop".into(),
             width: 1440.0,
             height: 1024.0,
             rotates: false,
-            colors: &[c("Silver", 0xB8, 0xB9, 0xBD), c("Black", 0x2C, 0x2C, 0x2E)],
+            colors: vec![c("Silver", 0xB8, 0xB9, 0xBD), c("Black", 0x2C, 0x2C, 0x2E)],
         },
-    ];
+    ] }
+
 
     /// The device whose screen is [`custom_size`](Self::custom_size) (no body is drawn around it).
     pub const CUSTOM_DEVICE: &str = "Custom size";
@@ -1133,16 +1137,16 @@ impl PrototypeSettings {
         if self.device == Self::CUSTOM_DEVICE {
             let ([w, h], [dw, dh]) = (self.custom_size, Self::CUSTOM_DEFAULT);
             let (width, height) = (Self::custom_side(w).unwrap_or(dw), Self::custom_side(h).unwrap_or(dh));
-            return Some(Device { name: Self::CUSTOM_DEVICE, width, height, rotates: false, colors: &[] });
+            return Some(Device { name: Self::CUSTOM_DEVICE.into(), width, height, rotates: false, colors: Vec::new() });
         }
-        Self::DEVICES.iter().find(|d| d.name == self.device).copied()
+        Self::fallback_devices().into_iter().find(|d| d.name == self.device)
     }
 
     /// The chosen device's colour (its model's first unless another is picked; None without a
     /// body).
     pub fn device_color(&self) -> Option<DeviceColor> {
         let colors = self.model()?.colors;
-        colors.iter().find(|c| c.name == self.color).or(colors.first()).copied()
+        colors.iter().find(|c| c.name == self.color).or(colors.first()).cloned()
     }
 
     /// The device turned to landscape (only devices that turn do).

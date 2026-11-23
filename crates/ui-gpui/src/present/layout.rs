@@ -58,6 +58,8 @@ pub struct Geom {
     pub clip: RectPx,
     pub place: Place,
     pub device: Option<Device>,
+    /// The external bezel SVG (relative path), when the device came from the catalogue.
+    pub frame: Option<String>,
     pub landscape: bool,
     pub color: Option<DeviceColor>,
     pub scale: f64,
@@ -155,20 +157,22 @@ fn anchored_overlay_rect(
 /// 留白 12），否则整窗演示（留白 32、按 `st.scale`）。
 pub fn compute(st: &PresentState, disp: &Document, area: RectPx, pane: bool, ppp: f32) -> Option<Geom> {
     let settings = page_settings(disp, st.current);
-    let (device, landscape) = (settings.device(), settings.landscape());
+    let device = figcraft_engine::devices::presented_device(&settings);
+    let frame = figcraft_engine::devices::frame_path_of(&settings);
+    let landscape = settings.landscape();
     let fills = settings.responsive && device.is_none();
     let fb = disp.world_bounds(st.current)?;
-    let body = device.filter(|d| (pane || st.device_frame) && !d.colors.is_empty());
+    let body = device.as_ref().filter(|d| (pane || st.device_frame) && !d.colors.is_empty()).cloned();
     let scale_mode = if pane { ScaleMode::Fit } else { st.scale };
     let pad = if !fills && matches!(scale_mode, ScaleMode::Fit | ScaleMode::Actual) { if pane { super::PANE_PAD } else { super::PAD } } else { 0.0 };
     let avail_w = (area.w - 2.0 * pad).max(1.0);
     let avail_h = (area.h - 2.0 * pad).max(1.0);
-    let (sw, sh) = device.map_or((fb.width() as f32, fb.height() as f32), |d| (d.width as f32, d.height as f32));
+    let (sw, sh) = device.as_ref().map_or((fb.width() as f32, fb.height() as f32), |d| (d.width as f32, d.height as f32));
     let outer = |scale: f64| -> (f32, f32, f32, f32, f32) {
         let (w, h) = ((f64::from(sw) * scale) as f32, (f64::from(sh) * scale) as f32);
-        match body {
+        match body.as_ref() {
             Some(d) => {
-                let (side, top, bottom) = body_outset(d.name, w, h, landscape);
+                let (side, top, bottom) = body_outset(&d.name, w, h, landscape);
                 (side, top, bottom, w + 2.0 * side, h + top + bottom)
             }
             None => (0.0, 0.0, 0.0, w, h),
@@ -228,6 +232,6 @@ pub fn compute(st: &PresentState, disp: &Document, area: RectPx, pane: bool, ppp
     let overlays = st.overlays.iter().filter_map(place_overlay).collect();
     let closing = st.closing.iter().filter_map(|(_, o)| place_overlay(o)).collect();
     let clip = if device.is_some() { screen } else { area };
-    let color = body.and(settings.device_color());
-    Some(Geom { area, screen, clip, place, device, landscape, color, scale, overlays, closing, pane, pan_range })
+    let color = body.as_ref().and(figcraft_engine::devices::device_color(&settings));
+    Some(Geom { area, screen, clip, place, device, frame, landscape, color, scale, overlays, closing, pane, pan_range })
 }

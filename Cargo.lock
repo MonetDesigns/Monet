@@ -2171,6 +2171,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "figcraft-devices"
+version = "0.15.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "figcraft-doc"
 version = "0.15.0"
 dependencies = [
@@ -2195,6 +2203,7 @@ dependencies = [
  "figcraft-abr",
  "figcraft-collab",
  "figcraft-color",
+ "figcraft-devices",
  "figcraft-doc",
  "figcraft-format",
  "figcraft-geom",
@@ -2410,6 +2419,7 @@ dependencies = [
  "figcraft-abr",
  "figcraft-collab-net",
  "figcraft-color",
+ "figcraft-devices",
  "figcraft-doc",
  "figcraft-engine",
  "figcraft-format",

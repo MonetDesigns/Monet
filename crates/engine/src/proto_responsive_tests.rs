@@ -44,15 +44,15 @@ fn rect(doc: &Document, id: NodeId) -> (f64, f64, f64, f64) {
 fn device_colours_pick_by_name_and_follow_the_device() {
     let mut s = Session::new();
     // Every device model comes in colours (the first is the default); names are unique per model.
-    for d in PrototypeSettings::DEVICES {
+    for d in PrototypeSettings::fallback_devices() {
         assert!(!d.colors.is_empty(), "{}", d.name);
-        let mut names: Vec<&str> = d.colors.iter().map(|c| c.name).collect();
+        let mut names: Vec<String> = d.colors.iter().map(|c| c.name.clone()).collect();
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), d.colors.len(), "{}", d.name);
     }
     ex(&mut s, "proto.settings", json!({"device": "iPhone 16"}));
-    assert_eq!(settings(&s).device_color().map(|c| c.name), Some("Black"), "the first by default");
+    assert_eq!(settings(&s).device_color().map(|c| c.name), Some("Black".to_string()), "the first by default");
     // Case doesn't matter; the stored name is the model's.
     ex(&mut s, "proto.settings", json!({"color": "teal"}));
     assert_eq!(settings(&s).color, "Teal");
@@ -64,12 +64,12 @@ fn device_colours_pick_by_name_and_follow_the_device() {
     assert_eq!(settings(&s).color, "Teal");
     // Another device keeps the colour only if it comes in it; an empty name is the default.
     ex(&mut s, "proto.settings", json!({"device": "iPad mini", "color": "Blue"}));
-    assert_eq!(settings(&s).device_color().map(|c| c.name), Some("Blue"));
+    assert_eq!(settings(&s).device_color().map(|c| c.name), Some("Blue".to_string()));
     ex(&mut s, "proto.settings", json!({"device": "MacBook Air"}));
-    assert_eq!((settings(&s).color.as_str(), settings(&s).device_color().map(|c| c.name)), ("", Some("Silver")));
+    assert_eq!((settings(&s).color.as_str(), settings(&s).device_color().map(|c| c.name)), ("", Some("Silver".to_string())));
     ex(&mut s, "proto.settings", json!({"color": "Grey"}));
     ex(&mut s, "proto.settings", json!({"color": ""}));
-    assert_eq!(settings(&s).device_color().map(|c| c.name), Some("Silver"));
+    assert_eq!(settings(&s).device_color().map(|c| c.name), Some("Silver".to_string()));
     // Undoable; no device, no colours.
     ex(&mut s, "edit.undo", json!({}));
     assert_eq!(settings(&s).color, "Grey");
@@ -130,7 +130,7 @@ fn settings_are_saved_and_old_files_read_as_before() {
     }
     let old: PrototypeSettings = serde_json::from_value(json!({"device": "iPhone 16", "rotation": "landscape"})).unwrap();
     assert!(!old.responsive);
-    assert_eq!(old.device_color().map(|c| c.name), Some("Black"));
+    assert_eq!(old.device_color().map(|c| c.name), Some("Black".to_string()));
     assert_eq!(old.custom_size, PrototypeSettings::CUSTOM_DEFAULT);
     // Responsive must be a boolean.
     assert!(s.execute("proto.settings", &json!({"responsive": "yes"})).is_err());

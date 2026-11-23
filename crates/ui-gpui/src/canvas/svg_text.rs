@@ -26,6 +26,12 @@ pub struct AppAssets;
 
 impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+        // 外置设备外框：`device:<relative path>` 从用户的 devices 目录读 SVG（外置文件，
+        // 和笔刷 / WGSL 一样不在二进制里）。
+        if let Some(rel) = path.strip_prefix("device:") {
+            let bytes = figcraft_devices::devices_dir().join(rel);
+            return Ok(std::fs::read(bytes).ok().map(Cow::Owned));
+        }
         if let Some(spec) = path.strip_prefix(PREFIX) {
             return Ok(svg_bytes(spec).map(|svg| Cow::Owned(svg.into_bytes())));
         }

@@ -112,7 +112,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "proto.settings",
             "Prototype settings",
-            "{device? (a device name, \"Custom size\" or \"None\"; any case; another name is refused with the list), background?, rotation? portrait|landscape (or 0|90; phones and tablets turn), color? (one of the device's colours by name), width?, height? (the custom size's screen, 1–10000 points; picks \"Custom size\"), responsive? bool (frames resize to the screen and their constraints and auto layout respond)} → the page's settings after the call (none given: reads them)",
+            "{device? (a device family name from the external catalogue, \"Custom size\" or \"None\"; any case; another name is refused with the list), variant? (a device variant name; picks its family when none chosen), background?, rotation? portrait|landscape (or 0|90; phones and tablets turn), color? (one of the device's colours by name), width?, height? (the custom size's screen, 1–10000 points; picks \"Custom size\"), responsive? bool (frames resize to the screen and their constraints and auto layout respond)} → the page's settings after the call (family, variants, colors and screen included; none given: reads them)",
             true,
             settings
         ),
@@ -175,24 +175,30 @@ pub fn specs() -> Vec<CommandSpec> {
 
 /// The device setting `name` stands for, as the device picker names it: "None", "Custom size" or a
 /// model of [`PrototypeSettings::DEVICES`], whatever its case and the spaces around it.
-fn known_device(name: &str) -> Option<&'static str> {
+fn known_device(name: &str) -> Option<String> {
     let name = name.trim();
-    ["None", PrototypeSettings::CUSTOM_DEVICE]
-        .into_iter()
-        .chain(PrototypeSettings::DEVICES.iter().map(|d| d.name))
+    if ["None", PrototypeSettings::CUSTOM_DEVICE].iter().any(|d| d.eq_ignore_ascii_case(name)) {
+        return Some(if name.eq_ignore_ascii_case("None") { "None".into() } else { PrototypeSettings::CUSTOM_DEVICE.into() });
+    }
+    crate::devices::family_names().into_iter()
+        .chain(crate::devices::family_names().iter().flat_map(|f| crate::devices::variant_names(f)).collect::<Vec<_>>())
         .find(|d| d.eq_ignore_ascii_case(name))
 }
 
 /// What `proto.settings` answers: the page's prototype settings (the device as the picker names it,
 /// the colour shown, the screen as presented, `null` without a device).
 fn settings_json(ps: &PrototypeSettings) -> Value {
-    let screen = ps.device().map(|d| json!({"width": d.width, "height": d.height}));
+    let screen = crate::devices::presented_device(ps).map(|d| json!({"width": d.width, "height": d.height}));
     json!({
         "ok": true,
         "device": ps.device,
+        "variant": ps.variant,
+        "families": crate::devices::family_names(),
+        "variants": crate::devices::variant_names(&ps.device),
+        "colors": crate::devices::colors_for(&ps.device, &ps.variant).into_iter().map(|(n, _)| n).collect::<Vec<_>>(),
         "background": format!("#{}", ps.background.to_hex()),
         "rotation": ps.rotation,
-        "color": ps.device_color().map(|c| c.name),
+        "color": crate::devices::device_color(ps).map(|c| c.name),
         "screen": screen,
         "customSize": {"width": ps.custom_size[0], "height": ps.custom_size[1]},
         "responsive": ps.responsive,
@@ -211,11 +217,31 @@ fn settings(s: &mut Session, p: &Value) -> Result<Value> {
         Some(v) => {
             let name = v.as_str().unwrap_or_default();
             let found = known_device(name).ok_or_else(|| {
-                let names: Vec<&str> =
-                    ["None", PrototypeSettings::CUSTOM_DEVICE].into_iter().chain(PrototypeSettings::DEVICES.iter().map(|d| d.name)).collect();
+                let names: Vec<String> =
+                    ["None".to_string(), PrototypeSettings::CUSTOM_DEVICE.to_string()].into_iter().chain(crate::devices::family_names()).collect();
                 bad(cmd, format!("unknown device {}: device is one of {}", figcraft_format::clip(&v.to_string(), 60), names.join("|")))
             })?;
-            Some(found.to_string())
+            Some(found)
+        }
+    };
+    let var = match p.get("variant") {
+        None | Some(Value::Null) => None,
+        Some(v) => {
+            let name = v.as_str().unwrap_or_default().trim();
+            if name.is_empty() {
+                Some(String::new())
+            } else {
+                // Variant names are globally unique in the catalogue, so a variant can be
+                // picked regardless of which family is current (the preview menu does this).
+                let cat = figcraft_devices::catalog();
+                let found = cat.variant(name).map(|x| x.name.clone()).or_else(|| {
+                    PrototypeSettings::fallback_devices().into_iter().find(|d| d.name.eq_ignore_ascii_case(name)).map(|d| d.name)
+                });
+                match found {
+                    Some(x) => Some(x),
+                    None => return Err(bad(cmd, format!("variant: unknown device variant {name}"))),
+                }
+            }
         }
     };
     let rot = match p.get("rotation") {
@@ -243,7 +269,19 @@ fn settings(s: &mut Session, p: &Value) -> Result<Value> {
         next.background = c;
     }
     if let Some(d) = dev {
+        if next.device != d {
+            next.variant.clear();
+        }
         next.device = d;
+    }
+    if let Some(v) = var {
+        // Picking a variant also selects its family when no family is chosen yet.
+        if !v.is_empty() && (next.device == "None" || next.device.is_empty()) {
+            if let Some(fam) = figcraft_devices::catalog().family_of(&v) {
+                next.device = fam.name.clone();
+            }
+        }
+        next.variant = v;
     }
     if let Some(r) = rot {
         next.rotation = r;
@@ -256,15 +294,19 @@ fn settings(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(r) = responsive {
         next.responsive = r;
     }
-    let colors = next.model().map_or(&[][..], |m| m.colors);
+    let owned_colors = crate::devices::colors_for(&next.device, &next.variant)
+        .into_iter()
+        .map(|(name, rgb)| figcraft_doc::proto::DeviceColor { name, rgb })
+        .collect::<Vec<_>>();
+    let colors = owned_colors.as_slice();
     match col {
         Some(c) if c.is_empty() => next.color.clear(),
         Some(c) => {
             let found = colors.iter().find(|x| x.name.eq_ignore_ascii_case(&c)).ok_or_else(|| {
-                let names: Vec<&str> = colors.iter().map(|x| x.name).collect();
+                let names: Vec<String> = colors.iter().map(|x| x.name.clone()).collect();
                 bad(cmd, if names.is_empty() { "this device has no colours".to_string() } else { format!("color: {}", names.join("|")) })
             })?;
-            next.color = found.name.into();
+            next.color = found.name.clone();
         }
         // Another device keeps the colour only if it comes in it.
         None if !colors.iter().any(|x| x.name == next.color) => next.color.clear(),

@@ -43,7 +43,7 @@ fn presets_keep_the_sizes_of_the_prototype_devices() {
         let n = s.doc().unwrap().node(id).unwrap();
         assert_eq!((n.name.as_str(), n.width, n.height), (name, size.0, size.1));
     }
-    let shared = FRAME_PRESETS.iter().filter_map(|p| Some((p, PrototypeSettings::DEVICES.iter().find(|d| d.name == p.1)?)));
+    let shared = FRAME_PRESETS.iter().filter_map(|p| Some((p, PrototypeSettings::fallback_devices().into_iter().find(|d| d.name == p.1)?)));
     let mut n = 0;
     for ((_, name, w, h), device) in shared {
         assert_eq!((*w, *h), (device.width, device.height), "{name}");

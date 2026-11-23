@@ -2625,6 +2625,13 @@ impl CanvasView {
         let action = present::ACTION.with(|a| a.replace(0));
 
         // 导航栏下拉：设备 / 缩放（eGUI `navigation_bar` 的两个 ComboBox）。
+        if let Some(variant) = present::take_variant_choice() {
+            let _ = self.app.session.execute("proto.settings", &serde_json::json!({ "variant": variant }));
+            if let Some(st) = self.present.as_mut() {
+                st.device_open = false;
+                st.reset_for_device();
+            }
+        }
         if let Some(device) = present::take_device_choice() {
             let _ = self.app.session.execute("proto.settings", &serde_json::json!({ "device": device }));
             if let Some(st) = self.present.as_mut() {
@@ -8999,6 +9006,12 @@ pub fn run() {
     // 引擎不内嵌任何笔刷形状，所有笔刷都来自这些外部文件。
     if let Err(e) = figcraft_abr::bootstrap() {
         log::warn!("brush library: {e}");
+    }
+
+    // 外置设备目录：首次启动把出型的 devices.json 与外框 SVG 放入用户目录，之后只扫目录。
+
+    if let Err(e) = figcraft_devices::bootstrap() {
+        log::warn!("device catalogue: {e}");
     }
 
     // `--control <port>`：开本地控制通道（与 `cargo run -p figcraft -- --control 7979` 同义）。

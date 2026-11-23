@@ -271,15 +271,20 @@ pub struct FlowRow {
 /// Prototype settings 的快照（egui `proto_panel.rs::settings`）。
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProtoSettingsData {
+    /// The chosen device family (from the external catalogue).
     pub device: String,
-    /// `PrototypeSettings::DEVICES` 的名字，外加 "None" / "Custom size"。
-    pub devices: Vec<&'static str>,
+    /// The chosen variant within the family (empty = family default).
+    pub variant: String,
+    /// Family names, plus "None" / "Custom size".
+    pub devices: Vec<String>,
+    /// Variants of the chosen family, for the second-level dropdown.
+    pub variants: Vec<String>,
     /// 该 device 能横竖旋转（手机 / 平板）。
     pub rotates: bool,
     pub landscape: bool,
     /// 当前 device 的机身色（设备没有颜色时为空）。
     pub color: String,
-    pub colors: Vec<(&'static str, [u8; 3])>,
+    pub colors: Vec<(String, [u8; 3])>,
     /// 自定义尺寸（`Some` 时才画 Size 行）。
     pub custom: Option<(f64, f64)>,
     pub responsive: bool,
@@ -340,7 +345,9 @@ impl Default for ProtoSettingsData {
     fn default() -> Self {
         Self {
             device: tr("None").into(),
+            variant: String::new(),
             devices: Vec::new(),
+            variants: Vec::new(),
             rotates: false,
             landscape: false,
             color: String::new(),
@@ -368,21 +375,25 @@ pub fn read_proto(doc: &Document, ids: &[NodeId], page: Option<NodeId>) -> Proto
     }
 
     // ── Prototype settings ──
-    let model = settings.model();
-    let mut devices: Vec<&'static str> = vec![tr_noop("None")];
-    devices.extend(PrototypeSettings::DEVICES.iter().map(|d| d.name));
-    devices.push(PrototypeSettings::CUSTOM_DEVICE);
+    let model = figcraft_engine::devices::presented_device(&settings);
+    let mut devices: Vec<String> = vec![tr_noop("None").to_string()];
+    devices.extend(figcraft_engine::devices::family_names());
+    devices.push(PrototypeSettings::CUSTOM_DEVICE.to_string());
+    let variants = figcraft_engine::devices::variant_names(&settings.device);
+    let colors: Vec<(String, [u8; 3])> = figcraft_engine::devices::colors_for(&settings.device, &settings.variant);
     let custom = (settings.device == PrototypeSettings::CUSTOM_DEVICE).then(|| {
-        let d = model.unwrap_or(PrototypeSettings::DEVICES[0]);
+        let d = model.clone().unwrap_or_else(|| figcraft_engine::devices::presented_device(&PrototypeSettings::default()).unwrap());
         (d.width, d.height)
     });
     p.settings = ProtoSettingsData {
         device: settings.device.clone(),
+        variant: settings.variant.clone(),
         devices,
-        rotates: model.is_some_and(|d| d.rotates),
+        variants,
+        rotates: figcraft_engine::devices::rotates(&settings),
         landscape: settings.landscape(),
-        color: settings.device_color().map(|c| c.name.to_string()).unwrap_or_default(),
-        colors: model.map(|m| m.colors.iter().map(|c| (c.name, c.rgb)).collect()).unwrap_or_default(),
+        color: figcraft_engine::devices::device_color(&settings).map(|c| c.name).unwrap_or_default(),
+        colors,
         custom,
         responsive: settings.responsive,
         background: settings.background.to_hex(),
