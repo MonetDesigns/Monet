@@ -241,6 +241,26 @@ fn alt_dragging_a_main_component_copies_an_instance() {
 }
 
 #[test]
+fn alt_dragging_a_variant_out_of_its_set_creates_an_instance() {
+    use crate::tools::{PointerEvent, PointerKind};
+    let mut s = Session::new();
+    let (_set, variant, _other) = button_set(&mut s);
+    let b = s.doc().unwrap().world_bounds(variant).unwrap();
+    let cx = b.x0 + b.width() / 2.0;
+    let cy = b.y0 + b.height() / 2.0;
+    // Select the variant, then Alt-drag it well clear of the set.
+    s.set_selection(vec![variant]);
+    let ev = |kind, x| PointerEvent { alt: true, ..PointerEvent::at(kind, x, cy, 1.0) };
+    s.pointer(&ev(PointerKind::Down, cx)).unwrap();
+    s.pointer(&ev(PointerKind::Move, cx + 400.0)).unwrap();
+    s.pointer(&ev(PointerKind::Up, cx + 400.0)).unwrap();
+    let [copy] = s.selection()[..] else { panic!("one copy selected") };
+    assert!(matches!(node(&s, copy).kind, NodeKind::Instance { .. }), "拖出组件集应得到实例，而不是复制变体");
+    assert_eq!(component_of(&s, copy), variant, "实例引用的是这个变体");
+    healthy(&s);
+}
+
+#[test]
 fn duplicating_a_variant_adds_a_variant_to_its_set() {
     let mut s = Session::new();
     let (set, _, hover) = button_set(&mut s);

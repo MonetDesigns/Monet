@@ -180,7 +180,12 @@ pub(super) fn overlays(
                 }
             }
         }
-        let labelled = focus.is_none() && (n.kind.is_frame_like() || matches!(n.kind, NodeKind::Section { .. })) && !n.is_board_atom();
+        // 组件实例（被拉出来实际使用的组件）不画名称文字栏：它本体像组件一样直接选中，
+        // 不需要上方那条灰/红文字。画框、section、组件/组件集仍照旧有名称。
+        let labelled = focus.is_none()
+            && (n.kind.is_frame_like() || matches!(n.kind, NodeKind::Section { .. }))
+            && !matches!(n.kind, NodeKind::Instance { .. })
+            && !n.is_board_atom();
         if labelled && let Some(q) = super::frame_labels::draw(app, painter, t, &doc, *c, sel.contains(c), renaming == Some(*c))
         {
             labels.push((*c, q.map(|p| app.to_page(p))));

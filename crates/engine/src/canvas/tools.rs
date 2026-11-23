@@ -33,10 +33,12 @@ use handles::DRAG_SLOP_PX;
 /// 自动布局的画框例外——它的本体就是设计面，点本体直接选中。
 /// 组件集（含变体的大组件）即使带了自动布局也算本体背景：它和画布一样，
 /// 只有名称文字（或按住 Ctrl 穿透）才选中，本体悬停不画误导性的描边。
+/// 实例（组件的使用）不是背景：它本体就像组件一样直接选中（没有名称文字可点）。
 pub(crate) fn frame_background(doc: &Document, page: NodeId, leaf: NodeId) -> bool {
     doc.node(leaf).is_some_and(|n| {
         n.parent == Some(page)
             && n.kind.is_frame_like()
+            && !matches!(n.kind, NodeKind::Instance { .. })
             && !n.children.is_empty()
             && (n.layout.is_none() || matches!(n.kind, NodeKind::ComponentSet { .. }))
             && !crate::widgets::is_widget(n)

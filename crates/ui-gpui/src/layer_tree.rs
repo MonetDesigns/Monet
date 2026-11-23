@@ -114,6 +114,17 @@ enum Mark {
     Selected,
 }
 
+/// Whether `id` sits inside a component, a component set, or an instance — the layers that take
+/// the component colour ramp (name, band) all the way down, like egui's
+/// `is_comp || has_component_ancestor` (instances count).
+fn in_component_ramp(doc: &Document, id: NodeId) -> bool {
+    doc.ancestors(id).iter().any(|a| {
+        doc.node(*a).is_some_and(|p| {
+            matches!(p.kind, NodeKind::Component { .. } | NodeKind::ComponentSet { .. } | NodeKind::Instance { .. })
+        })
+    })
+}
+
 /// Selected / descendant / none, which decides each row's band colour.
 /// One contiguous run (`Mark != None`) is a **single block**: the light fill joins up, the
 /// selected row takes the deeper band, and only the run's first and last rows inset by 4 pt, so
@@ -176,7 +187,8 @@ fn row_ink(t: &crate::theme::Tokens, r: &LayerRow, mark: Mark) -> (gpui::Rgba, g
     let name = if slot {
         if selected { t.slot } else if r.visible { t.slot_secondary } else { t.slot_dim }
     } else if component {
-        if selected { t.component } else if r.visible { t.component_secondary } else { t.component_dim }
+        // 组件 / 组件集 / 实例以及组件内部的层：名称文本始终是选中态的深紫，不随选中与否变化。
+        t.component
     } else if icon_layer {
         if selected { t.icon_layer } else if r.visible { t.layer_muted } else { t.layer_muted }
     } else if selected {
@@ -1004,11 +1016,11 @@ impl CanvasView {
             let path = if parent_path.is_empty() { id.0.to_string() } else { format!("{parent_path}/{}", id.0) };
             let can_into = n.kind.is_container() && !matches!(n.kind, NodeKind::Instance { .. });
             // Component members keep the component colour all the way down the tree: a child
-            // of a component (or a variant inside a component set) is tinted with the component
-            // colour, not the brand/icon colour. Mirrors `is_comp || has_component_ancestor`.
-            let in_component = doc.ancestors(id).iter().any(|a| {
-                doc.node(*a).is_some_and(|p| matches!(p.kind, NodeKind::Component { .. } | NodeKind::ComponentSet { .. }))
-            });
+            // of a component (or a variant inside a component set, or a layer inside an instance)
+            // is tinted with the component colour, not the brand/icon colour.
+            // Mirrors `is_comp || has_component_ancestor`; instances count, like egui's
+            // `is_component`, so an instance's inner layers sit on the component ramp.
+            let in_component = in_component_ramp(&doc, id);
             let mark_kind = if matches!(n.kind, NodeKind::Icon { .. }) {
                 2
             } else if matches!(n.kind, NodeKind::Component { .. } | NodeKind::ComponentSet { .. } | NodeKind::Instance { .. }) || in_component {
@@ -1845,8 +1857,8 @@ mod color_tests {
         assert_eq!(glyph, rgba(t.slot), "a selected slot's glyph is the full pink too");
 
         let (name, glyph) = row_ink(&t, &row(Icon::Component, 1, true, true), Mark::None);
-        assert_eq!(name, rgba(t.component_secondary), "an idle component is pale purple");
-        assert_eq!(glyph, rgba(t.component_secondary));
+        assert_eq!(name, rgba(t.component), "组件名称文本始终是深紫，未选中也不变浅");
+        assert_eq!(glyph, rgba(t.component_secondary), "图标仍按未选中走浅紫");
 
         let (name, glyph) = row_ink(&t, &row(Icon::Component, 1, true, true), Mark::Selected);
         assert_eq!(name, rgba(t.component), "a selected component is full purple");
@@ -1854,6 +1866,32 @@ mod color_tests {
 
         let (_, glyph) = row_ink(&t, &row(Icon::Component, 1, false, true), Mark::None);
         assert_eq!(glyph, rgba(t.component_dim), "a component child is a shade deeper than the parent");
+    }
+
+    /// 实例（组件的使用）内部的子层也走组件色 ramp：选中实例时子级背景不再是主题色。
+    #[test]
+    fn instance_children_take_the_component_ramp() {
+        let mut d = Document::new("x");
+        let page = d.first_page().unwrap();
+        let comp = d
+            .create(
+                page,
+                NodeKind::Component { description: String::new(), props: Default::default(), prop_order: Vec::new() },
+                "C",
+                0.0,
+                0.0,
+                100.0,
+                100.0,
+            )
+            .unwrap();
+        let child = d.create(comp, NodeKind::Rectangle, "R", 0.0, 0.0, 10.0, 10.0).unwrap();
+        assert!(in_component_ramp(&d, child), "组件内部层算组件色");
+        let inst = d
+            .create(page, NodeKind::Instance { component: comp, props: Default::default() }, "I", 0.0, 0.0, 100.0, 100.0)
+            .unwrap();
+        let inner = d.create(inst, NodeKind::Rectangle, "IR", 0.0, 0.0, 10.0, 10.0).unwrap();
+        assert!(in_component_ramp(&d, inner), "实例内部层也算组件色（漏掉 Instance 就是主题色 bug）");
+        assert!(!in_component_ramp(&d, page), "页面本身不算");
     }
 
     #[test]
@@ -1875,7 +1913,7 @@ mod color_tests {
 
         let hidden_comp = row(Icon::Component, 1, true, false);
         let (name, glyph) = row_ink(&t, &hidden_comp, Mark::None);
-        assert_eq!(name, rgba(t.component_dim), "a hidden idle component is a shade deeper");
+        assert_eq!(name, rgba(t.component), "组件名称文本始终深紫，隐藏也不变浅");
         assert_eq!(glyph, rgba(t.component_dim));
         let (_, glyph) = row_ink(&t, &hidden_comp, Mark::Selected);
         assert_eq!(glyph, rgba(t.component), "hidden but selected stays saturated");
