@@ -23,13 +23,14 @@ use crate::widgets::{
 use crate::widgets::{MenuRow, dropdown};
 use figcraft_i18n::tr;
 use gpui::{
-    AnyElement, App, Bounds, Corners, Entity, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, PathBuilder, Pixels, Point, SharedString,
-    Size, Window, div, point, prelude::*, px, size,
+    AnyElement, App, Bounds, Corners, Entity, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, PathBuilder, Pixels, Point, RenderImage,
+    SharedString, Size, Window, div, point, prelude::*, px, size,
 };
 use serde_json::{Value, json};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 
 /// Half of a 24 pt icon button. Callers hand us the press point; the placement rule wants the
 /// button's top (`ui-egui/src/popover.rs`: "its top on `y` (the button's top)").
@@ -3418,8 +3419,8 @@ impl WindowState {
                 .unwrap_or(2) as f32;
             h += 48.0 + 8.0 + 48.0 + 8.0 + 32.0 + stops * 32.0 + 12.0;
         } else {
-            // 对比度 48 + 色域 208 + 滑轨 48 + 数值 40 + 色板
-            h += 48.0 + SPECTRUM + 48.0 + 40.0;
+            // 对比度 48 + 色域 208 + 两条 16pt 滑轨 + 12pt 间距（共 44）+ 数值 40 + 色板
+            h += 48.0 + SPECTRUM + 44.0 + 40.0;
             let n = page_colors().len().max(recent_colors().len());
             let rows = n.div_ceil(CHITS_PER_ROW).clamp(1, 3) as f32;
             // 顶边 1 + 上 11 + 下拉 24 + 下 4 + 色块 rows×24 − 末行 8 + 底部 12
@@ -3554,6 +3555,8 @@ impl WindowState {
         // graphics 无 AAA → 无线；否则反解亮/暗两侧边界，供 SV canvas 画连续白线。
         let aa_boundary = aa_min.map(|m| figcraft_color::boundary_line(aa_bg, m, hue));
         let aa_boundary_paint = aa_boundary.clone();
+        let aa_bg_paint = aa_bg;
+        let aa_min_paint = aa_min;
         let hue_c = hsb_color(hue, 1.0, 1.0);
         let sv_drag = c.sv_drag.clone();
         let sv_drag_down = sv_drag.clone();
@@ -3584,6 +3587,9 @@ impl WindowState {
                                 bounds,
                                 gpui::linear_gradient(180.0, gpui::linear_color_stop(clear, 0.0), gpui::linear_color_stop(black, 1.0)),
                             ));
+                            if let Some(min) = aa_min_paint {
+                                paint_contrast_dots(window, bounds, SpectrumShape::Square, hue, aa_bg_paint, min);
+                            }
                             // AA 达标边界白线：一条连续 stroke 折线（lyon 自动补 join + 抗锯齿）。
                             if let Some((lighter, darker)) = &aa_boundary_paint {
                                 let bx = f32::from(bounds.origin.x);
@@ -3650,7 +3656,7 @@ impl WindowState {
                 sv_pick_down(hue, s, v, window, cx);
             });
         let spectrum = if c.ring.get() {
-            ring_spectrum(c, hsb, current, pick.clone()).into_any_element()
+            ring_spectrum(c, hsb, current, aa_bg, aa_min, pick.clone()).into_any_element()
         } else {
             square_spectrum.into_any_element()
         };
@@ -3672,23 +3678,41 @@ impl WindowState {
         };
         let hue_slider = crate::widgets::Slider::new(hue, 0.0, 360.0)
             .id(format!("color-{}-hue", c.uid))
+            .track_h(16.0)
+            .thumb(16.0)
+            .row_h(16.0)
+            .knob()
+            .thumb_fill(rgba(hsb_color(hue, 1.0, 1.0)))
             .step(1.0)
             .paint_track(|window, bounds, _| {
                 let x0 = f32::from(bounds.origin.x);
                 let y0 = f32::from(bounds.origin.y);
                 let w = f32::from(bounds.size.width).max(1.0);
                 let h = f32::from(bounds.size.height).max(1.0);
+                let r = h * 0.5;
                 for i in 0..6 {
                     let a = hsb_color(i as f32 * 60.0, 1.0, 1.0);
                     let b = hsb_color((i + 1) as f32 * 60.0, 1.0, 1.0);
-                    window.paint_quad(gpui::fill(
-                        Bounds { origin: point(px(x0 + w * i as f32 / 6.0), px(y0)), size: size(px(w / 6.0 + 0.5), px(h)) },
-                        gpui::linear_gradient(
-                            90.0,
-                            gpui::linear_color_stop(gpui::Hsla::from(rgba(a)), 0.0),
-                            gpui::linear_color_stop(gpui::Hsla::from(rgba(b)), 1.0),
-                        ),
-                    ));
+                    let mut corners = Corners::default();
+                    if i == 0 {
+                        corners.top_left = px(r);
+                        corners.bottom_left = px(r);
+                    }
+                    if i == 5 {
+                        corners.top_right = px(r);
+                        corners.bottom_right = px(r);
+                    }
+                    window.paint_quad(
+                        gpui::fill(
+                            Bounds { origin: point(px(x0 + w * i as f32 / 6.0), px(y0)), size: size(px(w / 6.0 + 0.5), px(h)) },
+                            gpui::linear_gradient(
+                                90.0,
+                                gpui::linear_color_stop(gpui::Hsla::from(rgba(a)), 0.0),
+                                gpui::linear_color_stop(gpui::Hsla::from(rgba(b)), 1.0),
+                            ),
+                        )
+                        .corner_radii(corners),
+                    );
                 }
             })
             .on_change(move |v, window, cx| hue_pick(v, window, cx))
@@ -3699,17 +3723,31 @@ impl WindowState {
         let opaque = current.with_alpha(255);
         let alpha_slider = crate::widgets::Slider::new(alpha, 0.0, 1.0)
             .id(format!("color-{}-alpha", c.uid))
+            .track_h(16.0)
+            .thumb(16.0)
+            .row_h(16.0)
+            .knob()
+            .thumb_fill(rgba(current.with_alpha(255)))
             .step(1.0 / 255.0)
             .paint_track(move |window, bounds, _| {
-                crate::widgets::swatch::checker(window, bounds, 4.0);
-                window.paint_quad(gpui::fill(
-                    bounds,
-                    gpui::linear_gradient(
-                        90.0,
-                        gpui::linear_color_stop(gpui::transparent_black(), 0.0),
-                        gpui::linear_color_stop(gpui::Hsla::from(rgba(opaque)), 1.0),
-                    ),
-                ));
+                let r = f32::from(bounds.size.height) * 0.5;
+                crate::widgets::swatch::checker_capsule(window, bounds, 4.0, r);
+                window.paint_quad(
+                    gpui::fill(
+                        bounds,
+                        gpui::linear_gradient(
+                            90.0,
+                            gpui::linear_color_stop(gpui::transparent_black(), 0.0),
+                            gpui::linear_color_stop(gpui::Hsla::from(rgba(opaque)), 1.0),
+                        ),
+                    )
+                    .corner_radii(Corners {
+                        top_left: px(r),
+                        top_right: px(r),
+                        bottom_right: px(r),
+                        bottom_left: px(r),
+                    }),
+                );
             })
             .on_change(move |v, window, cx| alpha_pick(opaque.with_alpha((v * 255.0).round() as u8), window, cx))
             .render();
@@ -3803,19 +3841,18 @@ impl WindowState {
         // ⑥ 对比度行：Figma `color_contrast_info` 的圆片 + 比值 + AA 圆标 + 设置下拉。
         //    对比基准是选区快照里的真实背景（父级纯色 fill / 页面背景），不是画布默认色。
         let ratio_label = format!("{aa_ratio:.2} : 1");
-        let bg_dot = aa_bg;
-        let ratio_canvas = gpui::canvas(
-            |_, _, _| {},
-            move |bounds, _, window, _| {
-                let r = f32::from(bounds.size.width).min(f32::from(bounds.size.height)) * 0.5;
-                let cx = f32::from(bounds.origin.x) + r;
-                let cy = f32::from(bounds.origin.y) + r;
-                let bg_rgba = rgba(crate::widgets::swatch::color32(bg_dot.with_alpha(1.0)));
-                window.paint_quad(gpui::fill(Bounds { origin: point(px(cx - r), px(cy - r)), size: size(px(r), px(2.0 * r)) }, bg_rgba));
-                window.paint_quad(gpui::fill(Bounds { origin: point(px(cx), px(cy - r)), size: size(px(r), px(2.0 * r)) }, rgba(Color32::WHITE)));
-            },
-        )
-        .size(pt(14.0));
+        // 背景圆取真实对比度背景色；前景弧是 16pt 图标（单色 mask），填当前文字色。
+        let ratio_icon = div()
+            .relative()
+            .size(pt(16.0))
+            .child(
+                div().absolute().left_0().top_0().child(crate::widgets::icon::paint(
+                    Icon::ContrastBackground,
+                    rgba(crate::widgets::swatch::color32(aa_bg.with_alpha(1.0))),
+                    16.0,
+                )),
+            )
+            .child(div().absolute().left_0().top_0().child(crate::widgets::icon::paint(Icon::ContrastForeground, rgba(current.with_alpha(255)), 16.0)));
 
         // AA 圆标：未达标带斜杠，点击取白线上最近达标色并应用（复用取色器现有 pick）。
         let aa_pick = pick.clone();
@@ -3874,7 +3911,7 @@ impl WindowState {
             .flex()
             .items_center()
             .gap(pt(6.0))
-            .child(div().size(pt(14.0)).child(ratio_canvas))
+            .child(ratio_icon)
             .child(div().flex_1().text_size(pt(11.0)).text_color(rgba(t.text)).child(ratio_label))
             .child(aa_trigger)
             .child(settings_trigger);
@@ -3985,7 +4022,7 @@ impl WindowState {
             col = col.child(
                 div()
                     .w(pt(PANEL_W))
-                    .h(pt(48.0))
+                    .h(pt(44.0))
                     .px(pt(16.0))
                     .flex()
                     .items_center()
@@ -4006,7 +4043,17 @@ impl WindowState {
                                 eyedrop_cmds.push(Cmd { id: "edit.pickColor", params: Some(json!({ "apply": false })) });
                             }),
                     )
-                    .child(div().flex_1().min_w(pt(0.0)).h(pt(48.0)).flex().flex_col().justify_between().child(hue_slider).child(alpha_slider)),
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(pt(0.0))
+                            .h(pt(44.0))
+                            .flex()
+                            .flex_col()
+                            .gap(pt(12.0))
+                            .child(hue_slider)
+                            .child(alpha_slider),
+                    ),
             );
             col = col.child(div().w(pt(PANEL_W)).h(pt(40.0)).px(pt(16.0)).flex().items_center().gap(pt(8.0)).child(format_select).child(fields_row));
             col = col.child(swatch_panel);
@@ -6674,9 +6721,16 @@ fn ring_bary(p: (f32, f32), tri: &[(f32, f32); 3]) -> [f32; 3] {
 }
 
 fn ring_sv(weights: [f32; 3]) -> (f32, f32) {
-    let v = (weights[0] + weights[1]).clamp(0.0, 1.0);
-    let s = if v > 0.0001 { (weights[0] / v).clamp(0.0, 1.0) } else { 0.0 };
-    (s, v)
+    // 拖到三角形外时先把负权重夹到 0，再把 wa+wb 归一化到 1（投影到最近边）；
+    // 三角形内部 wa+wb 本来就 <=1，保持 v=wa+wb 不变。
+    let wa = weights[0].max(0.0);
+    let wb = weights[1].max(0.0);
+    let sum = wa + wb;
+    if sum > 1.0 {
+        return (wa / sum, 1.0);
+    }
+    let s = if sum > 0.0001 { (wa / sum).clamp(0.0, 1.0) } else { 0.0 };
+    (s, sum)
 }
 
 fn ring_point_from_sv(tri: &[(f32, f32); 3], s: f32, v: f32) -> (f32, f32) {
@@ -6689,73 +6743,138 @@ fn ring_point_from_sv(tri: &[(f32, f32); 3], s: f32, v: f32) -> (f32, f32) {
     )
 }
 
-/// 外环 120 段扇形 + 内部三角 16×16 重心网格。用实色小三角替代 GPUI 缺失的锥形渐变。
-fn paint_ring(window: &mut Window, bounds: Bounds<Pixels>, hue: f32) {
-    let bx = f32::from(bounds.origin.x);
-    let by = f32::from(bounds.origin.y);
-    let cx = bx + RING_R;
-    let cy = by + RING_R;
-    let segments = 120;
-    for i in 0..segments {
-        let h0 = i as f32 * 360.0 / segments as f32;
-        let h1 = (i + 1) as f32 * 360.0 / segments as f32 + 0.05;
-        let o0 = ring_point(cx, cy, RING_R, h0);
-        let o1 = ring_point(cx, cy, RING_R, h1);
-        let i1 = ring_point(cx, cy, RING_INNER_R, h1);
-        let i0 = ring_point(cx, cy, RING_INNER_R, h0);
-        let mut b = gpui::PathBuilder::fill();
-        b.move_to(point(px(o0.0), px(o0.1)));
-        b.line_to(point(px(o1.0), px(o1.1)));
-        b.line_to(point(px(i1.0), px(i1.1)));
-        b.line_to(point(px(i0.0), px(i0.1)));
-        b.close();
-        if let Ok(path) = b.build() {
-            window.paint_path(path, rgba(hsb_color((h0 + h1) * 0.5, 1.0, 1.0)));
+thread_local! {
+    /// 环状色域只随 hue 变化：3× 超采样生成一张 RGBA 贴图，避免用几百个小三角拼渐变。
+    static RING_TEXTURE: RefCell<Option<(u32, Arc<RenderImage>)>> = const { RefCell::new(None) };
+}
+
+#[derive(Clone, Copy)]
+enum SpectrumShape {
+    Square,
+    Ring,
+}
+
+/// 色板某点的实际颜色：方形按 s=x/W、v=1-y/H；环形按外环色相 / 内部固定三角的重心插值。
+fn spectrum_color_at(shape: SpectrumShape, x: f32, y: f32, hue: f32) -> Option<Color32> {
+    match shape {
+        SpectrumShape::Square => Some(hsb_color(hue, (x / SPECTRUM).clamp(0.0, 1.0), (1.0 - y / SPECTRUM).clamp(0.0, 1.0))),
+        SpectrumShape::Ring => {
+            let dx = x - RING_R;
+            let dy = y - RING_R;
+            let r = (dx * dx + dy * dy).sqrt();
+            if (RING_INNER_R..=RING_R).contains(&r) {
+                return Some(hsb_color(hue_at(dx, dy), 1.0, 1.0));
+            }
+            if r >= RING_INNER_R {
+                return None;
+            }
+            let tri = ring_triangle(RING_R, RING_R);
+            let w = ring_bary((x, y), &tri);
+            if w.iter().all(|v| *v >= -0.001) {
+                let (s, v) = ring_sv(w);
+                Some(hsb_color(hue, s, v))
+            } else {
+                None
+            }
         }
     }
-    let tri = ring_triangle(cx, cy);
-    let n = 16;
-    let at = |wa: usize, wb: usize| {
-        let a = wa as f32 / n as f32;
-        let b = wb as f32 / n as f32;
-        let c = 1.0 - a - b;
-        (
-            tri[0].0 * a + tri[1].0 * b + tri[2].0 * c,
-            tri[0].1 * a + tri[1].1 * b + tri[2].1 * c,
-        )
-    };
-    for i in 0..n {
-        for j in 0..n - i {
-            let p0 = at(i, j);
-            let p1 = at(i + 1, j);
-            let p2 = at(i, j + 1);
-            let (s, v) = ring_sv([(i as f32 + 0.33) / n as f32, (j as f32 + 0.33) / n as f32, 0.0]);
-            let mut b = gpui::PathBuilder::fill();
-            b.move_to(point(px(p0.0), px(p0.1)));
-            b.line_to(point(px(p1.0), px(p1.1)));
-            b.line_to(point(px(p2.0), px(p2.1)));
-            b.close();
-            if let Ok(path) = b.build() {
-                window.paint_path(path, rgba(hsb_color(hue, s, v)));
-            }
-            if i + j + 1 < n {
-                let p3 = at(i + 1, j + 1);
-                let (s2, v2) = ring_sv([(i as f32 + 0.66) / n as f32, (j as f32 + 0.66) / n as f32, 0.0]);
-                let mut b = gpui::PathBuilder::fill();
-                b.move_to(point(px(p1.0), px(p1.1)));
-                b.line_to(point(px(p3.0), px(p3.1)));
-                b.line_to(point(px(p2.0), px(p2.1)));
-                b.close();
-                if let Ok(path) = b.build() {
-                    window.paint_path(path, rgba(hsb_color(hue, s2, v2)));
+}
+
+/// 对比度不足处铺 6 pt 点阵（白色 25% 圆点），覆盖整个色板但只在未达标区域落点。
+fn paint_contrast_dots(window: &mut Window, bounds: Bounds<Pixels>, shape: SpectrumShape, hue: f32, bg: figcraft_color::Color, min: f32) {
+    let bx = f32::from(bounds.origin.x);
+    let by = f32::from(bounds.origin.y);
+    let mut y = 5.0f32;
+    while y < SPECTRUM {
+        let mut x = 5.0f32;
+        while x < SPECTRUM {
+            if let Some(c) = spectrum_color_at(shape, x, y, hue) {
+                if figcraft_color::contrast_ratio(picker_color(c), bg) < min {
+                    let dot = Bounds { origin: point(px(bx + x - 1.0), px(by + y - 1.0)), size: size(px(2.0), px(2.0)) };
+                    window.paint_quad(
+                        gpui::fill(dot, rgba(Color32::from_white_alpha(64))).corner_radii(Corners {
+                            top_left: px(1.0),
+                            top_right: px(1.0),
+                            bottom_right: px(1.0),
+                            bottom_left: px(1.0),
+                        }),
+                    );
                 }
+            }
+            x += 6.0;
+        }
+        y += 6.0;
+    }
+}
+
+/// 3× 超采样生成环状色域贴图；缓存按 0.25° 量化，拖动时不会每帧重新分配纹理。
+fn ring_texture(hue: f32) -> Arc<RenderImage> {
+    let key = (hue.rem_euclid(360.0) * 4.0).round() as u32;
+    if let Some((cached, image)) = RING_TEXTURE.with(|slot| slot.borrow().clone()) {
+        if cached == key {
+            return image;
+        }
+    }
+    let scale = 3u32;
+    let side = (SPECTRUM as u32) * scale;
+    let mut data = vec![0u8; (side * side * 4) as usize];
+    for y in 0..side {
+        for x in 0..side {
+            let lx = (x as f32 + 0.5) / scale as f32;
+            let ly = (y as f32 + 0.5) / scale as f32;
+            if let Some(c) = spectrum_color_at(SpectrumShape::Ring, lx, ly, hue) {
+                let [r, g, b, a] = c.0;
+                let i = ((y * side + x) * 4) as usize;
+                data[i..i + 4].copy_from_slice(&[r, g, b, a]);
+            }
+        }
+    }
+    let image = crate::canvas::render_worker::wrap_rgba(side, side, data);
+    RING_TEXTURE.with(|slot| *slot.borrow_mut() = Some((key, image.clone())));
+    image
+}
+
+/// 环状色域：贴图 + 对比度点阵 + 达标白线。外环拖色相、内部固定三角拖 s/v。
+fn paint_ring(window: &mut Window, bounds: Bounds<Pixels>, hue: f32, bg: figcraft_color::Color, min: Option<f32>) {
+    let image = ring_texture(hue);
+    let _ = window.paint_image(bounds, Corners::default(), image, 0, false);
+    if let Some(min) = min {
+        paint_contrast_dots(window, bounds, SpectrumShape::Ring, hue, bg, min);
+        let bx = f32::from(bounds.origin.x);
+        let by = f32::from(bounds.origin.y);
+        let tri = ring_triangle(RING_R, RING_R);
+        let sc = rgba(Color32::from_rgba_unmultiplied(255, 255, 255, 217));
+        let (lighter, darker) = figcraft_color::boundary_line(bg, min, hue);
+        for line in [lighter, darker] {
+            if line.len() < 2 {
+                continue;
+            }
+            let mut b = gpui::PathBuilder::stroke(px(1.25));
+            for (i, p) in line.iter().enumerate() {
+                let q = ring_point_from_sv(&tri, p.s, p.v);
+                let point = point(px(bx + q.0), px(by + q.1));
+                if i == 0 {
+                    b.move_to(point);
+                } else {
+                    b.line_to(point);
+                }
+            }
+            if let Ok(path) = b.build() {
+                window.paint_path(path, sc);
             }
         }
     }
 }
 
 /// 环状色域元素：外环拖色相、内部三角拖饱和度/明度，布局与方形色域同为 208×208。
-fn ring_spectrum(c: &ColorState, hsb: figcraft_color::Hsb, current: Color32, pick: Rc<dyn Fn(Color32, &mut Window, &mut App)>) -> gpui::Div {
+fn ring_spectrum(
+    c: &ColorState,
+    hsb: figcraft_color::Hsb,
+    current: Color32,
+    bg: figcraft_color::Color,
+    min: Option<f32>,
+    pick: Rc<dyn Fn(Color32, &mut Window, &mut App)>,
+) -> gpui::Div {
     let hit: Rc<Cell<Option<Bounds<Pixels>>>> = Rc::new(Cell::new(None));
     let prepaint = hit.clone();
     let click_hit = hit.clone();
@@ -6783,7 +6902,7 @@ fn ring_spectrum(c: &ColorState, hsb: figcraft_color::Hsb, current: Color32, pic
     let canvas = gpui::canvas(
         move |bounds, _, _| prepaint.set(Some(bounds)),
         move |bounds, _, window, _| {
-            paint_ring(window, bounds, hue);
+            paint_ring(window, bounds, hue, bg, min);
             let dragging = drag_win.clone();
             let hit = move_hit.clone();
             let pick = move_pick.clone();
@@ -6799,13 +6918,13 @@ fn ring_spectrum(c: &ColorState, hsb: figcraft_color::Hsb, current: Color32, pic
                     let h = hue_at(x - RING_R, y - RING_R);
                     pick(h, keep.0, keep.1, window, cx);
                 } else {
+                    // 拖到三角形外也照常写颜色：把重心坐标夹到三角形上，
+                    // 手柄沿边界自由滑动，不会因为「刚出边就守卫 return」卡住。
                     let h = start_hue.get();
                     let tri = ring_triangle(RING_R, RING_R);
-                    let weights = ring_bary((x, y), &tri);
-                    if weights.iter().all(|w| *w >= -0.02) {
-                        let (s, v) = ring_sv(weights);
-                        pick(h, s, v, window, cx);
-                    }
+                    let weights = ring_bary((x, y), &tri).map(|w| w.max(0.0));
+                    let (s, v) = ring_sv(weights);
+                    pick(h, s, v, window, cx);
                 }
             });
             let dragging = drag_up.clone();
@@ -6824,7 +6943,7 @@ fn ring_spectrum(c: &ColorState, hsb: figcraft_color::Hsb, current: Color32, pic
         .w(pt(SPECTRUM))
         .h(pt(SPECTRUM))
         .child(canvas.size_full())
-        .child(picker_knob(ring_knob.0, ring_knob.1, Color32::WHITE))
+        .child(picker_knob(ring_knob.0, ring_knob.1, hsb_color(hue, 1.0, 1.0)))
         .child(picker_knob(sv.0, sv.1, current.with_alpha(255)))
         .on_mouse_down(MouseButton::Left, move |e, window, cx| {
             let Some(b) = click_hit.get() else { return };
@@ -6840,8 +6959,9 @@ fn ring_spectrum(c: &ColorState, hsb: figcraft_color::Hsb, current: Color32, pic
                 return;
             }
             let tri = ring_triangle(RING_R, RING_R);
-            let weights = ring_bary((x, y), &tri);
-            if weights.iter().all(|w| *w >= -0.02) {
+            let weights = ring_bary((x, y), &tri).map(|w| w.max(0.0));
+            let sum = weights[0] + weights[1] + weights[2];
+            if sum > 0.0 {
                 drag_down.set(Some(1));
                 start_hue_down.set(hue);
                 let (s, v) = ring_sv(weights);

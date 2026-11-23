@@ -36,6 +36,16 @@ pub struct Slider {
     max: f32,
     step: f32,
     width: Option<f32>,
+    /// 轨道高度：通用默认 6 pt，取色器的色相 / 透明度滑条按设计稿用 16 pt。
+    track_h: f32,
+    /// 滑块直径：通用默认 12 pt，取色器用 16 pt。
+    thumb: f32,
+    /// 整条滑条元素高度：通用默认 24 pt，取色器两条 16 pt 滑条 + 12 pt 间距 = 44 pt 行。
+    row_h: f32,
+    /// 滑块中心填色（取色器用它显示当前颜色预览）。
+    thumb_fill: Option<gpui::Rgba>,
+    /// 是否用取色器统一的圆形手柄（18pt 阴影 + 16pt 白环 + 中心色）。
+    knob: bool,
     /// 跨帧稳定的拖拽 id（同一条滑条每帧都会重建，靠它复用拖拽状态）。
     id: Option<SharedString>,
     show_value: bool,
@@ -60,6 +70,11 @@ impl Slider {
             max,
             step: 0.0,
             width: None,
+            track_h: TRACK_H,
+            thumb: THUMB,
+            row_h: 24.0,
+            thumb_fill: None,
+            knob: false,
             show_value: false,
             suffix: SharedString::default(),
             precision: 0,
@@ -80,6 +95,36 @@ impl Slider {
     /// 固定宽度；不设时占满容器。
     pub fn width(mut self, w: f32) -> Self {
         self.width = Some(w);
+        self
+    }
+
+    /// 轨道高度（取色器色相 / 透明度滑条传 16）。
+    pub fn track_h(mut self, h: f32) -> Self {
+        self.track_h = h.max(2.0);
+        self
+    }
+
+    /// 滑块直径（取色器传 16）。
+    pub fn thumb(mut self, d: f32) -> Self {
+        self.thumb = d.max(6.0);
+        self
+    }
+
+    /// 整条滑条元素高度（取色器传 16，两条 16 + 12 间距正好是设计稿的 44）。
+    pub fn row_h(mut self, h: f32) -> Self {
+        self.row_h = h.max(self.track_h.max(self.thumb));
+        self
+    }
+
+    /// 取色器统一圆形手柄样式。
+    pub fn knob(mut self) -> Self {
+        self.knob = true;
+        self
+    }
+
+    /// 滑块中心填色，色相滑条用它预览当前颜色。
+    pub fn thumb_fill(mut self, color: impl Into<gpui::Rgba>) -> Self {
+        self.thumb_fill = Some(color.into());
         self
     }
 
@@ -144,7 +189,9 @@ impl Slider {
         let paint_track = self.paint_track.clone();
         let track = rgba(t.border);
         let fill = rgba(t.accent);
-        let thumb_fill = rgba(t.panel);
+        let track_h = self.track_h;
+        let thumb = self.thumb;
+        let thumb_fill = self.thumb_fill.unwrap_or_else(|| rgba(t.panel));
         let thumb_edge = rgba(t.border_strong);
         let value_text = format!("{:.*}{}", self.precision, value, self.suffix);
 
@@ -154,24 +201,33 @@ impl Slider {
                 let x0 = f32::from(bounds.origin.x);
                 let w = f32::from(bounds.size.width).max(1.0);
                 let cy = f32::from(bounds.origin.y) + f32::from(bounds.size.height) / 2.0;
-                let track_rect = Bounds { origin: gpui::point(px(x0), px(cy - TRACK_H / 2.0)), size: gpui::size(px(w), px(TRACK_H)) };
+                let track_rect = Bounds { origin: gpui::point(px(x0), px(cy - track_h / 2.0)), size: gpui::size(px(w), px(track_h)) };
                 if let Some(paint) = &paint_track {
                     paint(window, track_rect, frac);
                 } else {
-                    window.paint_quad(gpui::fill(track_rect, track).corner_radii(pill(TRACK_H / 2.0)));
-                    let filled = (w * frac).max(TRACK_H);
-                    let fill_rect = Bounds { origin: track_rect.origin, size: gpui::size(px(filled.min(w)), px(TRACK_H)) };
-                    window.paint_quad(gpui::fill(fill_rect, fill).corner_radii(pill(TRACK_H / 2.0)));
+                    window.paint_quad(gpui::fill(track_rect, track).corner_radii(pill(track_h / 2.0)));
+                    let filled = (w * frac).max(track_h);
+                    let fill_rect = Bounds { origin: track_rect.origin, size: gpui::size(px(filled.min(w)), px(track_h)) };
+                    window.paint_quad(gpui::fill(fill_rect, fill).corner_radii(pill(track_h / 2.0)));
                 }
                 // 滑块：外圈 1pt 描边感的边缘 + 亮面，中心压在取值位置。
                 let cx = x0 + w * frac;
-                let edge = Bounds { origin: gpui::point(px(cx - THUMB / 2.0), px(cy - THUMB / 2.0)), size: gpui::size(px(THUMB), px(THUMB)) };
-                window.paint_quad(gpui::fill(edge, thumb_edge).corner_radii(pill(THUMB / 2.0)));
-                let inner = Bounds {
-                    origin: gpui::point(px(cx - THUMB / 2.0 + 1.0), px(cy - THUMB / 2.0 + 1.0)),
-                    size: gpui::size(px(THUMB - 2.0), px(THUMB - 2.0)),
-                };
-                window.paint_quad(gpui::fill(inner, thumb_fill).corner_radii(pill((THUMB - 2.0) / 2.0)));
+                if self.knob {
+                    let shadow = Bounds { origin: gpui::point(px(cx - 9.0), px(cy - 9.0)), size: gpui::size(px(18.0), px(18.0)) };
+                    window.paint_quad(gpui::fill(shadow, rgba(crate::canvas::geom::Color32::from_black_alpha(20))).corner_radii(pill(9.0)));
+                    let ring = Bounds { origin: gpui::point(px(cx - 8.0), px(cy - 8.0)), size: gpui::size(px(16.0), px(16.0)) };
+                    window.paint_quad(gpui::fill(ring, rgba(crate::canvas::geom::Color32::WHITE)).corner_radii(pill(8.0)));
+                    let center = Bounds { origin: gpui::point(px(cx - 4.0), px(cy - 4.0)), size: gpui::size(px(8.0), px(8.0)) };
+                    window.paint_quad(gpui::fill(center, thumb_fill).corner_radii(pill(4.0)));
+                } else {
+                    let edge = Bounds { origin: gpui::point(px(cx - thumb / 2.0), px(cy - thumb / 2.0)), size: gpui::size(px(thumb), px(thumb)) };
+                    window.paint_quad(gpui::fill(edge, thumb_edge).corner_radii(pill(thumb / 2.0)));
+                    let inner = Bounds {
+                        origin: gpui::point(px(cx - thumb / 2.0 + 1.0), px(cy - thumb / 2.0 + 1.0)),
+                        size: gpui::size(px(thumb - 2.0), px(thumb - 2.0)),
+                    };
+                    window.paint_quad(gpui::fill(inner, thumb_fill).corner_radii(pill((thumb - 2.0) / 2.0)));
+                }
                 // 拖动监听挂在窗口级：指针一旦移出轨道就收不到元素的 move/up，滑块会卡在
                 // 拖动状态（用户实测「滑条拖动很怪 / 放不下」）。
                 {
@@ -228,7 +284,7 @@ impl Slider {
             })
             .child(canvas);
 
-        let mut row = div().h(px(24.0)).flex().flex_row().items_center().gap(px(8.0));
+        let mut row = div().h(px(self.row_h)).flex().flex_row().items_center().gap(px(8.0));
         if let Some(w) = self.width {
             row = row.w(px(w));
         } else {

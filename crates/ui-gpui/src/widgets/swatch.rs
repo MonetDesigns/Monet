@@ -37,6 +37,11 @@ pub fn checker(window: &mut Window, bounds: Bounds<Pixels>, cell: f32) {
     checker_rounded(window, bounds, cell, 0.0);
 }
 
+/// 胶囊轨道的棋盘底：左右两端按 `radius` 收圆，取色器透明度滑条用。
+pub fn checker_capsule(window: &mut Window, bounds: Bounds<Pixels>, cell: f32, radius: f32) {
+    checker_rounded(window, bounds, cell, radius);
+}
+
 /// [`checker`] whose corners round by `radius`, so a swatch's transparent background stays inside
 /// the swatch's rounded border.
 fn checker_rounded(window: &mut Window, bounds: Bounds<Pixels>, cell: f32, radius: f32) {

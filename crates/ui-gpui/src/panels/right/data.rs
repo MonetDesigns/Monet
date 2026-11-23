@@ -1499,8 +1499,9 @@ pub struct SectionData {
 }
 
 /// 取色器 AA 对比度的选区上下文（selection → picker）。右栏拿不到 doc，所以和别的节一样
-/// 每帧由 `read()` 读成快照：`bg` 是当前色要映在其上的背景（父节点第一个可见纯色 fill，
-/// 回退到页面背景）；`is_text` + `runs` 喂给 `figcraft_color::classify` 得到 auto 类别。
+/// 每帧由 `read()` 读成快照：`bg` 是当前色要映在其上的真实背景——把选区节点从渲染中跳过后，
+/// 在它的中心采一个页面像素（因此底下压着的是兄弟图层、组 fill 还是页面底色都能取到）；
+/// 采样失败才退回父链合成。`is_text` + `runs` 喂给 `figcraft_color::classify` 得到 auto 类别。
 #[derive(Clone, Debug, PartialEq)]
 pub struct ContrastContext {
     pub bg: figcraft_color::Color,
@@ -1515,6 +1516,26 @@ impl Default for ContrastContext {
     }
 }
 
+/// 在选区中心采一个「跳过选区本身」的页面像素。兄弟图层压在下面、父组有 fill、页面底色，
+/// 都会由渲染器按 z 序真实合成；这是「对象背后的颜色」，不是从父链猜出来的。
+fn sampled_behind_color(doc: &Document, ids: &[NodeId], page: Option<NodeId>, page_bg: figcraft_color::Color) -> Option<figcraft_color::Color> {
+    let page_id = page?;
+    let first = *ids.first()?;
+    let box_ = doc.world_bounds(first)?;
+    let cx = (box_.x0 + box_.x1) * 0.5;
+    let cy = (box_.y0 + box_.y1) * 0.5;
+    let view = figcraft_render::View { origin: (cx - 0.5, cy - 0.5), scale: 1.0, width: 1, height: 1 };
+    let opts = figcraft_render::Options {
+        background: Some(page_bg),
+        skip: ids.to_vec(),
+        ..figcraft_render::Options::default()
+    };
+    let pix = crate::render_stack::on_render_stack(|| figcraft_render::render_view_single(doc, page_id, &view, &opts))??;
+    let c = pix.pixel(0, 0)?.demultiply();
+    let (r, g, b, a) = (c.red(), c.green(), c.blue(), c.alpha());
+    (a > 0).then(|| figcraft_color::Color::from_rgba8(r, g, b, 255))
+}
+
 fn read_contrast_context(doc: &Document, ids: &[NodeId], page: Option<NodeId>) -> ContrastContext {
     let page_bg = page
         .and_then(|p| doc.node(p))
@@ -1526,11 +1547,23 @@ fn read_contrast_context(doc: &Document, ids: &[NodeId], page: Option<NodeId>) -
     let Some(first) = ids.first().and_then(|id| doc.node(*id)) else {
         return ContrastContext { bg: page_bg, ..ContrastContext::default() };
     };
-    let bg = first
-        .parent
-        .and_then(|pid| doc.node(pid))
-        .and_then(|p| p.fills.iter().find(|paint| paint.visible).and_then(|paint| paint.solid_color()))
-        .unwrap_or(page_bg);
+    // 首选渲染采样：底下压着的兄弟图层也要算进来。只有采样失败时才退回父链合成。
+    let bg = sampled_behind_color(doc, ids, page, page_bg).unwrap_or_else(|| {
+        let mut ancestors = Vec::new();
+        let mut parent = first.parent;
+        while let Some(pid) = parent {
+            let Some(node) = doc.node(pid) else { break };
+            ancestors.push(node);
+            parent = node.parent;
+        }
+        let mut bg = page_bg;
+        for node in ancestors.iter().rev() {
+            if let Some(fill) = node.fills.iter().find(|paint| paint.visible).and_then(|paint| paint.solid_color()) {
+                bg = figcraft_color::composite(fill, bg);
+            }
+        }
+        bg
+    });
     let mut runs = Vec::new();
     let mut is_text = true;
     for id in ids {
@@ -2736,6 +2769,23 @@ mod tests {
         assert_eq!(d.assets.len(), 1);
         assert_eq!(d.assets[0].id, id);
         assert!(d.assets[0].thumb.is_some(), "Assets 行带着缩略图");
+    }
+
+    /// 对比度背景取的是「对象背后真正画出来的颜色」：压在下面的兄弟图层必须算进去，
+    /// 不能退回页面底色或只沿父链猜。
+    #[test]
+    fn contrast_background_samples_the_layer_behind_the_selection() {
+        let mut s = Session::with_document(Document::new("contrast-behind"));
+        let behind = s.execute("shape.rectangle", &json!({ "x": 0.0, "y": 0.0, "width": 64.0, "height": 64.0 })).expect("behind rect");
+        let behind: NodeId = serde_json::from_value(behind["id"].clone()).expect("id");
+        s.execute("fill.set", &json!({ "ids": [behind], "color": "#FF0000" })).expect("behind fill");
+        let front = s.execute("shape.rectangle", &json!({ "x": 0.0, "y": 0.0, "width": 64.0, "height": 64.0 })).expect("front rect");
+        let front: NodeId = serde_json::from_value(front["id"].clone()).expect("id");
+        s.execute("fill.set", &json!({ "ids": [front], "color": "#0000FF" })).expect("front fill");
+        let doc = s.doc().expect("doc");
+        let page = doc.pages.first().copied();
+        let ctx = read_contrast_context(doc, &[front], page);
+        assert_eq!(ctx.bg.to_hex(), "FF0000", "the red sibling under the blue selection is the contrast background");
     }
 }
 

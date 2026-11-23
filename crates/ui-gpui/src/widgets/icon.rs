@@ -203,6 +203,10 @@ pub enum Icon {
     StrokeSideCheck,
     ConstraintHorizontal,
     ConstraintVertical,
+    /// 对比度行左侧图标的背景圆（填真实背景色）。
+    ContrastBackground,
+    /// 对比度行左侧图标的前景弧（填当前选中色）。
+    ContrastForeground,
 }
 
 impl Icon {
@@ -323,6 +327,8 @@ impl Icon {
         Icon::StrokeSideCheck,
         Icon::ConstraintHorizontal,
         Icon::ConstraintVertical,
+        Icon::ContrastBackground,
+        Icon::ContrastForeground,
     ];
 
     /// Stable file stem (kebab-case).
@@ -442,6 +448,8 @@ impl Icon {
             Icon::StrokeSideCheck => "stroke-side-check",
             Icon::ConstraintHorizontal => "constraint-horizontal",
             Icon::ConstraintVertical => "constraint-vertical",
+            Icon::ContrastBackground => "ui-contrast-bg",
+            Icon::ContrastForeground => "ui-contrast-fg",
         }
     }
 
@@ -562,6 +570,8 @@ impl Icon {
             Icon::StrokeSideCheck => "stroke-side-check",
             Icon::ConstraintHorizontal => "constraint-horizontal",
             Icon::ConstraintVertical => "constraint-vertical",
+            Icon::ContrastBackground => "ui-contrast-bg",
+            Icon::ContrastForeground => "ui-contrast-fg",
         }
     }
 
@@ -692,6 +702,8 @@ static ICON_FILES: &[(&str, &[u8])] = &[
     ("layout-padding-top", include_bytes!("../../assets/icons/layout-padding-top.svg")),
     ("constraint-horizontal", include_bytes!("../../assets/icons/constraint-horizontal.svg")),
     ("constraint-vertical", include_bytes!("../../assets/icons/constraint-vertical.svg")),
+    ("ui-contrast-bg", include_bytes!("../../assets/icons/ui-contrast-bg.svg")),
+    ("ui-contrast-fg", include_bytes!("../../assets/icons/ui-contrast-fg.svg")),
 ];
 
 fn file_bytes(rel: &str) -> Option<&'static [u8]> {
@@ -864,7 +876,7 @@ mod tests {
 
     #[test]
     fn every_icon_has_an_external_svg_with_the_shared_stroke() {
-        assert_eq!(Icon::ALL.len(), 114, "Icon 变体数变了：请同步 ALL / asset_name / asset_rel / 本断言");
+        assert_eq!(Icon::ALL.len(), 116, "Icon 变体数变了：请同步 ALL / asset_name / asset_rel / 本断言");
         let mut names = HashSet::new();
         for &icon in Icon::ALL {
             let rel = icon.asset_rel();
