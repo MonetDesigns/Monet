@@ -256,6 +256,9 @@ impl<'a> Mapper<'a> {
             "fillGeometry",
             "strokeGeometry",
             "vectorNetwork",
+            // A terminal snapshot can use a network blob as its only geometry: keep the
+            // reference key too, or the flattened child loses that geometry entirely.
+            "vectorNetworkRef",
         ] {
             if let Some(value) = vector.get(key) {
                 out.insert(key.to_string(), value.clone());
