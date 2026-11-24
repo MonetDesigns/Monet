@@ -226,7 +226,6 @@ pub fn tick(st: &mut PresentState, geom: Option<&Geom>, now: f64) {
 
     let Some(disp) = st.disp.clone() else { return };
     let (root, place, clip) = g.active(st.current);
-    st.shown = Some((root, place, clip));
     // 响应式原型：被演示画框按设备屏幕 / 可用区改尺寸（eGUI `respond_to`，在 layout 里做）。
     let base = st.laid.clone().unwrap_or_else(|| disp.clone());
     let settings = super::scroll::page_settings(&base, st.current);

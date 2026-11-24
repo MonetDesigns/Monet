@@ -155,8 +155,10 @@ pub struct OverlayState {
     pub position: OverlayPosition,
     pub close_on_outside: bool,
     pub background: Option<figcraft_color::Color>,
-    /// 触发层的页矩形（用于 `anchor_to` 的相对偏移）。
-    pub anchor: Option<figcraft_geom::Rect>,
+    /// 触发层当时的**屏幕**矩形（eGUI `OverlayState.anchor`）：手动位置与 `anchor_to`
+    /// 都从它算相对偏移。存屏幕坐标而不是页坐标，浮层在浮层里打开（此时当前根是
+    /// 浮层，页→屏映射不再适用）时也不会退回屏幕居中。
+    pub anchor: Option<RectPx>,
     pub offset: Option<[f64; 2]>,
     pub anchor_to: OverlayAnchor,
     pub opened: f64,
@@ -259,8 +261,6 @@ pub struct PresentState {
     rev: u64,
     /// 响应式原型要把被演示画框改成的大小（eGUI `Presenter::fit`）。
     fit: Option<(f64, f64)>,
-    /// 最近一次摆放的 (根, 摆放, 可视区)：把屏幕矩形换回页矩形用（eGUI `Presenter::shown`）。
-    shown: Option<(NodeId, Place, RectPx)>,
     scroll_anim: Option<ScrollAnim>,
     /// 时钟（秒）：定时器 / 覆盖层动画 / 闪烁都以它为准。
     pub clock: f64,
@@ -332,7 +332,6 @@ impl PresentState {
             disp_rev: u64::MAX,
             rev: 0,
             fit: None,
-            shown: None,
             scroll_anim: None,
             clock: 0.0,
             epoch: Instant::now(),
@@ -572,18 +571,6 @@ impl PresentState {
     /// 显示文档（渲染 / 命中用）。
     pub fn display(&self) -> Option<&Document> {
         self.disp.as_ref().or(self.laid.as_ref())
-    }
-
-    /// 屏幕矩形 → 页坐标矩形（eGUI `Presenter::page_rect`）。只有触发层属于当前根时才有意义。
-    fn page_rect(&self, r: Option<RectPx>) -> Option<Rect> {
-        let (root, place, _) = self.shown?;
-        if root != self.current {
-            return None;
-        }
-        let r = r?;
-        let (x0, y0) = place.page((f64::from(r.x), f64::from(r.y)));
-        let (x1, y1) = place.page((f64::from(r.x + r.w), f64::from(r.y + r.h)));
-        Some(Rect::new(x0, y0, x1, y1))
     }
 
     fn ensure_loaded(&mut self, doc: &Document) {
@@ -854,14 +841,13 @@ impl PresentState {
                 if !doc.contains(*dest) {
                     return false;
                 }
-                let at = self.page_rect(rect);
                 self.delays_fired.retain(|(id, _)| !doc.is_ancestor(*dest, *id));
                 self.overlays.push(OverlayState {
                     id: *dest,
                     position: *position,
                     close_on_outside: *close_on_outside,
                     background: *background,
-                    anchor: at,
+                    anchor: rect,
                     offset: *offset,
                     anchor_to: *anchor,
                     opened: now,
@@ -876,7 +862,6 @@ impl PresentState {
                 if !doc.contains(*dest) {
                     return false;
                 }
-                let at = self.page_rect(rect);
                 self.delays_fired.retain(|(id, _)| !doc.is_ancestor(*dest, *id));
                 match self.overlays.last_mut() {
                     Some(o) => {
@@ -885,14 +870,14 @@ impl PresentState {
                         o.transition = tr;
                         o.dur = dur;
                         o.easing = easing;
-                        o.anchor = at;
+                        // 换内容不换锚点（eGUI `SwapOverlay`）：子菜单贴在打开它的那一层上。
                     }
                     None => self.overlays.push(OverlayState {
                         id: *dest,
                         position: OverlayPosition::Center,
                         close_on_outside: true,
                         background: None,
-                        anchor: at,
+                        anchor: rect,
                         offset: None,
                         anchor_to: OverlayAnchor::Screen,
                         opened: now,
