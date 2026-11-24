@@ -37,6 +37,47 @@ pub fn checker(window: &mut Window, bounds: Bounds<Pixels>, cell: f32) {
     checker_rounded(window, bounds, cell, 0.0);
 }
 
+/// 胶囊轨道的棋盘底：左右两端按 `radius` 收圆，取色器透明度滑条用。
+pub fn checker_capsule(window: &mut Window, bounds: Bounds<Pixels>, cell: f32, radius: f32) {
+    let x0 = f32::from(bounds.origin.x);
+    let y0 = f32::from(bounds.origin.y);
+    let w = f32::from(bounds.size.width).max(1.0);
+    let h = f32::from(bounds.size.height).max(1.0);
+    let r = radius.min(w * 0.5).min(h * 0.5);
+    // 普通圆角 swatch 走原来的逐角处理；胶囊（r = h/2）必须按圆帽边界逐行裁剪，
+    // 否则 x=0..cell、y 靠近中线那一格会伸到半圆外面。
+    if r < h * 0.5 - 0.01 {
+        checker_rounded(window, bounds, cell, radius);
+        return;
+    }
+    let (x1, y1) = (x0 + w, y0 + h);
+    quad(window, x0, y0, x1, y1, rgba(crate::canvas::geom::Color32::WHITE), r);
+    let cell = cell.max(1.0);
+    let nx = (w / cell).ceil() as i32;
+    let gray = rgba(crate::canvas::geom::Color32::from_gray(0xE6));
+    for y in 0..h.ceil() as i32 {
+        let ry0 = (y0 + y as f32).max(y0);
+        let ry1 = (y0 + y as f32 + 1.0).min(y1);
+        if ry0 >= ry1 {
+            continue;
+        }
+        let dy = (y as f32 + 0.5) - h * 0.5;
+        let inset = if dy.abs() < r { r - (r * r - dy * dy).sqrt() } else { r };
+        let (sx0, sx1) = ((x0 + inset).max(x0), (x1 - inset).min(x1));
+        let yi = (y as f32 / cell).floor() as i32;
+        for xi in 0..nx {
+            if (xi + yi) % 2 == 0 {
+                continue;
+            }
+            let cx0 = (x0 + xi as f32 * cell).max(sx0);
+            let cx1 = (x0 + (xi + 1) as f32 * cell).min(sx1);
+            if cx0 < cx1 {
+                quad(window, cx0, ry0, cx1, ry1, gray, 0.0);
+            }
+        }
+    }
+}
+
 /// [`checker`] whose corners round by `radius`, so a swatch's transparent background stays inside
 /// the swatch's rounded border.
 fn checker_rounded(window: &mut Window, bounds: Bounds<Pixels>, cell: f32, radius: f32) {

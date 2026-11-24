@@ -25,7 +25,7 @@ use figcraft_doc::proto::{Action, AnimationOp, Easing, OverlayAnchor, OverlayPos
 use figcraft_doc::{Document, NodeId};
 use figcraft_geom::Rect;
 use figcraft_i18n::tr;
-use gpui::{Div, ImageSource, MouseButton, SharedString, Stateful, div, img, prelude::*, px};
+use gpui::{Div, ImageSource, MouseButton, SharedString, Stateful, div, img, prelude::*, px, svg};
 use std::collections::BTreeMap;
 use std::time::Instant;
 
@@ -1108,18 +1108,18 @@ fn dev_rect(r: RectPx, area: RectPx, radius: f32, color: gpui::Rgba) -> Div {
 
 /// 机身：eGUI `device::device_body`。颜色带 + 黑色玻璃，Mac / Desktop 另加底座。
 fn device_body(stage: Div, g: &Geom, area: RectPx) -> Div {
-    let Some(d) = g.device else { return stage };
+    let Some(d) = g.device.as_ref() else { return stage };
     let w = layout::upright_w(g.screen.w, g.screen.h, g.landscape);
-    let (b, screen_r) = layout::bezel(d.name, w);
+    let (b, screen_r) = layout::bezel(&d.name, w);
     let band = layout::rim(w, b);
-    let rgb = g.color.map(|c| c.rgb).unwrap_or([0x2C, 0x2C, 0x2E]);
+    let rgb = g.color.as_ref().map(|c| c.rgb).unwrap_or([0x2C, 0x2C, 0x2E]);
     let body = shade(rgb, 0.0);
     let edge = shade(rgb, -0.3);
     let metal = shade(rgb, 0.12);
     let glass = gpui::rgb(0x16_16_18);
     let slab = RectPx { x: g.screen.x - b, y: g.screen.y - b, w: g.screen.w + 2.0 * b, h: g.screen.h + 2.0 * b };
     let mut out = stage;
-    match d.name {
+    match d.name.as_str() {
         "MacBook Air" => {
             let inner = slab;
             let base = RectPx { x: inner.x - w * 0.08, y: inner.y + inner.h, w: inner.w + w * 0.16, h: (w * 0.022).max(6.0) };
@@ -1153,18 +1153,34 @@ fn device_body(stage: Div, g: &Geom, area: RectPx) -> Div {
                     out = out.child(dev_rect(btn, area, 1.0, edge));
                 }
             }
-            out = out.child(dev_rect(slab, area, screen_r + b, body));
-            out = out.child(
-                div()
-                    .absolute()
-                    .left(px(slab.x - area.x))
-                    .top(px(slab.y - area.y))
-                    .w(px(slab.w))
-                    .h(px(slab.h))
-                    .rounded(px(screen_r + b))
-                    .border_1()
-                    .border_color(edge),
-            );
+            // 外置设备框：机身形状来自 devices/<family>/<variant>.svg（外置文件，
+            // 和笔刷 / WGSL 一样不在二进制里），颜色由 text_color 注入；没有外置框时
+            // 回退到几何绘制。按钮 / 玻璃带仍是固定逻辑。
+            if let Some(frame) = g.frame.as_ref() {
+                out = out.child(
+                    svg()
+                        .path(SharedString::from(format!("device:{frame}")))
+                        .absolute()
+                        .left(px(slab.x - area.x))
+                        .top(px(slab.y - area.y))
+                        .w(px(slab.w))
+                        .h(px(slab.h))
+                        .text_color(body),
+                );
+            } else {
+                out = out.child(dev_rect(slab, area, screen_r + b, body));
+                out = out.child(
+                    div()
+                        .absolute()
+                        .left(px(slab.x - area.x))
+                        .top(px(slab.y - area.y))
+                        .w(px(slab.w))
+                        .h(px(slab.h))
+                        .rounded(px(screen_r + b))
+                        .border_1()
+                        .border_color(edge),
+                );
+            }
             let glass_band = b - band;
             let inset = RectPx { x: slab.x + band, y: slab.y + band, w: slab.w - 2.0 * band, h: slab.h - 2.0 * band };
             out = out.child(dev_rect(inset, area, (screen_r + glass_band).min(glass_band * 3.4).max(0.0), glass));
@@ -1180,9 +1196,9 @@ fn device_body(stage: Div, g: &Geom, area: RectPx) -> Div {
 /// 角：每个 `r×r` 方块只把朝向屏幕中心的那一角做成圆角，正好盖住「方形角落减去四分之一圆」
 /// 的区域。
 fn device_glass(stage: Div, g: &Geom, area: RectPx) -> Div {
-    let Some(d) = g.device else { return stage };
+    let Some(d) = g.device.as_ref() else { return stage };
     let w = layout::upright_w(g.screen.w, g.screen.h, g.landscape);
-    let (_, screen_r) = layout::bezel(d.name, w);
+    let (_, screen_r) = layout::bezel(&d.name, w);
     let r = screen_r.min(g.screen.w / 2.0).min(g.screen.h / 2.0);
     if !(r.is_finite() && r > 0.0) {
         return stage;
@@ -1276,7 +1292,7 @@ pub fn render(app: &CanvasApp, state: &PresentState, vp: (f32, f32), canvas: (f3
 
     let mut stage = div().relative().flex_1().min_h(px(0.0)).w_full().overflow_hidden();
     if let Some(g) = g.as_ref() {
-        let screen_r = g.device.map_or(0.0, |d| layout::bezel(d.name, layout::upright_w(g.screen.w, g.screen.h, g.landscape)).1);
+        let screen_r = g.device.as_ref().map_or(0.0, |d| layout::bezel(&d.name, layout::upright_w(g.screen.w, g.screen.h, g.landscape)).1);
         // 1) 设备机身（屏幕外侧的颜色带 + 黑色玻璃）。
         stage = device_body(stage, g, area);
         // 2) 屏幕层：剪到屏幕矩形；圆角由第 8 步的 `device_glass` 遮罩补齐。
@@ -1367,7 +1383,7 @@ pub fn render(app: &CanvasApp, state: &PresentState, vp: (f32, f32), canvas: (f3
             }
         }
         // 5) 手机镜头药丸（eGUI `device_glass`）。
-        if let Some(d) = g.device
+        if let Some(d) = g.device.as_ref()
             && d.name.starts_with("iPhone")
         {
             let uw = layout::upright_w(g.screen.w, g.screen.h, g.landscape);
@@ -1602,13 +1618,46 @@ pub fn render(app: &CanvasApp, state: &PresentState, vp: (f32, f32), canvas: (f3
             Box::new(|_, _| SET_DEVICE.with(|d| *d.borrow_mut() = Some("None".to_string()))),
         );
         list = list.child(none);
-        for d in PrototypeSettings::DEVICES.iter() {
-            let n = d.name;
-            list = list.child(menu_item(
-                SharedString::from(n),
-                settings.device == n,
-                Box::new(move |_, _| SET_DEVICE.with(|d| *d.borrow_mut() = Some(n.to_string()))),
-            ));
+        // 顶层只列 family；悬停某一行展开它的 variants（仿主菜单的二级菜单）。
+        let hover = HOVER_FAMILY.with(|h| h.borrow().clone());
+        for family in figcraft_engine::devices::family_names() {
+            let is_hover = hover.as_deref() == Some(family.as_str());
+            let selected = settings.device == family;
+            let f_pick = family.clone();
+            let f_variants = family.clone();
+            let row = menu_item(
+                SharedString::from(family.clone()),
+                selected,
+                Box::new(move |_, _| SET_DEVICE.with(|d| *d.borrow_mut() = Some(f_pick.clone()))),
+            );
+            let row = row
+                .on_mouse_move(move |_, _window, _cx| {
+                    HOVER_FAMILY.with(|h| {
+                        let mut h = h.borrow_mut();
+                        if h.as_deref() != Some(family.as_str()) {
+                            *h = Some(family.clone());
+                        }
+                    });
+                })
+                .child(paint_icon(Icon::ChevronRight, rgba(t.menu_text), 12.0));
+            list = list.child(row);
+            if is_hover {
+                for v in figcraft_engine::devices::variant_names(&f_variants) {
+                    let selected_v = settings.variant == v || (settings.variant.is_empty() && settings.device == v);
+                    let vv = v.clone();
+                    list = list.child(
+                        menu_item(
+                            SharedString::from(format!("    {v}")),
+                            selected_v,
+                            Box::new(move |_, _| {
+                                SET_VARIANT.with(|x| *x.borrow_mut() = Some(vv.clone()));
+                                SET_DEVICE.with(|d| *d.borrow_mut() = None);
+                            }),
+                        )
+                        .pl(pt(18.0)),
+                    );
+                }
+            }
         }
         Some(list)
     } else {
@@ -1923,8 +1972,12 @@ thread_local! {
     /// 顶栏 / 导航按钮：3 退出、4 重播、5 评论、6 Inspect、8 上一帧、9 下一帧、
     /// 10 设备菜单、11 缩放菜单。
     pub static ACTION: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
-    /// 导航栏下拉里选中的设备（`proto.settings` 落地）。
+    /// 导航栏下拉里选中的设备 family（`proto.settings` 落地）。
     pub static SET_DEVICE: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+    /// 导航栏下拉里选中的分型号（`proto.settings` 的 `variant`）。
+    pub static SET_VARIANT: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+    /// 设备菜单里当前悬停的 family（悬停展开二级菜单，仿主菜单 flyout）。
+    pub static HOVER_FAMILY: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
     /// 导航栏下拉里选中的缩放档。
     pub static SET_SCALE: std::cell::RefCell<Option<u8>> = const { std::cell::RefCell::new(None) };
 }
@@ -1976,9 +2029,14 @@ pub fn push_down(x: f64, y: f64) {
     input::push(Ev::Down(x, y));
 }
 
-/// 取走导航栏下拉的选择（由 lib.rs 的 sync 帧落地命令）。
+/// 取走导航栏下拉的 family 选择（由 lib.rs 的 sync 帧落地命令）。
 pub fn take_device_choice() -> Option<String> {
     SET_DEVICE.with(|d| d.borrow_mut().take())
+}
+
+/// 取走导航栏下拉的分型号选择。
+pub fn take_variant_choice() -> Option<String> {
+    SET_VARIANT.with(|d| d.borrow_mut().take())
 }
 
 pub fn take_scale_choice() -> Option<ScaleMode> {

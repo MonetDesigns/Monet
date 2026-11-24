@@ -16,11 +16,11 @@ use super::sections::{icon_cmd, icon_row, pick_dropdown, slot};
 use crate::panels::{Cmd, PROTO_EDITOR_SLOT, RightFields, RowEditCtx};
 use crate::widgets::popover::{self, popover_body, popover_window, title_text};
 use crate::widgets::{
-    Icon, IconButton, PanelSection, SectionHeaderVariant, field_row, field_row_full, field_row_full_trailing, pt, rgba, sublabel_row, sublabel_row2,
-    swatch, tokens,
+    Icon, IconButton, PanelSection, SectionHeaderVariant, SegItem, Segmented, field_row, field_row_full, field_row_full_trailing, pt, rgba,
+    sublabel_row, sublabel_row2, swatch, tokens,
 };
 use figcraft_i18n::tr;
-use gpui::{AnyElement, App, Div, IntoElement, Pixels, SharedString, Size, div, point, prelude::*, px};
+use gpui::{AnyElement, App, Div, IntoElement, Pixels, SharedString, Size, Window, div, point, prelude::*, px};
 use serde_json::{Value, json};
 
 thread_local! {
@@ -33,8 +33,8 @@ pub(crate) fn panel(f: &RightFields, d: &PanelData, cx: &mut App, n: &mut usize)
     let p = &d.proto;
     let mut body = div().flex().flex_col().w_full();
     if d.header.is_none() {
-        // ── 无选中：flows + settings（egui `prototype()` 前半段）──
-        body = body.child(flows_section(f, p, cx, n)).child(crate::panels::sep()).child(settings_section(f, p, cx, n));
+        // ── 无选中：只画重写的原型设置（不再显示 Flow starting points）──
+        body = body.child(settings_section(f, p, cx, n));
         return body;
     }
     // ── 有选中：flow（顶层 frame 才有）+ interactions + scroll ──
@@ -113,83 +113,49 @@ fn desc_line(text: &str) -> Div {
 // Prototype settings（无选中）
 // ───────────────────────────────────────────────────────────────────────────────────────────────
 
-fn settings_section(f: &RightFields, p: &ProtoData, cx: &mut App, n: &mut usize) -> PanelSection {
+fn settings_section(f: &RightFields, p: &ProtoData, _cx: &mut App, _n: &mut usize) -> PanelSection {
     let s = &p.settings;
     let preview = icon_cmd(Icon::Eye, "proto.preview", json!({}), f, false);
     let mut sec = PanelSection::new(tr("Prototype settings")).header_trail(icon_row(vec![preview]));
 
-    // ── Device + 旋转（只有会转的设备才给旋转按钮）──
-    sec = sec.child(sublabel_row(tr("Device")));
-    let devices: Vec<(String, &'static str, Value)> = s.devices.iter().map(|d| (d.to_string(), "proto.settings", json!({ "device": d }))).collect();
-    let device_dd = pick_dropdown(f, s.device.clone(), 0.0, devices);
-    let mut trail: Vec<IconButton> = Vec::new();
-    if s.rotates {
-        let next = if s.landscape { "portrait" } else { "landscape" };
-        trail.push(icon_cmd(Icon::Rotate, "proto.settings", json!({ "rotation": next }), f, s.landscape));
-    }
-    sec = sec.child(field_row(vec![device_dd.into_any_element()], trail));
+    // ── 第一栏：总设备（family）下拉，占满一行，无小标题 ──
+    let families: Vec<(String, &'static str, Value)> = s
+        .devices
+        .iter()
+        .map(|d| (d.clone(), "proto.settings", json!({ "device": d })))
+        .collect();
+    let family_dd = pick_dropdown(f, s.device.clone(), 0.0, families);
+    sec = sec.child(field_row_full(family_dd));
 
-    // ── 机身色 ──
+    // ── 第二栏：分型号下拉 + 机身色下拉，同一行，无小标题 ──
+    let is_special = s.device == figcraft_doc::proto::PrototypeSettings::CUSTOM_DEVICE || s.device == "None";
+    let mut second: Vec<gpui::AnyElement> = Vec::new();
+    if !is_special && !s.variants.is_empty() {
+        let variants: Vec<(String, &'static str, Value)> = s
+            .variants
+            .iter()
+            .map(|v| (v.clone(), "proto.settings", json!({ "variant": v })))
+            .collect();
+        let current = if s.variant.is_empty() { s.variants.first().cloned().unwrap_or_default() } else { s.variant.clone() };
+        second.push(pick_dropdown(f, current, 0.0, variants).into_any_element());
+    }
     if !s.colors.is_empty() {
-        sec = sec.child(sublabel_row(tr("Color")));
-        let rows: Vec<(String, &'static str, Value)> =
-            s.colors.iter().map(|(name, _)| (name.to_string(), "proto.settings", json!({ "color": name }))).collect();
-        let rgb = s.colors.iter().find(|(name, _)| *name == s.color).map(|(_, c)| *c).unwrap_or([0, 0, 0]);
-        let dot = swatch(figcraft_color::Paint::solid(figcraft_color::Color::from_rgb8_const(rgb[0], rgb[1], rgb[2])), 16.0);
-        let line = div().flex().flex_row().items_center().gap(pt(8.0)).w_full().child(dot).child(pick_dropdown(f, s.color.clone(), 0.0, rows));
-        sec = sec.child(field_row_full(line));
+        let rows: Vec<(String, &'static str, Value)> = s.colors.iter().map(|(name, _)| (name.clone(), "proto.settings", json!({ "color": name }))).collect();
+        second.push(pick_dropdown(f, s.color.clone(), 0.0, rows).into_any_element());
+    }
+    if !second.is_empty() {
+        sec = sec.child(field_row(second, Vec::<IconButton>::new()));
     }
 
-    // ── 自定义尺寸（W/H + 交换）──
-    if let Some((w, h)) = s.custom {
-        sec = sec.child(sublabel_row(tr("Size")));
-        let wf = f.row_field(
-            cx,
-            slot(n),
-            &num(w),
-            RowEditCtx {
-                cmd: "proto.settings",
-                params: json!({}),
-                key: "width",
-                scale: 1.0,
-                string_value: false,
-                paint: None,
-                nest: None,
-                nest_key: None,
-                paint_color: None,
-            },
-        );
-        let hf = f.row_field(
-            cx,
-            slot(n),
-            &num(h),
-            RowEditCtx {
-                cmd: "proto.settings",
-                params: json!({}),
-                key: "height",
-                scale: 1.0,
-                string_value: false,
-                paint: None,
-                nest: None,
-                nest_key: None,
-                paint_color: None,
-            },
-        );
-        let swap = icon_cmd(Icon::Rotate, "proto.settings", json!({ "width": h, "height": w }), f, false);
-        sec = sec.child(field_row(vec![wf.into_any_element(), hf.into_any_element()], vec![swap]));
-    }
-
-    // ── Responsive ──
-    let resp = icon_cmd(Icon::Check, "proto.settings", json!({ "responsive": !s.responsive }), f, s.responsive);
-    sec = sec.child(field_row(vec![plain_label(tr("Responsive"))], vec![resp]));
-
-    // ── Background（色块 + hex 输入）──
-    sec = sec.child(sublabel_row(tr("Background")));
+    // ── 第三栏：原型背景色 + 竖/横二元选择器，同一行，无小标题 ──
     let bg = &s.background;
     let color = figcraft_color::Color::from_hex_or_name(bg).unwrap_or(figcraft_color::Color::from_rgb8_const(0x1E, 0x1E, 0x1E));
-    let hex = f.row_field(
-        cx,
-        slot(n),
+    let mut third: Vec<gpui::AnyElement> = Vec::new();
+    let dot = swatch(figcraft_color::Paint::solid(color), 16.0);
+    third.push(div().flex().flex_row().items_center().gap(pt(8.0)).child(dot).into_any_element());
+    let bg_field = f.row_field(
+        _cx,
+        slot(_n),
         bg,
         RowEditCtx {
             cmd: "proto.settings",
@@ -203,9 +169,25 @@ fn settings_section(f: &RightFields, p: &ProtoData, cx: &mut App, n: &mut usize)
             paint_color: None,
         },
     );
-    let dot = swatch(figcraft_color::Paint::solid(color), 16.0);
-    let line = div().flex().flex_row().items_center().gap(pt(8.0)).w_full().child(dot).child(hex);
-    sec.child(field_row_full(line))
+    third.push(bg_field.into_any_element());
+    // 竖屏 / 横屏：通用 Segmented 二元选择器（固定设置，不在 JSON 里）。
+    let cmds = f.cmds.clone();
+    let rotating = s.rotates;
+    let orientation = Segmented::new(vec![SegItem::text(tr("Portrait")), SegItem::text(tr("Landscape"))])
+        .active(Some(if s.landscape { 1 } else { 0 }))
+        .on_pick(move |i: usize, _w: &mut Window, _cx: &mut App| {
+            if !rotating {
+                return;
+            }
+            cmds.push(Cmd {
+                id: "proto.settings",
+                params: Some(json!({ "rotation": if i == 1 { "landscape" } else { "portrait" } })),
+            });
+            cmds.wake();
+        });
+    let orientation = if s.rotates { orientation.build() } else { orientation.build().opacity(0.4) };
+    sec = sec.child(field_row(third, vec![orientation.into_any_element()]));
+    sec
 }
 
 fn num(v: f64) -> String {

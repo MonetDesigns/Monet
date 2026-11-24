@@ -35,6 +35,16 @@ pub struct PaintRow {
     pub bind_field: String,
     /// 该字段可绑定的颜色变量名列表（点绑定按钮时弹出的菜单）。
     pub variables: Vec<String>,
+    /// 图片填充：当前图片键与原始字节（上传新图时走 `image.replace` 的真实命令）。
+    pub image: Option<(String, Option<figcraft_doc::ImageData>)>,
+    /// 图片自带的色彩配置描述（只在取色器打开时用，不在右栏快照里栅格化）。
+    pub image_profile: Option<String>,
+    /// 图片解码时用的文档色彩配置。
+    pub image_color_profile: figcraft_color::ColorProfile,
+    /// 文件里保存的图片调整预设。
+    pub image_presets: Vec<(String, figcraft_color::ImageFilters)>,
+    /// 可作为图案源、且与当前选区无关的图层（组件 + 顶层图层，最多 64 个）。
+    pub pattern_sources: Vec<(u64, String)>,
 }
 
 /// 一个 effect 行（egui `effects.rs::effects`）。
@@ -261,15 +271,20 @@ pub struct FlowRow {
 /// Prototype settings 的快照（egui `proto_panel.rs::settings`）。
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProtoSettingsData {
+    /// The chosen device family (from the external catalogue).
     pub device: String,
-    /// `PrototypeSettings::DEVICES` 的名字，外加 "None" / "Custom size"。
-    pub devices: Vec<&'static str>,
+    /// The chosen variant within the family (empty = family default).
+    pub variant: String,
+    /// Family names, plus "None" / "Custom size".
+    pub devices: Vec<String>,
+    /// Variants of the chosen family, for the second-level dropdown.
+    pub variants: Vec<String>,
     /// 该 device 能横竖旋转（手机 / 平板）。
     pub rotates: bool,
     pub landscape: bool,
     /// 当前 device 的机身色（设备没有颜色时为空）。
     pub color: String,
-    pub colors: Vec<(&'static str, [u8; 3])>,
+    pub colors: Vec<(String, [u8; 3])>,
     /// 自定义尺寸（`Some` 时才画 Size 行）。
     pub custom: Option<(f64, f64)>,
     pub responsive: bool,
@@ -330,7 +345,9 @@ impl Default for ProtoSettingsData {
     fn default() -> Self {
         Self {
             device: tr("None").into(),
+            variant: String::new(),
             devices: Vec::new(),
+            variants: Vec::new(),
             rotates: false,
             landscape: false,
             color: String::new(),
@@ -358,21 +375,25 @@ pub fn read_proto(doc: &Document, ids: &[NodeId], page: Option<NodeId>) -> Proto
     }
 
     // ── Prototype settings ──
-    let model = settings.model();
-    let mut devices: Vec<&'static str> = vec![tr_noop("None")];
-    devices.extend(PrototypeSettings::DEVICES.iter().map(|d| d.name));
-    devices.push(PrototypeSettings::CUSTOM_DEVICE);
+    let model = figcraft_engine::devices::presented_device(&settings);
+    let mut devices: Vec<String> = vec![tr_noop("None").to_string()];
+    devices.extend(figcraft_engine::devices::family_names());
+    devices.push(PrototypeSettings::CUSTOM_DEVICE.to_string());
+    let variants = figcraft_engine::devices::variant_names(&settings.device);
+    let colors: Vec<(String, [u8; 3])> = figcraft_engine::devices::colors_for(&settings.device, &settings.variant);
     let custom = (settings.device == PrototypeSettings::CUSTOM_DEVICE).then(|| {
-        let d = model.unwrap_or(PrototypeSettings::DEVICES[0]);
+        let d = model.clone().unwrap_or_else(|| figcraft_engine::devices::presented_device(&PrototypeSettings::default()).unwrap());
         (d.width, d.height)
     });
     p.settings = ProtoSettingsData {
         device: settings.device.clone(),
+        variant: settings.variant.clone(),
         devices,
-        rotates: model.is_some_and(|d| d.rotates),
+        variants,
+        rotates: figcraft_engine::devices::rotates(&settings),
         landscape: settings.landscape(),
-        color: settings.device_color().map(|c| c.name.to_string()).unwrap_or_default(),
-        colors: model.map(|m| m.colors.iter().map(|c| (c.name, c.rgb)).collect()).unwrap_or_default(),
+        color: figcraft_engine::devices::device_color(&settings).map(|c| c.name).unwrap_or_default(),
+        colors,
         custom,
         responsive: settings.responsive,
         background: settings.background.to_hex(),
@@ -1506,8 +1527,9 @@ pub struct SectionData {
 }
 
 /// 取色器 AA 对比度的选区上下文（selection → picker）。右栏拿不到 doc，所以和别的节一样
-/// 每帧由 `read()` 读成快照：`bg` 是当前色要映在其上的背景（父节点第一个可见纯色 fill，
-/// 回退到页面背景）；`is_text` + `runs` 喂给 `figcraft_color::classify` 得到 auto 类别。
+/// 每帧由 `read()` 读成快照：`bg` 是当前色要映在其上的真实背景——把选区节点从渲染中跳过后，
+/// 在它的中心采一个页面像素（因此底下压着的是兄弟图层、组 fill 还是页面底色都能取到）；
+/// 采样失败才退回父链合成。`is_text` + `runs` 喂给 `figcraft_color::classify` 得到 auto 类别。
 #[derive(Clone, Debug, PartialEq)]
 pub struct ContrastContext {
     pub bg: figcraft_color::Color,
@@ -1522,6 +1544,26 @@ impl Default for ContrastContext {
     }
 }
 
+/// 在选区中心采一个「跳过选区本身」的页面像素。兄弟图层压在下面、父组有 fill、页面底色，
+/// 都会由渲染器按 z 序真实合成；这是「对象背后的颜色」，不是从父链猜出来的。
+fn sampled_behind_color(doc: &Document, ids: &[NodeId], page: Option<NodeId>, page_bg: figcraft_color::Color) -> Option<figcraft_color::Color> {
+    let page_id = page?;
+    let first = *ids.first()?;
+    let box_ = doc.world_bounds(first)?;
+    let cx = (box_.x0 + box_.x1) * 0.5;
+    let cy = (box_.y0 + box_.y1) * 0.5;
+    let view = figcraft_render::View { origin: (cx - 0.5, cy - 0.5), scale: 1.0, width: 1, height: 1 };
+    let opts = figcraft_render::Options {
+        background: Some(page_bg),
+        skip: ids.to_vec(),
+        ..figcraft_render::Options::default()
+    };
+    let pix = crate::render_stack::on_render_stack(|| figcraft_render::render_view_single(doc, page_id, &view, &opts))??;
+    let c = pix.pixel(0, 0)?.demultiply();
+    let (r, g, b, a) = (c.red(), c.green(), c.blue(), c.alpha());
+    (a > 0).then(|| figcraft_color::Color::from_rgba8(r, g, b, 255))
+}
+
 fn read_contrast_context(doc: &Document, ids: &[NodeId], page: Option<NodeId>) -> ContrastContext {
     let page_bg = page
         .and_then(|p| doc.node(p))
@@ -1533,11 +1575,23 @@ fn read_contrast_context(doc: &Document, ids: &[NodeId], page: Option<NodeId>) -
     let Some(first) = ids.first().and_then(|id| doc.node(*id)) else {
         return ContrastContext { bg: page_bg, ..ContrastContext::default() };
     };
-    let bg = first
-        .parent
-        .and_then(|pid| doc.node(pid))
-        .and_then(|p| p.fills.iter().find(|paint| paint.visible).and_then(|paint| paint.solid_color()))
-        .unwrap_or(page_bg);
+    // 首选渲染采样：底下压着的兄弟图层也要算进来。只有采样失败时才退回父链合成。
+    let bg = sampled_behind_color(doc, ids, page, page_bg).unwrap_or_else(|| {
+        let mut ancestors = Vec::new();
+        let mut parent = first.parent;
+        while let Some(pid) = parent {
+            let Some(node) = doc.node(pid) else { break };
+            ancestors.push(node);
+            parent = node.parent;
+        }
+        let mut bg = page_bg;
+        for node in ancestors.iter().rev() {
+            if let Some(fill) = node.fills.iter().find(|paint| paint.visible).and_then(|paint| paint.solid_color()) {
+                bg = figcraft_color::composite(fill, bg);
+            }
+        }
+        bg
+    });
     let mut runs = Vec::new();
     let mut is_text = true;
     for id in ids {
@@ -1896,10 +1950,46 @@ fn paint_bind_key(n: &figcraft_doc::Node, fills: bool, index: usize) -> String {
     }
 }
 
-fn paint_rows(doc: &Document, ids: &[NodeId], fills: bool) -> Option<Vec<PaintRow>> {
+/// 图片填充的快照：原始字节留着给 `image.replace`，预览在右栏侧就栅格化成直 RGBA，
+/// 取色器只把字节包成贴图，不在浮层里再碰文档。
+fn image_snapshot(doc: &Document, paint: &Paint) -> (Option<(String, Option<figcraft_doc::ImageData>)>, Option<String>) {
+    let figcraft_color::PaintKind::Image(img) = &paint.kind else {
+        return (None, None);
+    };
+    let data = doc.images.get(&img.image).cloned();
+    let profile = figcraft_render::images::profile_name(&img.image, data.as_ref());
+    (Some((img.image.clone(), data)), profile)
+}
+
+/// 图案源：组件 + 当前页顶层图层，排除与选区互为祖先的（自己的子层不能平铺自己）。
+fn paint_pattern_sources(doc: &Document, ids: &[NodeId], page: Option<NodeId>) -> Vec<(u64, String)> {
+    let top = page.and_then(|p| doc.node(p)).map(|p| p.children.clone()).unwrap_or_default();
+    let comps = doc.nodes().filter(|n| matches!(n.kind, NodeKind::Component { .. })).map(|n| n.id);
+    let mut out = Vec::new();
+    for id in comps.chain(top) {
+        if ids.iter().any(|t| doc.is_ancestor(*t, id) || doc.is_ancestor(id, *t)) {
+            continue;
+        }
+        if out.iter().any(|(o, _)| *o == id.0) {
+            continue;
+        }
+        if let Some(n) = doc.node(id) {
+            out.push((id.0, n.name.clone()));
+        }
+        if out.len() >= 64 {
+            break;
+        }
+    }
+    out
+}
+
+fn paint_rows(doc: &Document, ids: &[NodeId], page: Option<NodeId>, fills: bool) -> Option<Vec<PaintRow>> {
     let list = common(doc, ids, |n| if fills { n.fills.clone() } else { n.strokes.clone() })?;
     let color_vars: Vec<String> =
         doc.variables.variables.iter().filter(|v| v.kind == figcraft_doc::VariableType::Color).map(|v| v.name.clone()).collect();
+    let pattern_sources = paint_pattern_sources(doc, ids, page);
+    let image_presets: Vec<(String, figcraft_color::ImageFilters)> =
+        doc.image_presets.iter().map(|p| (p.name.clone(), p.filters)).collect();
     Some(
         list.iter()
             .enumerate()
@@ -1909,6 +1999,7 @@ fn paint_rows(doc: &Document, ids: &[NodeId], fills: bool) -> Option<Vec<PaintRo
                     Some(c) => (true, c.to_hex()),
                     None => (false, crate::widgets::paint_name(p).to_string()),
                 };
+                let (image, image_profile) = image_snapshot(doc, p);
                 let key = ids.first().and_then(|id| doc.node(*id)).map(|n| paint_bind_key(n, fills, index)).unwrap_or_default();
                 let bound = ids
                     .first()
@@ -1927,6 +2018,11 @@ fn paint_rows(doc: &Document, ids: &[NodeId], fills: bool) -> Option<Vec<PaintRo
                     bound,
                     bind_field: key,
                     variables: color_vars.clone(),
+                    image,
+                    image_profile,
+                    image_color_profile: doc.color_profile,
+                    image_presets: image_presets.clone(),
+                    pattern_sources: pattern_sources.clone(),
                 }
             })
             .collect(),
@@ -2143,8 +2239,8 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
     // 多选主组件 → 「Combine as variants」按钮（lizard `combine_ui`）。
     d.combine_ids = if ids.len() >= 2 && figcraft_engine::cmd::component::can_combine_variants(doc, ids) { ids.to_vec() } else { Vec::new() };
 
-    d.fills = paint_rows(doc, ids, true);
-    d.strokes = paint_rows(doc, ids, false);
+    d.fills = paint_rows(doc, ids, page, true);
+    d.strokes = paint_rows(doc, ids, page, false);
     d.stroke_align = common(doc, ids, |n| n.stroke.align).map(|a| match a {
         figcraft_doc::StrokeAlign::Inside => tr("Inside"),
         figcraft_doc::StrokeAlign::Center => tr("Center"),
@@ -2743,6 +2839,23 @@ mod tests {
         assert_eq!(d.assets.len(), 1);
         assert_eq!(d.assets[0].id, id);
         assert!(d.assets[0].thumb.is_some(), "Assets 行带着缩略图");
+    }
+
+    /// 对比度背景取的是「对象背后真正画出来的颜色」：压在下面的兄弟图层必须算进去，
+    /// 不能退回页面底色或只沿父链猜。
+    #[test]
+    fn contrast_background_samples_the_layer_behind_the_selection() {
+        let mut s = Session::with_document(Document::new("contrast-behind"));
+        let behind = s.execute("shape.rectangle", &json!({ "x": 0.0, "y": 0.0, "width": 64.0, "height": 64.0 })).expect("behind rect");
+        let behind: NodeId = serde_json::from_value(behind["id"].clone()).expect("id");
+        s.execute("fill.set", &json!({ "ids": [behind], "color": "#FF0000" })).expect("behind fill");
+        let front = s.execute("shape.rectangle", &json!({ "x": 0.0, "y": 0.0, "width": 64.0, "height": 64.0 })).expect("front rect");
+        let front: NodeId = serde_json::from_value(front["id"].clone()).expect("id");
+        s.execute("fill.set", &json!({ "ids": [front], "color": "#0000FF" })).expect("front fill");
+        let doc = s.doc().expect("doc");
+        let page = doc.pages.first().copied();
+        let ctx = read_contrast_context(doc, &[front], page);
+        assert_eq!(ctx.bg.to_hex(), "FF0000", "the red sibling under the blue selection is the contrast background");
     }
 }
 

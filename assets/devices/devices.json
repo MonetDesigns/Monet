@@ -1,0 +1,633 @@
+{
+  "version": 1,
+  "families": [
+    {
+      "id": "iphone-17",
+      "name": "iPhone 17",
+      "variants": [
+        {
+          "name": "iPhone 17",
+          "frame": "iphone-17/iphone-17.svg",
+          "width": 402,
+          "height": 874,
+          "rotates": true,
+          "kind": "phone",
+          "colors": [
+            {
+              "name": "Black",
+              "rgb": [
+                56,
+                57,
+                61
+              ]
+            },
+            {
+              "name": "White",
+              "rgb": [
+                233,
+                233,
+                229
+              ]
+            }
+          ]
+        },
+        {
+          "name": "iPhone 17 Pro",
+          "frame": "iphone-17/iphone-17-pro.svg",
+          "width": 402,
+          "height": 874,
+          "rotates": true,
+          "kind": "phone",
+          "colors": [
+            {
+              "name": "Black",
+              "rgb": [
+                56,
+                57,
+                61
+              ]
+            },
+            {
+              "name": "Silver",
+              "rgb": [
+                215,
+                215,
+                213
+              ]
+            }
+          ]
+        },
+        {
+          "name": "iPhone 17 Pro Max",
+          "frame": "iphone-17/iphone-17-pro-max.svg",
+          "width": 440,
+          "height": 956,
+          "rotates": true,
+          "kind": "phone",
+          "colors": [
+            {
+              "name": "Black",
+              "rgb": [
+                56,
+                57,
+                61
+              ]
+            },
+            {
+              "name": "Silver",
+              "rgb": [
+                215,
+                215,
+                213
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "iphone-air",
+      "name": "iPhone Air",
+      "variants": [
+        {
+          "name": "iPhone Air",
+          "frame": "iphone-air/iphone-air.svg",
+          "width": 420,
+          "height": 912,
+          "rotates": true,
+          "kind": "phone",
+          "colors": [
+            {
+              "name": "Black",
+              "rgb": [
+                56,
+                57,
+                61
+              ]
+            },
+            {
+              "name": "Silver",
+              "rgb": [
+                215,
+                215,
+                213
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "iphone-16",
+      "name": "iPhone 16",
+      "variants": [
+        {
+          "name": "iPhone 16",
+          "frame": "iphone-16/iphone-16.svg",
+          "width": 393,
+          "height": 852,
+          "rotates": true,
+          "kind": "phone",
+          "colors": [
+            {
+              "name": "Black",
+              "rgb": [
+                58,
+                59,
+                63
+              ]
+            },
+            {
+              "name": "White",
+              "rgb": [
+                238,
+                237,
+                232
+              ]
+            },
+            {
+              "name": "Pink",
+              "rgb": [
+                236,
+                191,
+                203
+              ]
+            },
+            {
+              "name": "Teal",
+              "rgb": [
+                163,
+                207,
+                198
+              ]
+            },
+            {
+              "name": "Blue",
+              "rgb": [
+                114,
+                132,
+                212
+              ]
+            }
+          ]
+        },
+        {
+          "name": "iPhone 16 Pro",
+          "frame": "iphone-16/iphone-16-pro.svg",
+          "width": 402,
+          "height": 874,
+          "rotates": true,
+          "kind": "phone",
+          "colors": [
+            {
+              "name": "Black",
+              "rgb": [
+                59,
+                58,
+                56
+              ]
+            },
+            {
+              "name": "White",
+              "rgb": [
+                236,
+                235,
+                230
+              ]
+            }
+          ]
+        },
+        {
+          "name": "iPhone 16 Pro Max",
+          "frame": "iphone-16/iphone-16-pro-max.svg",
+          "width": 440,
+          "height": 956,
+          "rotates": true,
+          "kind": "phone",
+          "colors": [
+            {
+              "name": "Black",
+              "rgb": [
+                59,
+                58,
+                56
+              ]
+            },
+            {
+              "name": "White",
+              "rgb": [
+                236,
+                235,
+                230
+              ]
+            },
+            {
+              "name": "Natural",
+              "rgb": [
+                191,
+                185,
+                175
+              ]
+            },
+            {
+              "name": "Sand",
+              "rgb": [
+                198,
+                172,
+                143
+              ]
+            }
+          ]
+        },
+        {
+          "name": "iPhone 16 Plus",
+          "frame": "iphone-16/iphone-16-plus.svg",
+          "width": 430,
+          "height": 932,
+          "rotates": true,
+          "kind": "phone",
+          "colors": [
+            {
+              "name": "Black",
+              "rgb": [
+                58,
+                59,
+                63
+              ]
+            },
+            {
+              "name": "White",
+              "rgb": [
+                238,
+                237,
+                232
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "iphone-15",
+      "name": "iPhone 15",
+      "variants": [
+        {
+          "name": "iPhone 15 Pro",
+          "frame": "iphone-15/iphone-15-pro.svg",
+          "width": 393,
+          "height": 852,
+          "rotates": true,
+          "kind": "phone",
+          "colors": [
+            {
+              "name": "Black",
+              "rgb": [
+                59,
+                58,
+                56
+              ]
+            },
+            {
+              "name": "Silver",
+              "rgb": [
+                215,
+                215,
+                213
+              ]
+            }
+          ]
+        },
+        {
+          "name": "iPhone 15 Pro Max",
+          "frame": "iphone-15/iphone-15-pro-max.svg",
+          "width": 430,
+          "height": 932,
+          "rotates": true,
+          "kind": "phone",
+          "colors": [
+            {
+              "name": "Black",
+              "rgb": [
+                59,
+                58,
+                56
+              ]
+            },
+            {
+              "name": "Silver",
+              "rgb": [
+                215,
+                215,
+                213
+              ]
+            }
+          ]
+        },
+        {
+          "name": "iPhone 15 Plus",
+          "frame": "iphone-15/iphone-15-plus.svg",
+          "width": 430,
+          "height": 932,
+          "rotates": true,
+          "kind": "phone",
+          "colors": [
+            {
+              "name": "Black",
+              "rgb": [
+                58,
+                59,
+                63
+              ]
+            },
+            {
+              "name": "White",
+              "rgb": [
+                238,
+                237,
+                232
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "iphone-14",
+      "name": "iPhone 14",
+      "variants": [
+        {
+          "name": "iPhone 14 Pro",
+          "frame": "iphone-14/iphone-14-pro.svg",
+          "width": 393,
+          "height": 852,
+          "rotates": true,
+          "kind": "phone",
+          "colors": [
+            {
+              "name": "Black",
+              "rgb": [
+                59,
+                58,
+                56
+              ]
+            },
+            {
+              "name": "Silver",
+              "rgb": [
+                215,
+                215,
+                213
+              ]
+            }
+          ]
+        },
+        {
+          "name": "iPhone 14 Pro Max",
+          "frame": "iphone-14/iphone-14-pro-max.svg",
+          "width": 430,
+          "height": 932,
+          "rotates": true,
+          "kind": "phone",
+          "colors": [
+            {
+              "name": "Black",
+              "rgb": [
+                59,
+                58,
+                56
+              ]
+            },
+            {
+              "name": "Silver",
+              "rgb": [
+                215,
+                215,
+                213
+              ]
+            }
+          ]
+        },
+        {
+          "name": "iPhone 14",
+          "frame": "iphone-14/iphone-14.svg",
+          "width": 390,
+          "height": 844,
+          "rotates": true,
+          "kind": "phone",
+          "colors": [
+            {
+              "name": "Black",
+              "rgb": [
+                58,
+                59,
+                63
+              ]
+            },
+            {
+              "name": "White",
+              "rgb": [
+                238,
+                237,
+                232
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "android",
+      "name": "Android",
+      "variants": [
+        {
+          "name": "Android Compact",
+          "frame": "android/android-compact.svg",
+          "width": 412,
+          "height": 917,
+          "rotates": true,
+          "kind": "phone",
+          "colors": [
+            {
+              "name": "Black",
+              "rgb": [
+                46,
+                47,
+                51
+              ]
+            },
+            {
+              "name": "Silver",
+              "rgb": [
+                214,
+                216,
+                219
+              ]
+            },
+            {
+              "name": "Green",
+              "rgb": [
+                166,
+                192,
+                163
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Android Medium",
+          "frame": "android/android-medium.svg",
+          "width": 700,
+          "height": 840,
+          "rotates": true,
+          "kind": "tablet",
+          "colors": [
+            {
+              "name": "Black",
+              "rgb": [
+                46,
+                47,
+                51
+              ]
+            },
+            {
+              "name": "Silver",
+              "rgb": [
+                214,
+                216,
+                219
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ipad",
+      "name": "iPad",
+      "variants": [
+        {
+          "name": "iPad mini",
+          "frame": "ipad/ipad-mini.svg",
+          "width": 744,
+          "height": 1133,
+          "rotates": true,
+          "kind": "tablet",
+          "colors": [
+            {
+              "name": "Grey",
+              "rgb": [
+                106,
+                107,
+                111
+              ]
+            },
+            {
+              "name": "Silver",
+              "rgb": [
+                224,
+                225,
+                227
+              ]
+            },
+            {
+              "name": "Blue",
+              "rgb": [
+                156,
+                177,
+                201
+              ]
+            },
+            {
+              "name": "Purple",
+              "rgb": [
+                198,
+                188,
+                215
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "macbook",
+      "name": "MacBook",
+      "variants": [
+        {
+          "name": "MacBook Air",
+          "frame": "macbook/macbook-air.svg",
+          "width": 1280,
+          "height": 832,
+          "rotates": false,
+          "kind": "laptop",
+          "colors": [
+            {
+              "name": "Silver",
+              "rgb": [
+                201,
+                202,
+                206
+              ]
+            },
+            {
+              "name": "Grey",
+              "rgb": [
+                123,
+                124,
+                128
+              ]
+            },
+            {
+              "name": "Dark blue",
+              "rgb": [
+                46,
+                51,
+                61
+              ]
+            },
+            {
+              "name": "Cream",
+              "rgb": [
+                224,
+                217,
+                203
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "desktop",
+      "name": "Desktop",
+      "variants": [
+        {
+          "name": "Desktop",
+          "frame": "desktop/desktop.svg",
+          "width": 1440,
+          "height": 1024,
+          "rotates": false,
+          "kind": "desktop",
+          "colors": [
+            {
+              "name": "Silver",
+              "rgb": [
+                184,
+                185,
+                189
+              ]
+            },
+            {
+              "name": "Black",
+              "rgb": [
+                44,
+                44,
+                46
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

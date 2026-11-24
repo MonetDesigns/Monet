@@ -1,0 +1,10 @@
+[package]
+name = "figcraft-devices"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "External prototype device catalogue: device families, variants and frame artwork loaded from a JSON manifest in the user's devices directory"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }

@@ -246,6 +246,11 @@ impl Session {
                         for i in &ids {
                             let parent = doc.get(*i)?.parent.unwrap_or(page);
                             let idx = doc.index_in_parent(*i).map(|x| x + 1);
+                            // Alt 把组件集里的变体拖出去用：应当得到组件的**使用**（实例引用），
+                            // 而不是复制一个变体。把落点父级当成集合外，`copy_in_file` 就会
+                            // `create_instance_at`（变体留在集合内时才另建变体）。
+                            let from_set = doc.node(parent).is_some_and(|p| matches!(p.kind, NodeKind::ComponentSet { .. }));
+                            let (parent, idx) = if from_set { (page, None) } else { (parent, idx) };
                             copies.push(crate::components::copy_in_file(doc, *i, parent, idx)?);
                         }
                         crate::library::count_inserted(doc, &copies);

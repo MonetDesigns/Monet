@@ -1830,6 +1830,29 @@ impl CanvasView {
 
     /// 才真正有 UI 反应（以前 GPUI 完全不消费这些请求，我只能用右栏状态硬同步）。
 
+    /// `image.replace` 成功后原位刷新打开中的取色器。
+    fn refresh_picker_image(&mut self) {
+        let doc = {
+            let Ok(ds) = self.app.session.ds() else { return };
+            ds.doc.clone()
+        };
+        let Some(Popup::Window(w)) = &mut self.popup else { return };
+        w.refresh_color_from_doc(&doc);
+    }
+
+    /// 把图片字节按内容键注册到当前文档，返回键给取色器写 paint。
+    /// 图层 paint 不走这里（`image.replace` 自己注册），这里只服务样式 / 选区颜色目标。
+    fn register_image(&mut self, bytes: Vec<u8>) -> Option<String> {
+        use std::hash::{Hash, Hasher};
+        let (w, h) = image::ImageReader::new(std::io::Cursor::new(&bytes)).with_guessed_format().ok()?.into_dimensions().ok()?;
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        bytes.hash(&mut hasher);
+        let hash = format!("img{:016x}{:08x}", hasher.finish(), bytes.len());
+        let doc = self.app.session.doc_mut().ok()?;
+        doc.images.insert(hash.clone(), figcraft_doc::ImageData { bytes: std::sync::Arc::new(bytes), width: w, height: h });
+        Some(hash)
+    }
+
     fn sync_ui_requests(&mut self, cx: &mut Context<Self>) {
         if *self.extra_state.dismiss.borrow() {
             *self.extra_state.dismiss.borrow_mut() = false;
@@ -1887,6 +1910,23 @@ impl CanvasView {
 
                     cx.notify();
 
+                    continue;
+                }
+
+                // Crop image: the engine has already switched the fill to Crop mode; take the
+                // canvas over by closing the colour picker and selecting that one layer.
+                "image.crop" => {
+                    self.popup = None;
+                    self.app.crop = r
+                        .data
+                        .get("id")
+                        .and_then(figcraft_engine::params::id_of)
+                        .zip(r.data.get("index").and_then(serde_json::Value::as_u64))
+                        .map(|(id, i)| (id, i as usize));
+                    if let Some((id, _)) = self.app.crop {
+                        let _ = self.app.session.execute("select.set", &serde_json::json!({ "ids": [id] }));
+                    }
+                    cx.notify();
                     continue;
                 }
 
@@ -2630,6 +2670,13 @@ impl CanvasView {
         let action = present::ACTION.with(|a| a.replace(0));
 
         // 导航栏下拉：设备 / 缩放（eGUI `navigation_bar` 的两个 ComboBox）。
+        if let Some(variant) = present::take_variant_choice() {
+            let _ = self.app.session.execute("proto.settings", &serde_json::json!({ "variant": variant }));
+            if let Some(st) = self.present.as_mut() {
+                st.device_open = false;
+                st.reset_for_device();
+            }
+        }
         if let Some(device) = present::take_device_choice() {
             let _ = self.app.session.execute("proto.settings", &serde_json::json!({ "device": device }));
             if let Some(st) = self.present.as_mut() {
@@ -2924,6 +2971,11 @@ impl CanvasView {
 
                         // A23：导出命令没给路径时引擎只回 base64，UI 负责弹保存对话框落盘。
                         self.deliver_download(c.id, &result, cx);
+
+                        // 图片替换成功：原位刷新打开中的取色器 paint / 预览。
+                        if c.id == "image.replace" {
+                            self.refresh_picker_image();
+                        }
                     }
 
                     Err(e) => {
@@ -3702,7 +3754,8 @@ impl CanvasView {
     /// 必须补上 `dock().canvas_origin()`。egui 的 `canvas.rect.min` 本身就是窗口原点、
     /// 不需要这一步 —— 这正是原来输入框位置不对的原因。
     ///
-    /// 矩形公式逐项照抄 egui：`x = area.min.x`、`y = area.max.y - 16`、
+    /// 矩形公式：`x = area.min.x`、`y = area.min.y`（= 静态文字顶，命中区的顶边；底边是
+    /// 对象上边缘上方 `LABEL_GAP`，2026-11-22 设计稿）、
     /// `w = (text_w + 24).max(area.width).clamp(80, 480)`（宽度用真实量算，
     /// 不再是「字符数 × 6.5」的估算）。高度用 `LABEL_H`（18 = 静态行盒），不是 egui 的 16。
     fn label_rename_rect(&self, window: &Window, id: Option<figcraft_doc::NodeId>) -> Option<(f32, f32, f32)> {
@@ -3729,20 +3782,20 @@ impl CanvasView {
 
         let mut min_x = f32::MAX;
         let mut max_x = f32::MIN;
-        let mut max_y = f32::MIN;
+        let mut min_y = f32::MAX;
 
         for p in quad {
             let s = self.app.to_screen(p.x, p.y);
             min_x = min_x.min(s.x);
             max_x = max_x.max(s.x);
-            max_y = max_y.max(s.y);
+            min_y = min_y.min(s.y);
         }
 
         if min_x == f32::MAX {
             return None;
         }
 
-        let (x, y, w) = inline_input::label_rename_rect(min_x, max_x, max_y, f32::from(text_w), ox, oy);
+        let (x, y, w) = inline_input::label_rename_rect(min_x, min_y, max_x, f32::from(text_w), ox, oy);
         Some((x, y, w))
     }
 
@@ -4370,6 +4423,72 @@ impl CanvasView {
         self.open_context_items(pos, items, cx);
     }
 
+    /// 名称行右侧 16×16 图标槽的按下（画布标签层里画的，命中在这里先吃掉）。
+    ///
+    /// 最右的槽是开发状态：没有状态时点一下直接置「待开发」（绿色，圆角 3）；已有状态时
+    /// 在槽下方 6、水平居中弹出菜单（在开发模式中打开 / 移除状态）。变体组另有一个
+    /// 尺寸框下方 4 的「+」，点一下给这个组件集加一个变体。返回 `true` 表示这次按下已被
+    /// 按钮处理，不再走画布的命中（选框 / 拖动）。
+    fn label_slot_press(&mut self, pos: Pos2, cx: &mut Context<Self>) -> bool {
+        let hit = {
+            let Ok(ds) = self.app.session.ds() else { return false };
+            canvas::frame_labels::slot_at(&self.app, &ds.doc, ds.page, &ds.selection, pos)
+        };
+        let Some((hit, rect)) = hit else { return false };
+        match hit {
+            canvas::frame_labels::SlotHit::Status(id, has) => {
+                if !has {
+                    self.run_command("node.set", serde_json::json!({ "ids": [id.0], "props": { "devStatus": "readyForDev" } }), cx);
+                    return true;
+                }
+                self.open_dev_status_menu(id, rect, cx);
+                true
+            }
+            // 未选中且还没标签：这个槽没有悬停态 / 菜单，点一下直接置「待开发」。
+            canvas::frame_labels::SlotHit::Ready(id) => {
+                self.run_command("node.set", serde_json::json!({ "ids": [id.0], "props": { "devStatus": "readyForDev" } }), cx);
+                true
+            }
+            // 未选中但已有标签：先选中这个框，再打开菜单。
+            canvas::frame_labels::SlotHit::Menu(id) => {
+                self.run_command("select.set", serde_json::json!({ "ids": [id.0] }), cx);
+                self.open_dev_status_menu(id, rect, cx);
+                true
+            }
+            canvas::frame_labels::SlotHit::AddVariant(id) => {
+                self.run_command("component.addVariant", serde_json::json!({ "id": id.0 }), cx);
+                true
+            }
+        }
+    }
+
+    /// 开发状态槽的下拉：在开发模式中打开 / 移除状态。菜单在槽下方 6、与槽水平居中。
+    fn open_dev_status_menu(&mut self, id: NodeId, rect: canvas::geom::Rect, cx: &mut Context<Self>) {
+        let open = tr("Open in developer mode");
+        let remove = tr("Remove status");
+        let rows = vec![MenuRow::row(open), MenuRow::row(remove)];
+        // 菜单顶边 = 锚点底 + 4，所以锚点底取槽底 + 2 → 菜单落在槽下方 6；
+        // 菜单左边 = 槽中心 - 菜单宽 / 2 → 与槽水平居中。
+        let w = 180.0;
+        let (ox, oy) = self.dock().canvas_origin();
+        let anchor = Bounds { origin: gpui::point(px(rect.center().x - w / 2.0 + ox), px(rect.max.y + 2.0 + oy)), size: size(px(1.0), px(0.0)) };
+        let me = cx.entity();
+        let on_pick = Rc::new(move |label: &str, _w: &mut Window, cx: &mut App| {
+            if label == open {
+                me.update(cx, |cv, cx| {
+                    cv.run_command("select.set", serde_json::json!({ "ids": [id.0] }), cx);
+                    cv.fields.set_right_tab(2);
+                    cx.notify();
+                });
+            } else if label == remove {
+                me.update(cx, |cv, cx| {
+                    cv.run_command("node.set", serde_json::json!({ "ids": [id.0], "props": { "devStatus": "none" } }), cx)
+                });
+            }
+        });
+        self.open_menu(anchor, Some(w), rows, on_pick, cx);
+    }
+
     /// The Pages-panel row's right-click menu. Flat four rows, so it uses the same `MenuRow` +
     /// `open_menu` control as every other panel dropdown (egui's `context_popup`).
     fn open_page_context_menu(&mut self, id: NodeId, divider: bool, pointer: Point<Pixels>, cx: &mut Context<Self>) {
@@ -4856,6 +4975,14 @@ impl CanvasView {
 
             return;
         }
+
+        // 取色器的图片上传给样式 / 选区颜色目标用：字节注册进当前文档，
+        // 再由取色器自己的目标感知写回器替换 paint。
+        let root = cx.entity().downgrade();
+        w.set_image_callback(Rc::new(move |bytes, cx: &mut App| {
+            let this = root.upgrade()?;
+            this.update(cx, |cv, _| cv.register_image(bytes))
+        }));
 
         self.popup = Some(Popup::Window(w));
 
@@ -5607,7 +5734,12 @@ impl Render for CanvasView {
                     paint.kind =
                         figcraft_color::PaintKind::Gradient(figcraft_color::Gradient::default_for(figcraft_color::GradientKind::Linear, base));
                 }
-                let picker = popovers::PaintPicker { paint, on_write: std::rc::Rc::new(|_, _, _| {}), styles: Vec::new() };
+                let picker = popovers::PaintPicker {
+                    paint,
+                    on_write: std::rc::Rc::new(|_, _, _| {}),
+                    styles: Vec::new(),
+                    extras: popovers::PaintPickerExtras::default(),
+                };
                 let w = popovers::WindowState::color(
                     cx,
                     gpui::point(px(160.0), px(60.0)),
@@ -6222,6 +6354,15 @@ impl Render for CanvasView {
                     this.pointer = Some(pos);
 
                     this.primary_down = true;
+
+                    // 名称行右侧的 16×16 图标槽（开发状态 / 变体组「+」）画在标签层里，
+                    // 命中先在这里吃掉，否则会变成一次画布按下（选框 / 拖动）。
+
+                    if !this.space && !this.zoom_key && this.label_slot_press(pos, cx) {
+                        cx.notify();
+
+                        return;
+                    }
 
                     // Prototype 连线：ghost / 「+」手柄 / 曲线，原文 `proto_canvas::input` 在
                     // 参考线与各类手柄之前先跑。
@@ -8995,6 +9136,12 @@ pub fn run() {
     // 引擎不内嵌任何笔刷形状，所有笔刷都来自这些外部文件。
     if let Err(e) = figcraft_abr::bootstrap() {
         log::warn!("brush library: {e}");
+    }
+
+    // 外置设备目录：首次启动把出型的 devices.json 与外框 SVG 放入用户目录，之后只扫目录。
+
+    if let Err(e) = figcraft_devices::bootstrap() {
+        log::warn!("device catalogue: {e}");
     }
 
     // `--control <port>`：开本地控制通道（与 `cargo run -p figcraft -- --control 7979` 同义）。

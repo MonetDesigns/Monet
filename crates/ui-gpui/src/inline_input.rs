@@ -213,15 +213,15 @@ pub fn stable_top_offset(ascent: f32, descent: f32, ref_ascent: f32, ref_descent
 
 /// 画布标签重命名框的矩形（egui `frame_labels::rename_field`），纯几何、可回归测试。
 ///
-/// `min_x / max_x / max_y` 是标签四角经 `to_screen` 得到的**画布局部坐标**；本项目
+/// `min_x / min_y / max_x` 是标签四角经 `to_screen` 得到的**画布局部坐标**；本项目
 /// `app.canvas.rect` 原点恒为 0，绝对定位的浮层挂在整窗根视图上，因此必须补 `origin_*`。
 /// 调用方给的 `text_w` 是 11pt 下真实量算出的名字宽度（不再是字符数估算）。
 ///
-/// `y` 仍是「静态 galley 的顶边」（= `max_y - 16`，`frame_labels` 就把名字画在这里），
+/// `y` 就是标签命中区的**顶边**（= 静态 galley 的顶边，`frame_labels` 把名字画在这里），
 /// 高度则是 [`LABEL_H`]（18 = 静态行盒），编辑框才能和静态文字重合。
-pub fn label_rename_rect(min_x: f32, max_x: f32, max_y: f32, text_w: f32, origin_x: f32, origin_y: f32) -> (f32, f32, f32) {
+pub fn label_rename_rect(min_x: f32, min_y: f32, max_x: f32, text_w: f32, origin_x: f32, origin_y: f32) -> (f32, f32, f32) {
     let w = (text_w + 24.0).max(max_x - min_x).clamp(80.0, 480.0);
-    (min_x + origin_x, max_y - 16.0 + origin_y, w)
+    (min_x + origin_x, min_y + origin_y, w)
 }
 
 /// 标签 quad 缺失时的兜底位置（帧左上角上方 20pt），同样要补画布窗口原点。
@@ -277,19 +277,20 @@ mod tests {
     /// 画布标签输入框位置：必须补上 dock 给的画布窗口原点（原来漏了，输入框整体偏到左栏）。
     #[test]
     fn label_rename_rect_adds_the_canvas_window_origin() {
-        let (x, y, w) = label_rename_rect(100.0, 300.0, 240.0, 60.0, 300.0, 40.0);
+        // 标签命中区：x 100…300、顶边 224（底边由 `LABEL_GAP` 决定，这里只用顶边）。
+        let (x, y, w) = label_rename_rect(100.0, 224.0, 300.0, 60.0, 300.0, 40.0);
         assert_eq!((x, y, w), (400.0, 264.0, 200.0));
         // 同一标签在原点为 0 的画布里，x/y 正好少掉轨道 + 左栏 + 标题栏。
-        assert_eq!(label_rename_rect(100.0, 300.0, 240.0, 60.0, 0.0, 0.0), (100.0, 224.0, 200.0));
+        assert_eq!(label_rename_rect(100.0, 224.0, 300.0, 60.0, 0.0, 0.0), (100.0, 224.0, 200.0));
     }
 
     /// 宽度逐项照抄 egui：`(text_w + 24).max(area.width).clamp(80, 480)`。
     #[test]
     fn label_rename_rect_width_uses_measured_text_and_label_bounds() {
-        assert_eq!(label_rename_rect(0.0, 10.0, 30.0, 2.0, 0.0, 0.0).2, 80.0, "短名字至少 80pt");
-        assert_eq!(label_rename_rect(0.0, 400.0, 30.0, 2.0, 0.0, 0.0).2, 400.0, "标签比文字宽时取标签宽");
-        assert_eq!(label_rename_rect(0.0, 10.0, 30.0, 900.0, 0.0, 0.0).2, 480.0, "长名字夹到 480pt");
-        assert_eq!(label_rename_rect(0.0, 10.0, 30.0, 100.0, 0.0, 0.0).2, 124.0);
+        assert_eq!(label_rename_rect(0.0, 30.0, 10.0, 2.0, 0.0, 0.0).2, 80.0, "短名字至少 80pt");
+        assert_eq!(label_rename_rect(0.0, 30.0, 400.0, 2.0, 0.0, 0.0).2, 400.0, "标签比文字宽时取标签宽");
+        assert_eq!(label_rename_rect(0.0, 30.0, 10.0, 900.0, 0.0, 0.0).2, 480.0, "长名字夹到 480pt");
+        assert_eq!(label_rename_rect(0.0, 30.0, 10.0, 100.0, 0.0, 0.0).2, 124.0);
     }
 
     #[test]
