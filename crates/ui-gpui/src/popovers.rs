@@ -3459,20 +3459,15 @@ impl WindowState {
                 .unwrap_or(2) as f32;
             h += 48.0 + 8.0 + 48.0 + 8.0 + 32.0 + stops * 32.0 + 12.0;
         } else if image {
-            // 预览格 150 + 缩放行 32 + 配置 18 + 预设 30 + 7 条调整 168 + 色板
+            // 预览格 150 + 缩放行 32 + 配置 18 + 预设 30 + 7 条调整 168；
+            // 图片 / 图案页不显示「在此页面的颜色 / 最近的颜色」。
             h += 150.0 + 32.0 + 18.0 + 30.0 + 7.0 * 24.0;
-            let n = page_colors().len().max(recent_colors().len());
-            let rows = n.div_ceil(CHITS_PER_ROW).clamp(1, 3) as f32;
-            h += 1.0 + 11.0 + 24.0 + 4.0 + rows * CHIT_PITCH - (CHIT_PITCH - CHIT) + 12.0;
         } else if pattern {
-            // 来源 32 + 平铺 32 + 数值 32 + 色板
+            // 来源 32 + 平铺 32 + 数值 32；同样不带底部色板。
             h += 96.0;
-            let n = page_colors().len().max(recent_colors().len());
-            let rows = n.div_ceil(CHITS_PER_ROW).clamp(1, 3) as f32;
-            h += 1.0 + 11.0 + 24.0 + 4.0 + rows * CHIT_PITCH - (CHIT_PITCH - CHIT) + 12.0;
         } else {
             // 对比度 48 + 色域 208 + 两条 16pt 滑轨 + 12pt 间距（共 44）+ 数值 40 + 色板
-            h += 48.0 + SPECTRUM + 44.0 + 40.0;
+            h += 48.0 + SPECTRUM + 8.0 + 44.0 + 40.0;
             let n = page_colors().len().max(recent_colors().len());
             let rows = n.div_ceil(CHITS_PER_ROW).clamp(1, 3) as f32;
             // 顶边 1 + 上 11 + 下拉 24 + 下 4 + 色块 rows×24 − 末行 8 + 底部 12
@@ -3734,6 +3729,7 @@ impl WindowState {
             .thumb(16.0)
             .row_h(16.0)
             .knob()
+            .inset_thumb()
             .thumb_fill(rgba(hsb_color(hue, 1.0, 1.0)))
             .step(1.0)
             .paint_track(|window, bounds, _| {
@@ -3742,6 +3738,7 @@ impl WindowState {
                 let w = f32::from(bounds.size.width).max(1.0);
                 let h = f32::from(bounds.size.height).max(1.0);
                 let r = h * 0.5;
+                // 整条渐变本身裁成端点为半圆的胶囊；端帽里仍是同一条渐变，不另贴纯色圆片。
                 for i in 0..6 {
                     let a = hsb_color(i as f32 * 60.0, 1.0, 1.0);
                     let b = hsb_color((i + 1) as f32 * 60.0, 1.0, 1.0);
@@ -3756,7 +3753,10 @@ impl WindowState {
                     }
                     window.paint_quad(
                         gpui::fill(
-                            Bounds { origin: point(px(x0 + w * i as f32 / 6.0), px(y0)), size: size(px(w / 6.0 + 0.5), px(h)) },
+                            Bounds {
+                                origin: point(px(x0 + w * i as f32 / 6.0), px(y0)),
+                                size: size(px(w / 6.0 + if i == 5 { 0.0 } else { 0.5 }), px(h)),
+                            },
                             gpui::linear_gradient(
                                 90.0,
                                 gpui::linear_color_stop(gpui::Hsla::from(rgba(a)), 0.0),
@@ -3770,7 +3770,7 @@ impl WindowState {
             .on_change(move |v, window, cx| hue_pick(v, window, cx))
             .render();
 
-        // ③ 透明度滑轨：同样用 `Slider`，轨道先棋盘再叠透明→当前色的水平渐变。
+        // ③ 透明度滑轨：轨道先棋盘再叠透明→当前色的渐变，整条渐变由两端半圆裁切。
         let alpha_pick = pick.clone();
         let opaque = current.with_alpha(255);
         let alpha_slider = crate::widgets::Slider::new(alpha, 0.0, 1.0)
@@ -3779,6 +3779,7 @@ impl WindowState {
             .thumb(16.0)
             .row_h(16.0)
             .knob()
+            .inset_thumb()
             .thumb_fill(rgba(current.with_alpha(255)))
             .step(1.0 / 255.0)
             .paint_track(move |window, bounds, _| {
@@ -3807,30 +3808,10 @@ impl WindowState {
         // ④ 数值行：格式下拉 56 + 三个通道字段（1fr）+ 不透明度 54，字段高 24。
         let model_name = COLOR_MODELS.get(model).copied().unwrap_or("Hex");
         let model_trigger = c.model_anchor.clone();
-        let model_hit: Rc<Cell<Option<Bounds<Pixels>>>> = Rc::new(Cell::new(None));
-        let format_select = div()
-            .relative()
-            .flex_none()
-            .w(pt(56.0))
-            .h(pt(24.0))
-            .pl(pt(8.0))
-            .rounded(pt(5.0))
-            .border_1()
-            .border_color(rgba(t.border))
-            .bg(rgba(t.panel))
-            .flex()
-            .items_center()
-            .cursor_pointer()
-            .hover(|s| s.bg(rgba(t.hover)))
-            .child(div().flex_1().min_w(pt(0.0)).overflow_hidden().text_size(pt(11.0)).text_color(rgba(t.text)).child(model_name))
-            .child(picker_icons::paint(PickerIcon::Chevron, rgba(t.icon), 24.0))
-            .child(bounds_probe(model_hit.clone()))
-            .on_mouse_down(MouseButton::Left, move |_, window, _| {
-                if let Some(b) = model_hit.get() {
-                    model_trigger.set(Some(b));
-                    window.refresh();
-                }
-            });
+        let format_select = dropdown::Dropdown::new(model_name, 56.0, None).on_click(move |rect, window, _| {
+            model_trigger.set(Some(rect));
+            window.refresh();
+        });
         let mut fields_row = div().flex_1().min_w(pt(0.0)).h(pt(24.0)).flex().flex_row().items_center().gap(pt(1.0));
         let cell = |e: AnyElement| div().flex_1().min_w(pt(0.0)).h(pt(24.0)).rounded(pt(5.0)).bg(rgba(t.field)).child(e);
         if model_values(model, current).is_some() {
@@ -3846,32 +3827,13 @@ impl WindowState {
         let set = c.swatch_set.get();
         let (set_label, set_colors) = if set == 0 { (tr("On this page"), page_colors()) } else { (tr("Recent"), recent_colors()) };
         let set_trigger = c.swatch_anchor.clone();
-        let set_hit: Rc<Cell<Option<Bounds<Pixels>>>> = Rc::new(Cell::new(None));
-        let set_select = div()
-            .relative()
-            .w_full()
-            .h(pt(24.0))
-            .pl(pt(8.0))
-            .rounded(pt(5.0))
-            .border_1()
-            .border_color(rgba(t.border))
-            .bg(rgba(t.panel))
-            .flex()
-            .items_center()
-            .cursor_pointer()
-            .hover(|s| s.bg(rgba(t.hover)))
-            .child(div().flex_1().min_w(pt(0.0)).overflow_hidden().text_size(pt(11.0)).text_color(rgba(t.text)).child(set_label))
-            .child(picker_icons::paint(PickerIcon::Chevron, rgba(t.icon), 24.0))
-            .child(bounds_probe(set_hit.clone()))
-            .on_mouse_down(MouseButton::Left, move |_, window, _| {
-                if let Some(b) = set_hit.get() {
-                    set_trigger.set(Some(b));
-                    window.refresh();
-                }
-            });
-        let mut grid = div().px(pt(12.0)).flex().flex_col().gap(pt(CHIT_PITCH - CHIT));
+        let set_select = dropdown::Dropdown::new(set_label, PANEL_W - 32.0, None).center_label().on_click(move |rect, window, _| {
+            set_trigger.set(Some(rect));
+            window.refresh();
+        });
+        let mut grid = div().px(pt(12.0)).flex().flex_col().items_center().gap(pt(CHIT_PITCH - CHIT));
         for row in set_colors.chunks(CHITS_PER_ROW) {
-            let mut r = div().flex().flex_row().items_center().gap(pt(CHIT_PITCH - CHIT));
+            let mut r = div().w_full().flex().flex_row().items_center().justify_center().gap(pt(CHIT_PITCH - CHIT));
             for col in row {
                 let p = pick.clone();
                 let col = *col;
@@ -4345,7 +4307,6 @@ impl WindowState {
                     }
                 }
             }
-            col = col.child(swatch_panel);
         } else if is_pattern {
             let pat = match &kind_now {
                 Some(figcraft_color::PaintKind::Pattern(pt)) => Some(pt.clone()),
@@ -4356,7 +4317,6 @@ impl WindowState {
                     col = col.child(el);
                 }
             }
-            col = col.child(swatch_panel);
         } else if is_grad {
             if let (Some(p), Some(state)) = (&c.paint, &c.paint_state) {
                 let grad = match &state.borrow().kind {
@@ -4376,6 +4336,7 @@ impl WindowState {
                 div()
                     .w(pt(PANEL_W))
                     .h(pt(44.0))
+                    .mt(pt(8.0))
                     .px(pt(16.0))
                     .flex()
                     .items_center()
