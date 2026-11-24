@@ -74,6 +74,12 @@ pub struct FrameInfo {
     pub screen_rect: [f64; 4],
     /// The PNG's own pixel size, so the screen rect maps into the placed body.
     pub png_size: [f64; 2],
+    /// `[screen window radius, body outline radius]` in PNG pixels, measured from the alpha.
+    pub radii: [f64; 2],
+    /// Placement relative to the snapped screen rect, filled by layout: `[dx, dy, png_w, png_h,
+    /// radius_window]` all in window pixels. `device_body` / the mask use these exact values so
+    /// the artwork and the content share one snapped geometry (no sub-pixel seam).
+    pub placed: Option<[f32; 5]>,
 }
 
 /// A size label like `402 × 874` for a variant (its logical screen points).
@@ -115,18 +121,19 @@ pub fn frame_info(ps: &PrototypeSettings, landscape: bool, color: &str) -> Optio
         return None;
     }
     // Resolve inside the borrow, then read the file size outside it.
-    let (rel, rect) = with_catalog(|cat| {
+    let (rel, rect, radii) = with_catalog(|cat| {
         let v = cat.resolve(&ps.device, Some(&ps.variant))?;
         let orientation = if v.rotates { if landscape { "landscape" } else { "portrait" } } else { "frame" };
         let rel = v.frame_for(orientation, color)?.to_string();
         let rect = v.screen_rect(orientation)?;
-        Some((rel, rect))
+        let (sr, or_) = v.radii(orientation);
+        Some((rel, rect, [sr, or_]))
     })
     .flatten()?;
     // The manifest stores the screen rect but not the body size; read the PNG's IHDR (cached).
     // Without it, fall back to a rect-centred guess — honest but only a last resort.
     let png_size = figcraft_devices::frame_size(&rel).unwrap_or([rect[0] * 2.0 + rect[2], rect[1] * 2.0 + rect[3]]);
-    Some(FrameInfo { image: format!("device:{rel}"), screen_rect: rect, png_size })
+    Some(FrameInfo { image: format!("device:{rel}"), screen_rect: rect, png_size, radii, placed: None })
 }
 
 /// Family names for the top-level dropdown.

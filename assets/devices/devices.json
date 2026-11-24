@@ -82,6 +82,14 @@
               1206,
               2622
             ]
+          },
+          "screenRadius": {
+            "landscape": 53,
+            "portrait": 53
+          },
+          "outerRadius": {
+            "landscape": 253,
+            "portrait": 255
           }
         },
         {
@@ -141,6 +149,14 @@
               1206,
               2622
             ]
+          },
+          "screenRadius": {
+            "landscape": 46,
+            "portrait": 46
+          },
+          "outerRadius": {
+            "landscape": 247,
+            "portrait": 252
           }
         },
         {
@@ -200,6 +216,14 @@
               1320,
               2868
             ]
+          },
+          "screenRadius": {
+            "landscape": 50,
+            "portrait": 50
+          },
+          "outerRadius": {
+            "landscape": 268,
+            "portrait": 285
           }
         },
         {
@@ -269,6 +293,14 @@
               1260,
               2736
             ]
+          },
+          "screenRadius": {
+            "landscape": 49,
+            "portrait": 49
+          },
+          "outerRadius": {
+            "landscape": 258,
+            "portrait": 283
           }
         }
       ]
@@ -344,6 +376,14 @@
               1206,
               2622
             ]
+          },
+          "screenRadius": {
+            "landscape": 46,
+            "portrait": 46
+          },
+          "outerRadius": {
+            "landscape": 306,
+            "portrait": 251
           }
         },
         {
@@ -413,6 +453,14 @@
               1320,
               2868
             ]
+          },
+          "screenRadius": {
+            "landscape": 49,
+            "portrait": 50
+          },
+          "outerRadius": {
+            "landscape": 266,
+            "portrait": 282
           }
         }
       ]
@@ -498,6 +546,14 @@
               1179,
               2556
             ]
+          },
+          "screenRadius": {
+            "landscape": 14,
+            "portrait": 14
+          },
+          "outerRadius": {
+            "landscape": 247,
+            "portrait": 273
           }
         },
         {
@@ -577,6 +633,14 @@
               1290,
               2796
             ]
+          },
+          "screenRadius": {
+            "landscape": 14,
+            "portrait": 14
+          },
+          "outerRadius": {
+            "landscape": 242,
+            "portrait": 273
           }
         },
         {
@@ -646,6 +710,14 @@
               1206,
               2622
             ]
+          },
+          "screenRadius": {
+            "landscape": 53,
+            "portrait": 53
+          },
+          "outerRadius": {
+            "landscape": 300,
+            "portrait": 267
           }
         },
         {
@@ -715,6 +787,14 @@
               1320,
               2868
             ]
+          },
+          "screenRadius": {
+            "landscape": 53,
+            "portrait": 53
+          },
+          "outerRadius": {
+            "landscape": 260,
+            "portrait": 283
           }
         }
       ]
@@ -772,6 +852,14 @@
               1398,
               2034
             ]
+          },
+          "screenRadius": {
+            "portrait": 100,
+            "outer-open": 0
+          },
+          "outerRadius": {
+            "portrait": 155,
+            "outer-open": 162
           }
         }
       ]
@@ -847,6 +935,14 @@
               1488,
               2266
             ]
+          },
+          "screenRadius": {
+            "landscape": 0,
+            "portrait": 0
+          },
+          "outerRadius": {
+            "landscape": 194,
+            "portrait": 165
           }
         }
       ]
@@ -922,6 +1018,14 @@
               1640,
               2360
             ]
+          },
+          "screenRadius": {
+            "landscape": 0,
+            "portrait": 0
+          },
+          "outerRadius": {
+            "landscape": 131,
+            "portrait": 152
           }
         },
         {
@@ -991,6 +1095,14 @@
               2048,
               2732
             ]
+          },
+          "screenRadius": {
+            "landscape": 0,
+            "portrait": 0
+          },
+          "outerRadius": {
+            "landscape": 158,
+            "portrait": 132
           }
         }
       ]
@@ -1046,6 +1158,14 @@
               1668,
               2420
             ]
+          },
+          "screenRadius": {
+            "landscape": 0,
+            "portrait": 0
+          },
+          "outerRadius": {
+            "landscape": 171,
+            "portrait": 164
           }
         },
         {
@@ -1095,6 +1215,14 @@
               2064,
               2752
             ]
+          },
+          "screenRadius": {
+            "landscape": 0,
+            "portrait": 0
+          },
+          "outerRadius": {
+            "landscape": 156,
+            "portrait": 160
           }
         }
       ]
@@ -1170,6 +1298,14 @@
               1640,
               2360
             ]
+          },
+          "screenRadius": {
+            "landscape": 0,
+            "portrait": 0
+          },
+          "outerRadius": {
+            "landscape": 179,
+            "portrait": 179
           }
         }
       ]
@@ -1233,6 +1369,12 @@
               2560,
               1664
             ]
+          },
+          "screenRadius": {
+            "frame": 0
+          },
+          "outerRadius": {
+            "frame": 106
           }
         },
         {
@@ -1290,6 +1432,12 @@
               2880,
               1864
             ]
+          },
+          "screenRadius": {
+            "frame": 0
+          },
+          "outerRadius": {
+            "frame": 98
           }
         }
       ]
@@ -1353,6 +1501,12 @@
               2408,
               1506
             ]
+          },
+          "screenRadius": {
+            "frame": 0
+          },
+          "outerRadius": {
+            "frame": 130
           }
         }
       ]
@@ -1398,6 +1552,12 @@
               3024,
               1964
             ]
+          },
+          "screenRadius": {
+            "frame": 0
+          },
+          "outerRadius": {
+            "frame": 103
           }
         },
         {
@@ -1437,6 +1597,12 @@
               3456,
               2234
             ]
+          },
+          "screenRadius": {
+            "frame": 0
+          },
+          "outerRadius": {
+            "frame": 272
           }
         }
       ]
@@ -1482,6 +1648,12 @@
               3024,
               1986
             ]
+          },
+          "screenRadius": {
+            "frame": 0
+          },
+          "outerRadius": {
+            "frame": 120
           }
         },
         {
@@ -1521,6 +1693,12 @@
               3472,
               2266
             ]
+          },
+          "screenRadius": {
+            "frame": 0
+          },
+          "outerRadius": {
+            "frame": 115
           }
         }
       ]
@@ -1611,6 +1789,12 @@
               4480,
               2520
             ]
+          },
+          "screenRadius": {
+            "frame": 0
+          },
+          "outerRadius": {
+            "frame": 68
           }
         }
       ]

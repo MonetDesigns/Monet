@@ -50,6 +50,13 @@ pub struct DeviceVariant {
     /// The screen rectangle inside each orientation's PNG: `[x, y, w, h]` in PNG pixels.
     #[serde(default, alias = "screenRects")]
     pub screen_rects: std::collections::BTreeMap<String, [f64; 4]>,
+    /// Screen-window corner radius per orientation, in PNG pixels (measured from the alpha).
+    #[serde(default, alias = "screenRadius")]
+    pub screen_radii: std::collections::BTreeMap<String, f64>,
+    /// Body outer-outline corner radius per orientation, in PNG pixels. Content spilling into
+    /// the transparent corners outside this outline must be masked to the stage background.
+    #[serde(default, alias = "outerRadius")]
+    pub outer_radii: std::collections::BTreeMap<String, f64>,
 }
 
 impl DeviceVariant {
@@ -71,6 +78,14 @@ impl DeviceVariant {
     pub fn screen_rect(&self, orientation: &str) -> Option<[f64; 4]> {
         self.screen_rects.get(orientation).copied()
             .or_else(|| self.screen_rects.values().next().copied())
+    }
+
+    /// Corner radii for an orientation, falling back to any orientation.
+    pub fn radii(&self, orientation: &str) -> (f64, f64) {
+        let pick = |m: &std::collections::BTreeMap<String, f64>| {
+            m.get(orientation).copied().or_else(|| m.values().next().copied()).unwrap_or(0.0)
+        };
+        (pick(&self.screen_radii), pick(&self.outer_radii))
     }
 }
 

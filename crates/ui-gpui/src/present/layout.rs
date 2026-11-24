@@ -161,7 +161,7 @@ pub fn compute(st: &PresentState, disp: &Document, area: RectPx, pane: bool, ppp
     let device = figcraft_engine::devices::presented_device(&settings);
     let landscape_eff = settings.landscape();
     let color_name = figcraft_engine::devices::device_color(&settings).map(|c| c.name).unwrap_or_default();
-    let frame = figcraft_engine::devices::frame_info(&settings, landscape_eff, &color_name);
+    let mut frame = figcraft_engine::devices::frame_info(&settings, landscape_eff, &color_name);
     let landscape = settings.landscape();
     let fills = settings.responsive && device.is_none();
     let fb = disp.world_bounds(st.current)?;
@@ -225,6 +225,17 @@ pub fn compute(st: &PresentState, disp: &Document, area: RectPx, pane: bool, ppp
         w: snap((f64::from(sw) * scale) as f32).max(1.0 / ppp),
         h: snap((f64::from(sh) * scale) as f32).max(1.0 / ppp),
     };
+    // 真实外框：用已 snap 的 screen 反算 PNG 的位置 / 尺寸 / 窗口圆角，保证机身与内容
+    // 共用一套对齐后的几何，消除半像素缝隙。
+    if let Some(fi) = frame.as_mut() {
+        let k = f64::from(screen.w) / fi.screen_rect[2].max(1.0);
+        let png_w = (snap((fi.png_size[0] * k) as f32)).max(screen.w);
+        let png_h = (snap((fi.png_size[1] * k) as f32)).max(screen.h);
+        let dx = snap((fi.screen_rect[0] * k) as f32);
+        let dy = snap((fi.screen_rect[1] * k) as f32);
+        let radius = snap((fi.radii[0] * k) as f32).min(screen.w / 2.0).min(screen.h / 2.0);
+        fi.placed = Some([dx, dy, png_w, png_h, radius]);
+    }
     let place = Place {
         page_min: (fb.x0, fb.y0),
         origin: (
