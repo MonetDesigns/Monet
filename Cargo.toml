@@ -19,6 +19,7 @@ repository = "https://github.com/yelintong/Monet"
 [workspace.dependencies]
 # internal
 figcraft-geom = { path = "crates/geom" }
+figcraft-motion-codec = { path = "crates/motion-codec" }
 figcraft-color = { path = "crates/color" }
 figcraft-doc = { path = "crates/doc" }
 figcraft-layout = { path = "crates/layout" }
@@ -35,7 +36,6 @@ figcraft-engine = { path = "crates/engine" }
 figcraft-mcp = { path = "crates/mcp" }
 figcraft-collab-net = { path = "crates/collab-net" }
 figcraft-plugin = { path = "crates/plugin" }
-figcraft-motion-codec = { path = "crates/motion-codec" }
 figcraft-i18n = { path = "crates/i18n" }
 figcraft-abr = { path = "crates/abr" }
 
@@ -56,6 +56,8 @@ craft-figcraft-format = { version = "0.1.0", git = "https://github.com/storytold
 craft-jpeg = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "a49329e71e32ad93794ab595c41f33209a7d2220" }
 craft-image-codecs = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "a49329e71e32ad93794ab595c41f33209a7d2220" }
 craft-gif = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "a49329e71e32ad93794ab595c41f33209a7d2220", features = ["frames"] }
+craft-media = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "a49329e71e32ad93794ab595c41f33209a7d2220" }
+craft-video = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "a49329e71e32ad93794ab595c41f33209a7d2220", features = ["h264-encode"] }
 # Which paths stored in a document may be followed.
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "a49329e71e32ad93794ab595c41f33209a7d2220" }
 # Who draws the window frame on Linux — the compositor or the app — so every Craft app shows the

@@ -9,6 +9,8 @@ description = "Animation frame encoders for Monet: GIF, AV1/WebM (Matroska) and 
 workspace = true
 
 [dependencies]
+craft-media = { workspace = true }
+craft-video = { workspace = true, features = ["h264-encode"] }
 image = { workspace = true }
 zip = { workspace = true }
 rav1e = { workspace = true }

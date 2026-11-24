@@ -38,6 +38,8 @@ pub enum AnimFormat {
     Webm,
     /// A zip of numbered PNG files.
     PngZip,
+    /// H.264/AVC in an MP4 container.
+    Mp4,
 }
 
 impl AnimFormat {
@@ -46,6 +48,7 @@ impl AnimFormat {
             Self::Gif => "GIF",
             Self::Webm => "WebM (AV1)",
             Self::PngZip => "PNG frames",
+            Self::Mp4 => "MP4 (H.264)",
         }
     }
     pub fn extension(self) -> &'static str {
@@ -53,6 +56,7 @@ impl AnimFormat {
             Self::Gif => "gif",
             Self::Webm => "webm",
             Self::PngZip => "zip",
+            Self::Mp4 => "mp4",
         }
     }
     /// `gif`, `webm`, `png`, `zip` / `png-zip` (case-insensitive).
@@ -61,6 +65,7 @@ impl AnimFormat {
             "gif" => Some(Self::Gif),
             "webm" | "av1" => Some(Self::Webm),
             "png" | "zip" | "png-zip" | "pngzip" => Some(Self::PngZip),
+            "mp4" | "h264" => Some(Self::Mp4),
             _ => None,
         }
     }
@@ -191,6 +196,16 @@ pub fn run(s: &mut Session, p: &Value) -> Result<Value> {
     // WebM is streamed: `encode_webm` renders each frame itself. Rendering them up front first
     // would double the (already slow) AV1 work, so only Gif/PngZip pre-build a frame Vec.
     let (bytes, ext) = match format {
+        AnimFormat::Mp4 => {
+            let mut rendered = Vec::with_capacity(times.len());
+            for t in &times {
+                let pm = anim.render(*t).ok_or_else(|| bad(cmd, "a frame failed to render"))?;
+                rendered.push(figcraft_motion_codec::FrameRgba::new(pm.width(), pm.height(), figcraft_render::to_rgba8(&pm)).map_err(|e| bad(cmd, e))?);
+            }
+            let o = figcraft_motion_codec::Mp4Options { fps, crf: (100.0 - quality as f64 / 4.0) as f32 };
+            let bytes = figcraft_motion_codec::encode_mp4(&rendered, &o, [255, 255, 255]).map_err(|e| bad(cmd, e))?;
+            (bytes, "mp4")
+        }
         AnimFormat::Webm => {
             // WebM is streamed through the codec crate. Frames are fed by a closure that draws
             // on demand, so the (slow) AV1 work is not doubled by pre-building every Pixmap.
@@ -217,7 +232,7 @@ pub fn run(s: &mut Session, p: &Value) -> Result<Value> {
                     let name = s.doc()?.node(node).map(|n| n.name.clone()).unwrap_or_else(|| "animation".into());
                     (figcraft_motion_codec::write_png_zip(&frames, &name).map_err(|e| bad(cmd, e))?, "zip")
                 }
-                AnimFormat::Webm => return Err(bad(cmd, "webm handled above")),
+                AnimFormat::Webm | AnimFormat::Mp4 => return Err(bad(cmd, "handled above")),
             }
         }
     };
@@ -305,6 +320,21 @@ mod tests {
         let mut zs = zip::ZipArchive::new(std::io::Cursor::new(zip)).unwrap();
         assert_eq!(zs.len(), frames.len());
         assert!(zs.by_name("Card_0001.png").is_ok());
+    }
+
+    #[test]
+    fn mp4_export_produces_an_mp4_container() {
+        use serde_json::json;
+        let (d, frame, _) = animated_doc();
+        let mut s = Session::with_document(d);
+        let out = s.execute("motion.export", &json!({"id": frame.0, "format": "mp4", "fps": 10, "scale": 0.5})).unwrap();
+        assert_eq!(out["format"], "mp4");
+        let data = base64::engine::general_purpose::STANDARD.decode(out["data"].as_str().unwrap()).unwrap();
+        // ISO BMFF: ftyp box first, isom brand, and an avc1 sample entry somewhere in moov.
+        assert_eq!(&data[4..8], b"ftyp", "an ISO BMFF file");
+        assert!(data.windows(4).any(|w| w == b"isom"), "isom brand");
+        assert!(data.windows(4).any(|w| w == b"avc1"), "H.264 sample entry");
+        assert!(data.len() > 200, "real encoded frames, not just a header");
     }
 
     #[test]

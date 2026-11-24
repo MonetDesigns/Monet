@@ -374,3 +374,79 @@ pub fn encode_webm(frames: &[FrameRgba], o: &WebmOptions) -> Result<Vec<u8>, Str
     Ok(mux(w, h, fps, &av1c, &blocks))
 }
 
+// ---------------------------------------------------------------------------------- MP4 / H.264
+
+use craft_media::isobmff::{AvcConfig, Brand, Mp4Writer, SampleEntry, TrackConfig, WriterOptions, WriteSample};
+use craft_video::h264::{Encoder as H264Encoder, EncoderConfig as H264Config, PacketFormat, RateControl, YuvFrame};
+
+/// H.264-in-MP4 encoder options.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Mp4Options {
+    /// Frames per second, 1..=120.
+    pub fps: u32,
+    /// CRF quality: lower is better quality and larger (default 23, roughly 18..30).
+    pub crf: f32,
+}
+
+impl Default for Mp4Options {
+    fn default() -> Self {
+        Self { fps: 30, crf: 23.0 }
+    }
+}
+
+/// Encode frames as an H.264/AVC video in an MP4 container. Frames are straight RGBA8; the
+/// encoder flattens alpha onto `background` (MP4/H.264 here carries no alpha) and downsamples to
+/// 4:2:0, so both dimensions must be even and non-zero.
+pub fn encode_mp4(frames: &[FrameRgba], o: &Mp4Options, background: [u8; 3]) -> Result<Vec<u8>, String> {
+    let fps = o.fps.clamp(1, 120);
+    let (w, h) = if let Some(f) = frames.first() { (f.width, f.height) } else { return Err("no frames to encode".into()) };
+    if w == 0 || h == 0 || w % 2 == 1 || h % 2 == 1 {
+        return Err("MP4 needs an even, non-zero picture size; lower the scale".into());
+    }
+    if frames.iter().any(|f| f.width != w || f.height != h) {
+        return Err("all frames must have the same size".into());
+    }
+
+    let mut cfg = H264Config::new(w, h, fps, 1);
+    cfg.format = PacketFormat::LengthPrefixed; // MP4 samples
+    cfg.rate = RateControl::Crf(o.crf);
+    let mut enc = H264Encoder::new(cfg).map_err(|e| format!("H.264 encoder: {e}"))?;
+    let avcc = enc.avcc();
+    let avc = AvcConfig::parse(&avcc).map_err(|e| format!("H.264 avcC: {e}"))?;
+
+    let timescale = 90_000u32;
+    let step = (timescale / fps).max(1);
+    let mut writer = Mp4Writer::new(std::io::Cursor::new(Vec::new()), WriterOptions::new(Brand::Mp4)).map_err(|e| format!("MP4 writer: {e}"))?;
+    let track = writer
+        .add_track(TrackConfig::new(SampleEntry::avc(avc, w as u16, h as u16), timescale))
+        .map_err(|e| format!("MP4 track: {e}"))?;
+
+    // Samples are written in decode order; composition_offset restores presentation order.
+    let mut write = |data: &[u8], key: bool, cto: i64| -> Result<(), String> {
+        writer
+            .write_sample(track, WriteSample { data, duration: step, composition_offset: cto as i32, is_sync: key })
+            .map_err(|e| format!("MP4 sample: {e}"))
+    };
+    let mut sent = 0usize;
+    let mut last_pts = 0i64;
+    for f in frames {
+        let rgb = flatten_rgb(&f.rgba, background);
+        let ([y, u, v], cw) = to_yuv420(&rgb, w as usize, h as usize);
+        let pic = YuvFrame { y: &y, u: &u, v: &v, y_stride: w as usize, uv_stride: cw };
+        // pts is the presentation timestamp and must advance by a constant step per picture
+        // (a packet may carry several NALs; they all belong to this one picture).
+        for p in enc.encode(&pic, last_pts).map_err(|e| format!("H.264 encode: {e}"))? {
+            write(&p.data, p.keyframe, p.pts - p.dts)?;
+        }
+        last_pts += 1;
+        sent += 1;
+    }
+    for p in enc.flush() {
+        write(&p.data, p.keyframe, p.pts - p.dts)?;
+    }
+    if sent == 0 {
+        return Err("H.264 encoder produced no frames".into());
+    }
+    let out = writer.finish_faststart().map_err(|e| format!("MP4 finish: {e}"))?.into_inner();
+    Ok(out)
+}
