@@ -115,7 +115,10 @@ pub(super) fn variable_data(d: &Kv, depth: usize) -> Option<Value> {
     let v = d.get("value")?;
     let ty = d.get("dataType").and_then(Kv::str)?;
     let value = match ty {
-        "ALIAS" => json!({"type": "VARIABLE_ALIAS", "id": v.get("alias").and_then(ref_guid)?}),
+        // Resolve through VarCanon like the ordinary binding path: a bare assetRef has no
+        // local guid, and an older local copy must map to the newest one that survives in the
+        // document. `ref_guid` alone emits a stale or missing id and drops the whole value.
+        "ALIAS" => json!({"type": "VARIABLE_ALIAS", "id": VarCanon::resolve(v.get("alias")?)?}),
         "EXPRESSION" if depth < MAX_EXPR_DEPTH => {
             let e = v.get("expressionValue")?;
             let function = match e.get("expressionFunction").and_then(Kv::str)? {

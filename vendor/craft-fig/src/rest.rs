@@ -504,7 +504,10 @@ impl<'a> Mapper<'a> {
         let blobs =
             msg.get("blobs").map(Kv::list).unwrap_or_default().iter().map(|b| b.get("bytes").and_then(Kv::bytes).unwrap_or_default()).collect();
         let mut assets: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
-        for n in msg.get("nodeChanges").map(Kv::list).unwrap_or_default() {
+        // Build the index from the live nodes, not the raw change list: a removed style A and
+        // a live style B sharing a key/version would otherwise keep A (first wins), and
+        // `resource_id` would resolve to a node that no longer exists.
+        for n in nodes.values() {
             let (Some(key), Some(id)) = (n.get("key").and_then(Kv::str), n.get("guid").and_then(guid)) else { continue };
             if key.is_empty() || key.len() > MAX_ASSET_PART {
                 continue;
@@ -640,12 +643,14 @@ thread_local! {
 }
 
 /// Removes the thread's table when the mapping is done.
-pub(super) struct VarCanonGuard;
+pub(super) struct VarCanonGuard(Option<VarCanon>);
 
 impl Drop for VarCanonGuard {
-    /// Clears the thread's table, so a later file on this thread starts without it.
+    /// Restore the table this file replaced. A nested `to_rest` call inside a Geometry
+    /// callback installs its own table; clearing instead of restoring would leave the outer
+    /// file without variable resolution for the rest of the mapping.
     fn drop(&mut self) {
-        VAR_CANON.with(|c| c.borrow_mut().take());
+        VAR_CANON.with(|c| *c.borrow_mut() = self.0.take());
     }
 }
 
@@ -690,8 +695,10 @@ impl VarCanon {
         t.by_key = newest.into_iter().map(|(k, (_, id))| (k, id)).collect();
         t.local = local;
         t.sets_by_key = sets.into_iter().map(|(k, (_, id))| (k, id)).collect();
-        VAR_CANON.with(|c| *c.borrow_mut() = Some(t));
-        VarCanonGuard
+        // Save the previous table so nested calls restore it on drop. For a top-level call
+        // this is None, so cleanup still clears the thread as before.
+        let previous = VAR_CANON.with(|c| c.borrow_mut().replace(t));
+        VarCanonGuard(previous)
     }
 
     /// The variable a reference (`{guid}` or `{assetRef}`) names, as its newest copy. A guid

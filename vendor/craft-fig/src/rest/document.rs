@@ -99,7 +99,12 @@ impl<'a> Mapper<'a> {
         let mut rows = 0usize;
         while let Some((row, depth)) = pending.pop() {
             rows += 1;
-            if depth > MAX_DEPTH || rows > self.max_nodes {
+            if depth > MAX_DEPTH {
+                // A deep branch popped before a shallow sibling must not end the scan:
+                // the sibling may still name a swap target whose definition is needed.
+                continue;
+            }
+            if rows > self.max_nodes {
                 break;
             }
             let data = row.get("symbolData");
