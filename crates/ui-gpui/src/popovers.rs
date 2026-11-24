@@ -5943,12 +5943,18 @@ impl WindowState {
                     let anchor_key = format!("style-editor-paint-{}-{}", sid, idx);
                     let hit = window_trigger_top(&anchor_key);
                     let anchored_key = anchor_key.clone();
+                    // A style paint picker is a child of this window; it needs the same image
+                    // registration callback or its upload control silently does nothing.
+                    let register_image = self.color.as_ref().map(|c| c.register_image.clone());
                     cf = cf.on_swatch(move |pos: Point<Pixels>, window, cx: &mut App| {
                         // 往**左**让 8 pt：取色器右缘贴着面板左缘排开（`open_pos` 会把它放在
                         // 锚点左侧），两个卡片并排而不是一开一关。
                         let top = anchored_top(&anchored_key, window);
                         let anchor = Point { x: pos.x - px(8.0), y: pos.y };
                         let mut child = Self::color(cx, anchor, current, Some(pick.clone()), Default::default(), on_pick.clone(), open_cmds.clone());
+                        if let Some(cb) = register_image.as_ref().and_then(|r| r.borrow().clone()) {
+                            child.set_image_callback(cb);
+                        }
                         child.anchor_to_button_top(top);
                         *slot.borrow_mut() = Some(Box::new(child));
                         open_cmds.wake();

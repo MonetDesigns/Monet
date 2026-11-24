@@ -1851,14 +1851,17 @@ impl CanvasView {
 
     /// 把图片字节按内容键注册到当前文档，返回键给取色器写 paint。
     /// 图层 paint 不走这里（`image.replace` 自己注册），这里只服务样式 / 选区颜色目标。
-    fn register_image(&mut self, bytes: Vec<u8>) -> Option<String> {
+    fn register_image(&mut self, uid: u64, bytes: Vec<u8>) -> Option<String> {
         use std::hash::{Hash, Hasher};
         let (w, h) = image::ImageReader::new(std::io::Cursor::new(&bytes)).with_guessed_format().ok()?.into_dimensions().ok()?;
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         bytes.hash(&mut hasher);
         let hash = format!("img{:016x}{:08x}", hasher.finish(), bytes.len());
-        let doc = self.app.session.doc_mut().ok()?;
-        doc.images.insert(hash.clone(), figcraft_doc::ImageData { bytes: std::sync::Arc::new(bytes), width: w, height: h });
+        // Register into the document the picker was opened for, not the session's global
+        // active one: another window rendering can switch `active`, and the paint written to
+        // this picker would then reference a key its own document does not contain.
+        let ds = self.app.session.docs.iter_mut().find(|d| d.uid == uid)?;
+        ds.doc_mut().images.insert(hash.clone(), figcraft_doc::ImageData { bytes: std::sync::Arc::new(bytes), width: w, height: h });
         Some(hash)
     }
 
@@ -5037,9 +5040,13 @@ impl CanvasView {
         // 取色器的图片上传给样式 / 选区颜色目标用：字节注册进当前文档，
         // 再由取色器自己的目标感知写回器替换 paint。
         let root = cx.entity().downgrade();
+        // Capture the document identity now: by the time a file is dropped, another window
+        // may have become the session's active document.
+        let uid = self.app.session.ds().ok().map(|d| d.uid);
         w.set_image_callback(Rc::new(move |bytes, cx: &mut App| {
             let this = root.upgrade()?;
-            this.update(cx, |cv, _| cv.register_image(bytes))
+            let uid = uid?;
+            this.update(cx, |cv, _| cv.register_image(uid, bytes))
         }));
 
         self.popup = Some(Popup::Window(w));
