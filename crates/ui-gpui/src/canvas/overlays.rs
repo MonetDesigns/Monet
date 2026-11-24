@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use super::geom::*;
 use super::outline::{crisp_line, draw_outline, node_quad, outline_colour, quad, stroke};
-use super::painter::{Painter, text_size};
+use super::painter::{Label, Painter, text_size};
 use super::rulers::fmt;
 use crate::app::CanvasApp;
 use crate::theme::{COMPONENT, SLOT, Tokens, stroke as s};
@@ -608,10 +608,18 @@ pub(super) fn pill_rect(text: &str, at: Pos2, align: Align2, pad_x: f32) -> (Rec
 fn pill_with_bg(painter: &mut Painter, at: Pos2, align: Align2, text: String, _col: Color32, fg: Color32, bg: Color32, pad_x: f32) -> Rect {
     let (r, glyph) = pill_rect(&text, at, align, pad_x);
     painter.rect_filled(r, CornerRadius::same(3), bg);
-    // 文字贴内框左上：距左 pad_x、距上 2（真实字形高）。Galley 用同一真实高度，
-    // 否则 GPUI 按 text_size 的虚高排版，文字在框里上下不对齐。
-    let galley = super::painter::Galley { text, font: semibold(11.0), color: fg, size: glyph };
-    painter.galley(pos2(r.min.x + pad_x, r.min.y + 2.0), galley, fg);
+    // 文字在背景块里居中（LeftRight 留白均分）：设计稿 Group 234 / Frame 232 是
+    // 61×17 框、左右各 6，文字 `205x203` 高 13 居中。用真实字形高 13 作文字框，
+    // 容器宽度也用估算的等宽值；CENTER_CENTER 让估算与真实字宽的差摊到左右两边，
+    // 而不是全堆在右边（贴左上画会让右侧空白看起来像右边距写多了）。
+    painter.labels.push(Label {
+        rect: Rect::from_center_size(r.center(), glyph),
+        text,
+        font: semibold(11.0),
+        color: fg,
+        align: Align2::CENTER_CENTER,
+        angle: None,
+    });
     r
 }
 
