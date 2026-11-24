@@ -579,11 +579,11 @@ pub(super) fn pill_rect(text: &str, at: Pos2, align: Align2, pad_x: f32) -> (Rec
 }
 
 fn pill_with_bg(painter: &mut Painter, at: Pos2, align: Align2, text: String, _col: Color32, fg: Color32, bg: Color32, pad_x: f32) -> Rect {
-    let galley = painter.layout_no_wrap(text, semibold(11.0), fg);
-    // 用同一套「字宽 + 固定边距」公式算框，字号/边距改一处两处同步。
-    let (r, _) = pill_rect(&galley.text, at, align, pad_x);
+    let (r, _) = pill_rect(&text, at, align, pad_x);
     painter.rect_filled(r, CornerRadius::same(3), bg);
-    painter.galley(r.min + vec2(pad_x, 2.0), galley, fg);
+    // 文字在**整个内框**里居中：GPUI 用真实字形宽度排版，若 `text_size` 的估算偏大，
+    // 贴左画就会让右边留白偏大。给满内框 + CENTER_CENTER，真实文字左右边距自然相等。
+    painter.text(r.center(), Align2::CENTER_CENTER, text, semibold(11.0), fg);
     r
 }
 

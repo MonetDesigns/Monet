@@ -74,15 +74,10 @@ pub fn add_variant_slot(center_x: f32, y1: f32) -> Rect {
     Rect::from_min_size(pos2(center_x - SLOT_SIZE / 2.0, y1 + ADD_VARIANT_TOP), vec2(SLOT_SIZE, SLOT_SIZE))
 }
 
-/// 「+」加号挂在哪个节点下方：组件集 → 它自己；组件集里的变体 → **所属组件集**
-/// （所以选中变体时加号出现在整个集的下方，而不是变体小框下方）；独立组件 → 它自己
-/// （点一下会变成它自己的集）。其余节点没有加号。
-fn add_variant_host(doc: &Document, n: &figcraft_doc::Node) -> Option<NodeId> {
-    match n.kind {
-        NodeKind::ComponentSet { .. } => Some(n.id),
-        NodeKind::Component { .. } => Some(figcraft_engine::components::variant_set(doc, n.id).unwrap_or(n.id)),
-        _ => None,
-    }
+/// 「+」加号挂在**当前选中的那个节点**下方：变体就挂变体小框下方，组件集挂集框下方，
+/// 独立组件挂自己下方。`component.addVariant` 接受变体 id，引擎自己解析回它所属的集。
+fn add_variant_host(n: &figcraft_doc::Node) -> Option<NodeId> {
+    matches!(n.kind, NodeKind::ComponentSet { .. } | NodeKind::Component { .. }).then_some(n.id)
 }
 
 /// 对象四角（含旋转）在屏幕上的包围盒 `(x0, y0, x1, y1)`。
@@ -165,12 +160,8 @@ pub fn slot_at(app: &CanvasApp, doc: &Document, page: NodeId, sel: &[NodeId], po
                 (SlotHit::Ready(id), status)
             });
         }
-        if sel.contains(&id) && let Some(host) = add_variant_host(doc, n) {
-            let (hx0, hy1, hx1) = match screen_bounds(app, doc, host) {
-                Some((hx0, _, hx1, hy1)) => (hx0, hy1, hx1),
-                None => (x0, y1, x1),
-            };
-            let add = add_variant_slot((hx0 + hx1) / 2.0, hy1);
+        if sel.contains(&id) && add_variant_host(n).is_some() {
+            let add = add_variant_slot((x0 + x1) / 2.0, y1);
             if add.contains(pos) {
                 return Some((SlotHit::AddVariant(id), add));
             }
@@ -336,12 +327,8 @@ pub fn draw(app: &CanvasApp, painter: &mut Painter, t: &Tokens, doc: &Document, 
                     status_slot(painter, n, slot, hover_slot);
                 }
             }
-            if selected && let Some(host) = add_variant_host(doc, n) {
-                let (hx0, hy1, hx1) = match screen_bounds(app, doc, host) {
-                    Some((hx0, _, hx1, hy1)) => (hx0, hy1, hx1),
-                    None => (x0, y1, x1),
-                };
-                add_variant_button(painter, add_variant_slot((hx0 + hx1) / 2.0, hy1));
+            if selected && add_variant_host(n).is_some() {
+                add_variant_button(painter, add_variant_slot((x0 + x1) / 2.0, y1));
             }
         }
         label_rect
