@@ -10,7 +10,20 @@ use figcraft_geom::Rect;
 use serde_json::{Value, json};
 
 use crate::board::{is_code_text, text_of};
-use crate::board_tests::{board, id, node};
+use crate::board_tests::{board as raw_board, id, node};
+
+/// A board session with a font library that has faces.
+///
+/// The text layout shapes through `figcraft_text`'s font database. A native build gets faces from
+/// the optional craft-fonts embed or from `scan_system_fonts` at startup (`ui_gpui::run`); a test
+/// binary starts with an empty database, and an empty database makes `shape_text` skip every
+/// item, collapsing all text to a single line (a code block then hugs 128 px whatever it holds).
+/// Scan the system fonts once so these tests see the same shapes a running app does.
+fn board() -> Session {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(figcraft_text::scan_system_fonts);
+    raw_board()
+}
 use crate::collab_live_tests::Room;
 use crate::tools::{PointerEvent, PointerKind};
 use crate::{EngineError, Session};
