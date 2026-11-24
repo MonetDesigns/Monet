@@ -35,6 +35,7 @@ figcraft-engine = { path = "crates/engine" }
 figcraft-mcp = { path = "crates/mcp" }
 figcraft-collab-net = { path = "crates/collab-net" }
 figcraft-plugin = { path = "crates/plugin" }
+figcraft-motion-codec = { path = "crates/motion-codec" }
 figcraft-i18n = { path = "crates/i18n" }
 figcraft-abr = { path = "crates/abr" }
 

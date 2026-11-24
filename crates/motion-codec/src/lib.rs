@@ -1,19 +1,72 @@
-//! WebM/AV1 animation export: frames are encoded by `rav1e` (pure Rust, no `asm`/nasm) and
-//! wrapped in a small Matroska (EBML) writer so the result plays in Chrome, Edge, Firefox and
-//! current Safari, in `<video>` tags and most editors. AV1-in-WebM is the only fully pure-Rust
-//! route (VP8/VP9 have no maintained pure-Rust encoder; H.264 needs a C++ library).
+//! Animation frame encoders for Monet. Byte-in/byte-out codecs only: no document, no renderer,
+//! no engine dependency. Frames are premultiplied RGBA8 with an explicit size; the caller owns
+//! timeline evaluation and drawing.
 //!
-//! Ported from figcraft/desigma `desigma-export::anim::webm` (PR#1624 family), adapted to this
-//! tree's [`super::motion_export::Animation`] (already evaluates Motion and returns a fixed-size
-//! premultiplied Pixmap per frame). Rate control is constant quantizer: [`WebmOptions::quality`]
-//! (1..=100) maps to a rav1e quantizer of `255 - 2*quality`, so flat UI animations stay small.
-//! Frames are encoded in display order (low latency), a key frame every two seconds, with Cues
-//! for seeking. **No UI dependency**: driven by the `motion.export` command.
+//! Ported from the engine's `motion_export.rs` / `motion_webm.rs` so the export formats live in
+//! their own crate, the way the upstream Craft apps keep their format codecs in craft-libs.
 
+use std::io::{Cursor, Write};
+
+use image::codecs::gif::{GifEncoder, Repeat};
+use image::codecs::png::PngEncoder;
+use image::{Delay, Frame, ImageEncoder, RgbaImage};
 use rav1e::prelude::*;
 
-use super::motion_export::Animation;
-use crate::{Result, bad};
+/// An animation frame: straight RGBA8 bytes, row-major, `w*h*4` long.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FrameRgba {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
+impl FrameRgba {
+    pub fn new(width: u32, height: u32, rgba: Vec<u8>) -> Result<Self, &'static str> {
+        if width == 0 || height == 0 || rgba.len() != width as usize * height as usize * 4 {
+            return Err("frame size does not match its RGBA bytes");
+        }
+        Ok(Self { width, height, rgba })
+    }
+}
+
+/// Encode straight RGBA frames as an animated GIF with the given per-frame delays (ms).
+pub fn encode_gif(frames: &[FrameRgba], delays_ms: &[u32], repeating: bool) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    {
+        let mut enc = GifEncoder::new(&mut out);
+        if repeating {
+            enc.set_repeat(Repeat::Infinite).map_err(|e| format!("gif repeat: {e}"))?;
+        }
+        let mut imgs = Vec::with_capacity(frames.len());
+        for (f, ms) in frames.iter().zip(delays_ms.iter()) {
+            let img = RgbaImage::from_raw(f.width, f.height, f.rgba.clone()).ok_or("gif frame size mismatch")?;
+            imgs.push(Frame::from_parts(img, 0, 0, Delay::from_numer_denom_ms((*ms).max(10), 1)));
+        }
+        enc.encode_frames(imgs).map_err(|e| format!("gif encode: {e}"))?;
+    }
+    Ok(out)
+}
+
+/// Pack frames into a zip of numbered PNG files (`base_0001.png`, ...).
+pub fn write_png_zip(frames: &[FrameRgba], base: &str) -> Result<Vec<u8>, String> {
+    let mut buf = Cursor::new(Vec::new());
+    {
+        let mut zw = zip::ZipWriter::new(&mut buf);
+        let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        let digits = frames.len().to_string().len().max(4);
+        for (i, f) in frames.iter().enumerate() {
+            let name = format!("{base}_{:0digits$}.png", i + 1);
+            let mut png = Vec::new();
+            PngEncoder::new(&mut png)
+                .write_image(&f.rgba, f.width, f.height, image::ExtendedColorType::Rgba8)
+                .map_err(|e| format!("png encode: {e}"))?;
+            zw.start_file(name, opts).map_err(|e| format!("zip entry: {e}"))?;
+            zw.write_all(&png).map_err(|e| format!("zip write: {e}"))?;
+        }
+        zw.finish().map_err(|e| format!("zip finish: {e}"))?;
+    }
+    Ok(buf.into_inner())
+}
 
 /// WebM/AV1 encoder options.
 #[derive(Clone, Debug, PartialEq)]
@@ -233,10 +286,10 @@ fn to_yuv420(rgb: &[u8], w: usize, h: usize) -> ([Vec<u8>; 3], usize) {
     ([y, u, v], cw)
 }
 
-/// Flatten a premultiplied-RGBA Pixmap onto `bg` and return straight RGB bytes (AV1 has no alpha).
-fn flatten_rgb(pm: &figcraft_render::Pixmap, bg: [u8; 3]) -> Vec<u8> {
-    let mut out = Vec::with_capacity((pm.width() * pm.height() * 3) as usize);
-    for px in pm.data().chunks_exact(4) {
+/// Flatten premultiplied RGBA bytes onto `bg` and return straight RGB bytes (AV1 has no alpha).
+fn flatten_rgb(rgba: &[u8], bg: [u8; 3]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(rgba.len() / 4 * 3);
+    for px in rgba.chunks_exact(4) {
         let inv = 255 - px[3] as u32;
         for c in 0..3 {
             out.push((px[c] as u32 + (bg[c] as u32 * inv + 127) / 255).min(255) as u8);
@@ -250,16 +303,15 @@ fn strip_temporal_delimiter(data: &[u8]) -> &[u8] {
     if data.len() >= 2 && data[0] == 0x12 && data[1] == 0x00 { &data[2..] } else { data }
 }
 
+
 /// Encode the animation as an AV1 WebM. Returns the file bytes.
-pub fn encode_webm(anim: &Animation, o: &WebmOptions) -> Result<Vec<u8>> {
-    let cmd = "motion.export";
+pub fn encode_webm(frames: &[FrameRgba], o: &WebmOptions) -> Result<Vec<u8>, String> {
     let fps = o.fps.clamp(1, 120);
-    let times = anim.frame_times(fps);
-    let total = times.len() as u32;
-    let (w, h) = anim.size();
+    let total = frames.len() as u32;
+    let (w, h) = if let Some(f) = frames.first() { (f.width, f.height) } else { return Err("no frames to encode".into()) };
     let (wu, hu) = (w as usize, h as usize);
     if wu == 0 || hu == 0 || wu % 2 == 1 || hu % 2 == 1 {
-        return Err(bad(cmd, "WebM needs an even, non-zero picture size; lower the scale"));
+        return Err("WebM needs an even, non-zero picture size; lower the scale".into());
     }
 
     let mut enc = EncoderConfig::with_speed_preset(o.speed.min(10));
@@ -283,11 +335,11 @@ pub fn encode_webm(anim: &Animation, o: &WebmOptions) -> Result<Vec<u8>> {
     let threads = if o.threads == 0 { std::thread::available_parallelism().map(|n| n.get()).unwrap_or(2).min(8) } else { o.threads };
     enc.tiles = if o.tiles > 0 { o.tiles } else { (wu * hu / (640 * 360)).clamp(1, threads.next_power_of_two()) };
     let cfg = Config::new().with_encoder_config(enc).with_threads(threads);
-    let mut ctx: Context<u8> = cfg.new_context().map_err(|e| bad(cmd, format!("AV1 encoder: {e}")))?;
+    let mut ctx: Context<u8> = cfg.new_context().map_err(|e| format!("AV1 encoder: {e}"))?;
     let av1c = ctx.container_sequence_header();
 
-    let mut blocks: Vec<Block> = Vec::with_capacity(times.len());
-    let take = |ctx: &mut Context<u8>, blocks: &mut Vec<Block>| -> Result<()> {
+    let mut blocks: Vec<Block> = Vec::with_capacity(frames.len());
+    let take = |ctx: &mut Context<u8>, blocks: &mut Vec<Block>| -> Result<(), String> {
         loop {
             match ctx.receive_packet() {
                 Ok(p) => {
@@ -296,92 +348,29 @@ pub fn encode_webm(anim: &Animation, o: &WebmOptions) -> Result<Vec<u8>> {
                 }
                 Err(EncoderStatus::Encoded) => continue,
                 Err(EncoderStatus::NeedMoreData) | Err(EncoderStatus::LimitReached) => return Ok(()),
-                Err(e) => return Err(bad(cmd, format!("AV1 encoder: {e}"))),
+                Err(e) => return Err(format!("AV1 encoder: {e}")),
             }
         }
     };
     let mut sent = 0u32;
-    for &t in &times {
-        let pm = anim.render(t).ok_or_else(|| bad(cmd, "a frame failed to render"))?;
-        let rgb = flatten_rgb(&pm, o.background);
+    for f in frames {
+        let rgb = flatten_rgb(&f.rgba, o.background);
         let ([py, pu, pv], cw) = to_yuv420(&rgb, wu, hu);
         let mut frame = ctx.new_frame();
         frame.planes[0].copy_from_raw_u8(&py, wu, 1);
         frame.planes[1].copy_from_raw_u8(&pu, cw, 1);
         frame.planes[2].copy_from_raw_u8(&pv, cw, 1);
-        ctx.send_frame(frame).map_err(|e| bad(cmd, format!("AV1 encoder: {e}")))?;
+        ctx.send_frame(frame).map_err(|e| format!("AV1 encoder: {e}"))?;
         sent += 1;
         take(&mut ctx, &mut blocks)?;
     }
     ctx.flush();
     take(&mut ctx, &mut blocks)?;
     if blocks.len() as u32 != sent || blocks.is_empty() {
-        return Err(bad(cmd, format!("AV1 encoder produced {} packets for {sent} frames", blocks.len())));
+        return Err(format!("AV1 encoder produced {} packets for {sent} frames", blocks.len()));
     }
     blocks.sort_by_key(|b| b.ts_ms);
     let _ = total;
     Ok(mux(w, h, fps, &av1c, &blocks))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use figcraft_doc::anim::motion::TimelineSettings;
-    use figcraft_doc::anim::motion::{AnimProperty, AnimValue};
-    use figcraft_doc::geom::Vec2;
-    use figcraft_doc::{Document, NodeId, NodeKind};
-
-    fn tiny_animated_doc() -> (Document, NodeId) {
-        let mut d = Document::new("t");
-        let page = d.first_page().unwrap();
-        let frame = d.create(page, NodeKind::Frame, "F", 0.0, 0.0, 16.0, 16.0).unwrap();
-        let dot = d.create(frame, NodeKind::Rectangle, "Dot", 2.0, 2.0, 8.0, 8.0).unwrap();
-        let n = d.node_mut(dot).unwrap();
-        let tr = n.motion.ensure_track(AnimProperty::Opacity);
-        tr.set_key(0, AnimValue::Scalar(1.0), None);
-        tr.set_key(200, AnimValue::Scalar(0.0), None);
-        let pos = n.motion.ensure_track(AnimProperty::Position);
-        pos.set_key(0, AnimValue::Vec2(Vec2::new(2.0, 2.0)), None);
-        pos.set_key(200, AnimValue::Vec2(Vec2::new(6.0, 2.0)), None);
-        d.timelines.insert(frame, TimelineSettings { duration_ms: 200, fps: 10, looping: true });
-        (d, frame)
-    }
-
-    /// EBML structural sanity: a real WebM header, a Segments/Tracks/Cues, and the AV1 codec id.
-    #[test]
-    fn webm_mux_writes_a_valid_ebml_file() {
-        let (d, frame) = tiny_animated_doc();
-        let anim = Animation::new(&d, frame, 1.0).unwrap();
-        let o = WebmOptions { fps: 5, speed: 10, threads: 1, tiles: 1, ..Default::default() };
-        let webm = encode_webm(&anim, &o).unwrap();
-        // EBML magic + DocType "webm" + Segment id.
-        assert_eq!(&webm[0..4], &[0x1A, 0x45, 0xDF, 0xA3]);
-        assert!(webm.windows(4).any(|w| w == b"webm"));
-        assert!(webm.windows(4).any(|w| w == [0x18, 0x53, 0x80, 0x67]), "Segment element");
-        assert!(webm.windows(5).any(|w| w == b"V_AV1"), "AV1 codec id");
-        assert!(webm.len() > 200, "real encoded frames, not just a header");
-    }
-
-    #[test]
-    fn quantizer_maps_quality_to_rav1e_range() {
-        let mut o = WebmOptions::default();
-        o.quality = 100;
-        assert_eq!(o.quantizer(), 55);
-        o.quality = 1;
-        assert_eq!(o.quantizer(), 253);
-        o.quality = 85;
-        assert_eq!(o.quantizer(), 85);
-    }
-
-    #[test]
-    fn odd_size_is_refused_before_allocation() {
-        let (mut d, frame) = tiny_animated_doc();
-        // Make the frame an odd width: 17 px at scale 1.
-        if let Some(n) = d.node_mut(frame) {
-            n.width = 17.0;
-        }
-        let anim = Animation::new(&d, frame, 1.0).unwrap();
-        let o = WebmOptions { fps: 5, speed: 10, threads: 1, tiles: 1, ..Default::default() };
-        assert!(encode_webm(&anim, &o).is_err(), "4:2:0 AV1 requires even dimensions");
-    }
-}

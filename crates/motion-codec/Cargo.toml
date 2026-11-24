@@ -1,0 +1,14 @@
+[package]
+name = "figcraft-motion-codec"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Animation frame encoders for Monet: GIF, AV1/WebM (Matroska) and PNG-zip. Pure byte-in/byte-out codecs with no engine, document or renderer dependency."
+
+[lints]
+workspace = true
+
+[dependencies]
+image = { workspace = true }
+zip = { workspace = true }
+rav1e = { workspace = true }

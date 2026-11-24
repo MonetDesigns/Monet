@@ -2440,6 +2440,7 @@ dependencies = [
  "figcraft-format",
  "figcraft-geom",
  "figcraft-layout",
+ "figcraft-motion-codec",
  "figcraft-pathops",
  "figcraft-pdf",
  "figcraft-plugin",
@@ -2449,7 +2450,6 @@ dependencies = [
  "figcraft-vectordrawable",
  "image",
  "log",
- "rav1e",
  "regex",
  "same-file",
  "serde",
@@ -2524,6 +2524,15 @@ dependencies = [
  "log",
  "proptest",
  "serde_json",
+]
+
+[[package]]
+name = "figcraft-motion-codec"
+version = "0.15.0"
+dependencies = [
+ "image",
+ "rav1e",
+ "zip 2.6.1",
 ]
 
 [[package]]
