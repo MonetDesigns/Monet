@@ -4362,6 +4362,25 @@ impl CanvasView {
     fn label_slot_press(&mut self, pos: Pos2, cx: &mut Context<Self>) -> bool {
         let hit = {
             let Ok(ds) = self.app.session.ds() else { return false };
+            // 组件变体 / 变体集的「+」画在选中框下方（overlays::transform_box），命中也按同一几何。
+            // 变体在 ComponentSet 内部，不走顶层帧标签 slot_at 那条路径。
+            if ds.selection.len() == 1
+                && ds.selection.first().is_some_and(|i| {
+                    ds.doc.node(*i).is_some_and(|n| {
+                        matches!(n.kind, figcraft_doc::NodeKind::ComponentSet { .. })
+                            || figcraft_engine::components::variant_set(&ds.doc, n.id).is_some()
+                    })
+                })
+                && let Some(b) = figcraft_engine::tools::selection_box(&ds.doc, &ds.selection)
+            {
+                let screen: Vec<_> = b.iter().map(|p| self.app.to_screen(p.x, p.y)).collect();
+                let mid_x = screen.iter().map(|p| p.x).sum::<f32>() / 4.0;
+                let y1 = screen.iter().map(|p| p.y).fold(f32::MIN, f32::max);
+                if canvas::overlays::add_variant_rect(mid_x, y1).contains(pos) {
+                    self.run_command("component.addVariant", serde_json::json!({ "id": ds.selection[0].0 }), cx);
+                    return true;
+                }
+            }
             canvas::frame_labels::slot_at(&self.app, &ds.doc, ds.page, &ds.selection, pos)
         };
         let Some((hit, rect)) = hit else { return false };

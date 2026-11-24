@@ -76,7 +76,7 @@ pub fn add_variant_slot(center_x: f32, y1: f32) -> Rect {
 
 /// 「+」加号挂在**当前选中的那个节点**下方：变体就挂变体小框下方，组件集挂集框下方，
 /// 独立组件挂自己下方。`component.addVariant` 接受变体 id，引擎自己解析回它所属的集。
-fn add_variant_host(n: &figcraft_doc::Node) -> Option<NodeId> {
+pub fn add_variant_host(n: &figcraft_doc::Node) -> Option<NodeId> {
     matches!(n.kind, NodeKind::ComponentSet { .. } | NodeKind::Component { .. }).then_some(n.id)
 }
 
@@ -160,12 +160,6 @@ pub fn slot_at(app: &CanvasApp, doc: &Document, page: NodeId, sel: &[NodeId], po
                 (SlotHit::Ready(id), status)
             });
         }
-        if sel.contains(&id) && add_variant_host(n).is_some() {
-            let add = add_variant_slot((x0 + x1) / 2.0, y1);
-            if add.contains(pos) {
-                return Some((SlotHit::AddVariant(id), add));
-            }
-        }
     }
     None
 }
@@ -230,7 +224,7 @@ fn more_dots(painter: &mut Painter, r: Rect, ink: Color32) {
 }
 
 /// 变体组「+」按钮：组件紫底、圆角 3、白色十字（设计稿 10×10 的加号）。
-fn add_variant_button(painter: &mut Painter, r: Rect) {
+pub fn add_variant_button(painter: &mut Painter, r: Rect) {
     painter.rect_filled(r, CornerRadius::same(3), COMPONENT);
     let c = r.center();
     let st = stroke(Color32::WHITE, 1.0);
@@ -326,9 +320,6 @@ pub fn draw(app: &CanvasApp, painter: &mut Painter, t: &Tokens, doc: &Document, 
                     let hover_slot = app.pointer.is_some_and(|p| slot.contains(p));
                     status_slot(painter, n, slot, hover_slot);
                 }
-            }
-            if selected && add_variant_host(n).is_some() {
-                add_variant_button(painter, add_variant_slot((x0 + x1) / 2.0, y1));
             }
         }
         label_rect

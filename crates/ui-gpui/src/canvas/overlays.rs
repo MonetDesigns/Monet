@@ -302,6 +302,11 @@ pub(super) fn overlays(
                 } else {
                     4
                 };
+            // 组件变体 / 组件变体集才挂「+」：独立组件没有，普通图层没有。
+            let add_variant = sel.len() == 1
+                && sel.first().and_then(|i| doc.node(*i)).is_some_and(|n| {
+                    matches!(n.kind, NodeKind::ComponentSet { .. }) || figcraft_engine::components::variant_set(&doc, n.id).is_some()
+                });
             size_label = transform_box(
                 app,
                 painter,
@@ -310,6 +315,7 @@ pub(super) fn overlays(
                 sel.len() > 1,
                 handles,
                 (!measuring && connector.is_none()).then_some(label),
+                add_variant,
             );
             for end in connector.into_iter().flatten().filter(|_| !app.session.tool.dev_mode) {
                 let c = app.to_screen(end.x, end.y);
@@ -528,6 +534,12 @@ fn bezier_handle(painter: &mut Painter, a: Pos2, b: Pos2, size: f32, col: Color3
     painter.circle_stroke(b, size, stroke(Color32::from_gray(0), 1.0));
 }
 
+/// 选中框下方「+」的矩形：尺寸框顶边 = 对象下边缘 + 9，框高约 17，故加号顶边 = 下边缘 + 30。
+/// 绘制与命中共用，保证按钮画在哪就能点在哪。
+pub fn add_variant_rect(cx: f32, y1: f32) -> Rect {
+    super::frame_labels::add_variant_slot(cx, y1)
+}
+
 /// 变换框（屏幕四角 tl、tr、br、bl）：`outline` 时画轮廓，前 `handles` 个角手柄，
 /// 显示尺寸时在下方画尺寸 `label`（返回尺寸 pill 的矩形）。
 fn transform_box(
@@ -538,6 +550,7 @@ fn transform_box(
     outline: bool,
     handles: usize,
     label: Option<String>,
+    add_variant: bool,
 ) -> Option<Rect> {
     if outline {
         // 变换框也按设备像素吸附（见 `outline::crisp_rect`）：直接描 1px 路径时四条边
@@ -560,7 +573,13 @@ fn transform_box(
         let fg = contrasting_ink(col);
         // 尺寸框铁律：文字框顶边距对象下边缘 9；背景块距文字上下各 2、左右各 6，圆角 3。
         // （`pill_with_bg` 的 `+ vec2(pad_x*2, 4)` 与 `galley` 的 `+2` 纵向内缩即上下 2。）
-        return Some(pill_with_bg(painter, pos2(cx, bottom + 9.0), Align2::CENTER_TOP, label, col, fg, col, 6.0));
+        let pill = pill_with_bg(painter, pos2(cx, bottom + 9.0), Align2::CENTER_TOP, label, col, fg, col, 6.0);
+        // 组件变体 / 组件变体集的「+」：紧贴在尺寸框下方（同一居中 x）。画在选中框这条路径上，
+        // 因为变体在 ComponentSet 内部、不会走顶层帧标签 frame_labels::draw 那条路径。
+        if add_variant {
+            super::frame_labels::add_variant_button(painter, add_variant_rect(cx, bottom));
+        }
+        return Some(pill);
     }
     None
 }
@@ -621,5 +640,17 @@ mod size_pill_tests {
         let (long, _) = pill_rect("1000 × 1000", pos2(0.0, 0.0), Align2::CENTER_TOP, 6.0);
         assert!(long.width() > short.width() + 20.0, "{} vs {}", long.width(), short.width());
         assert_eq!(short.height(), long.height()); // 上下边距固定 2
+    }
+}
+
+#[cfg(test)]
+mod add_variant_rect_tests {
+    use super::add_variant_rect;
+
+    /// 加号 = 尺寸框（下边缘 + 9、高 17）下方 4；与绘制、命中共用同一几何。
+    #[test]
+    fn add_variant_rect_sits_below_the_size_pill() {
+        let r = add_variant_rect(200.0, 403.0);
+        assert_eq!((r.min.x, r.min.y, r.width(), r.height()), (192.0, 433.0, 16.0, 16.0));
     }
 }
