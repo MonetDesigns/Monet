@@ -172,6 +172,23 @@ pub fn flow_children(doc: &Document, frame: NodeId) -> Vec<NodeId> {
     f.children.iter().copied().filter(|c| doc.node(*c).is_some_and(|n| n.visible && !n.child_layout.absolute)).collect()
 }
 
+/// Whether the parent frame `p` wraps and hugs `horizontal`'s axis, which is the cross axis of its
+/// flow: Fill container is not offered there (Figma greys it out; a grid has no flow to wrap).
+pub fn wrapping_row_hugs_across(p: &figcraft_doc::Node, horizontal: bool) -> bool {
+    let Some(al) = &p.layout else { return false };
+    let hugs = if horizontal { p.child_layout.sizing_h } else { p.child_layout.sizing_v } == Sizing::Hug;
+    al.wrap && hugs && axis_is_main(al.mode, horizontal) == Some(false)
+}
+
+/// Whether the horizontal (or vertical) axis is the main axis of a flow; `None` for a grid.
+fn axis_is_main(mode: LayoutMode, horizontal: bool) -> Option<bool> {
+    match mode {
+        LayoutMode::Horizontal => Some(horizontal),
+        LayoutMode::Vertical => Some(!horizontal),
+        LayoutMode::Grid => None,
+    }
+}
+
 /// Make a layer's sizing coherent with where it sits (after an edit). Fill needs room to fill: a
 /// layer that isn't in an auto layout flow (no auto layout parent, or ignoring auto layout), or
 /// whose parent hugs that axis, gets Fixed at its current size instead. Hug needs auto layout or
@@ -193,8 +210,18 @@ fn coherent_own_sizing(doc: &mut Document, id: NodeId) -> bool {
     let parent_hugs =
         |horizontal: bool| flow_parent.map(|p| if horizontal { p.child_layout.sizing_h } else { p.child_layout.sizing_v } == Sizing::Hug);
     let can_hug = (n.layout.is_some() && n.kind.is_frame_like()) || matches!(n.kind, NodeKind::Text(_));
+    // Fill has nothing to fill without a flow parent, along an axis the parent hugs (it hugs the
+    // children), or across a wrapping row that hugs that axis. Across a hugging flow it stays.
+    let no_fill = |horizontal: bool| match (flow_parent, parent_hugs(horizontal)) {
+        (None, _) => true,
+        (Some(p), Some(true)) => {
+            let main = p.layout.as_ref().and_then(|al| axis_is_main(al.mode, horizontal));
+            main != Some(false) || wrapping_row_hugs_across(p, horizontal)
+        }
+        _ => false,
+    };
     let coherent = |s: Sizing, horizontal: bool| match s {
-        Sizing::Fill if parent_hugs(horizontal) != Some(false) => Sizing::Fixed,
+        Sizing::Fill if no_fill(horizontal) => Sizing::Fixed,
         Sizing::Hug if !can_hug => Sizing::Fixed,
         s => s,
     };

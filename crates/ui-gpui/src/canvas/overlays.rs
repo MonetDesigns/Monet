@@ -297,7 +297,17 @@ pub(super) fn overlays(
             } else {
                 Default::default()
             };
-            let mut label = if is_line {
+            // 组件变体集：尺寸标签改显示变体数（如 "4 Variants"），不显示宽×高。
+            let set_variants = if sel.len() == 1 {
+                doc.node(sel[0]).filter(|n| matches!(n.kind, NodeKind::ComponentSet { .. })).map(|n| {
+                    n.children.iter().filter(|c| doc.node(**c).is_some_and(|cn| matches!(cn.kind, NodeKind::Component { .. }))).count()
+                })
+            } else {
+                None
+            };
+            let mut label = if let Some(count) = set_variants {
+                figcraft_i18n::trn("{n} variants", count, &[])
+            } else if is_line {
                 fmt(w)
             } else {
                 format!("{}{} × {}{}", fmt(w), sizing_label(sw), fmt(h), sizing_label(sh))
