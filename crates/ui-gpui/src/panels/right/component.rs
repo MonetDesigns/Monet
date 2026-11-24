@@ -62,18 +62,8 @@ fn variant_section(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut usi
     let t = tokens();
     let variant_id = c.main_id.unwrap_or(NodeId(0));
     let set = c.set_id.unwrap_or(NodeId(0));
-    let mut sec = PanelSection::new(c.title);
-
-    // ① Component values：属性 → 候选值（每行一个属性，值用 " / " 分隔）。
-    if !c.own_variant_props.is_empty() {
-        sec = sec.child(field_row_full(div().text_size(pt(11.0)).text_color(rgba(t.text)).child(tr("Component values"))));
-        for (name, values, _) in &c.own_variant_props {
-            let label = div().w(px(84.0)).flex_none().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(name.clone()));
-            let shown = if values.is_empty() { tr("None").to_string() } else { values.join(" / ") };
-            let value = div().flex_1().min_w(px(0.0)).text_size(pt(11.0)).text_color(rgba(t.text)).child(SharedString::from(shown));
-            sec = sec.child(field_row_full(div().flex().flex_row().items_center().gap(pt(8.0)).child(label).child(value)));
-        }
-    }
+    // 变体面板只显示 Current variant：标题行留空，避免多出一个 "Component"。
+    let mut sec = PanelSection::new(SharedString::from(String::new()));
 
     // ② Current variant 标题 + 「Go to component set」按钮（选中该 set）。
     let go = icon_cmd(Icon::ComponentSet, "select.set", json!({ "ids": [set.0] }), f, false);
@@ -85,7 +75,7 @@ fn variant_section(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut usi
         sec = sec.child(field_row_full(div().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(tr("No variant properties"))));
     }
 
-    // ③ 每属性：属性名可改 + 值可输入（两半并排，lizard `variant_ui` 的行布局）。
+    // ③ 每属性：属性名可改 + 值下拉（lizard `variant_ui` 的 TextFieldWithPresets）。
     for (name, values, current) in &c.own_variant_props {
         let name_edit = f.row_field(
             cx,
@@ -103,28 +93,17 @@ fn variant_section(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut usi
                 paint_color: None,
             },
         );
-        let value_edit = f.row_field(
-            cx,
-            slot(n),
-            current,
-            RowEditCtx {
-                cmd: "component.setVariantValue",
-                params: json!({ "id": variant_id.0, "property": name }),
-                key: "value",
-                scale: 1.0,
-                string_value: true,
-                paint: None,
-                nest: None,
-                nest_key: None,
-                paint_color: None,
-            },
-        );
-        let hint = values.join(" / ");
+        // 候选值下拉：选中即 `component.setVariantValue`（改这个变体的名字段），
+        // 与 lizard 的预设值菜单一致。
+        let rows: Vec<(String, &'static str, Value)> = values
+            .iter()
+            .map(|v| (v.clone(), "component.setVariantValue", json!({ "id": variant_id.0, "property": name, "value": v })))
+            .collect();
+        let dd = pick_dropdown(f, current.clone(), 0.0, rows);
         sec = sec.child(field_row_full(
             div().flex().flex_row().items_center().gap(pt(8.0)).w_full()
-                .child(div().flex_1().min_w(px(0.0)).child(name_edit))
-                .child(div().flex_1().min_w(px(0.0)).child(value_edit))
-                .child(div().text_size(pt(10.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(hint))),
+                .child(div().w(px(84.0)).flex_none().child(name_edit))
+                .child(div().flex_1().min_w(px(0.0)).child(dd)),
         ));
     }
     sec

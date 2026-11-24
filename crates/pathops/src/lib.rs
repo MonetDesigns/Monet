@@ -489,8 +489,14 @@ fn path_end(path: &BezPath, at_end: bool) -> Option<(Point, Vec2)> {
 
 /// The filled arrowhead shape for `cap` at one end of an open path.
 pub fn arrowhead(path: &BezPath, cap: StrokeCap, weight: f64, at_end: bool) -> Option<BezPath> {
+    arrowhead_sized(path, cap, weight, at_end, 1.0)
+}
+
+/// [`arrowhead`] with a per-point size multiplier (`size`): the arrow a style row sizes up or down.
+pub fn arrowhead_sized(path: &BezPath, cap: StrokeCap, weight: f64, at_end: bool, size: f64) -> Option<BezPath> {
     // Capped like a stroke's width: the circle below is flattened at a fixed tolerance.
-    let weight = weight.min(MAX_STROKE_WIDTH);
+    let size = if size.is_finite() && size > 0.0 { size.min(100.0) } else { 1.0 };
+    let weight = (weight * size).min(MAX_STROKE_WIDTH);
     let (tip, dir) = path_end(path, at_end)?;
     let n = Vec2::new(-dir.y, dir.x);
     let s = (weight * 3.0).max(6.0);

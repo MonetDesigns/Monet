@@ -1480,7 +1480,7 @@ pub(crate) fn network(v: &Value) -> Option<VectorNetwork> {
     let entries: usize = net.regions.iter().flat_map(|r| &r.loops).map(Vec::len).sum();
     let coord = |x: f64| x.is_finite() && x.abs() <= MAX_COORD;
     let fits = net.vertices.len() + net.segments.len() + entries <= MAX_PATH_ELEMENTS
-        && net.vertices.iter().all(|p| coord(p.x) && coord(p.y) && coord(p.radius))
+        && net.vertices.iter().all(|p| coord(p.x) && coord(p.y) && coord(p.radius) && p.smoothing.is_none_or(coord) && p.cap_size.is_none_or(coord))
         && net.segments.iter().all(|s| [s.ta.0, s.ta.1, s.tb.0, s.tb.1].into_iter().all(coord));
     if !fits {
         return None;
@@ -1492,6 +1492,12 @@ pub(crate) fn network(v: &Value) -> Option<VectorNetwork> {
     }
     for p in &mut net.vertices {
         p.radius = p.radius.clamp(0.0, MAX_SIZE);
+        if let Some(sm) = p.smoothing.as_mut() {
+            *sm = sm.clamp(0.0, 1.0);
+        }
+        if let Some(cs) = p.cap_size.as_mut() {
+            *cs = cs.clamp(0.0, MAX_SIZE);
+        }
     }
     net.sanitize();
     (!net.segments.is_empty()).then_some(net)

@@ -50,11 +50,17 @@ pub struct Vertex {
     /// The join where the stroke turns at this point; `None` takes the layer's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub join: Option<StrokeJoin>,
+    /// Corner smoothing at this point (0..=1); `None` takes the layer's `cornerSmoothing`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smoothing: Option<f64>,
+    /// Size multiplier of a stroke cap drawn at this point (an arrow's size); `None` is 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cap_size: Option<f64>,
 }
 
 impl Vertex {
     pub fn new(x: f64, y: f64) -> Self {
-        Self { x, y, radius: 0.0, mirror: None, cap: None, join: None }
+        Self { x, y, radius: 0.0, mirror: None, cap: None, join: None, smoothing: None, cap_size: None }
     }
     pub fn point(&self) -> Point {
         Point::new(self.x, self.y)
@@ -437,11 +443,23 @@ impl VectorNetwork {
                 }
             }
         }
-        // The segments that bound a closed region, where corners take smoothing.
+        // The segments that bound a closed region, where corners take smoothing. A segment
+        // inferred as a loop's close is walked as part of that loop below, so its end corners
+        // take smoothing too — whether or not deletion has already put it in the loop.
+        let index = self.loop_index();
         let mut on_loop = vec![false; if smoothing > 0.0 { self.segments.len() } else { 0 }];
         for &i in self.regions.iter().flat_map(|r| r.loops.iter().flatten()) {
             if let Some(x) = on_loop.get_mut(i) {
                 *x = true;
+            }
+        }
+        if smoothing > 0.0 {
+            for lp in self.regions.iter().flat_map(|r| r.loops.iter()) {
+                if let Some(c) = self.closing_segment(lp, &index) {
+                    if let Some(x) = on_loop.get_mut(c) {
+                        *x = true;
+                    }
+                }
             }
         }
         let turns: Vec<Option<Turn>> = (0..self.vertices.len()).map(|v| self.turn(v, incident.get(v)?)).collect();
@@ -500,7 +518,6 @@ impl VectorNetwork {
         // The curves go between the two segments wherever a loop walks through the point, in the
         // order the loop meets them. Each loop is rebuilt in one pass, so a polygon with many
         // rounded corners isn't quadratic.
-        let index = self.loop_index();
         for lp in out.regions.iter_mut().flat_map(|r| r.loops.iter_mut()) {
             if lp.is_empty() {
                 continue;
@@ -617,6 +634,13 @@ impl VectorNetwork {
         let reach = self.room(s1, a1, l1, rounds).min(self.room(s2, a2, l2, rounds));
         let own = |at_a: bool, t: f64| if at_a { t } else { 1.0 - t };
         let closed = |s: usize| on_loop.get(s).copied().unwrap_or(false);
+        // A point's own smoothing overrides the layer's; both are clamped to 0..=1.
+        let smoothing = self
+            .vertices
+            .get(v)
+            .and_then(|x| x.smoothing)
+            .unwrap_or(smoothing)
+            .clamp(0.0, 1.0);
         if smoothing > 0.0
             && is_line(&c1)
             && is_line(&c2)
@@ -887,6 +911,13 @@ fn start_dir(c: &CubicBez) -> Option<Vec2> {
     [c.p1 - c.p0, c.p2 - c.p0, c.p3 - c.p0].into_iter().find(|d| d.hypot() > 1e-9).map(|d| d / d.hypot())
 }
 
+/// The direction a curve reaches its end in: along its last handle, else toward its end from the
+/// earlier control points; `None` for a curve of no length. The counterpart of [`start_dir`] for
+/// a zero derivative at the far end of [`trim`].
+fn end_dir(c: &CubicBez) -> Option<Vec2> {
+    [c.p3 - c.p2, c.p3 - c.p1, c.p3 - c.p0].into_iter().find(|d| d.hypot() > 1e-9).map(|d| d / d.hypot())
+}
+
 /// Whether a cubic is a straight segment (no handles).
 fn is_line(c: &CubicBez) -> bool {
     c.p1 == c.p0 && c.p2 == c.p3
@@ -905,6 +936,13 @@ fn trim(c: &CubicBez, t: f64, len: f64) -> (Point, Vec2, f64) {
     }
     let k = c.inv_arclen(t, ARCLEN_ACC).clamp(0.0, 1.0);
     let d = c.deriv().eval(k).to_vec2();
-    let back = if d.hypot() > 1e-9 { -d / d.hypot() } else { start_dir(c).map(|u| -u).unwrap_or_default() };
+    let back = if d.hypot() > 1e-9 {
+        -d / d.hypot()
+    } else {
+        // At the far end the derivative vanishes when the last handle has no length; use the
+        // endpoint tangent there so a corner arc leaves along the segment, not back along its
+        // start. The start side keeps its own fallback.
+        (if k > 0.5 { end_dir(c) } else { start_dir(c) }).map(|u| -u).unwrap_or_default()
+    };
     (c.eval(k), back, k)
 }

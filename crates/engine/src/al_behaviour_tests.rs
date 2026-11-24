@@ -369,3 +369,21 @@ fn an_absolute_child_of_an_auto_layout_frame_still_aligns_to_it() {
     s.execute("align.right", &json!({"ids": [kid]})).unwrap();
     assert_eq!(s.doc().unwrap().world_bounds(kid).unwrap().x1, 200.0);
 }
+
+/// Component sets with auto layout: a variant can Fill across the flow even when its
+/// parent hugs that axis (upstream figcraft / Figma behaviour). Previously the local
+/// `coherent_sizing` reverted every Fill whose parent hugged, so a variant's width
+/// could not be set to Fill inside a hugging set.
+#[test]
+fn cross_axis_fill_survives_a_hugging_parent() {
+    let mut s = Session::new();
+    let f = al_frame(&mut s, json!({"sizingH": "hug", "sizingV": "hug"}));
+    let a = rect(&mut s, f, 4.0, 20.0, "#FF0000");
+    let b = rect(&mut s, f, 50.0, 40.0, "#0000FF");
+    assert_eq!(sizing(&s, f), (Sizing::Hug, Sizing::Hug));
+    // Across the flow (horizontal row → vertical Fill): a non-Fill sibling is left,
+    // so the parent keeps hugging and the child stays Fill.
+    set(&mut s, a, json!({"sizingV": "fill"}));
+    assert_eq!(sizing(&s, f), (Sizing::Hug, Sizing::Hug), "parent keeps hugging across the flow");
+    assert_eq!(sizing(&s, a), (Sizing::Fixed, Sizing::Fill));
+}

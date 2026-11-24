@@ -95,6 +95,7 @@ impl VLabel {
             color: self.color,
             align: Align2::CENTER_CENTER,
             angle: Some(-std::f32::consts::FRAC_PI_2),
+            pill: None,
         });
     }
 }
