@@ -954,7 +954,10 @@ fn nf_point_axis(
         tf.set_lead(Slot::Text(SharedString::from(lead)));
         tf.set_numeric("", 1.0);
         let cmds = cmds.clone();
-        tf.set_on_commit(move |text, _window, _cx| {
+        // Parse the raw draft: a Mixed field has no kept value, so resolving first would turn
+        // `+10` into the absolute 10. `point_axis_value` keeps the relative operator for the
+        // engine to apply to each point's own coordinate.
+        tf.set_on_commit_draft(move |text, _window, _cx| {
             let Some(v) = point_axis_value(&text) else { return };
             cmds.push(Cmd { id: "vector.edit.position", params: Some(serde_json::json!({ key: v })) });
         });

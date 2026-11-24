@@ -1032,11 +1032,14 @@ pub fn specs() -> Vec<CommandSpec> {
                 if moves.is_empty() {
                     return Err(bad("vector.edit.position", "select points"));
                 }
-                // Points that all share one offset move as one, so moving every point of a layer
-                // by one offset still carries the regions' paint frames, as a drag of all of them
-                // does. Otherwise no one move covers every point, so each point moves alone.
+                // Points that all share exactly one offset move as one, so moving every point of
+                // a layer by one offset still carries the regions' paint frames, as a drag of all
+                // of them does. Otherwise each point moves alone with its own delta. Compare
+                // bit-for-bit, not within a tolerance: a large parent scale can make different
+                // parent-space offsets look equal locally, and applying d0 to all of them would
+                // silently flatten the difference (two points ending at the same world position).
                 let d0 = moves[0].1;
-                let uniform = moves.iter().all(|(_, d)| (*d - d0).hypot() < 1e-9);
+                let uniform = moves.iter().all(|(_, d)| d.x.to_bits() == d0.x.to_bits() && d.y.to_bits() == d0.y.to_bits());
                 edit(s.doc_mut()?, ve.id, |net| {
                     if uniform {
                         let all: Vec<usize> = moves.iter().map(|(i, _)| *i).collect();

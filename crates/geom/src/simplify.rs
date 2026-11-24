@@ -23,7 +23,9 @@ const STRAY: f64 = 2.0;
 /// - A run of nearly collinear segments: kurbo measures its error across the path, not along it, so
 ///   a fitted cubic whose handle runs hundreds of units on along the line passes its check. Each
 ///   fitted run is measured against the run it replaces, and one that strays more than
-///   twice `accuracy` from it is kept as it was instead.
+///   twice `accuracy` from it at the sampled positions is kept as it was instead. This is a
+///   sampled deviation check (15 interior points per fitted segment), not a continuous bound: a
+///   segment can pass while exceeding the tolerance between samples.
 ///
 /// Subpaths and closes are kept, and a closing segment stays implicit, as kurbo leaves it.
 ///

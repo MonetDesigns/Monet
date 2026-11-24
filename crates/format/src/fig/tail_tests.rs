@@ -581,7 +581,7 @@ fn per_point_smoothing_and_cap_size_import_from_style_rows() {
     }
     let (doc, warnings) = import(&canvas(&schema(), &message), "Tail").unwrap();
     let wave = network_of(&doc, "Wave");
-    assert_eq!(wave.vertices[1].smoothing, Some(0.6));
+    assert_eq!(wave.vertices[1].smoothing, Some(f64::from(0.6_f32)));
     assert_eq!(wave.vertices[1].cap_size, Some(3.0));
     assert_eq!(wave.vertices[0].smoothing, None);
     assert!(
