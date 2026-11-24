@@ -537,7 +537,9 @@ fn bezier_handle(painter: &mut Painter, a: Pos2, b: Pos2, size: f32, col: Color3
 /// 选中框下方「+」的矩形：尺寸框顶边 = 对象下边缘 + 9，框高约 17，故加号顶边 = 下边缘 + 30。
 /// 绘制与命中共用，保证按钮画在哪就能点在哪。
 pub fn add_variant_rect(cx: f32, y1: f32) -> Rect {
-    super::frame_labels::add_variant_slot(cx, y1)
+    // 尺寸框顶边 = y1 + 7，高 = 13 + 上下各 2 = 17，底部再留 4 → + 顶边 y1 + 28。
+    let top = y1 + 7.0 + SIZE_PILL_GLYPH_H + 4.0 + 4.0;
+    super::frame_labels::add_variant_slot(cx, top - super::frame_labels::ADD_VARIANT_TOP)
 }
 
 /// 变换框（屏幕四角 tl、tr、br、bl）：`outline` 时画轮廓，前 `handles` 个角手柄，
@@ -573,7 +575,7 @@ fn transform_box(
         let fg = contrasting_ink(col);
         // 尺寸框铁律：文字框顶边距对象下边缘 9；背景块距文字上下各 2、左右各 6，圆角 3。
         // （`pill_with_bg` 的 `+ vec2(pad_x*2, 4)` 与 `galley` 的 `+2` 纵向内缩即上下 2。）
-        let pill = pill_with_bg(painter, pos2(cx, bottom + 9.0), Align2::CENTER_TOP, label, col, fg, col, 6.0);
+        let pill = pill_with_bg(painter, pos2(cx, bottom + 7.0), Align2::CENTER_TOP, label, col, fg, col, 6.0);
         // 组件变体 / 组件变体集的「+」：紧贴在尺寸框下方（同一居中 x）。画在选中框这条路径上，
         // 因为变体在 ComponentSet 内部、不会走顶层帧标签 frame_labels::draw 那条路径。
         if add_variant {
@@ -591,18 +593,25 @@ pub(super) fn pill(painter: &mut Painter, at: Pos2, align: Align2, text: String,
 
 /// 尺寸框铁律：背景块宽度 = 文字实测宽 + 左右固定边距（各 `pad_x`），高度 = 文字高 + 上下各 2；
 /// 圆角 3。文字宽度用当前字号逐字量，不写死任何总宽 —— 数字位数不同框就跟着变。
+/// 尺寸框文字高：设计稿 Group 234 / Frame 232 内文字 `205x203`（11pt）实测 13，
+/// 背景框 61×17 = 文字 13 + 上下各 2，圆角 3，padding 左右各 6。
+const SIZE_PILL_GLYPH_H: f32 = 13.0;
+
 pub(super) fn pill_rect(text: &str, at: Pos2, align: Align2, pad_x: f32) -> (Rect, Vec2) {
-    let galley_size = text_size(text, semibold(11.0));
-    let size = galley_size + vec2(pad_x * 2.0, 4.0);
-    (align.anchor_size(at, size), galley_size)
+    let w = text_size(text, semibold(11.0)).x;
+    // 框宽 = 文字宽 + 左右各 pad_x；框高 = 真实字形高 + 上下各 2。
+    let glyph = vec2(w, SIZE_PILL_GLYPH_H);
+    let size = glyph + vec2(pad_x * 2.0, 4.0);
+    (align.anchor_size(at, size), glyph)
 }
 
 fn pill_with_bg(painter: &mut Painter, at: Pos2, align: Align2, text: String, _col: Color32, fg: Color32, bg: Color32, pad_x: f32) -> Rect {
-    let (r, _) = pill_rect(&text, at, align, pad_x);
+    let (r, glyph) = pill_rect(&text, at, align, pad_x);
     painter.rect_filled(r, CornerRadius::same(3), bg);
-    // 文字在**整个内框**里居中：GPUI 用真实字形宽度排版，若 `text_size` 的估算偏大，
-    // 贴左画就会让右边留白偏大。给满内框 + CENTER_CENTER，真实文字左右边距自然相等。
-    painter.text(r.center(), Align2::CENTER_CENTER, text, semibold(11.0), fg);
+    // 文字贴内框左上：距左 pad_x、距上 2（真实字形高）。Galley 用同一真实高度，
+    // 否则 GPUI 按 text_size 的虚高排版，文字在框里上下不对齐。
+    let galley = super::painter::Galley { text, font: semibold(11.0), color: fg, size: glyph };
+    painter.galley(pos2(r.min.x + pad_x, r.min.y + 2.0), galley, fg);
     r
 }
 
@@ -633,6 +642,15 @@ mod size_pill_tests {
     use super::pill_rect;
     use crate::canvas::geom::{Align2, pos2};
 
+    /// 尺寸框铁律：距对象下边缘 7，框高 = 文字 13 + 上下各 2 = 17，
+    /// 宽 = 文字宽 + 左右各 6，圆角 3。
+    #[test]
+    fn size_pill_obeys_the_7_2_6_3_rule() {
+        let (r, glyph) = super::pill_rect("110 × 116", pos2(0.0, 0.0), Align2::LEFT_TOP, 6.0);
+        assert_eq!(r.height(), 17.0);            // 13 字形 + 2 + 2（设计稿 Frame 232）
+        assert_eq!(r.width(), glyph.x + 12.0);   // 左右各 6
+    }
+
     /// 尺寸框宽度 = 文字实测宽 + 左右各 6，高度 = 文字高 + 上下各 2；位数变化框跟着变。
     #[test]
     fn size_pill_width_follows_text_with_fixed_margins() {
@@ -647,10 +665,10 @@ mod size_pill_tests {
 mod add_variant_rect_tests {
     use super::add_variant_rect;
 
-    /// 加号 = 尺寸框（下边缘 + 9、高 17）下方 4；与绘制、命中共用同一几何。
+    /// 加号 = 尺寸框下方 4；与绘制、命中共用同一几何。
     #[test]
     fn add_variant_rect_sits_below_the_size_pill() {
         let r = add_variant_rect(200.0, 403.0);
-        assert_eq!((r.min.x, r.min.y, r.width(), r.height()), (192.0, 433.0, 16.0, 16.0));
+        assert_eq!((r.min.x, r.min.y, r.width(), r.height()), (192.0, 431.0, 16.0, 16.0));
     }
 }
