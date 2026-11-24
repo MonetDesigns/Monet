@@ -1124,7 +1124,7 @@ fn dev_rect(r: RectPx, area: RectPx, radius: f32, color: gpui::Rgba) -> Div {
 }
 
 /// 机身：eGUI `device::device_body`。颜色带 + 黑色玻璃，Mac / Desktop 另加底座。
-fn device_body(stage: Div, g: &Geom, area: RectPx) -> Div {
+fn device_body(stage: Div, g: &Geom, area: RectPx, ppp: f32) -> Div {
     // 真实外框 PNG：整张图铺在设备区域，透明屏幕窗口正好露出下面的画布层。
     if let Some(fi) = g.frame.as_ref() {
         let (dx, dy, png_w, png_h) = fi.placed.map(|p| (p[0], p[1], p[2], p[3])).unwrap_or_else(|| {
@@ -1138,11 +1138,15 @@ fn device_body(stage: Div, g: &Geom, area: RectPx) -> Div {
         });
         let x = g.screen.x - dx;
         let y = g.screen.y - dy;
+        // 内容图（frame_at）按设备像素 snap 定位；机身 PNG 必须同一套 snap，否则两者
+        // 边缘差半像素，位图采样就会在窗口边界露出一条背景色的细线。
+        let ppp = ppp.max(0.25);
+        let snap = |v: f32| (v * ppp).round() / ppp;
         return stage.child(
             img(gpui::ImageSource::from(fi.image.clone()))
                 .absolute()
-                .left(px(x - area.x))
-                .top(px(y - area.y))
+                .left(px(snap(x - area.x)))
+                .top(px(snap(y - area.y)))
                 .w(px(png_w))
                 .h(px(png_h)),
         );
@@ -1328,7 +1332,7 @@ pub fn render(app: &CanvasApp, state: &PresentState, vp: (f32, f32), canvas: (f3
         };
         // 没有真实外框时才在内容**之下**先铺几何机身；有 PNG 时改在内容之后盖上去（见第 7 步）。
         if g.frame.is_none() {
-            stage = device_body(stage, g, area);
+            stage = device_body(stage, g, area, ppp);
         }
         // 2) 屏幕层：剪到屏幕矩形；圆角由第 8 步的 `device_glass` 遮罩补齐。
         let mut layer = div()
@@ -1450,9 +1454,9 @@ pub fn render(app: &CanvasApp, state: &PresentState, vp: (f32, f32), canvas: (f3
         }
         stage = stage.child(layer);
         if g.frame.is_some() {
-            // 7a) 机身 PNG 盖在画面之上：PSD 的 Screen bbox 精确，透明窗口=内容矩形，
-            //     机身圆角自然裁出内容，不需要任何额外色块蒙版。
-            stage = device_body(stage, g, area);
+            // 7a) 机身 PNG 盖在画面之上：透明窗口露出内容，圆角裁切已由 frame_at 的
+            //     img().rounded() 完成，机身与内容对齐不留缝。
+            stage = device_body(stage, g, area, ppp);
         } else {
             // 7b) 几何绘制：在画面之上补四角玻璃遮罩，盖住方角溢出（GPUI 不裁圆角）。
             stage = device_glass(stage, g, area);
