@@ -1885,6 +1885,17 @@ impl CanvasView {
                     continue;
                 }
 
+                // Crop image: the engine has already switched the fill to Crop mode; take the
+                // canvas over by closing the colour picker and selecting that one layer.
+                "image.crop" => {
+                    self.popup = None;
+                    if let Some(id) = r.data.get("id").and_then(figcraft_engine::params::id_of) {
+                        let _ = self.app.session.execute("select.set", &serde_json::json!({ "ids": [id] }));
+                    }
+                    cx.notify();
+                    continue;
+                }
+
                 "canvas.renameLabel" => {
                     if let Some(id) = r.data.get("id").and_then(figcraft_engine::params::id_of) {
                         self.begin_inline_rename(vec![id], InlineRenameTarget::Label, cx);
@@ -2926,6 +2937,12 @@ impl CanvasView {
 
                         // A23：导出命令没给路径时引擎只回 base64，UI 负责弹保存对话框落盘。
                         self.deliver_download(c.id, &result, cx);
+
+                        // 图片替换后，打开中的取色器仍持有旧 paint / 预览；关掉它，
+                        // 下次打开会从文档重新读取，避免后续编辑把旧图片写回去。
+                        if c.id == "image.replace" {
+                            self.popup = None;
+                        }
                     }
 
                     Err(e) => {
