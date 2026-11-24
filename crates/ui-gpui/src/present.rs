@@ -1122,47 +1122,6 @@ fn dev_rect(r: RectPx, area: RectPx, radius: f32, color: gpui::Rgba) -> Div {
 }
 
 /// 机身：eGUI `device::device_body`。颜色带 + 黑色玻璃，Mac / Desktop 另加底座。
-/// 屏幕窗口圆角裁切：真实 PNG 的透明窗口是圆角的，其 bbox 四角落在机身透明区，
-/// 直角内容会从那四角漏出去（机身盖不住）。这里在内容之上补四个角块，每块只把朝
-/// 屏幕中心的一角做成圆角，盖掉「矩形角 − 圆角窗口」；颜色 = 预览背景，看不出色块。
-/// 半径来自 PNG alpha 实测（devices.json screenRadius），不能用名字猜。
-fn device_frame_mask(stage: Div, g: &Geom, area: RectPx) -> Div {
-    let Some(fi) = g.frame.as_ref() else { return stage };
-    let k = g.screen.w / fi.screen_rect[2].max(1.0) as f32;
-    let r = (fi.radii[0] as f32 * k).min(g.screen.w / 2.0).min(g.screen.h / 2.0);
-    if !(r.is_finite() && r > 0.0) {
-        return stage;
-    }
-    let bg = rgba(tokens().panel);
-    let s = g.screen;
-    // 角块比理论位置各内缩 0.5px，避免压到机身边缘。
-    let e = 0.5f32;
-    let corners = [
-        (s.x, s.y, 3u8),
-        (s.x + s.w - r, s.y, 2u8),
-        (s.x, s.y + s.h - r, 1u8),
-        (s.x + s.w - r, s.y + s.h - r, 0u8),
-    ];
-    let mut out = stage;
-    for (x, y, corner) in corners {
-        let mut m = div()
-            .absolute()
-            .left(px(x - area.x + e))
-            .top(px(y - area.y + e))
-            .w(px(r))
-            .h(px(r))
-            .bg(bg);
-        m = match corner {
-            0 => m.rounded_tl(px(r)),
-            1 => m.rounded_tr(px(r)),
-            2 => m.rounded_bl(px(r)),
-            _ => m.rounded_br(px(r)),
-        };
-        out = out.child(m);
-    }
-    out
-}
-
 fn device_body(stage: Div, g: &Geom, area: RectPx) -> Div {
     // 真实外框 PNG：整张图铺在设备区域，透明屏幕窗口正好露出下面的画布层。
     if let Some(fi) = g.frame.as_ref() {
@@ -1487,8 +1446,8 @@ pub fn render(app: &CanvasApp, state: &PresentState, vp: (f32, f32), canvas: (f3
         }
         stage = stage.child(layer);
         if g.frame.is_some() {
-            // 7a) 先按屏幕窗口圆角裁掉内容四角（矩形角落在机身透明区，机身盖不住），再盖 PNG。
-            stage = device_frame_mask(stage, g, area);
+            // 7a) 机身 PNG 盖在画面之上：PSD 的 Screen bbox 精确，透明窗口=内容矩形，
+            //     机身圆角自然裁出内容，不需要任何额外色块蒙版。
             stage = device_body(stage, g, area);
         } else {
             // 7b) 几何绘制：在画面之上补四角玻璃遮罩，盖住方角溢出（GPUI 不裁圆角）。
