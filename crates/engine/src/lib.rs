@@ -66,6 +66,7 @@ pub use dev::annotations;
 pub use dev::code_connect;
 pub use dev::codegen;
 pub use dev::component_codegen;
+pub use dev::design_context;
 pub use dev::dev_measurements;
 pub use dev::dev_resources;
 pub use dev::devcompare;
@@ -255,6 +256,8 @@ mod brush_tests;
 mod canvas_fixes_tests;
 #[cfg(test)]
 mod code_connect_tests;
+#[cfg(test)]
+mod design_context_tests;
 #[cfg(test)]
 mod collab_ids_tests;
 #[cfg(test)]
