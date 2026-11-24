@@ -3737,41 +3737,39 @@ impl WindowState {
                 let w = f32::from(bounds.size.width).max(1.0);
                 let h = f32::from(bounds.size.height).max(1.0);
                 let r = h * 0.5;
-                let (lo, hi) = (r / w, 1.0 - r / w);
-                // 中间是直边色带；两端的半圆是独立色块，颜色就是该端的颜色。
+                // 整条渐变本身裁成端点为半圆的胶囊；端帽里仍是同一条渐变，不另贴纯色圆片。
                 for i in 0..6 {
-                    let s = (i as f32 / 6.0).max(lo);
-                    let e = ((i + 1) as f32 / 6.0).min(hi);
-                    if e <= s {
-                        continue;
+                    let a = hsb_color(i as f32 * 60.0, 1.0, 1.0);
+                    let b = hsb_color((i + 1) as f32 * 60.0, 1.0, 1.0);
+                    let mut corners = Corners::default();
+                    if i == 0 {
+                        corners.top_left = px(r);
+                        corners.bottom_left = px(r);
                     }
-                    let a = hsb_color(s * 360.0, 1.0, 1.0);
-                    let b = hsb_color(e * 360.0, 1.0, 1.0);
-                    window.paint_quad(gpui::fill(
-                        Bounds { origin: point(px(x0 + s * w), px(y0)), size: size(px((e - s) * w), px(h)) },
-                        gpui::linear_gradient(
-                            90.0,
-                            gpui::linear_color_stop(gpui::Hsla::from(rgba(a)), 0.0),
-                            gpui::linear_color_stop(gpui::Hsla::from(rgba(b)), 1.0),
-                        ),
-                    ));
-                }
-                let mut cap = |cx: f32, color: Color32| {
+                    if i == 5 {
+                        corners.top_right = px(r);
+                        corners.bottom_right = px(r);
+                    }
                     window.paint_quad(
                         gpui::fill(
-                            Bounds { origin: point(px(cx - r), px(y0)), size: size(px(2.0 * r), px(h)) },
-                            rgba(color),
+                            Bounds {
+                                origin: point(px(x0 + w * i as f32 / 6.0), px(y0)),
+                                size: size(px(w / 6.0 + if i == 5 { 0.0 } else { 0.5 }), px(h)),
+                            },
+                            gpui::linear_gradient(
+                                90.0,
+                                gpui::linear_color_stop(gpui::Hsla::from(rgba(a)), 0.0),
+                                gpui::linear_color_stop(gpui::Hsla::from(rgba(b)), 1.0),
+                            ),
                         )
-                        .corner_radii(Corners { top_left: px(r), top_right: px(r), bottom_right: px(r), bottom_left: px(r) }),
+                        .corner_radii(corners),
                     );
-                };
-                cap(x0 + r, hsb_color(0.0, 1.0, 1.0));
-                cap(x0 + w - r, hsb_color(360.0, 1.0, 1.0));
+                }
             })
             .on_change(move |v, window, cx| hue_pick(v, window, cx))
             .render();
 
-        // ③ 透明度滑轨：同样用 `Slider`，轨道先棋盘再叠透明→当前色的水平渐变。
+        // ③ 透明度滑轨：轨道先棋盘再叠透明→当前色的渐变，整条渐变由两端半圆裁切。
         let alpha_pick = pick.clone();
         let opaque = current.with_alpha(255);
         let alpha_slider = crate::widgets::Slider::new(alpha, 0.0, 1.0)
@@ -3783,29 +3781,23 @@ impl WindowState {
             .thumb_fill(rgba(current.with_alpha(255)))
             .step(1.0 / 255.0)
             .paint_track(move |window, bounds, _| {
-                let x0 = f32::from(bounds.origin.x);
-                let y0 = f32::from(bounds.origin.y);
-                let w = f32::from(bounds.size.width).max(1.0);
-                let h = f32::from(bounds.size.height).max(1.0);
-                let r = h * 0.5;
+                let r = f32::from(bounds.size.height) * 0.5;
                 crate::widgets::swatch::checker_capsule(window, bounds, 4.0, r);
-                let (lo, hi) = (r / w, 1.0 - r / w);
-                let start = opaque.with_alpha((255.0 * lo).round() as u8);
-                let end = opaque.with_alpha((255.0 * hi).round() as u8);
-                window.paint_quad(gpui::fill(
-                    Bounds { origin: point(px(x0 + r), px(y0)), size: size(px((w - 2.0 * r).max(1.0)), px(h)) },
-                    gpui::linear_gradient(
-                        90.0,
-                        gpui::linear_color_stop(gpui::Hsla::from(rgba(start)), 0.0),
-                        gpui::linear_color_stop(gpui::Hsla::from(rgba(end)), 1.0),
-                    ),
-                ));
                 window.paint_quad(
                     gpui::fill(
-                        Bounds { origin: point(px(x0 + w - 2.0 * r), px(y0)), size: size(px(2.0 * r), px(h)) },
-                        rgba(opaque),
+                        bounds,
+                        gpui::linear_gradient(
+                            90.0,
+                            gpui::linear_color_stop(gpui::transparent_black(), 0.0),
+                            gpui::linear_color_stop(gpui::Hsla::from(rgba(opaque)), 1.0),
+                        ),
                     )
-                    .corner_radii(Corners { top_left: px(r), top_right: px(r), bottom_right: px(r), bottom_left: px(r) }),
+                    .corner_radii(Corners {
+                        top_left: px(r),
+                        top_right: px(r),
+                        bottom_right: px(r),
+                        bottom_left: px(r),
+                    }),
                 );
             })
             .on_change(move |v, window, cx| alpha_pick(opaque.with_alpha((v * 255.0).round() as u8), window, cx))
