@@ -782,6 +782,9 @@ impl CanvasView {
         if self.pane_wid == wid {
             return;
         }
+        // A crop target belongs to the pane that opened it: leaving it must not turn off
+        // transform handles or draw crop marks on a same-id image in another pane.
+        self.app.crop = None;
         let old = self.pane_wid;
         let next = match self.panes.remove(&wid) {
             Some(n) => n,

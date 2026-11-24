@@ -4764,6 +4764,9 @@ impl WindowState {
                                 let save_cmds = save_cmds.clone();
                                 let naming = naming.clone();
                                 move |_, window, cx| {
+                                    // Commit the editor first: typed characters stay in the
+                                    // draft until commit, and `value()` only sees committed text.
+                                    name.update(cx, |e, cx| { e.finish_edit(window, cx); });
                                     let draft = name.read(cx).value().trim().to_string();
                                     if !draft.is_empty() {
                                         save_cmds.push(Cmd {
