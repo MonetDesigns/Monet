@@ -7004,6 +7004,25 @@ impl Render for CanvasView {
                     return;
                 }
 
+                // 当前模式自己的键先于菜单快捷键（上游 `shortcuts.rs:458` 的
+                // `session.tool_key`）：矢量编辑模式的工具与推点、画笔的 Enter 收尾、形状
+                // 构建器，以及**选中的参考线**（Delete 删、方向键移、Escape 取消选中）。
+                // 漏掉这一层会让参考线删不掉、矢量点键全失效。
+                let mode_key = canonical_key(&e.keystroke.key);
+                match this.app.session.tool_key(&mode_key, e.keystroke.modifiers.shift, e.keystroke.modifiers.alt, e.keystroke.modifiers.platform) {
+                    Ok(true) => {
+                        cx.notify();
+                        cx.stop_propagation();
+                        return;
+                    }
+                    Ok(false) => {}
+                    Err(err) => {
+                        this.toast(err.to_string(), cx);
+                        cx.stop_propagation();
+                        return;
+                    }
+                }
+
                 // 命令快捷键：键名规范化后查引擎的 keymap（和原文 `shortcuts.rs` 同一条路）。
 
                 // Ctrl/Cmd+Z、Shift+Ctrl+Z、Delete、Ctrl+C/V/D、Ctrl+A……都在这张表里。
