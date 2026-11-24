@@ -3729,6 +3729,7 @@ impl WindowState {
             .thumb(16.0)
             .row_h(16.0)
             .knob()
+            .inset_thumb()
             .thumb_fill(rgba(hsb_color(hue, 1.0, 1.0)))
             .step(1.0)
             .paint_track(|window, bounds, _| {
@@ -3778,6 +3779,7 @@ impl WindowState {
             .thumb(16.0)
             .row_h(16.0)
             .knob()
+            .inset_thumb()
             .thumb_fill(rgba(current.with_alpha(255)))
             .step(1.0 / 255.0)
             .paint_track(move |window, bounds, _| {

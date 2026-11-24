@@ -46,6 +46,8 @@ pub struct Slider {
     thumb_fill: Option<gpui::Rgba>,
     /// 是否用取色器统一的圆形手柄（18pt 阴影 + 16pt 白环 + 中心色）。
     knob: bool,
+    /// 手柄中心只在端点圆帽圆心之间移动：轨道两端视觉延伸，但手柄不越出。
+    inset_thumb: bool,
     /// 跨帧稳定的拖拽 id（同一条滑条每帧都会重建，靠它复用拖拽状态）。
     id: Option<SharedString>,
     show_value: bool,
@@ -75,6 +77,7 @@ impl Slider {
             row_h: 24.0,
             thumb_fill: None,
             knob: false,
+            inset_thumb: false,
             show_value: false,
             suffix: SharedString::default(),
             precision: 0,
@@ -119,6 +122,12 @@ impl Slider {
     /// 取色器统一圆形手柄样式。
     pub fn knob(mut self) -> Self {
         self.knob = true;
+        self
+    }
+
+    /// 手柄停靠在两端半圆圆心，不越出轨道；数值仍按整条行程映射。
+    pub fn inset_thumb(mut self) -> Self {
+        self.inset_thumb = true;
         self
     }
 
@@ -191,6 +200,7 @@ impl Slider {
         let fill = rgba(t.accent);
         let track_h = self.track_h;
         let thumb = self.thumb;
+        let inset = self.inset_thumb;
         let thumb_fill = self.thumb_fill.unwrap_or_else(|| rgba(t.panel));
         let thumb_edge = rgba(t.border_strong);
         let value_text = format!("{:.*}{}", self.precision, value, self.suffix);
@@ -202,16 +212,19 @@ impl Slider {
                 let w = f32::from(bounds.size.width).max(1.0);
                 let cy = f32::from(bounds.origin.y) + f32::from(bounds.size.height) / 2.0;
                 let track_rect = Bounds { origin: gpui::point(px(x0), px(cy - track_h / 2.0)), size: gpui::size(px(w), px(track_h)) };
+                // 手柄圆心只在两端圆帽圆心之间移动；轨道本身仍铺满整宽。
+                let radius = thumb / 2.0;
+                let travel = (w - 2.0 * radius).max(1.0);
                 if let Some(paint) = &paint_track {
                     paint(window, track_rect, frac);
                 } else {
                     window.paint_quad(gpui::fill(track_rect, track).corner_radii(pill(track_h / 2.0)));
-                    let filled = (w * frac).max(track_h);
+                    let filled = if inset { (2.0 * radius + travel * frac).max(2.0 * radius) } else { (w * frac).max(track_h) };
                     let fill_rect = Bounds { origin: track_rect.origin, size: gpui::size(px(filled.min(w)), px(track_h)) };
                     window.paint_quad(gpui::fill(fill_rect, fill).corner_radii(pill(track_h / 2.0)));
                 }
                 // 滑块：外圈 1pt 描边感的边缘 + 亮面，中心压在取值位置。
-                let cx = x0 + w * frac;
+                let cx = if inset { x0 + radius + travel * frac } else { x0 + w * frac };
                 if self.knob {
                     let shadow = Bounds { origin: gpui::point(px(cx - 9.0), px(cy - 9.0)), size: gpui::size(px(18.0), px(18.0)) };
                     window.paint_quad(gpui::fill(shadow, rgba(crate::canvas::geom::Color32::from_black_alpha(20))).corner_radii(pill(9.0)));
@@ -242,7 +255,13 @@ impl Slider {
                         let Some(cb) = &cb else { return };
                         let Some(b) = hit.get() else { return };
                         let w = f32::from(b.size.width).max(1.0);
-                        let f = ((f32::from(e.position.x) - f32::from(b.origin.x)) / w).clamp(0.0, 1.0);
+                        let radius = thumb / 2.0;
+                        let travel = (w - 2.0 * radius).max(1.0);
+                        let f = if inset {
+                            ((f32::from(e.position.x) - f32::from(b.origin.x) - radius) / travel).clamp(0.0, 1.0)
+                        } else {
+                            ((f32::from(e.position.x) - f32::from(b.origin.x)) / w).clamp(0.0, 1.0)
+                        };
                         let raw = min + f * (max - min);
                         let next = (if step > 0.0 { (raw / step).round() * step } else { raw }).clamp(min, max);
                         if (next - last.get()).abs() < 1e-4 {
@@ -272,7 +291,13 @@ impl Slider {
                 drag_down.set(true);
                 let Some(b) = hit_down.get() else { return };
                 let w = f32::from(b.size.width).max(1.0);
-                let f = ((f32::from(e.position.x) - f32::from(b.origin.x)) / w).clamp(0.0, 1.0);
+                let radius = thumb / 2.0;
+                let travel = (w - 2.0 * radius).max(1.0);
+                let f = if inset {
+                    ((f32::from(e.position.x) - f32::from(b.origin.x) - radius) / travel).clamp(0.0, 1.0)
+                } else {
+                    ((f32::from(e.position.x) - f32::from(b.origin.x)) / w).clamp(0.0, 1.0)
+                };
                 let raw = min + f * (max - min);
                 let next = (if step > 0.0 { (raw / step).round() * step } else { raw }).clamp(min, max);
                 last_down.set(next);
