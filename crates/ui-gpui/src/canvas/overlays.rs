@@ -3,6 +3,7 @@
 //! 拖放目标 → 选中轮廓与变换框（含连接线端点、旋转原点）→ 框选 → 钢笔/橡皮筋/套索/橡皮 →
 //! 吸附参考线与尺寸。
 
+use figcraft_color::{ImagePaint, ImageScaleMode, PaintKind};
 use figcraft_doc::{Document, NodeId, NodeKind};
 use figcraft_engine::tools::{ToolId, selection_box, selection_frame};
 use figcraft_geom::Point;
@@ -292,8 +293,9 @@ pub(super) fn overlays(
             // 屏幕上小于手柄的层只显示轮廓（手柄仍在框外应答）。
             let tiny = figcraft_engine::tools::box_sides_px(&b, zoom).1 < figcraft_engine::tools::SMALL_BOX_PX;
             let measuring = app.session.tool.overlay.measure_box.is_some();
+            let cropping = app.crop.is_some();
             let handles =
-                if measuring || app.session.tool.dev_mode || connector.is_some() || sel.iter().any(|i| figcraft_engine::tools::locked_in(&doc, *i)) {
+                if cropping || measuring || app.session.tool.dev_mode || connector.is_some() || sel.iter().any(|i| figcraft_engine::tools::locked_in(&doc, *i)) {
                     0
                 } else if is_line {
                     2
@@ -311,6 +313,9 @@ pub(super) fn overlays(
                 handles,
                 (!measuring && connector.is_none()).then_some(label),
             );
+            if cropping {
+                crop_marks(app, painter, &doc, t);
+            }
             for end in connector.into_iter().flatten().filter(|_| !app.session.tool.dev_mode) {
                 let c = app.to_screen(end.x, end.y);
                 painter.circle_filled(c, 5.0, Color32::WHITE);
@@ -476,6 +481,51 @@ pub(super) fn overlays(
 
 /// 选中椭圆的圆弧手柄（悬停/拖动中的那个略大，Start 中间带一个小点），
 /// 拖动时在旁边显示读数 —— 照搬 `ui-egui/src/canvas/overlays.rs` 的 `arc_overlay`。
+/// Crop mode's own marks: the crop rectangle, its corner squares, and the L-brackets / edge bars.
+fn crop_marks(app: &CanvasApp, painter: &mut Painter, doc: &Document, t: &Tokens) {
+    let Some((id, index)) = app.crop else { return };
+    let Some(n) = doc.node(id) else { return };
+    let Some(PaintKind::Image(img)) = n.fills.get(index).map(|p| &p.kind) else { return };
+    if img.scale_mode != ImageScaleMode::Crop {
+        return;
+    }
+    let Some(data) = doc.images.get(&img.image) else { return };
+    let crop = img.effective_crop(f64::from(data.width), f64::from(data.height), n.width, n.height);
+    let (x0, y0, x1, y1) = ImagePaint::crop_rect(crop);
+    let world = doc.world_transform(id);
+    let corners = [(x0 * n.width, y0 * n.height), (x1 * n.width, y0 * n.height), (x1 * n.width, y1 * n.height), (x0 * n.width, y1 * n.height)].map(|(x, y)| {
+        let p = world * Point::new(x, y);
+        app.to_screen(p.x, p.y)
+    });
+    let accent = accent(app);
+    quad(painter, corners, stroke(Color32::WHITE, 2.0));
+    quad(painter, corners, stroke(accent, 1.0));
+    for p in corners {
+        let r = Rect::from_center_size(p, vec2(8.0, 8.0));
+        painter.rect_filled(r, CornerRadius::ZERO, Color32::WHITE);
+        painter.rect_stroke(r, CornerRadius::ZERO, stroke(accent, 1.0), super::geom::StrokeKind::Inside);
+    }
+    const W: f32 = 5.0;
+    let halo = stroke(Color32::from_black_alpha(50), W + 2.0);
+    let mark = stroke(accent, W);
+    let mut draw = |pts: Vec<Pos2>| {
+        painter.add_shape(pts.clone(), false, Color32::TRANSPARENT, halo);
+        painter.add_shape(pts, false, Color32::TRANSPARENT, mark);
+    };
+    for i in 0..4 {
+        let (p, prev, next) = (corners[i], corners[(i + 3) % 4], corners[(i + 1) % 4]);
+        let (to_prev, to_next) = ((prev - p).normalized(), (next - p).normalized());
+        let at = p + (to_prev + to_next) * (W / 2.0);
+        let leg = |dir: Vec2, len: f32| at + dir * 22.0_f32.min(len / 3.0);
+        draw(vec![leg(to_prev, (prev - p).length()), at, leg(to_next, (next - p).length())]);
+        let len = (next - p).length();
+        let mid = p + (next - p) * 0.5 + to_prev * (W / 2.0);
+        let half = to_next * 12.0_f32.min(len / 6.0);
+        draw(vec![mid - half, mid + half]);
+    }
+    let _ = t;
+}
+
 fn arc_overlay(app: &CanvasApp, painter: &mut Painter, col: Color32) {
     use figcraft_engine::arc_handles::ArcHandle;
     let Some(hs) = app.session.arc_handles() else { return };

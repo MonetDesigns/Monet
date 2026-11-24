@@ -697,6 +697,8 @@ struct ColorState {
     image_naming: Rc<Cell<bool>>,
     /// 取色器图片预览贴图：按图片键缓存，不在每帧重建 GPU 纹理。
     image_texture: Rc<RefCell<Option<(String, (u32, u32), Arc<RenderImage>)>>>,
+    /// 图片字节注册入口：图层 paint 走 `image.replace`，样式 / 选区颜色走这里先注册再用 paint 写回。
+    register_image: Rc<RefCell<Option<Rc<dyn Fn(Vec<u8>, &mut App) -> Option<String>>>>>,
     /// 取色器自己的子浮层：点击渐变断点颜色 / 头部「+」时，在本卡片**左边**再开一张卡，
     /// 不占 root 的单槽，因此取色器本身不会被替换掉。
     sub: Rc<RefCell<Option<Box<WindowState>>>>,
@@ -2960,6 +2962,39 @@ impl WindowState {
 
     /// 登记当帧的内部菜单与其关闭回调。`render()` 据此在窗口根垫一层透明 backdrop：
     /// 点击菜单以外的任何位置都会关闭菜单（通用行为）。
+    /// 图片替换成功后，从文档重新读取当前目标的 paint 与图片预览，避免继续编辑旧镜像。
+    pub(crate) fn refresh_color_from_doc(&mut self, doc: &figcraft_doc::Document) {
+        let Some(c) = &mut self.color else { return };
+        let Some(p) = &mut c.paint else { return };
+        let Some(id) = p.extras.ids.first().copied() else { return };
+        let Some(n) = doc.node(id) else { return };
+        let list = if p.extras.fills { &n.fills } else { &n.strokes };
+        let Some(paint) = list.get(p.extras.index) else { return };
+        p.paint = paint.clone();
+        if let Some(state) = &c.paint_state {
+            *state.borrow_mut() = paint.clone();
+        }
+        if let figcraft_color::PaintKind::Image(img) = &paint.kind {
+            let data = doc.images.get(&img.image).cloned();
+            let profile = figcraft_render::images::profile_name(&img.image, data.as_ref());
+            p.extras.image = Some((img.image.clone(), data));
+            p.extras.image_profile = profile;
+            p.extras.image_color_profile = doc.color_profile;
+        } else {
+            p.extras.image = None;
+            p.extras.image_profile = None;
+        }
+        *c.image_texture.borrow_mut() = None;
+        let _ = c.image_pending.take();
+    }
+
+    /// 由根视图注入图片注册入口；打开中的取色器据此支持样式 / 选区颜色目标的上传。
+    pub(crate) fn set_image_callback(&mut self, cb: Rc<dyn Fn(Vec<u8>, &mut App) -> Option<String>>) {
+        if let Some(c) = &self.color {
+            *c.register_image.borrow_mut() = Some(cb);
+        }
+    }
+
     fn push_overlay(&self, el: AnyElement, dismiss: Rc<dyn Fn(&mut Window, &mut App)>) {
         self.overlays.borrow_mut().push(el);
         self.overlay_dismiss.borrow_mut().push(dismiss);
@@ -3124,6 +3159,7 @@ impl WindowState {
             image_preset_name: cx.new(|cx| TextEdit::new(cx)),
             image_naming: Rc::new(Cell::new(false)),
             image_texture: Rc::new(RefCell::new(None)),
+            register_image: Rc::new(RefCell::new(None)),
             sub: Rc::new(RefCell::new(None)),
             nested: false,
             uid: {
@@ -4475,12 +4511,25 @@ impl WindowState {
         let key = img.map(|i| i.image.clone()).unwrap_or_default();
         let image_data = extras.image.clone();
         let color_profile = extras.image_color_profile;
-        let replace: std::rc::Rc<dyn Fn(std::path::PathBuf)> = std::rc::Rc::new({
+        let register_image = c.register_image.clone();
+        let write = p.on_write.clone();
+        let Some(state) = c.paint_state.clone() else { return div().into_any_element() };
+        let upload: std::rc::Rc<dyn Fn(std::path::PathBuf, &mut Window, &mut App)> = std::rc::Rc::new({
             let cmds = cmds.clone();
             let extras = extras.clone();
-            move |path| {
+            let register_image = register_image.clone();
+            let write = write.clone();
+            let state = state.clone();
+            move |path, window, cx| {
                 if extras.ids.is_empty() {
-                    // 样式 / 选区颜色没有图层命令目标；不能拿当前画布选顶替。
+                    // 样式 / 选区颜色没有图层命令目标：先把字节注册进当前文档，
+                    // 再沿取色器自己的目标感知写回器替换 paint，绝不拿画布选区顶替。
+                    let Some(bytes) = std::fs::read(&path).ok() else { return };
+                    let Some(hash) = register_image.borrow().as_ref().and_then(|f| f(bytes, cx)) else { return };
+                    let mut np = state.borrow().clone();
+                    np.kind = figcraft_color::Paint::image(hash, figcraft_color::ImageScaleMode::Fill).kind;
+                    *state.borrow_mut() = np.clone();
+                    write(np, window, cx);
                     return;
                 }
                 cmds.push(Cmd {
@@ -4535,7 +4584,6 @@ impl WindowState {
             },
         );
         let well = {
-            let replace = replace.clone();
             div()
                 .h(pt(110.0))
                 .border_1()
@@ -4543,9 +4591,12 @@ impl WindowState {
                 .rounded(pt(4.0))
                 .overflow_hidden()
                 .child(canvas.size_full())
-                .on_drop::<gpui::ExternalPaths>(move |paths: &gpui::ExternalPaths, _, _| {
-                    if let Some(path) = paths.paths().first() {
-                        replace(path.clone());
+                .on_drop::<gpui::ExternalPaths>({
+                    let upload = upload.clone();
+                    move |paths: &gpui::ExternalPaths, window, cx| {
+                        if let Some(path) = paths.paths().first() {
+                            upload(path.clone(), window, cx);
+                        }
                     }
                 })
         };
@@ -4572,11 +4623,14 @@ impl WindowState {
                     .text_color(rgba(t.text))
                     .hover(|s| s.bg(rgba(t.hover)))
                     .child(tr("Upload from computer"))
-                    .on_mouse_down(MouseButton::Left, move |_, _, _| {
-                        let Some(path) = rfd::FileDialog::new().set_title(tr("Choose image")).add_filter(tr("Images"), &["png", "jpg", "jpeg", "webp", "gif", "tif", "tiff"]).pick_file() else {
-                            return;
-                        };
-                        replace(path);
+                    .on_mouse_down(MouseButton::Left, {
+                        let upload = upload.clone();
+                        move |_, window, cx| {
+                            let Some(path) = rfd::FileDialog::new().set_title(tr("Choose image")).add_filter(tr("Images"), &["png", "jpg", "jpeg", "webp", "gif", "tif", "tiff"]).pick_file() else {
+                                return;
+                            };
+                            upload(path, window, cx);
+                        }
                     }),
             )
             .into_any_element()
@@ -4722,6 +4776,25 @@ impl WindowState {
                                 }
                             }),
                     )
+                    .on_key_down({
+                        let name = name.clone();
+                        let save_cmds = save_cmds.clone();
+                        let naming = naming.clone();
+                        move |e: &gpui::KeyDownEvent, window, cx| {
+                            if e.keystroke.key.as_str() != "enter" {
+                                return;
+                            }
+                            let draft = name.read(cx).value().trim().to_string();
+                            if !draft.is_empty() {
+                                save_cmds.push(Cmd {
+                                    id: "image.savePreset",
+                                    params: Some(json!({ "name": draft, "filters": filters })),
+                                });
+                            }
+                            naming.set(false);
+                            window.refresh();
+                        }
+                    })
                     .into_any_element(),
             );
         }

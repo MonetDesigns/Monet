@@ -1825,6 +1825,29 @@ impl CanvasView {
 
     /// 才真正有 UI 反应（以前 GPUI 完全不消费这些请求，我只能用右栏状态硬同步）。
 
+    /// `image.replace` 成功后原位刷新打开中的取色器。
+    fn refresh_picker_image(&mut self) {
+        let doc = {
+            let Ok(ds) = self.app.session.ds() else { return };
+            ds.doc.clone()
+        };
+        let Some(Popup::Window(w)) = &mut self.popup else { return };
+        w.refresh_color_from_doc(&doc);
+    }
+
+    /// 把图片字节按内容键注册到当前文档，返回键给取色器写 paint。
+    /// 图层 paint 不走这里（`image.replace` 自己注册），这里只服务样式 / 选区颜色目标。
+    fn register_image(&mut self, bytes: Vec<u8>) -> Option<String> {
+        use std::hash::{Hash, Hasher};
+        let (w, h) = image::ImageReader::new(std::io::Cursor::new(&bytes)).with_guessed_format().ok()?.into_dimensions().ok()?;
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        bytes.hash(&mut hasher);
+        let hash = format!("img{:016x}{:08x}", hasher.finish(), bytes.len());
+        let doc = self.app.session.doc_mut().ok()?;
+        doc.images.insert(hash.clone(), figcraft_doc::ImageData { bytes: std::sync::Arc::new(bytes), width: w, height: h });
+        Some(hash)
+    }
+
     fn sync_ui_requests(&mut self, cx: &mut Context<Self>) {
         if *self.extra_state.dismiss.borrow() {
             *self.extra_state.dismiss.borrow_mut() = false;
@@ -1889,7 +1912,13 @@ impl CanvasView {
                 // canvas over by closing the colour picker and selecting that one layer.
                 "image.crop" => {
                     self.popup = None;
-                    if let Some(id) = r.data.get("id").and_then(figcraft_engine::params::id_of) {
+                    self.app.crop = r
+                        .data
+                        .get("id")
+                        .and_then(figcraft_engine::params::id_of)
+                        .zip(r.data.get("index").and_then(serde_json::Value::as_u64))
+                        .map(|(id, i)| (id, i as usize));
+                    if let Some((id, _)) = self.app.crop {
                         let _ = self.app.session.execute("select.set", &serde_json::json!({ "ids": [id] }));
                     }
                     cx.notify();
@@ -2938,10 +2967,9 @@ impl CanvasView {
                         // A23：导出命令没给路径时引擎只回 base64，UI 负责弹保存对话框落盘。
                         self.deliver_download(c.id, &result, cx);
 
-                        // 图片替换后，打开中的取色器仍持有旧 paint / 预览；关掉它，
-                        // 下次打开会从文档重新读取，避免后续编辑把旧图片写回去。
+                        // 图片替换成功：原位刷新打开中的取色器 paint / 预览。
                         if c.id == "image.replace" {
-                            self.popup = None;
+                            self.refresh_picker_image();
                         }
                     }
 
@@ -4893,6 +4921,14 @@ impl CanvasView {
 
             return;
         }
+
+        // 取色器的图片上传给样式 / 选区颜色目标用：字节注册进当前文档，
+        // 再由取色器自己的目标感知写回器替换 paint。
+        let root = cx.entity().downgrade();
+        w.set_image_callback(Rc::new(move |bytes, cx: &mut App| {
+            let this = root.upgrade()?;
+            this.update(cx, |cv, _| cv.register_image(bytes))
+        }));
 
         self.popup = Some(Popup::Window(w));
 
