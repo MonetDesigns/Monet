@@ -228,12 +228,15 @@ pub fn compute(st: &PresentState, disp: &Document, area: RectPx, pane: bool, ppp
     // 真实外框：用已 snap 的 screen 反算 PNG 的位置 / 尺寸 / 窗口圆角，保证机身与内容
     // 共用一套对齐后的几何，消除半像素缝隙。
     if let Some(fi) = frame.as_mut() {
+        // dx/dy 必须与 outer() 里的 left/top 是**同一个未取整的值**：screen.x 已按 (ax+side)
+        // 取整，PNG 再按 screen.x-dx 摆放；若 dx 单独 snap 过，二者差 1px 就会在机身圆角
+        // 处露出内容（用户实测的四角红三角 / 缝隙）。这里直接用 side/top 原值。
+        let dx = side;
+        let dy = top;
         let k = f64::from(screen.w) / fi.screen_rect[2].max(1.0);
-        let png_w = (snap((fi.png_size[0] * k) as f32)).max(screen.w);
-        let png_h = (snap((fi.png_size[1] * k) as f32)).max(screen.h);
-        let dx = snap((fi.screen_rect[0] * k) as f32);
-        let dy = snap((fi.screen_rect[1] * k) as f32);
-        let radius = snap((fi.radii[0] * k) as f32).min(screen.w / 2.0).min(screen.h / 2.0);
+        let png_w = (fi.png_size[0] as f32 * k as f32).max(screen.w);
+        let png_h = (fi.png_size[1] as f32 * k as f32).max(screen.h);
+        let radius = (fi.radii[0] as f32 * k as f32).min(screen.w / 2.0).min(screen.h / 2.0);
         fi.placed = Some([dx, dy, png_w, png_h, radius]);
     }
     let place = Place {
