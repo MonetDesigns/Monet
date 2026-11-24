@@ -1095,12 +1095,13 @@ fn frame_at(
     let ppp64 = f64::from(ppp.max(0.25));
     let w = ((tex.bounds.width() * place.scale * ppp64).round().max(1.0) / ppp64) as f32;
     let h = ((tex.bounds.height() * place.scale * ppp64).round().max(1.0) / ppp64) as f32;
-    let snap = |v: f32| (v * ppp).round() / ppp;
+    // 父层（layer）已 snap 到设备像素，这里不再二次取整：多处 snap 基准不同会累积出
+    // 0.5~1px 抖动，在机身窗口边界露出背景细线。纹理尺寸仍按像素取整（位图必须整数）。
     Some(
         img(ImageSource::Render(tex.img))
             .absolute()
-            .left(px(snap(r.x - origin.x + offset.0)))
-            .top(px(snap(r.y - origin.y + offset.1)))
+            .left(px(r.x - origin.x + offset.0))
+            .top(px(r.y - origin.y + offset.1))
             .w(px(w))
             .h(px(h))
             .rounded(px(clip_radius))
@@ -1315,10 +1316,12 @@ pub fn render(app: &CanvasApp, state: &PresentState, vp: (f32, f32), canvas: (f3
             q.push((crate::windows::current(), g.clone()));
         });
     }
-    // 舞台内一律用 area 局部坐标。
-    let lx = |x: f32| x - area.x;
-    let ly = |y: f32| y - area.y;
-    let ppp = app.ppp;
+    // 舞台内一律用 area 局部坐标，并 snap 到设备像素：内容层、机身 PNG、hotspot 必须
+    // 落在同一套像素网格上，否则边界差半像素就会露出背景细线。
+    let ppp = app.ppp.max(0.25);
+    let snap = |v: f32| (v * ppp).round() / ppp;
+    let lx = |x: f32| snap(x - area.x);
+    let ly = |y: f32| snap(y - area.y);
 
     let mut stage = div().relative().flex_1().min_h(px(0.0)).w_full().overflow_hidden();
     if let Some(g) = g.as_ref() {
