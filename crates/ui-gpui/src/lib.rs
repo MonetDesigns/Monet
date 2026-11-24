@@ -6207,6 +6207,38 @@ impl Render for CanvasView {
                 continue;
             }
 
+            // 自带背景的标签（尺寸框）：GPUI 按真实字形宽度撑开 div，padding 即边距，
+            // 左右/上下都精确对称，不靠估算宽画框再居中塞字。
+            if let Some((bg, pad_x, pad_y)) = l.pill {
+                // 用足够宽的透明 wrapper 按 rect 中心水平居中；pill 自身宽度由真实文字撑开，
+                // 不依赖估算宽，因此左右 padding 精确、文字紧贴外框。
+                let wrap_w = l.rect.width().max(1.0) + 64.0;
+                let pill = div()
+                    .absolute()
+                    .left(px(l.rect.center().x - wrap_w / 2.0))
+                    .top(px(l.rect.min.y))
+                    .w(px(wrap_w))
+                    .flex()
+                    .justify_center()
+                    .child(
+                div()
+                    .px(px(pad_x))
+                    .py(px(pad_y))
+                    .bg(canvas::painter::to_rgba(bg))
+                    .rounded(px(3.0))
+                    .child(
+                        div()
+                            .text_size(px(l.font.size))
+                            .text_color(canvas::painter::to_rgba(l.color))
+                            .line_height(px(l.font.size * 1.18))
+                            .whitespace_nowrap()
+                            .child(l.text.clone()),
+                    )
+                );
+                texts.push(pill.into_any_element());
+                continue;
+            }
+
             let mut el = div()
                 .absolute()
                 .left(px(l.rect.min.x))

@@ -278,7 +278,7 @@ pub fn set_grabbed(k: Option<crate::motion::SelectedKey>) {
 fn text(labels: &mut Vec<Label>, at: Pos2, align: Align2, s: impl Into<String>, font: FontId, color: Color32) {
     let s = s.into();
     let rect = align.anchor_size(at, text_size(&s, font));
-    labels.push(Label { rect, text: s, font, color, align, angle: None });
+    labels.push(Label { rect, text: s, font, color, align, angle: None, pill: None });
 }
 
 /// egui `widgets::elide` — cut a long name to a fixed number of glyphs.

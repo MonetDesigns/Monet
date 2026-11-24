@@ -624,19 +624,18 @@ pub(super) fn pill_rect(text: &str, at: Pos2, align: Align2, pad_x: f32) -> (Rec
 
 fn pill_with_bg(painter: &mut Painter, at: Pos2, align: Align2, text: String, _col: Color32, fg: Color32, bg: Color32, pad_x: f32) -> Rect {
     let (r, glyph) = pill_rect(&text, at, align, pad_x);
-    painter.rect_filled(r, CornerRadius::same(3), bg);
-    // 文字在背景块里居中（LeftRight 留白均分）：设计稿 Group 234 / Frame 232 是
-    // 61×17 框、左右各 6，文字 `205x203` 高 13 居中。用真实字形高 13 作文字框，
-    // 容器宽度也用估算的等宽值；CENTER_CENTER 让估算与真实字宽的差摊到左右两边，
-    // 而不是全堆在右边（贴左上画会让右侧空白看起来像右边距写多了）。
+    // 背景交给 GPUI 按**真实字形宽度**画（Label.pill）：padding 精确到上下 2、左右 6，
+    // 圆角 3，文字上下对称居中。不再用估算宽画框再塞字（那样留白不均、贴不紧文字外框）。
     painter.labels.push(Label {
-        rect: Rect::from_center_size(r.center(), glyph),
+        rect: r,
         text,
         font: semibold(11.0),
         color: fg,
         align: Align2::CENTER_CENTER,
         angle: None,
+        pill: Some((bg, pad_x, 2.0)),
     });
+    let _ = glyph;
     r
 }
 
