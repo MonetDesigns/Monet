@@ -284,7 +284,24 @@ pub(super) fn overlays(
             let is_line = sel.len() == 1 && matches!(sel.first().and_then(|i| doc.node(*i)).map(|n| &n.kind), Some(NodeKind::Line));
             // 选中的连接线：手柄就是它的两个端点（可拖到别的对象上）。
             let connector = figcraft_engine::board::selected_connector_ends(&doc, &sel).map(|(_, ends)| ends);
-            let mut label = if is_line { fmt(w) } else { format!("{} × {}", fmt(w), fmt(h)) };
+            // 尺寸标签：宽或高是 Fill / Hug 时，在对应数字后隔一个空格显示术语（右栏同款）。
+            let sizing_label = |axis: figcraft_doc::Sizing| -> String {
+                match axis {
+                    figcraft_doc::Sizing::Fill => format!(" {}", figcraft_i18n::tr("Fill|sizing")),
+                    figcraft_doc::Sizing::Hug => format!(" {}", figcraft_i18n::tr("Hug")),
+                    figcraft_doc::Sizing::Fixed => String::new(),
+                }
+            };
+            let (sw, sh) = if sel.len() == 1 {
+                doc.node(sel[0]).map(|n| (n.child_layout.sizing_h, n.child_layout.sizing_v)).unwrap_or_default()
+            } else {
+                Default::default()
+            };
+            let mut label = if is_line {
+                fmt(w)
+            } else {
+                format!("{}{} × {}{}", fmt(w), sizing_label(sw), fmt(h), sizing_label(sh))
+            };
             let scale = app.session.tool.overlay.scale;
             if let Some(hint) = scale {
                 label = format!("{label} · {}x", fmt(hint.factor.abs()));
