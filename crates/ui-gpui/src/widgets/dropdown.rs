@@ -122,12 +122,14 @@ pub struct Dropdown {
     on_click: Option<OnClick>,
     /// 下拉弹窗的锚点 key；登记后每帧上报自身矩形，菜单跟随 + 与按钮同宽。
     menu_key: Option<String>,
+    /// 标签在编辑槽里居中（色板集那一行用；其它下拉保持左对齐）。
+    center_label: bool,
 }
 
 impl Dropdown {
     /// `ui-egui::dropdown`: `width` is required (`col * 2.0 + 8.0` in the panel), the lead optional.
     pub fn new(label: impl Into<SharedString>, width: f32, lead: Option<DropLead>) -> Self {
-        Self { label: label.into(), width, fill: false, lead, on_click: None, menu_key: None }
+        Self { label: label.into(), width, fill: false, lead, on_click: None, menu_key: None, center_label: false }
     }
 
     /// 登记为一个「下拉弹窗」的触发按钮。key 必须**跨帧稳定**（同一个按钮每帧传同一个字符串）；
@@ -140,6 +142,12 @@ impl Dropdown {
     /// 填满所在网格单元（`w_full`）：列宽由统一网格的 `flex_1` 决定，调用方不传宽度。
     pub fn fill(mut self) -> Self {
         self.fill = true;
+        self
+    }
+
+    /// 让标签在编辑槽里水平居中，而不是贴着 lead 一侧。
+    pub fn center_label(mut self) -> Self {
+        self.center_label = true;
         self
     }
 
@@ -174,7 +182,7 @@ impl IntoElement for Dropdown {
             // A 9 pt dot centred in the 24 pt slot, as the original draws it.
             DropLead::Dot(c) => div().flex_none().size(pt(9.0)).rounded(pt(5.0)).bg(rgba(c)).into_any_element(),
         });
-        let label = div()
+        let mut label = div()
             .w_full()
             .h_full()
             .flex()
@@ -182,9 +190,11 @@ impl IntoElement for Dropdown {
             .overflow_hidden()
             .whitespace_nowrap()
             .text_size(pt(TEXT_PT))
-            .text_color(rgba(t.text))
-            .child(self.label.clone())
-            .into_any_element();
+            .text_color(rgba(t.text));
+        if self.center_label {
+            label = label.justify_center();
+        }
+        let label = label.child(self.label.clone()).into_any_element();
         let chevron = div().flex_none().size(pt(12.0)).child(paint_icon(Icon::ChevronDown, rgba(t.text_secondary), 12.0)).into_any_element();
 
         let mut el = input.paint(&frame, Parts { lead, edit: Some(label), trail: Some(chevron), ..Default::default() });
