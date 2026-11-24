@@ -265,13 +265,26 @@ impl Schema {
             let mut fields = Vec::with_capacity(n);
             // A set, not a scan per field: wide definitions would make the scan quadratic.
             let mut ids = HashSet::new();
+            let mut names = HashSet::new();
             for _ in 0..n {
                 let fname = r.string()?;
+                // Field identity is the name: two fields sharing one name re-encode with
+                // whichever tag the name lookup finds first, losing the other's value.
+                if !names.insert(fname.as_str()) {
+                    return err(format!("schema: duplicate field name {fname} in {name}"));
+                }
                 let ty = r.var_int()?;
                 let array = r.byte()? & 1 != 0;
                 let value = r.var_uint()?;
-                if kind == Kind::Message && !ids.insert(value) {
-                    return err(format!("schema: duplicate field id {value} in {name}"));
+                if kind == Kind::Message {
+                    // Zero is the message terminator on the wire: a field with tag 0 can never
+                    // be read back. Enum values and struct field numbers may still be zero.
+                    if value == 0 {
+                        return err(format!("schema: zero field id in message {name}"));
+                    }
+                    if !ids.insert(value) {
+                        return err(format!("schema: duplicate field id {value} in {name}"));
+                    }
                 }
                 raw_types.push(ty);
                 fields.push(Field { name: fname, ty: None, array, value });
@@ -390,16 +403,23 @@ impl<'s> Decoder<'s, '_> {
             return self.value(ty, depth);
         }
         let n = self.r.var_uint()? as usize;
-        // Every element takes at least one byte.
-        if n > self.r.left() {
-            return err("message: array longer than the data");
-        }
         // The field itself counts, so empty arrays can't pile up for free.
         self.spend(1)?;
         if ty == Type::Byte {
+            // Byte elements each cost one value: charge them before copying, otherwise a
+            // two-byte array passes on a budget of two (root + array) without paying for them.
+            self.spend(n)?;
             return Ok(Kv::Bytes(self.r.take(n)?.to_vec()));
         }
-        self.spend(n)?;
+        // A definition element spends its own value in `def`; charging it here as well would
+        // reject arrays of definitions that fit the documented budget. Zero-byte structs need
+        // no payload bytes, so only bound the remaining types by the bytes left.
+        if !matches!(ty, Type::Def(_)) && n > self.r.left() {
+            return err("message: array longer than the data");
+        }
+        if !matches!(ty, Type::Def(_)) {
+            self.spend(n)?;
+        }
         let mut out = Vec::with_capacity(n);
         for _ in 0..n {
             out.push(self.value(ty, depth)?);
@@ -531,6 +551,14 @@ pub mod encode {
                 w.var_uint(value.ok_or_else(|| KiwiError(format!("encode: {v:?} is not a value of {}", d.name)))?);
             }
             Kind::Struct => {
+                // Require an object and reject unknown fields: a scalar used to pass an empty
+                // struct, and a misspelled field was silently dropped instead of reported.
+                let Kv::Object(fields) = v else { return err(format!("encode: {} needs an object", d.name)) };
+                for (name, _) in fields {
+                    if !d.fields.iter().any(|f| f.name == *name) {
+                        return err(format!("encode: {} has no field {name}", d.name));
+                    }
+                }
                 for f in &d.fields {
                     let fv = v.get(&f.name).ok_or_else(|| KiwiError(format!("encode: {} needs field {}", d.name, f.name)))?;
                     encode_field(s, f, fv, w, depth)?;
