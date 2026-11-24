@@ -293,6 +293,10 @@ pub struct ParaList {
     /// The paragraph's base direction (Text ▸ Text direction); `Auto` follows its letters.
     #[serde(skip_serializing_if = "crate::node::is_default")]
     pub direction: TextDirection,
+    /// The paragraph's own wrap style (a wrap style can be set on the text layer, a paragraph or a
+    /// text style); `None` follows the layer's [`TextData::wrap_style`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wrap: Option<WrapStyle>,
 }
 
 /// Character style. In runs, every field is an override; `None` means "inherit the base".
@@ -337,6 +341,9 @@ pub struct ParagraphStyle {
     pub paragraph_indent: f64,
     #[serde(skip_serializing_if = "crate::node::is_default")]
     pub list: ListStyle,
+    /// The wrap style (Auto asks nothing).
+    #[serde(skip_serializing_if = "crate::node::is_default")]
+    pub wrap_style: WrapStyle,
     #[serde(skip_serializing_if = "crate::node::is_default")]
     pub features: std::collections::BTreeMap<String, bool>,
 }
@@ -838,6 +845,33 @@ impl TextData {
         self.paragraphs.get(p).copied().unwrap_or(ParaList { list: self.list, ..ParaList::default() })
     }
 
+    /// Paragraph `p`'s wrap style: its own, else the layer's.
+    pub fn para_wrap_style(&self, p: usize) -> WrapStyle {
+        self.paragraphs.get(p).and_then(|pl| pl.wrap).unwrap_or(self.wrap_style)
+    }
+
+    /// The layer level: every paragraph takes wrap style `w` (their own overrides go).
+    pub fn set_wrap_style(&mut self, w: WrapStyle) {
+        self.wrap_style = w;
+        // Every paragraph by index: `para_span` leaves out an empty one after a final newline.
+        let last = self.paragraph_count() - 1;
+        self.set_para_lists_between(0, last, false, |pl| pl.wrap = None);
+    }
+
+    /// The paragraph level: the paragraphs chars `start..end` touch take wrap style `w`; one equal
+    /// to the layer's is no override.
+    pub fn set_para_wrap_styles(&mut self, start: usize, end: usize, w: WrapStyle) {
+        let layer = self.wrap_style;
+        self.set_para_lists(start, end, |pl| pl.wrap = (w != layer).then_some(w));
+    }
+
+    /// The effective wrap style the paragraphs chars `start..end` touch share, or None when they differ.
+    pub fn common_wrap_style(&self, start: usize, end: usize) -> Option<WrapStyle> {
+        let (a, b) = self.para_span(start, end);
+        let first = self.para_wrap_style(a);
+        (a..=b).all(|p| self.para_wrap_style(p) == first).then_some(first)
+    }
+
     /// Spell out every paragraph's list settings in `paragraphs` (and drop extra entries).
     fn fill_paragraphs(&mut self) {
         let n = self.paragraph_count();
@@ -911,7 +945,16 @@ impl TextData {
             Some(first) if self.paragraphs.iter().all(|p| p.list == first.list) => first.list,
             _ => self.list,
         };
-        ParagraphStyle { paragraph_spacing: self.paragraph_spacing, paragraph_indent: self.paragraph_indent, list, features: self.features.clone() }
+        // Every paragraph by index: `para_span` leaves out an empty one after a final newline.
+        let first = self.para_wrap_style(0);
+        let wrap_style = if (1..self.paragraph_count()).all(|p| self.para_wrap_style(p) == first) { first } else { self.wrap_style };
+        ParagraphStyle {
+            paragraph_spacing: self.paragraph_spacing,
+            paragraph_indent: self.paragraph_indent,
+            list,
+            wrap_style,
+            features: self.features.clone(),
+        }
     }
 
     /// Take what text style `ps` sets at the paragraph and layer level: the spacing, indent and
@@ -923,6 +966,7 @@ impl TextData {
         // Every paragraph by index: `para_span` leaves out an empty one after a final newline.
         let last = self.paragraph_count() - 1;
         self.set_para_lists_between(0, last, false, |pl| pl.list = ps.list);
+        self.set_wrap_style(ps.wrap_style);
     }
 
     /// As [`take_paragraph_style`](Self::take_paragraph_style), with the list style going to the

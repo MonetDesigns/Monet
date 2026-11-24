@@ -10,7 +10,9 @@
 
 pub mod anim;
 pub mod board;
+mod board_code;
 mod board_mindmap;
+pub use board_code::*;
 pub use board_mindmap::{MIND_GAP_X, MIND_GAP_Y, MIND_MAX_DEPTH, MIND_MAX_NODES, MindBox, mind_layout};
 pub mod board_route;
 pub mod colors;
@@ -1368,6 +1370,8 @@ fn remap_action(a: &mut proto::Action, map: &BTreeMap<NodeId, NodeId>) {
 
 #[cfg(test)]
 mod blur_tests;
+#[cfg(test)]
+mod board_code_tests;
 #[cfg(test)]
 mod board_mindmap_tests;
 #[cfg(test)]

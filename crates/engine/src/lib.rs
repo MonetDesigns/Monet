@@ -222,6 +222,8 @@ mod board_connector_tests;
 #[cfg(test)]
 mod board_grid_tests;
 #[cfg(test)]
+mod board_code_tests;
+#[cfg(test)]
 mod board_mindmap_tests;
 #[cfg(test)]
 mod board_reshape_tests;

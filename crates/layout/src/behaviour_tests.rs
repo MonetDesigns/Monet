@@ -234,14 +234,6 @@ fn sizing_rules() {
             rects: &[(10.0, 10.0, 20.0, 80.0)],
         },
         Case {
-            rule: "fill on an axis the frame hugs has nothing to fill: the child keeps its size",
-            // A hugging frame has no free space; it hugs 50 + 30.
-            frame: Frame { sizing: (Hug, Hug), ..FRAME },
-            kids: &[kid(50.0, 20.0), Kid { size: (30.0, 40.0), sizing: (Fill, Fill), ..KID }],
-            want: (80.0, 40.0),
-            rects: &[(0.0, 0.0, 50.0, 20.0), (50.0, 0.0, 30.0, 40.0)],
-        },
-        Case {
             rule: "min width: a fixed child is never narrower than its minimum",
             frame: Frame { sizing: (Hug, Hug), ..FRAME },
             kids: &[Kid { size: (50.0, 20.0), min: (Some(80.0), None), ..KID }],

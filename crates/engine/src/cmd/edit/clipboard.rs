@@ -364,14 +364,16 @@ pub(super) fn paste_over(s: &mut Session, _p: &Value) -> Result<Value> {
     let sel = s.selection();
     let page = s.page()?;
     let doc = s.doc()?;
-    let (parent, at) = match sel.first() {
+    let (parent, at, above) = match sel.first() {
         Some(i) => {
             let parent = doc.node(*i).and_then(|n| n.parent).unwrap_or(page);
-            (parent, doc.world_bounds(*i).map(|b| (b.x0, b.y0)))
+            (parent, doc.world_bounds(*i).map(|b| (b.x0, b.y0)), doc.index_in_parent(*i).map(|ix| ix + 1))
         }
-        None => (page, None),
+        None => (page, None, None),
     };
     let ids = paste_into(s, parent, at)?;
+    // The pasted layers sit above the layer they replace, as the incumbent stacks them.
+    move_above(s, &ids, parent, above)?;
     s.set_selection(ids.clone());
     Ok(json!({"ids": ids}))
 }

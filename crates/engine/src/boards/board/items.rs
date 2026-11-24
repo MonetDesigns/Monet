@@ -26,7 +26,7 @@ pub(super) fn add(
 }
 
 /// A soft shadow under stickies and stamps.
-fn soft_shadow() -> Effect {
+pub(super) fn soft_shadow() -> Effect {
     Effect {
         kind: EffectKind::DropShadow(Shadow { color: Color::new(0.0, 0.0, 0.0, 0.16), offset: (0.0, 2.0), radius: 6.0, ..Shadow::default() }),
         visible: true,

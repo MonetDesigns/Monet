@@ -21,6 +21,7 @@ use crate::params::{boolean, color_of, get, id, id_of, num, num_or, opt_id, req_
 use crate::tools::{Gesture, PointerEvent, ToolId};
 use crate::{EngineError, Result, Session, bad, spec, textedit};
 
+mod code;
 mod connectors;
 mod derived;
 mod edit;
@@ -32,6 +33,7 @@ mod tools;
 pub(crate) use connectors::end_handle_at;
 pub use connectors::{END_HANDLE_PX, selected_connector_ends};
 use connectors::{connector_cmd, reattach};
+pub use code::is_code_text;
 pub use derived::route;
 pub(crate) use derived::{settle_routes, settle_stamps, settle_text, stamp_target};
 
@@ -204,6 +206,20 @@ pub fn specs() -> Vec<CommandSpec> {
             "{x, y (its centre on the page), stamp: thumbsUp|heart|plusOne|star|question|check} → {id}  a badge with your name on hover",
             true,
             stamp_cmd
+        ),
+        spec!(
+            "board.codeBlock",
+            "Code block",
+            "{x?, y? (its top-left in the parent; default a four-line block centred in the view), language? (bash|cpp|css|go|graphql|html|javascript|json|kotlin|plainText|python|ruby|rust|sql|swift|typescript; default typescript), text?, width? (210 to 100000; default 576), parent?, edit? (start typing in it; default false)} → {id, text, language}  a dark panel holding monospace text: as wide as it is made, as tall as its lines (four at least)",
+            true,
+            code::code_block_cmd
+        ),
+        spec!(
+            "board.setLanguage",
+            "Code language",
+            "{id? | ids? (code blocks; default the selected ones, or the one being typed in), language} → {ids}",
+            true,
+            code::set_language
         ),
         spec!(
             "board.ink",
