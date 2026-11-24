@@ -179,6 +179,46 @@ pub(crate) fn pick_dropdown(f: &RightFields, label: impl Into<SharedString>, wid
     pick_dropdown_lead(f, label, width, rows, None)
 }
 
+/// Like [`pick_dropdown`], but each row shows a trailing detail (e.g. a device's `W × H`).
+/// The rows are `(label, trailing, command, params)`; an empty trailing shows nothing.
+#[track_caller]
+pub(crate) fn pick_dropdown_sized(
+    f: &RightFields,
+    label: impl Into<SharedString>,
+    width: f32,
+    rows: Vec<(String, String, &'static str, Value)>,
+) -> Dropdown {
+    let label = label.into();
+    let menu: Vec<MenuRow> = rows.iter().enumerate().map(|(i, (l, tail, _, _))| {
+        let mut r = MenuRow::row(l.clone()).key(i.to_string());
+        if !tail.is_empty() { r = r.trail(tail.clone()); }
+        r
+    }).collect();
+    let loc = std::panic::Location::caller();
+    let key = format!("pick:{}:{}:{}", loc.file(), loc.line(), label);
+    let anchor_handle = crate::widgets::dropdown::menu_anchor(&key);
+    let mut d = Dropdown::new(label, width, None).fill().menu(key);
+    if let Some(root) = f.root.clone() {
+        let cmds = f.cmds.clone();
+        let anchor_handle = anchor_handle.clone();
+        d = d.on_click(move |anchor, _window, cx: &mut App| {
+            let rows = rows.clone();
+            let cmds = cmds.clone();
+            let on_pick = Rc::new(move |key: &str, _w: &mut Window, _cx: &mut App| {
+                if let Some((_, _, cmd, params)) = key.parse::<usize>().ok().and_then(|i| rows.get(i)) {
+                    cmds.push(Cmd { id: cmd, params: Some(params.clone()) });
+                }
+            });
+            let anchor_handle = anchor_handle.clone();
+            let menu = menu.clone();
+            root.update(cx, move |cv, cx| {
+                cv.open_dropdown_menu(Some(anchor_handle), anchor, Some(width.max(120.0)), menu, on_pick, cx);
+            });
+        });
+    }
+    d
+}
+
 /// Same dropdown, with a leading glyph in the field's lead slot.
 
 /// 约束图形选择器：外框里的子层与四条边的 pin，中间十字设居中。

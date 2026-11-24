@@ -12,7 +12,7 @@
 //! preview 用 `Eye`、连接字形用 `LinkOn`，语义一一对应。
 
 use super::data::{FlowRow, InteractionRow, PanelData, ProtoData, ScrollData};
-use super::sections::{icon_cmd, icon_row, pick_dropdown, slot};
+use super::sections::{icon_cmd, icon_row, pick_dropdown, pick_dropdown_sized, slot};
 use crate::panels::{Cmd, PROTO_EDITOR_SLOT, RightFields, RowEditCtx};
 use crate::widgets::popover::{self, popover_body, popover_window, title_text};
 use crate::widgets::{
@@ -118,75 +118,65 @@ fn settings_section(f: &RightFields, p: &ProtoData, _cx: &mut App, _n: &mut usiz
     let preview = icon_cmd(Icon::Eye, "proto.preview", json!({}), f, false);
     let mut sec = PanelSection::new(tr("Prototype settings")).header_trail(icon_row(vec![preview]));
 
-    // ── 第一栏：总设备（family）下拉，占满一行，无小标题 ──
-    let families: Vec<(String, &'static str, Value)> = s
+    // ── 第一栏：总设备（family）下拉，行尾显示它的屏幕尺寸 ──
+    let families: Vec<(String, String, &'static str, Value)> = s
         .devices
         .iter()
-        .map(|d| (d.clone(), "proto.settings", json!({ "device": d })))
+        .map(|d| (d.clone(), figcraft_engine::devices::family_size_label(d), "proto.settings", json!({ "device": d })))
         .collect();
-    let family_dd = pick_dropdown(f, s.device.clone(), 0.0, families);
+    let family_dd = pick_dropdown_sized(f, s.device.clone(), 0.0, families);
     sec = sec.child(field_row_full(family_dd));
 
-    // ── 第二栏：分型号下拉 + 机身色下拉，同一行，无小标题 ──
+    // ── 第二栏：分型号下拉，行尾显示该型号 W × H ──
     let is_special = s.device == figcraft_doc::proto::PrototypeSettings::CUSTOM_DEVICE || s.device == "None";
-    let mut second: Vec<gpui::AnyElement> = Vec::new();
     if !is_special && !s.variants.is_empty() {
-        let variants: Vec<(String, &'static str, Value)> = s
+        let variants: Vec<(String, String, &'static str, Value)> = s
             .variants
             .iter()
-            .map(|v| (v.clone(), "proto.settings", json!({ "variant": v })))
+            .map(|v| (v.clone(), figcraft_engine::devices::size_label(v), "proto.settings", json!({ "variant": v })))
             .collect();
         let current = if s.variant.is_empty() { s.variants.first().cloned().unwrap_or_default() } else { s.variant.clone() };
-        second.push(pick_dropdown(f, current, 0.0, variants).into_any_element());
-    }
-    if !s.colors.is_empty() {
-        let rows: Vec<(String, &'static str, Value)> = s.colors.iter().map(|(name, _)| (name.clone(), "proto.settings", json!({ "color": name }))).collect();
-        second.push(pick_dropdown(f, s.color.clone(), 0.0, rows).into_any_element());
-    }
-    if !second.is_empty() {
-        sec = sec.child(field_row(second, Vec::<IconButton>::new()));
+        sec = sec.child(field_row_full(pick_dropdown_sized(f, current, 0.0, variants)));
     }
 
-    // ── 第三栏：原型背景色 + 竖/横二元选择器，同一行，无小标题 ──
+    // ── 第三栏：设备颜色（通用 swatch）+ 竖/横二元选择器，同一行 ──
+    let cmds = f.cmds.clone();
+    let rotating = s.rotates;
+    let mut third: Vec<gpui::AnyElement> = Vec::new();
+    if !s.colors.is_empty() {
+        let rows: Vec<(String, &'static str, Value)> = s.colors.iter().map(|(name, _)| (name.clone(), "proto.settings", json!({ "color": name }))).collect();
+        let rgb = s.colors.iter().find(|(name, _)| *name == s.color).map(|(_, c)| *c).unwrap_or([0, 0, 0]);
+        let dot = swatch(figcraft_color::Paint::solid(figcraft_color::Color::from_rgb8_const(rgb[0], rgb[1], rgb[2])), 16.0);
+        let line = div().flex().flex_row().items_center().gap(pt(8.0)).flex_1().child(dot)
+            .child(pick_dropdown(f, s.color.clone(), 0.0, rows));
+        third.push(line.into_any_element());
+    }
+    let orientation = Segmented::new(vec![SegItem::text(tr("Portrait")), SegItem::text(tr("Landscape"))])
+        .active(Some(if s.landscape { 1 } else { 0 }))
+        .on_pick(move |i: usize, _w: &mut Window, _cx: &mut App| {
+            if !rotating { return; }
+            cmds.push(Cmd { id: "proto.settings", params: Some(json!({ "rotation": if i == 1 { "landscape" } else { "portrait" } })) });
+            cmds.wake();
+        });
+    let orientation = orientation.build();
+    third.push(orientation.into_any_element());
+    sec = sec.child(field_row(third, Vec::<IconButton>::new()));
+
+    // ── 第四栏：预览背景色（固定设置项），通用 hex 输入 ──
     let bg = &s.background;
     let color = figcraft_color::Color::from_hex_or_name(bg).unwrap_or(figcraft_color::Color::from_rgb8_const(0x1E, 0x1E, 0x1E));
-    let mut third: Vec<gpui::AnyElement> = Vec::new();
     let dot = swatch(figcraft_color::Paint::solid(color), 16.0);
-    third.push(div().flex().flex_row().items_center().gap(pt(8.0)).child(dot).into_any_element());
-    let bg_field = f.row_field(
+    let hex = f.row_field(
         _cx,
         slot(_n),
         bg,
         RowEditCtx {
-            cmd: "proto.settings",
-            params: json!({}),
-            key: "background",
-            scale: 1.0,
-            string_value: true,
-            paint: None,
-            nest: None,
-            nest_key: None,
-            paint_color: None,
+            cmd: "proto.settings", params: json!({}), key: "background", scale: 1.0, string_value: true,
+            paint: None, nest: None, nest_key: None, paint_color: None,
         },
     );
-    third.push(bg_field.into_any_element());
-    // 竖屏 / 横屏：通用 Segmented 二元选择器（固定设置，不在 JSON 里）。
-    let cmds = f.cmds.clone();
-    let rotating = s.rotates;
-    let orientation = Segmented::new(vec![SegItem::text(tr("Portrait")), SegItem::text(tr("Landscape"))])
-        .active(Some(if s.landscape { 1 } else { 0 }))
-        .on_pick(move |i: usize, _w: &mut Window, _cx: &mut App| {
-            if !rotating {
-                return;
-            }
-            cmds.push(Cmd {
-                id: "proto.settings",
-                params: Some(json!({ "rotation": if i == 1 { "landscape" } else { "portrait" } })),
-            });
-            cmds.wake();
-        });
-    let orientation = if s.rotates { orientation.build() } else { orientation.build().opacity(0.4) };
-    sec = sec.child(field_row(third, vec![orientation.into_any_element()]));
+    let line = div().flex().flex_row().items_center().gap(pt(8.0)).w_full().child(dot).child(hex);
+    sec = sec.child(field_row_full(line));
     sec
 }
 

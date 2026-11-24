@@ -25,7 +25,7 @@ use figcraft_doc::proto::{Action, AnimationOp, Easing, OverlayAnchor, OverlayPos
 use figcraft_doc::{Document, NodeId};
 use figcraft_geom::Rect;
 use figcraft_i18n::tr;
-use gpui::{Div, ImageSource, MouseButton, SharedString, Stateful, div, img, prelude::*, px, svg};
+use gpui::{Div, ImageSource, MouseButton, SharedString, Stateful, div, img, prelude::*, px};
 use std::collections::BTreeMap;
 use std::time::Instant;
 
@@ -1123,6 +1123,22 @@ fn dev_rect(r: RectPx, area: RectPx, radius: f32, color: gpui::Rgba) -> Div {
 
 /// 机身：eGUI `device::device_body`。颜色带 + 黑色玻璃，Mac / Desktop 另加底座。
 fn device_body(stage: Div, g: &Geom, area: RectPx) -> Div {
+    // 真实外框 PNG：整张图铺在设备区域，透明屏幕窗口正好露出下面的画布层。
+    if let Some(fi) = g.frame.as_ref() {
+        let k = g.screen.w / fi.screen_rect[2].max(1.0) as f32;
+        let png_w = fi.png_size[0] as f32 * k;
+        let png_h = fi.png_size[1] as f32 * k;
+        let x = g.screen.x - fi.screen_rect[0] as f32 * k;
+        let y = g.screen.y - fi.screen_rect[1] as f32 * k;
+        return stage.child(
+            img(gpui::ImageSource::from(fi.image.clone()))
+                .absolute()
+                .left(px(x - area.x))
+                .top(px(y - area.y))
+                .w(px(png_w))
+                .h(px(png_h)),
+        );
+    }
     let Some(d) = g.device.as_ref() else { return stage };
     let w = layout::upright_w(g.screen.w, g.screen.h, g.landscape);
     let (b, screen_r) = layout::bezel(&d.name, w);
@@ -1171,31 +1187,18 @@ fn device_body(stage: Div, g: &Geom, area: RectPx) -> Div {
             // 外置设备框：机身形状来自 devices/<family>/<variant>.svg（外置文件，
             // 和笔刷 / WGSL 一样不在二进制里），颜色由 text_color 注入；没有外置框时
             // 回退到几何绘制。按钮 / 玻璃带仍是固定逻辑。
-            if let Some(frame) = g.frame.as_ref() {
-                out = out.child(
-                    svg()
-                        .path(SharedString::from(format!("device:{frame}")))
-                        .absolute()
-                        .left(px(slab.x - area.x))
-                        .top(px(slab.y - area.y))
-                        .w(px(slab.w))
-                        .h(px(slab.h))
-                        .text_color(body),
-                );
-            } else {
-                out = out.child(dev_rect(slab, area, screen_r + b, body));
-                out = out.child(
-                    div()
-                        .absolute()
-                        .left(px(slab.x - area.x))
-                        .top(px(slab.y - area.y))
-                        .w(px(slab.w))
-                        .h(px(slab.h))
-                        .rounded(px(screen_r + b))
-                        .border_1()
-                        .border_color(edge),
-                );
-            }
+            out = out.child(dev_rect(slab, area, screen_r + b, body));
+            out = out.child(
+                div()
+                    .absolute()
+                    .left(px(slab.x - area.x))
+                    .top(px(slab.y - area.y))
+                    .w(px(slab.w))
+                    .h(px(slab.h))
+                    .rounded(px(screen_r + b))
+                    .border_1()
+                    .border_color(edge),
+            );
             let glass_band = b - band;
             let inset = RectPx { x: slab.x + band, y: slab.y + band, w: slab.w - 2.0 * band, h: slab.h - 2.0 * band };
             out = out.child(dev_rect(inset, area, (screen_r + glass_band).min(glass_band * 3.4).max(0.0), glass));
@@ -1307,9 +1310,18 @@ pub fn render(app: &CanvasApp, state: &PresentState, vp: (f32, f32), canvas: (f3
 
     let mut stage = div().relative().flex_1().min_h(px(0.0)).w_full().overflow_hidden();
     if let Some(g) = g.as_ref() {
-        let screen_r = g.device.as_ref().map_or(0.0, |d| layout::bezel(&d.name, layout::upright_w(g.screen.w, g.screen.h, g.landscape)).1);
-        // 1) 设备机身（屏幕外侧的颜色带 + 黑色玻璃）。
-        stage = device_body(stage, g, area);
+        // 屏幕圆角：有真实外框 PNG 时用它的屏幕矩形比例，否则按名字的几何带估算。
+        let screen_r = if let Some(fi) = g.frame.as_ref() {
+            // 屏幕圆角 ≈ 屏幕短边的 8%（Apple 素材的实际比例），用**窗口像素**（与 g.screen 同单位）。
+            let _ = fi;
+            (g.screen.w.min(g.screen.h) * 0.08).max(0.0)
+        } else {
+            g.device.as_ref().map_or(0.0, |d| layout::bezel(&d.name, layout::upright_w(g.screen.w, g.screen.h, g.landscape)).1)
+        };
+        // 没有真实外框时才在内容**之下**先铺几何机身；有 PNG 时改在内容之后盖上去（见第 7 步）。
+        if g.frame.is_none() {
+            stage = device_body(stage, g, area);
+        }
         // 2) 屏幕层：剪到屏幕矩形；圆角由第 8 步的 `device_glass` 遮罩补齐。
         let mut layer = div()
             .absolute()
@@ -1397,8 +1409,9 @@ pub fn render(app: &CanvasApp, state: &PresentState, vp: (f32, f32), canvas: (f3
                 layer = draw_overlay(layer, o, pl, raw);
             }
         }
-        // 5) 手机镜头药丸（eGUI `device_glass`）。
-        if let Some(d) = g.device.as_ref()
+        // 5) 手机镜头药丸：只在几何绘制（无外框 PNG）时补，真实 PNG 自带。
+        if g.frame.is_none()
+            && let Some(d) = g.device.as_ref()
             && d.name.starts_with("iPhone")
         {
             let uw = layout::upright_w(g.screen.w, g.screen.h, g.landscape);
@@ -1426,8 +1439,13 @@ pub fn render(app: &CanvasApp, state: &PresentState, vp: (f32, f32), canvas: (f3
             );
         }
         stage = stage.child(layer);
-        // 7) 设备玻璃圆角遮罩：在画面之上盖住方角溢出部分（eGUI `device_glass`）。
-        stage = device_glass(stage, g, area);
+        if g.frame.is_some() {
+            // 7a) 真实外框 PNG 盖在画面之上：透明屏幕窗口露出内容，圆角与镜头孔由 PNG 自身裁出。
+            stage = device_body(stage, g, area);
+        } else {
+            // 7b) 几何绘制：在画面之上补四角玻璃遮罩，盖住方角溢出（GPUI 不裁圆角）。
+            stage = device_glass(stage, g, area);
+        }
         // 8) hotspot 提示（eGUI `draw` 的最后一步）：点击空白后从整不透明淡出到 0
         //    （`(flash_until-now)/FLASH_SECS`）。和 eGUI 一样画在设备玻璃之上、舞台坐标系里，
         //    不受屏幕层的圆角裁切影响。
@@ -1625,6 +1643,35 @@ pub fn render(app: &CanvasApp, state: &PresentState, vp: (f32, f32), canvas: (f3
             .when(selected, |d| d.child(paint_icon(Icon::Check, rgba(t.accent), 14.0)))
     };
 
+    // 带右侧尺寸文本的设备行：左边名称、右边 W × H（参考实现的选择器样式）。
+    let menu_item_sized = |label: SharedString, detail: String, selected: bool, pick: Box<dyn Fn(&mut gpui::Window, &mut gpui::App)>| {
+        div()
+            .h(px(26.0))
+            .px(pt(10.0))
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(pt(8.0))
+            .rounded(pt(4.0))
+            .text_size(pt(11.0))
+            .text_color(rgba(if selected { t.text } else { t.menu_text }))
+            .cursor_pointer()
+            .hover(|s| s.bg(rgba(t.menu_hover)))
+            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                cx.stop_propagation();
+                pick(window, cx);
+            })
+            .child(label)
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(pt(10.0))
+                    .text_color(rgba(t.text_secondary))
+                    .child(SharedString::from(detail)),
+            )
+            .when(selected, |d| d.child(paint_icon(Icon::Check, rgba(t.accent), 14.0)))
+    };
+
     let device_menu = if state.device_open {
         let mut list = menu_shell("present-device-menu");
         let none = menu_item(
@@ -1640,8 +1687,10 @@ pub fn render(app: &CanvasApp, state: &PresentState, vp: (f32, f32), canvas: (f3
             let selected = settings.device == family;
             let f_pick = family.clone();
             let f_variants = family.clone();
-            let row = menu_item(
+            let size = figcraft_engine::devices::family_size_label(&family);
+            let row = menu_item_sized(
                 SharedString::from(family.clone()),
+                size,
                 selected,
                 Box::new(move |_, _| SET_DEVICE.with(|d| *d.borrow_mut() = Some(f_pick.clone()))),
             );
@@ -1661,8 +1710,9 @@ pub fn render(app: &CanvasApp, state: &PresentState, vp: (f32, f32), canvas: (f3
                     let selected_v = settings.variant == v || (settings.variant.is_empty() && settings.device == v);
                     let vv = v.clone();
                     list = list.child(
-                        menu_item(
+                        menu_item_sized(
                             SharedString::from(format!("    {v}")),
+                            figcraft_engine::devices::size_label(&v),
                             selected_v,
                             Box::new(move |_, _| {
                                 SET_VARIANT.with(|x| *x.borrow_mut() = Some(vv.clone()));
