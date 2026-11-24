@@ -10,6 +10,7 @@
 
 use figcraft_devices::{DeviceVariant, NONE_DEVICE, with_catalog};
 use figcraft_doc::proto::{Device, DeviceColor, PrototypeSettings};
+use figcraft_i18n::tr;
 
 /// Convert an external variant into the document's owned device shape.
 fn to_device(v: &DeviceVariant) -> Device {
@@ -172,6 +173,28 @@ pub fn colors_for(family: &str, variant: &str) -> Vec<(String, [u8; 3])> {
                 .map(|d| d.colors.into_iter().map(|c| (c.name, c.rgb)).collect())
         })
         .unwrap_or_default()
+}
+
+/// Every catalogue variant as a frame preset `(category, name, width, height)`. The Frame
+/// tool uses this so its device sizes come from the same catalogue as the prototype picker,
+/// instead of the frozen `FRAME_PRESETS` list.
+pub fn frame_presets() -> Vec<(String, String, f64, f64)> {
+    with_catalog(|cat| {
+        let mut out: Vec<(String, String, f64, f64)> = Vec::new();
+        for f in &cat.families {
+            let category = match f.variants.first().map(|v| v.kind.as_str()) {
+                Some("phone") => "Phone",
+                Some("tablet") => "Tablet",
+                Some("laptop") | Some("desktop") => "Desktop",
+                _ => "Phone",
+            };
+            for v in &f.variants {
+                out.push((category.to_string(), v.name.clone(), v.width, v.height));
+            }
+        }
+        out
+    })
+    .unwrap_or_default()
 }
 
 /// Whether the effective device turns (phones and tablets).

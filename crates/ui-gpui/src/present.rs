@@ -1122,44 +1122,6 @@ fn dev_rect(r: RectPx, area: RectPx, radius: f32, color: gpui::Rgba) -> Div {
 }
 
 /// 机身：eGUI `device::device_body`。颜色带 + 黑色玻璃，Mac / Desktop 另加底座。
-/// 真实外框的圆角裁切蒙版：GPUI 的 `overflow_mask` 只构造矩形 ContentMask，
-/// `rounded()+overflow_hidden()` 不裁圆角，屏幕内容会漏到设备圆角之外。
-///
-/// 做法（对齐 eGUI `device_glass`）：在内容之上补四个角块，每块只把朝向屏幕中心的一角
-/// 做成圆角，盖掉「内容矩形 − 圆角窗口」的四个方角。颜色用舞台背景 `tokens().panel`，
-/// 所以看不到任何色块，只有干净的圆角裁切；随后真实 PNG 机身盖在最上层。
-fn device_frame_mask(stage: Div, g: &Geom, area: RectPx) -> Div {
-    let Some(fi) = g.frame.as_ref() else { return stage };
-    let r = fi.placed.map(|p| p[4]).unwrap_or_else(|| {
-        let k = g.screen.w / fi.screen_rect[2].max(1.0) as f32;
-        (fi.radii[0] as f32 * k).min(g.screen.w / 2.0).min(g.screen.h / 2.0)
-    });
-    if !(r.is_finite() && r > 0.0) {
-        return stage;
-    }
-    let bg = rgba(tokens().panel);
-    let s = g.screen;
-    // (x, y, 圆角朝向)：圆角放在朝向屏幕中心的那一角，正好补掉方角。
-    let corners = [
-        (s.x, s.y, 3u8),                    // 左上块 → 圆角在右下
-        (s.x + s.w - r, s.y, 2u8),          // 右上块 → 圆角在左下
-        (s.x, s.y + s.h - r, 1u8),          // 左下块 → 圆角在右上
-        (s.x + s.w - r, s.y + s.h - r, 0u8),// 右下块 → 圆角在左上
-    ];
-    let mut out = stage;
-    for (x, y, corner) in corners {
-        let mut m = div().absolute().left(px(x - area.x)).top(px(y - area.y)).w(px(r)).h(px(r)).bg(bg);
-        m = match corner {
-            0 => m.rounded_tl(px(r)),
-            1 => m.rounded_tr(px(r)),
-            2 => m.rounded_bl(px(r)),
-            _ => m.rounded_br(px(r)),
-        };
-        out = out.child(m);
-    }
-    out
-}
-
 fn device_body(stage: Div, g: &Geom, area: RectPx) -> Div {
     // 真实外框 PNG：整张图铺在设备区域，透明屏幕窗口正好露出下面的画布层。
     if let Some(fi) = g.frame.as_ref() {
@@ -1484,9 +1446,8 @@ pub fn render(app: &CanvasApp, state: &PresentState, vp: (f32, f32), canvas: (f3
         }
         stage = stage.child(layer);
         if g.frame.is_some() {
-            // 7a) 先把内容四角按窗口圆角裁掉（背景色蒙版），再盖真实 PNG 机身。
-            //     少了蒙版，内容的直角会漏到机身圆角之外（截图里的四角溢出）。
-            stage = device_frame_mask(stage, g, area);
+            // 7a) 真实外框 PNG 盖在画面之上：它的 alpha 通道就是精确蒙版——屏幕窗口透明、
+            //     机身与四角不透明，自然把内容裁成窗口的圆角，不需要额外色块遮罩。
             stage = device_body(stage, g, area);
         } else {
             // 7b) 几何绘制：在画面之上补四角玻璃遮罩，盖住方角溢出（GPUI 不裁圆角）。

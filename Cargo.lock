@@ -2207,6 +2207,7 @@ dependencies = [
  "figcraft-doc",
  "figcraft-format",
  "figcraft-geom",
+ "figcraft-i18n",
  "figcraft-layout",
  "figcraft-pathops",
  "figcraft-pdf",

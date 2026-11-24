@@ -71,21 +71,21 @@
           ],
           "screenRects": {
             "landscape": [
-              69,
               72,
+              69,
               2622,
               1206
             ],
             "portrait": [
-              72,
               69,
+              72,
               1206,
               2622
             ]
           },
           "screenRadius": {
-            "landscape": 53,
-            "portrait": 53
+            "landscape": 54,
+            "portrait": 51
           },
           "outerRadius": {
             "landscape": 253,
@@ -138,21 +138,21 @@
           ],
           "screenRects": {
             "landscape": [
-              69,
               72,
+              69,
               2622,
               1206
             ],
             "portrait": [
-              72,
               69,
+              72,
               1206,
               2622
             ]
           },
           "screenRadius": {
-            "landscape": 46,
-            "portrait": 46
+            "landscape": 47,
+            "portrait": 45
           },
           "outerRadius": {
             "landscape": 247,
@@ -205,21 +205,21 @@
           ],
           "screenRects": {
             "landscape": [
-              66,
               75,
+              66,
               2868,
               1320
             ],
             "portrait": [
-              75,
               66,
+              75,
               1320,
               2868
             ]
           },
           "screenRadius": {
-            "landscape": 50,
-            "portrait": 50
+            "landscape": 55,
+            "portrait": 48
           },
           "outerRadius": {
             "landscape": 268,
@@ -282,21 +282,21 @@
           ],
           "screenRects": {
             "landscape": [
-              72,
               60,
+              72,
               2736,
               1260
             ],
             "portrait": [
-              60,
               72,
+              60,
               1260,
               2736
             ]
           },
           "screenRadius": {
-            "landscape": 49,
-            "portrait": 49
+            "landscape": 46,
+            "portrait": 56
           },
           "outerRadius": {
             "landscape": 258,
@@ -365,21 +365,21 @@
           ],
           "screenRects": {
             "landscape": [
-              69,
               72,
+              69,
               2622,
               1206
             ],
             "portrait": [
-              72,
               69,
+              72,
               1206,
               2622
             ]
           },
           "screenRadius": {
-            "landscape": 46,
-            "portrait": 46
+            "landscape": 47,
+            "portrait": 45
           },
           "outerRadius": {
             "landscape": 306,
@@ -442,21 +442,21 @@
           ],
           "screenRects": {
             "landscape": [
-              66,
               76,
+              66,
               2868,
               1320
             ],
             "portrait": [
-              75,
               66,
+              75,
               1320,
               2868
             ]
           },
           "screenRadius": {
-            "landscape": 49,
-            "portrait": 50
+            "landscape": 54,
+            "portrait": 48
           },
           "outerRadius": {
             "landscape": 266,
@@ -622,14 +622,14 @@
           ],
           "screenRects": {
             "landscape": [
-              87,
               90,
+              87,
               2796,
               1290
             ],
             "portrait": [
-              90,
               87,
+              90,
               1290,
               2796
             ]
@@ -699,21 +699,21 @@
           ],
           "screenRects": {
             "landscape": [
-              69,
               72,
+              69,
               2622,
               1206
             ],
             "portrait": [
-              72,
               69,
+              72,
               1206,
               2622
             ]
           },
           "screenRadius": {
-            "landscape": 53,
-            "portrait": 53
+            "landscape": 54,
+            "portrait": 52
           },
           "outerRadius": {
             "landscape": 300,
@@ -776,21 +776,21 @@
           ],
           "screenRects": {
             "landscape": [
-              66,
               75,
+              66,
               2868,
               1320
             ],
             "portrait": [
-              75,
               66,
+              75,
               1320,
               2868
             ]
           },
           "screenRadius": {
-            "landscape": 53,
-            "portrait": 53
+            "landscape": 57,
+            "portrait": 50
           },
           "outerRadius": {
             "landscape": 260,
@@ -841,21 +841,21 @@
           ],
           "screenRects": {
             "portrait": [
-              88,
-              80,
-              1398,
-              2034
+              120,
+              120,
+              2853,
+              2007
             ],
             "outer-open": [
+              81,
               1570,
-              80,
               1398,
-              2034
+              2032
             ]
           },
           "screenRadius": {
-            "portrait": 100,
-            "outer-open": 0
+            "portrait": 8,
+            "outer-open": 27
           },
           "outerRadius": {
             "portrait": 155,
@@ -924,21 +924,21 @@
           ],
           "screenRects": {
             "landscape": [
-              142,
               146,
+              142,
               2266,
               1488
             ],
             "portrait": [
-              146,
               142,
+              146,
               1488,
               2266
             ]
           },
           "screenRadius": {
-            "landscape": 0,
-            "portrait": 0
+            "landscape": 29,
+            "portrait": 29
           },
           "outerRadius": {
             "landscape": 194,
@@ -1008,20 +1008,20 @@
           "screenRects": {
             "landscape": [
               130,
-              130,
-              2360,
+              131,
+              2358,
               1640
             ],
             "portrait": [
               130,
               130,
               1640,
-              2360
+              2359
             ]
           },
           "screenRadius": {
-            "landscape": 0,
-            "portrait": 0
+            "landscape": 32,
+            "portrait": 32
           },
           "outerRadius": {
             "landscape": 131,
@@ -1084,21 +1084,21 @@
           ],
           "screenRects": {
             "landscape": [
-              124,
               126,
+              124,
               2732,
               2048
             ],
             "portrait": [
-              126,
               124,
+              126,
               2048,
               2732
             ]
           },
           "screenRadius": {
-            "landscape": 0,
-            "portrait": 0
+            "landscape": 40,
+            "portrait": 40
           },
           "outerRadius": {
             "landscape": 158,
@@ -1147,21 +1147,21 @@
           ],
           "screenRects": {
             "landscape": [
-              110,
               106,
+              110,
               2420,
               1668
             ],
             "portrait": [
-              106,
               110,
+              106,
               1668,
               2420
             ]
           },
           "screenRadius": {
-            "landscape": 0,
-            "portrait": 0
+            "landscape": 33,
+            "portrait": 33
           },
           "outerRadius": {
             "landscape": 171,
@@ -1204,21 +1204,21 @@
           ],
           "screenRects": {
             "landscape": [
-              124,
               118,
+              124,
               2752,
               2064
             ],
             "portrait": [
-              118,
               124,
+              118,
               2064,
               2752
             ]
           },
           "screenRadius": {
-            "landscape": 0,
-            "portrait": 0
+            "landscape": 41,
+            "portrait": 41
           },
           "outerRadius": {
             "landscape": 156,
@@ -1290,18 +1290,18 @@
               200,
               200,
               2360,
-              1640
+              1639
             ],
             "portrait": [
               200,
               200,
-              1640,
+              1639,
               2360
             ]
           },
           "screenRadius": {
-            "landscape": 0,
-            "portrait": 0
+            "landscape": 32,
+            "portrait": 32
           },
           "outerRadius": {
             "landscape": 179,
@@ -1364,14 +1364,14 @@
           ],
           "screenRects": {
             "frame": [
-              420,
               288,
+              420,
               2560,
               1664
             ]
           },
           "screenRadius": {
-            "frame": 0
+            "frame": 72
           },
           "outerRadius": {
             "frame": 106
@@ -1427,14 +1427,14 @@
           ],
           "screenRects": {
             "frame": [
-              329,
               218,
+              329,
               2880,
               1864
             ]
           },
           "screenRadius": {
-            "frame": 0
+            "frame": 52
           },
           "outerRadius": {
             "frame": 98
@@ -1496,14 +1496,14 @@
           ],
           "screenRects": {
             "frame": [
-              406,
               297,
+              406,
               2408,
               1506
             ]
           },
           "screenRadius": {
-            "frame": 0
+            "frame": 28
           },
           "outerRadius": {
             "frame": 130
@@ -1547,14 +1547,14 @@
           ],
           "screenRects": {
             "frame": [
-              418,
               288,
+              418,
               3024,
               1964
             ]
           },
           "screenRadius": {
-            "frame": 0
+            "frame": 75
           },
           "outerRadius": {
             "frame": 103
@@ -1592,14 +1592,14 @@
           ],
           "screenRects": {
             "frame": [
-              402,
               303,
+              402,
               3456,
               2234
             ]
           },
           "screenRadius": {
-            "frame": 0
+            "frame": 44
           },
           "outerRadius": {
             "frame": 272
@@ -1643,14 +1643,14 @@
           ],
           "screenRects": {
             "frame": [
-              418,
               277,
+              418,
               3024,
               1986
             ]
           },
           "screenRadius": {
-            "frame": 0
+            "frame": 95
           },
           "outerRadius": {
             "frame": 120
@@ -1688,14 +1688,14 @@
           ],
           "screenRects": {
             "frame": [
-              394,
               287,
+              394,
               3472,
-              2266
+              2265
             ]
           },
           "screenRadius": {
-            "frame": 0
+            "frame": 61
           },
           "outerRadius": {
             "frame": 115
@@ -1784,14 +1784,14 @@
           ],
           "screenRects": {
             "frame": [
-              140,
               150,
+              140,
               4480,
               2520
             ]
           },
           "screenRadius": {
-            "frame": 0
+            "frame": 50
           },
           "outerRadius": {
             "frame": 68
