@@ -1087,6 +1087,7 @@ fn frame_at(
     ppp: f32,
     alpha: f32,
     offset: (f32, f32),
+    clip_radius: f32,
 ) -> Option<gpui::AnyElement> {
     let tex = frame_tex(state, doc, id, place.scale * f64::from(ppp.max(0.25)))?;
     let r = place.rect(tex.bounds);
@@ -1102,6 +1103,7 @@ fn frame_at(
             .top(px(snap(r.y - origin.y + offset.1)))
             .w(px(w))
             .h(px(h))
+            .rounded(px(clip_radius))
             .opacity(alpha)
             .into_any_element(),
     )
@@ -1353,7 +1355,7 @@ pub fn render(app: &CanvasApp, state: &PresentState, vp: (f32, f32), canvas: (f3
                 scale: g.scale,
             });
             let from_el = from_place.and_then(|pl| {
-                frame_at(state, doc, from, &pl, g.screen, ppp, poses.from.alpha as f32, (poses.from.offset.x as f32, poses.from.offset.y as f32))
+                frame_at(state, doc, from, &pl, g.screen, ppp, poses.from.alpha as f32, (poses.from.offset.x as f32, poses.from.offset.y as f32), 0.0)
             });
             let to_el = frame_at(
                 state,
@@ -1364,13 +1366,14 @@ pub fn render(app: &CanvasApp, state: &PresentState, vp: (f32, f32), canvas: (f3
                 ppp,
                 poses.to.alpha as f32,
                 (poses.to.offset.x as f32, poses.to.offset.y as f32),
+                0.0,
             );
             if poses.to_on_top {
                 layer = layer.children(from_el).children(to_el);
             } else {
                 layer = layer.children(to_el).children(from_el);
             }
-        } else if let Some(el) = frame_at(state, doc, state.current, &g.place, g.screen, ppp, 1.0, (0.0, 0.0)) {
+        } else if let Some(el) = frame_at(state, doc, state.current, &g.place, g.screen, ppp, 1.0, (0.0, 0.0), screen_r) {
             layer = layer.child(el);
         }
         // 4) 覆盖层 / 关闭中的覆盖层。
@@ -1398,6 +1401,7 @@ pub fn render(app: &CanvasApp, state: &PresentState, vp: (f32, f32), canvas: (f3
                 ppp,
                 poses.to.alpha.clamp(0.0, 1.0) as f32,
                 (poses.to.offset.x as f32, poses.to.offset.y as f32),
+                0.0,
             ) {
                 Some(el) => layer.child(el),
                 None => layer,
