@@ -233,6 +233,8 @@ pub enum Act {
     CommitDuration,
     ToggleVisible(NodeId),
     ToggleTrackVisible(NodeId, AnimProperty),
+    /// The timeline header's arrow: open the shared Export dialog on the current selection.
+    OpenExport,
     DeleteClip(NodeId, u32),
     ToggleClipVisible(NodeId, u32),
     SelectClip(NodeId, u32),
@@ -903,6 +905,9 @@ pub fn apply(app: &mut CanvasApp, ui: &mut MotionUi, acts: Vec<Act>) -> bool {
                 // 收敛到 `motion.track`（PR#1624）：不带 visible 参数 = 翻转。
                 run_cmd(app, "Show/hide track", "motion.track", serde_json::json!({"node": n.0, "property": p.name()}));
             }
+            // Purely a view-level request; `CanvasView::sync_motion` opens the dialog after
+            // `apply` returns (the motion state machine has no dialog ownership).
+            Act::OpenExport => {}
             Act::DeleteClip(n, c) => {
                 remove_clip(app, n, c);
                 if ui.clip_popover == Some((n, c)) {

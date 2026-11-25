@@ -212,6 +212,15 @@ fn replay(buf: &mut [u8], w: u32, h: u32, op: &Op) {
                 }
             }
         }
+        Op::Ring { rect, width, color } => poly(
+            buf,
+            w,
+            h,
+            &[rect.min, pos2(rect.max.x, rect.min.y), rect.max, pos2(rect.min.x, rect.max.y)],
+            true,
+            Color32::TRANSPARENT,
+            &Stroke::new(*width, *color),
+        ),
         Op::Line { a, b, stroke } => line(buf, w, h, *a, *b, stroke),
         Op::Circle { center, radius, fill: f, stroke } => circle(buf, w, h, *center, *radius, *f, stroke),
         Op::Poly { points, closed, fill: f, stroke } => poly(buf, w, h, points, *closed, *f, stroke),

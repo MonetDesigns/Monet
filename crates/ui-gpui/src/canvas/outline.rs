@@ -69,7 +69,7 @@ pub(crate) fn node_quad(app: &CanvasApp, doc: &Document, id: NodeId) -> Option<[
     let corners = [Point::new(0.0, 0.0), Point::new(n.width, 0.0), Point::new(n.width, n.height), Point::new(0.0, n.height)];
     Some(corners.map(|c| {
         let p = w * c;
-        app.to_screen(p.x, p.y)
+        app.to_presented(p.x, p.y)
     }))
 }
 
@@ -132,8 +132,27 @@ fn outline_shape(app: &CanvasApp, doc: &Document, id: NodeId) -> Option<Vec<Vec<
     Some(out)
 }
 
+fn debug_outline() -> bool {
+    std::env::var_os("FIGCRAFT_DEBUG_OUTLINE").is_some()
+}
+
 /// 图层在画布上的轮廓：形状类走真实几何，其余走包围盒。
 pub(super) fn draw_outline(app: &CanvasApp, painter: &mut Painter, doc: &Document, id: NodeId, s: Stroke) {
+    if debug_outline() {
+        let n = doc.node(id);
+        let wb = doc.world_bounds(id);
+        let q = node_quad(app, doc, id);
+        eprintln!(
+            "[outline] id={:?} name={:?} kind={:?} page_bounds={:?} screen_q={:?} shift={:?} ppp={}",
+            id,
+            n.map(|n| n.name.as_str()),
+            n.map(|n| &n.kind),
+            wb,
+            q,
+            Vec2::ZERO,
+            app.ppp
+        );
+    }
     match outline_shape(app, doc, id) {
         Some(lines) => {
             for l in lines {
@@ -142,11 +161,10 @@ pub(super) fn draw_outline(app: &CanvasApp, painter: &mut Painter, doc: &Documen
         }
         None => {
             if let Some(q) = node_quad(app, doc, id) {
-                // 轴对齐的矩形：吸附到**设备像素**画四条填充带。描一条 1px 的路径时，边落在
-                // 分数坐标上会被抗锯齿摊成两条半透明的线——四条边各自落点不同，看起来就是
-                // "线粗细不均匀"。参考编辑器 的选中框永远是一个设备像素、永远实心。
+                // 轴对齐的矩形：用一条闭合路径画直角边框，线宽原样使用调用方的值。
+                // 四边和四角由同一次描边生成，不会左右分别取整。
                 if let Some(r) = axis_aligned(q)
-                    && crisp_rect(painter, r, s.width, app.ppp, s.color)
+                    && outline_ring(painter, r, s.width, app.ppp, Vec2::ZERO, s.color)
                 {
                     return;
                 }
@@ -165,30 +183,36 @@ pub(super) fn axis_aligned(q: [Pos2; 4]) -> Option<Rect> {
     (horizontal && vertical).then(|| Rect::from_min_max(pos2(a.x.min(c.x), a.y.min(c.y)), pos2(a.x.max(c.x), a.y.max(c.y))))
 }
 
-/// 沿矩形画 `width`（逻辑像素）粗的描边，四条边都吸附到设备像素网格上。
+/// 沿矩形边界画一条直角闭合环，线宽严格使用调用方给的值。
 ///
-/// 线宽取**整数个设备像素**（至少 1），矩形边先向外扩半个线宽（和描路径一样是居中描边），
-/// 再把四条边取整到设备像素——于是每条边都恰好覆盖整列/整行像素，粗细恒定、边缘实心。
-/// `ppp` 不合法时返回 false，调用方退回描路径。
-pub(super) fn crisp_rect(painter: &mut Painter, r: Rect, width: f32, ppp: f32, col: Color32) -> bool {
+/// 环的四条边由同一条闭合路径一次生成，不再经过 `paint_quad` 的四边 border：
+/// 后者在 1.25/1.5/1.75 这类非整数缩放下会把左边取到描边像素上、右边取到外侧，
+/// 同一圈线左右不对称。路径中心线严格等于 `r`，所以四边、四角和四个手柄共用同一
+/// 坐标，平移时也不会因为 floor/ceil 每隔一个像素突然跳一下。
+/// 选中线宽是 1.0，悬停线宽是 2.0，原样保留。
+/// `shift` 是贴图对齐设备像素带来的亚像素位移。`ppp` 只用于调试输出。
+pub(super) fn outline_ring(painter: &mut Painter, r: Rect, width: f32, ppp: f32, shift: Vec2, col: Color32) -> bool {
     if !(ppp.is_finite() && ppp > 0.0 && width.is_finite() && width > 0.0) {
         return false;
     }
-    // 整数个设备像素（至少 1），再换回逻辑像素。
-    let t = (width * ppp).round().clamp(1.0, 64.0) / ppp;
-    let half = t / 2.0;
-    let snap = |v: f32| (v * ppp).round() / ppp;
-    let (x0, y0) = (snap(r.min.x - half), snap(r.min.y - half));
-    let (x1, y1) = (snap(r.max.x + half), snap(r.max.y + half));
-    if x1 - x0 < t || y1 - y0 < t {
+    let r = r.translate(shift);
+    if !(r.min.x.is_finite() && r.min.y.is_finite() && r.max.x.is_finite() && r.max.y.is_finite()) {
         return false;
     }
-    let band = |a: Pos2, b: Pos2| Rect::from_min_max(a, b);
-    // 上下两条通长，左右两条只补中间，四角不重叠（半透明颜色叠两次会更深）。
-    painter.rect_filled(band(pos2(x0, y0), pos2(x1, y0 + t)), CornerRadius::ZERO, col);
-    painter.rect_filled(band(pos2(x0, y1 - t), pos2(x1, y1)), CornerRadius::ZERO, col);
-    painter.rect_filled(band(pos2(x0, y0 + t), pos2(x0 + t, y1 - t)), CornerRadius::ZERO, col);
-    painter.rect_filled(band(pos2(x1 - t, y0 + t), pos2(x1, y1 - t)), CornerRadius::ZERO, col);
+    painter.rect_ring(r, width, col);
+    if debug_outline() {
+        let d = width * ppp;
+        eprintln!(
+            "[outline_ring] center_screen={:?}..{:?} width={} ppp={} device_width={} outer_screen={:?}..{:?}",
+            (r.min.x, r.min.y),
+            (r.max.x, r.max.y),
+            width,
+            ppp,
+            d,
+            (r.min.x - width / 2.0, r.min.y - width / 2.0),
+            (r.max.x + width / 2.0, r.max.y + width / 2.0)
+        );
+    }
     true
 }
 
@@ -221,46 +245,65 @@ mod crisp_tests {
     use super::*;
     use crate::canvas::painter::Op;
 
-    fn rects(p: &Painter) -> Vec<Rect> {
-        p.ops
-            .iter()
-            .filter_map(|op| match op {
-                Op::Rect { rect, .. } => Some(*rect),
-                _ => None,
-            })
-            .collect()
+    /// 取唯一一条闭合矩形环：`(rect, width, color)`。
+    fn one_ring(p: &Painter) -> (Rect, f32, Color32) {
+        assert_eq!(p.ops.len(), 1, "the outline must be one closed ring");
+        match &p.ops[0] {
+            Op::Ring { rect, width, color } => (*rect, *width, *color),
+            other => panic!("expected one ring, got {other:?}"),
+        }
     }
 
-    /// 选中框：1px 的线在 1.75 的缩放下必须落在整设备像素上，四条边一样厚。
+    /// 路径中心线必须正好落在矩形边上：四边、四角、四个手柄共用这一条线。
+    fn assert_centered_on(rect: Rect, r: Rect) {
+        assert!((rect.min.x - r.min.x).abs() < 1e-4, "left edge is off: {rect:?} vs {r:?}");
+        assert!((rect.min.y - r.min.y).abs() < 1e-4, "top edge is off: {rect:?} vs {r:?}");
+        assert!((rect.max.x - r.max.x).abs() < 1e-4, "right edge is off: {rect:?} vs {r:?}");
+        assert!((rect.max.y - r.max.y).abs() < 1e-4, "bottom edge is off: {rect:?} vs {r:?}");
+    }
+
+    /// 选中框与悬停框的线宽必须原样保留：选中 1.0，悬停 2.0。
     #[test]
-    fn a_one_pixel_outline_lands_on_whole_device_pixels() {
+    fn selected_and_hover_widths_are_kept() {
         let ppp = 1.75f32;
-        let mut p = Painter::new(Rect::from_min_max(pos2(0.0, 0.0), pos2(200.0, 200.0)));
-        let r = Rect::from_min_max(pos2(10.37, 20.61), pos2(110.83, 80.42));
-        assert!(crisp_rect(&mut p, r, 1.0, ppp, Color32::WHITE));
-        let q = rects(&p);
-        assert_eq!(q.len(), 4, "four bands");
-        for band in &q {
-            for v in [band.min.x, band.min.y, band.max.x, band.max.y] {
-                let d = v * ppp;
-                assert!((d - d.round()).abs() < 1e-3, "{v} is not on a device pixel");
-            }
-        }
-        // 四条边厚度一致，且都是整数个设备像素（1×1.75 = 1.75 → 取整为 2 个设备像素）。
-        let t = (1.0f32 * ppp).round() / ppp;
-        let heights = [band_height(&q[0]), band_height(&q[1]), band_width(&q[2]), band_width(&q[3])];
-        for h in heights {
-            assert!((h - t).abs() < 1e-4, "thickness {h} is not {t} (an even number of device pixels)");
-            let dev = h * ppp;
-            assert!((dev - dev.round()).abs() < 1e-3, "{dev} device pixels is not a whole number");
+        for width in [1.0f32, 2.0] {
+            let mut p = Painter::new(Rect::from_min_max(pos2(0.0, 0.0), pos2(200.0, 200.0)));
+            let r = Rect::from_min_max(pos2(10.37, 20.61), pos2(110.83, 80.42));
+            assert!(outline_ring(&mut p, r, width, ppp, Vec2::ZERO, Color32::WHITE));
+            let (rect, got, color) = one_ring(&p);
+            assert_eq!(color, Color32::WHITE);
+            assert!((got - width).abs() < 1e-6, "requested {width}, got {got}");
+            assert_centered_on(rect, r);
         }
     }
 
-    fn band_height(r: &Rect) -> f32 {
-        r.max.y - r.min.y
+    /// 画布平移到任何小数坐标时，中心线都严格等于物体边缘，框不会整像素地跳。
+    #[test]
+    fn the_ring_hugs_the_content_while_the_canvas_pans() {
+        let ppp = 1.75f32;
+        let base = Rect::from_min_max(pos2(10.0, 20.0), pos2(110.0, 80.0));
+        for step in 0..40 {
+            let off = step as f32 / 40.0;
+            let r = base.translate(vec2(off, off * 0.37));
+            let mut p = Painter::new(Rect::from_min_max(pos2(0.0, 0.0), pos2(200.0, 200.0)));
+            assert!(outline_ring(&mut p, r, 1.0, ppp, Vec2::ZERO, Color32::WHITE), "offset {off}");
+            let (rect, width, _) = one_ring(&p);
+            assert_centered_on(rect, r);
+            assert!((width - 1.0).abs() < 1e-6, "offset {off}: width changed to {width}");
+        }
     }
-    fn band_width(r: &Rect) -> f32 {
-        r.max.x - r.min.x
+
+    /// 贴图吸附位移必须带着整圈一起走：位移后中心线落在位移后的边缘上。
+    #[test]
+    fn the_ring_follows_the_content_shift() {
+        let ppp = 2.0f32;
+        let mut p = Painter::new(Rect::from_min_max(pos2(0.0, 0.0), pos2(200.0, 200.0)));
+        let r = Rect::from_min_max(pos2(10.0, 20.0), pos2(110.0, 80.0));
+        let shift = vec2(0.5, 0.5);
+        assert!(outline_ring(&mut p, r, 2.0, ppp, shift, Color32::WHITE));
+        let (rect, width, _) = one_ring(&p);
+        assert_centered_on(rect, r.translate(shift));
+        assert!((width - 2.0).abs() < 1e-6, "hover width must stay 2.0");
     }
 
     /// 旋转过的四边形不做吸附，退回描路径（否则会画成轴对齐的框）。
@@ -277,9 +320,9 @@ mod crisp_tests {
     fn absurd_scales_fall_back() {
         let mut p = Painter::new(Rect::from_min_max(pos2(0.0, 0.0), pos2(10.0, 10.0)));
         let r = Rect::from_min_max(pos2(1.0, 1.0), pos2(9.0, 9.0));
-        assert!(!crisp_rect(&mut p, r, 1.0, 0.0, Color32::WHITE));
-        assert!(!crisp_rect(&mut p, r, 1.0, f32::NAN, Color32::WHITE));
-        assert!(!crisp_rect(&mut p, r, 0.0, 1.0, Color32::WHITE));
+        assert!(!outline_ring(&mut p, r, 1.0, 0.0, Vec2::ZERO, Color32::WHITE));
+        assert!(!outline_ring(&mut p, r, 1.0, f32::NAN, Vec2::ZERO, Color32::WHITE));
+        assert!(!outline_ring(&mut p, r, 0.0, 1.0, Vec2::ZERO, Color32::WHITE));
         assert!(p.ops.is_empty());
     }
 
@@ -290,7 +333,14 @@ mod crisp_tests {
         let mut p = Painter::new(Rect::from_min_max(pos2(0.0, 0.0), pos2(200.0, 200.0)));
         crisp_line(&mut p, pos2(10.37, 4.0), pos2(10.37, 90.0), 1.0, ppp, Color32::WHITE);
         crisp_line(&mut p, pos2(4.0, 20.61), pos2(90.0, 20.61), 1.0, ppp, Color32::WHITE);
-        let q = rects(&p);
+        let q: Vec<Rect> = p
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                Op::Rect { rect, .. } => Some(*rect),
+                _ => None,
+            })
+            .collect();
         assert_eq!(q.len(), 2);
         let t = (1.0f32 * ppp).round() / ppp;
         for band in &q {
@@ -303,3 +353,4 @@ mod crisp_tests {
         }
     }
 }
+

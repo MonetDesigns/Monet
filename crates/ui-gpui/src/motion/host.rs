@@ -18,7 +18,8 @@ impl CanvasView {
         let mut acts = self.motion_q.drain();
         // The header's X leaves Motion mode; only the root view can resize the right panel.
         let close = acts.iter().any(|a| matches!(a, motion::Act::CloseMotion));
-        acts.retain(|a| !matches!(a, motion::Act::CloseMotion));
+        let export = acts.iter().any(|a| matches!(a, motion::Act::OpenExport));
+        acts.retain(|a| !matches!(a, motion::Act::CloseMotion | motion::Act::OpenExport));
         // `self.app` 与 `self.pane` 是不同字段：第二个可变借用走 pane 路径。
 
         if motion::apply(&mut self.app, &mut self.pane.motion_ui, acts) {
@@ -27,6 +28,9 @@ impl CanvasView {
         if close {
             self.set_motion_open(false, cx);
             self.motion_ui.playing = false;
+        }
+        if export {
+            self.open_dialog(crate::dialogs::Kind::Export, &serde_json::json!({}), cx);
         }
         let selection = self.app.session.selection();
         let settings =
@@ -131,6 +135,7 @@ impl CanvasView {
             cx,
             layer,
             fill_keyed,
+            playhead,
             &self.motion_q,
         )
         .into_element()
@@ -147,6 +152,7 @@ impl CanvasView {
             cx,
             layer,
             stroke_keyed,
+            playhead,
             &self.motion_q,
         )
         .into_element()

@@ -38,7 +38,7 @@ pub(crate) fn specs() -> Vec<CommandSpec> {
         spec!(
             "motion.autoKey",
             "Auto key",
-            "{property, value, time?, ids?} the inspector's edit at playhead: if the property already has a keyframe track, sets a key at `time` (default 0); otherwise writes the node's static property and creates no animation. Matches Figma/desigma auto-key semantics.",
+            "{property, value?, color?, time?, ids?} the inspector's edit at playhead: if the property already has a keyframe track, sets a key at `time` (default 0); otherwise writes the node's static property and creates no animation. `color` is a `#RRGGBB[AA]` shorthand for Fill/Stroke. Matches Figma/desigma auto-key semantics.",
             true,
             motion_auto_key
         ),
@@ -248,7 +248,18 @@ fn motion_auto_key(s: &mut Session, p: &Value) -> Result<Value> {
     let property = string(p, "property")
         .and_then(|name| property_of(&name))
         .ok_or_else(|| bad(cmd, "`property` is required and must be a known animatable property"))?;
-    let value: motion::AnimValue = parse(cmd, p, "value")?.ok_or_else(|| bad(cmd, "`value` is required"))?;
+    // Colour fields post a hex string (`fill.set`-style `{color: "#RRGGBB"}`) rather than the
+    // externally-tagged `AnimValue::Color { r, g, b, a }`. Accept that shorthand here so the
+    // Fill / Stroke rows can share the ordinary fill/stroke command and still auto-key.
+    let colour = if property.kind() == motion::ValueKind::Color {
+        string(p, "color").or_else(|| string(p, "value")).and_then(|hex| figcraft_color::Color::from_hex(hex.as_str()).map(motion::AnimValue::Color))
+    } else {
+        None
+    };
+    let value: motion::AnimValue = match colour {
+        Some(v) => v,
+        None => parse(cmd, p, "value")?.ok_or_else(|| bad(cmd, "`value` is required"))?,
+    };
     let ids = req_targets(cmd, s, p)?;
     // Atomic shape check: refuse before writing anything if any target rejects the value.
     for id in &ids {
@@ -708,6 +719,34 @@ mod tests {
         let tr = node(&s, n).motion.track(AnimProperty::Opacity).unwrap();
         assert_eq!(tr.keys.iter().filter(|k| k.time_ms == 750).count(), 1, "same-time edit updates, no duplicate");
         assert!((tr.key_at(750).unwrap().value.scalar().unwrap() - 0.75).abs() < 1e-6);
+    }
+
+    /// The Fill / Stroke inspector posts `{color: "#RRGGBB"}`. `motion.autoKey` must accept that
+    /// shorthand for colour properties and write a real colour key at the playhead.
+    #[test]
+    fn auto_key_accepts_hex_colour_shorthand() {
+        let mut s = Session::new();
+        let n = rect(&mut s);
+        let red = serde_json::to_value(motion::AnimValue::Color(figcraft_color::Color::from_hex("#FF0000").unwrap())).unwrap();
+        ex(&mut s, "motion.keyframe", json!({"property": "Fill", "time": 0, "value": red, "ids": [n.0]}));
+        let out = ex(&mut s, "motion.autoKey", json!({"property": "Fill", "color": "#00FF00", "time": 500, "ids": [n.0]}));
+        assert_eq!(out["animated"], 1);
+        let tr = node(&s, n).motion.track(AnimProperty::FillColor).unwrap();
+        assert_eq!(tr.key_at(500).unwrap().value, motion::AnimValue::Color(figcraft_color::Color::from_hex("#00FF00").unwrap()));
+    }
+
+    /// Stroke weight is a scalar track and the inspector's weight editor must be able to key it.
+    #[test]
+    fn auto_key_can_key_stroke_weight() {
+        let mut s = Session::new();
+        let n = rect(&mut s);
+        let two = serde_json::to_value(motion::AnimValue::Scalar(2.0)).unwrap();
+        ex(&mut s, "motion.keyframe", json!({"property": "Stroke weight", "time": 0, "value": two, "ids": [n.0]}));
+        let six = serde_json::to_value(motion::AnimValue::Scalar(6.0)).unwrap();
+        let out = ex(&mut s, "motion.autoKey", json!({"property": "Stroke weight", "value": six, "time": 500, "ids": [n.0]}));
+        assert_eq!(out["animated"], 1);
+        let tr = node(&s, n).motion.track(AnimProperty::StrokeWeight).unwrap();
+        assert!((tr.key_at(500).unwrap().value.scalar().unwrap() - 6.0).abs() < 1e-6);
     }
 
     /// 形状错误整条拒绝，一个字节都不写（与 motion.keyframe 的原子性一致）。

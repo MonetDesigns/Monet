@@ -26,7 +26,7 @@ pub struct AppAssets;
 
 impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
-        // 外置设备外框：`device:<relative path>` 从用户的 devices 目录读 SVG（外置文件，
+        // 外置设备外框：`device:<relative path>` 从用户的 devices 目录读机身 PNG（外置文件，
         // 和笔刷 / WGSL 一样不在二进制里）。
         if let Some(rel) = path.strip_prefix("device:") {
             let bytes = figcraft_devices::devices_dir().join(rel);

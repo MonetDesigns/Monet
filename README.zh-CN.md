@@ -41,6 +41,11 @@
 
 <br>
 
+<p align="center">
+  <a href="docs/images/motion-hero.mp4"><img src="docs/images/motion-hero.gif" alt="2.4 秒循环的动画场景：深色卡片填充色在石板灰、靛蓝和青色之间切换，描边在靛蓝、粉色和青色之间循环，线宽同步收放；周围有脉动的球体和漂浮的色块" width="960"></a>
+</p>
+<p align="center"><sub><b>2.4 秒动画循环</b> —— 填充、描边和描边线宽与预设片段写在同一条时间轴上。<a href="docs/images/motion-hero.mp4">查看 MP4</a>，或<a href="docs/images/screenshots/08-motion-fill-stroke-weight.png">查看编辑器状态</a>。</sub></p>
+
 ## 界面一览
 
 以下截图均来自运行中的 GPUI 应用（`cargo run -p figcraft-ui-gpui --example run`）。
@@ -68,8 +73,8 @@
 </tr>
 <tr>
 <td width="50%" valign="top">
-  <img src="docs/images/screenshots/06-motion-timeline.png" alt="窗口底部的动画时间轴：Hello 图层上一个 1.5 秒循环片段，Position 轨道，0、0.75、1.5 秒三个菱形关键帧，左侧有播放控制" width="100%">
-  <p align="center"><sub><b>动画时间轴</b>：循环 Position 轨道上的关键帧</sub></p>
+  <img src="docs/images/screenshots/08-motion-fill-stroke-weight.png" alt="Monet 完整窗口的动画模式：图层列表选中 Motion Card，画布显示动画卡片，右侧是动画面板，下方时间轴在 0.8 秒播放头处显示 Fill（青色）、Stroke（粉色）和 Stroke weight（10 px）轨道" width="100%">
+  <p align="center"><sub><b>动画</b>：填充、描边和线宽自动关键帧</sub></p>
 </td>
 <td width="50%" valign="top">
   <img src="docs/images/screenshots/07-variables.png" alt="编辑器上方打开的变量窗口，显示变量集合及其模式" width="100%">
@@ -111,8 +116,10 @@ egui 前端作为冻结参照保留在仓库中；引擎改动在上游进行，
       与上游项目共享。
     </td>
     <td width="50%" valign="top">
-      <h3>🎬 动画</h3>
-      关键帧、缓动和画布下方的时间轴驱动同一个场景，支持循环片段和按属性分轨。
+      <h3>🎬 引擎驱动的动画</h3>
+      关键帧、缓动和按属性分轨驱动画布上的同一个场景。填充、描边和描边线宽可在检查器里自动
+      打关键帧，预设覆盖入场、循环和出场，时间轴在后台导出 <b>MP4（H.264）</b>、GIF、
+      WebM（AV1）和 PNG 序列。
     </td>
   </tr>
   <tr>
@@ -121,11 +128,46 @@ egui 前端作为冻结参照保留在仓库中；引擎改动在上游进行，
       笔刷是导入到本地库的外部 <code>.abr</code> 文件；笔画保留笔尖的柔和边缘，沿路径盖章绘制。
     </td>
     <td width="50%" valign="top">
+      <h3>🧪 外置 WGSL 材质</h3>
+      把图层指向一个 <code>.wgsl</code> 文件，或用 <code>FIGCRAFT_WGSL_DIR</code> 扫描目录。
+      Shader 以图层像素为输入，在画布图块上做离屏 pass；uniform 会作为带标签的字段出现在效果
+      面板，绑定随文档一起保存。
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
       <h3>🔒 离线、本地优先</h3>
       无需账号、服务器，打开文件不需要网络往返。界面跟随系统语言，所有文案来自文案目录。
     </td>
+    <td width="50%" valign="top">
+      <h3>📦 可携带文件</h3>
+      文档保存为 <code>.fig</code>；同一个引擎导出 PNG、SVG、WebM 和 PDF，开发插件从本地
+      <code>figcraft-plugin.json</code> 清单加载。
+    </td>
   </tr>
 </table>
+
+### 笔刷和材质都是文件
+
+笔刷引擎不是一组固定的内置笔尖：它在运行时导入 `.abr` 笔刷库，笔画可以沿矢量路径盖章任意
+笔尖，并支持间距、抖动、散布和独立随机种子。下面三条笔画使用随仓库附带的
+`monet-defaults.abr` 笔刷库。
+
+<p align="center">
+  <img src="docs/images/art-brushes.png" alt="三条深红、蓝色和琥珀色笔画，分别由 monet-defaults.abr 中不同笔尖盖章绘制，边缘带有柔和鬃毛质感" width="900">
+  <br>
+  <sub><b>本地笔刷</b> —— 来自外部 <code>.abr</code> 文件的 ribbon、ink 和 bristle 笔尖。</sub>
+</p>
+
+WGSL 材质在 shader 层同理：图层绑定记录一个 <code>.wgsl</code> 文件及其 uniform 值；画布把这个
+节点从 CPU 图块里挖空，用背后的像素运行 shader，再把结果合成回来。下面的天气卡片是一个
+玻璃材质，采样它下方的彩色背景。
+
+<p align="center">
+  <img src="docs/images/art-glass-weather.png" alt="一张带半透明玻璃材质的天气卡片：紫、青、橙色背景透过磨砂折射表面，同时卡片文字与图标保持清晰" width="900">
+  <br>
+  <sub><b>外置 WGSL 材质</b> —— 覆盖在实时画布图块上的玻璃 shader，uniform 在效果面板中可调。</sub>
+</p>
 
 ## 开始使用
 

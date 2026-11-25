@@ -1168,8 +1168,9 @@ fn dispatch_down(
         HitKind::Visible(n) => q.push(Act::ToggleVisible(n)),
         HitKind::TrackVisible(n, p) => q.push(Act::ToggleTrackVisible(n, p)),
         HitKind::Close => q.push(Act::CloseMotion),
-        // egui L267-268: the export button is a no-op there — leave the selection intact.
-        HitKind::Export => {}
+        // The arrow is the animation export entry; Motion mode opens the same Export dialog as
+        // the File menu, now with the MP4 / GIF / WebM / PNG-sequence rows.
+        HitKind::Export => q.push(Act::OpenExport),
         HitKind::Clear => q.push(Act::ClearSelection),
     }
     None

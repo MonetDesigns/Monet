@@ -664,7 +664,7 @@ pub(crate) struct RightFields {
     scale_k: Entity<TextField>,
     scale_ctx: std::rc::Rc<std::cell::RefCell<crate::panels::right::data::ScaleData>>,
     /// Frame 预设面板各分类的展开状态（egui 存在 `ui.data` 的临时值，默认只开 Phone）。
-    preset_open: std::rc::Rc<std::cell::RefCell<Vec<(&'static str, bool)>>>,
+    preset_open: std::rc::Rc<std::cell::RefCell<Vec<(String, bool)>>>,
     /// Selection colors 节的展开态，键是 `ds.uid`（参考实现
     /// `Id::new(("selection_colors_open", ds.uid))`）：**每个文档各自记住**开合状态，
     /// 缺省即折叠；折叠时头部右侧显示最多三个色块 + `+N`。
@@ -2412,6 +2412,13 @@ pub(crate) fn right_panel(
         _ => {}
     }
 
+    // ── Frame 工具（F）：Design 标签整页换成 Frame 预设（egui `right.rs`:
+    //    `RightTab::Design if tool == Frame => frame_presets::panel`）──────────────
+    if data.frame_tool {
+        body = body.child(right::sections::frame_presets(f, data));
+        return wrap(body);
+    }
+
     // ── 无选中：Page（egui `page_section`）──────────────────────────────────────
     if sel.empty {
         // `view_bar` 已有下边框，这里不再补一条线。
@@ -2427,13 +2434,6 @@ pub(crate) fn right_panel(
         return wrap(body);
     }
 
-    // ── Frame 工具（F）：Design 标签整页换成 Frame 预设（egui `right.rs`:
-    //    `RightTab::Design if tool == Frame => frame_presets::panel`）──────────────
-    if data.frame_tool {
-        body = body.child(right::sections::frame_presets(f, data));
-        return wrap(body);
-    }
-
     // 预计算需要 `window` / `cx` 的节（避免链式构造里的重复可变借用）。
     let header_sec = right::sections::header(f, data, col);
     // Component / Instance（egui `header` 末尾的 `component_panel::instance_section`）。
@@ -2444,8 +2444,8 @@ pub(crate) fn right_panel(
     // is a placeholder (never used — `keyframe_layer` is `None`), keeping the shared `paints` call
     // shape identical to the Motion inspector's.
     let motion_q = crate::motion::Queue::new(std::rc::Rc::new(|| {}));
-    let fills_sec = right::sections::paints(f, data, true, sel.has_vector, row_w, col, &mut n, window, cx, None, false, &motion_q);
-    let strokes_sec = right::sections::paints(f, data, false, sel.has_vector, row_w, col, &mut n, window, cx, None, false, &motion_q);
+    let fills_sec = right::sections::paints(f, data, true, sel.has_vector, row_w, col, &mut n, window, cx, None, false, 0, &motion_q);
+    let strokes_sec = right::sections::paints(f, data, false, sel.has_vector, row_w, col, &mut n, window, cx, None, false, 0, &motion_q);
     let effects_sec = right::sections::effects(f, data, col, cx, None);
     let sel_colors_sec = right::sections::selection_colors(f, data, row_w, col, &mut n, window, cx);
     let grids_sec = right::sections::grids(f, data, col);

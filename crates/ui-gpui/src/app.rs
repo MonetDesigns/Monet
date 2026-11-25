@@ -118,6 +118,23 @@ impl CanvasApp {
         Point::new(x, y)
     }
 
+    /// 页面 → **画布上实际贴图**的屏幕坐标。
+    ///
+    /// `to_screen` 用会话当前视图；贴图却可能还停留在上一帧的 `tex_view`，两者在连续
+    /// 平移/缩放时会差零点几个逻辑像素。选框、手柄必须跟着**真正显示出来的那张图**
+    /// 走，否则左边压住物体描边、右边又露在外面。这里直接按 `presented_image_rect`
+    /// 的贴图原点换算，不再单独猜一个 `content_shift`。
+    pub fn to_presented(&self, x: f64, y: f64) -> Pos2 {
+        let Ok(ds) = self.session.ds() else { return self.to_screen(x, y) };
+        let Some(v) = self.canvas.tex_view.as_ref().filter(|_| self.canvas.texture.is_some() && self.canvas.tex_of == Some((ds.uid, ds.page))) else {
+            return self.to_screen(x, y);
+        };
+        let tl = self.to_screen(v.origin.0, v.origin.1);
+        let r = crate::canvas::presented_image_rect(tl, v, ds.view.zoom, self.ppp, false);
+        let z = ds.view.zoom as f32;
+        pos2(r.min.x + (x as f32 - v.origin.0 as f32) * z, r.min.y + (y as f32 - v.origin.1 as f32) * z)
+    }
+
     /// 画布叠加层的主色（页面深色时用亮品牌绿）。
     pub fn accent(&self) -> Color32 {
         canvas_accent(self.canvas.page, self.theme.accent, self.theme.accent_hover)

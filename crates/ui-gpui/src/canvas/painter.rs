@@ -59,6 +59,9 @@ pub struct Label {
 #[derive(Clone, Debug)]
 pub enum Op {
     Rect { rect: Rect, radius: CornerRadius, fill: Color32, stroke: Stroke, kind: StrokeKind },
+    /// 一条闭合的矩形环，按路径描边绘制。四边由同一个 stroke tessellator 生成，
+    /// 不会像 `paint_quad` 的 border_widths 那样在非整数坐标上左右分别取整。
+    Ring { rect: Rect, width: f32, color: Color32 },
     Line { a: Pos2, b: Pos2, stroke: Stroke },
     Circle { center: Pos2, radius: f32, fill: Color32, stroke: Stroke },
     Poly { points: Vec<Pos2>, closed: bool, fill: Color32, stroke: Stroke },
@@ -114,6 +117,14 @@ impl Painter {
 
     pub fn rect_stroke(&mut self, rect: Rect, corner_radius: impl Into<CornerRadius>, stroke: impl Into<Stroke>, kind: StrokeKind) {
         self.ops.push(Op::Rect { rect, radius: corner_radius.into(), fill: Color32::TRANSPARENT, stroke: stroke.into(), kind });
+    }
+
+    /// 直角矩形环：四角一次闭合、整圈一条路径。线宽以逻辑像素给出，中心线就是 `rect`。
+    pub fn rect_ring(&mut self, rect: Rect, width: f32, color: Color32) {
+        if width <= 0.0 || color.a() == 0 || !rect.is_positive() {
+            return;
+        }
+        self.ops.push(Op::Ring { rect, width, color });
     }
 
     pub fn rect(&mut self, rect: Rect, corner_radius: impl Into<CornerRadius>, fill_color: Color32, stroke: impl Into<Stroke>, kind: StrokeKind) {
@@ -213,6 +224,23 @@ impl Painter {
                         q = q.border_widths(px(bw)).border_color(to_rgba(stroke.color));
                     }
                     window.paint_quad(q);
+                }
+                Op::Ring { rect, width, color } => {
+                    let pts = [
+                        point(px(rect.min.x + o.x), px(rect.min.y + o.y)),
+                        point(px(rect.max.x + o.x), px(rect.min.y + o.y)),
+                        point(px(rect.max.x + o.x), px(rect.max.y + o.y)),
+                        point(px(rect.min.x + o.x), px(rect.max.y + o.y)),
+                    ];
+                    let mut b = PathBuilder::stroke(px(*width));
+                    b.move_to(pts[0]);
+                    b.line_to(pts[1]);
+                    b.line_to(pts[2]);
+                    b.line_to(pts[3]);
+                    b.close();
+                    if let Ok(path) = b.build() {
+                        window.paint_path(path, to_rgba(*color));
+                    }
                 }
                 Op::Line { a, b, stroke } => paint_line(window, *a + o.to_vec2(), *b + o.to_vec2(), stroke),
                 Op::Circle { center, radius, fill, stroke } => {

@@ -3002,6 +3002,19 @@ impl CanvasView {
 
                 let params = panels::cmd_params(&ids, c.params);
 
+                // Motion export renders and encodes every frame. Running it on the UI thread froze
+                // the whole window for the duration of the encode. Defer it out of this borrow and
+                // run it on a worker with a cloned document; the save dialog is still native and
+                // happens before the worker starts.
+                if c.id == "motion.export" {
+                    let params = params.clone();
+                    let this = cx.entity().downgrade();
+                    cx.defer(move |cx| {
+                        let _ = this.update(cx, |view, cx| view.start_motion_export(params, cx));
+                    });
+                    continue;
+                }
+
                 // 命令前的 uid 快照：成功后用 uid-diff 把新文档登记到发起窗口（见 adopt_opened_doc）。
                 let docs_before: Vec<u64> = self.app.session.docs.iter().map(|d| d.uid).collect();
 
@@ -3937,6 +3950,73 @@ impl CanvasView {
         }
     }
 
+    /// Animated exports are potentially long (hundreds of frames + H.264/AV1). The save picker
+    /// and the encoder both stay off the UI thread: a synchronous native dialog pumps its own
+    /// message loop and freezes GPUI (and can re-enter the borrowed entity). Hand a cloned
+    /// document to a worker that calls the same `motion.export` engine command the CLI / control
+    /// channel use, so there is one encoder path.
+    fn start_motion_export(&mut self, params: serde_json::Value, cx: &mut Context<Self>) {
+        use base64::Engine as _;
+
+        let ext = params.get("format").and_then(serde_json::Value::as_str).unwrap_or("mp4").to_string();
+        let doc_name = self.app.session.ds().ok().map(|d| d.doc.name.clone()).unwrap_or_else(|| "animation".into());
+        let default_name = format!("{doc_name}.{ext}");
+        let this = cx.entity().downgrade();
+        cx.spawn(async move |this, cx| {
+            let Some(file) = rfd::AsyncFileDialog::new()
+                .set_title(tr("Export animation"))
+                .set_file_name(&default_name)
+                .add_filter(ext.to_uppercase(), &[ext.as_str()])
+                .save_file()
+                .await
+            else {
+                return;
+            };
+            let path = file.path().to_path_buf();
+            let _ = this.update(cx, |view, cx| view.toast(tr("Exporting animation…"), cx));
+            // Re-read the document after the picker returns so the export reflects edits made
+            // while the dialog was open.
+            let doc = match this.update(cx, |view, _| view.app.session.doc().ok().cloned()) {
+                Ok(Some(doc)) => doc,
+                Ok(None) => return,
+                Err(_) => return,
+            };
+            let (tx, rx) = smol::channel::bounded::<std::result::Result<serde_json::Value, String>>(1);
+            let thread_params = params.clone();
+            let spawned = std::thread::Builder::new().name("figcraft-motion-export".into()).spawn(move || {
+                let mut session = figcraft_engine::Session::with_document(doc);
+                let result = session.execute("motion.export", &thread_params).map_err(|e| e.to_string());
+                let _ = tx.send_blocking(result);
+            });
+            if spawned.is_err() {
+                let _ = this.update(cx, |view, cx| view.toast(tr("Could not start the animation export"), cx));
+                return;
+            }
+            let Ok(result) = rx.recv().await else { return };
+            let _ = this.update(cx, |view, cx| {
+                let result = match result {
+                    Ok(v) => v,
+                    Err(e) => {
+                        view.toast(e, cx);
+                        return;
+                    }
+                };
+                let Some(data) = result.get("data").and_then(serde_json::Value::as_str) else {
+                    view.toast(tr("The animation export returned no data"), cx);
+                    return;
+                };
+                let Some(bytes) = base64::engine::general_purpose::STANDARD.decode(data).ok() else {
+                    view.toast(tr("The animation export returned invalid data"), cx);
+                    return;
+                };
+                if let Err(e) = std::fs::write(&path, bytes) {
+                    view.toast(e.to_string(), cx);
+                }
+            });
+        })
+        .detach();
+    }
+
     /// A23：导出结果落盘。引擎在没有 `path` 时把内容以 base64 `data` 返回（egui 侧交给
     /// `Services::download` / `pick_save`）；桌面版用原生保存对话框：
     ///
@@ -3944,85 +4024,86 @@ impl CanvasView {
     /// * `file.exportLayers` 的多个文件（顶层没有 `data`、每项自带 `data`）→ 选文件夹后
     ///   按 `files[].name` 逐个写入（egui `services.pick_folder` 同义）；
     /// * `file.exportLayers` 的 zip（顶层 `data`）→ 保存对话框，扩展名 `.zip`。
+    ///
+    /// The native picker is asynchronous on purpose. `rfd::FileDialog::save_file()` pumps a
+    /// nested Win32 message loop; calling it from a GPUI effect freezes the window and can
+    /// re-enter the borrowed view (`RefCell already borrowed`). Keep the picker and the disk
+    /// write in a foreground task, then return to the entity only once the path is known.
     fn deliver_download(&mut self, command: &str, result: &serde_json::Value, cx: &mut Context<Self>) {
-        // 原生文件对话框是**阻塞**的（内部跑系统消息循环）。若在当前 `Context<Self>` 的
-        // borrow 期间直接调用，消息循环会让异步任务 re-enter 并再次 update 同一个实体，
-        // 触发 `RefCell already borrowed`（点导出按钮崩溃）。把整段推迟到本轮 effect 结束、
-        // 实体归还 App 之后执行——与 windows.rs 的建窗 defer 同款。
-        let this = cx.entity().downgrade();
+        use base64::Engine as _;
+
         let command = command.to_string();
         let result = result.clone();
         let doc_name = self.app.session.ds().ok().map(|d| d.doc.name.clone()).unwrap_or_else(|| "export".into());
-        cx.defer(move |cx| {
-            let _ = this.update(cx, |view, cx| view.deliver_download_now(&command, &result, &doc_name, cx));
-        });
-    }
+        let this = cx.entity().downgrade();
+        cx.spawn(async move |this, cx| {
+            let decode = |s: &str| base64::engine::general_purpose::STANDARD.decode(s).ok();
 
-    /// 实际落盘：只从 [`Self::deliver_download`] 的 defer 回调里调用（borrow 已释放）。
-    fn deliver_download_now(&mut self, command: &str, result: &serde_json::Value, doc_name: &str, cx: &mut Context<Self>) {
-        use base64::Engine as _;
+            if result.get("data").is_none() {
+                let files: Vec<(String, Vec<u8>)> = result
+                    .get("files")
+                    .and_then(serde_json::Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|f| Some((f.get("name")?.as_str()?.to_string(), decode(f.get("data")?.as_str()?)?)))
+                    .collect();
 
-        let decode = |s: &str| base64::engine::general_purpose::STANDARD.decode(s).ok();
+                if files.is_empty() {
+                    return;
+                }
 
-        if result.get("data").is_none() {
-            let files: Vec<(String, Vec<u8>)> = result
-                .get("files")
-                .and_then(serde_json::Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(|f| Some((f.get("name")?.as_str()?.to_string(), decode(f.get("data")?.as_str()?)?)))
-                .collect();
+                let Some(dir) = rfd::AsyncFileDialog::new().set_title(tr("Export layers")).pick_folder().await else {
+                    return;
+                };
+                let dir = dir.path().to_path_buf();
 
-            if files.is_empty() {
+                for (name, bytes) in files {
+                    let path = dir.join(name);
+
+                    if let Some(parent) = path.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+
+                    if let Err(e) = std::fs::write(&path, bytes) {
+                        let _ = this.update(cx, |view, cx| view.toast(e.to_string(), cx));
+                        return;
+                    }
+                }
+
+                let _ = this.update(cx, |_, cx| cx.notify());
                 return;
             }
 
-            let Some(dir) = rfd::FileDialog::new().set_title(tr("Export layers")).pick_folder() else {
+            let Some(data) = result.get("data").and_then(serde_json::Value::as_str) else {
                 return;
             };
 
-            for (name, bytes) in files {
-                let path = dir.join(name);
+            let Some(bytes) = decode(data) else {
+                return;
+            };
 
-                if let Some(parent) = path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
+            let ext = result.get("format").and_then(serde_json::Value::as_str).unwrap_or("png");
+            let ext = if command == "file.exportLayers" { "zip" } else { ext };
+            let name = format!("{doc_name}.{ext}");
 
+            let Some(file) = rfd::AsyncFileDialog::new()
+                .set_file_name(&name)
+                .add_filter(ext.to_uppercase(), &[ext])
+                .save_file()
+                .await
+            else {
+                return;
+            };
+            let path = file.path().to_path_buf();
+
+            let _ = this.update(cx, |view, cx| {
                 if let Err(e) = std::fs::write(&path, bytes) {
-                    self.toast(e.to_string(), cx);
-
-                    return;
+                    view.toast(e.to_string(), cx);
                 }
-            }
-
-            cx.notify();
-
-            return;
-        }
-
-        let Some(data) = result.get("data").and_then(serde_json::Value::as_str) else {
-            return;
-        };
-
-        let Some(bytes) = decode(data) else {
-            return;
-        };
-
-        let ext = result.get("format").and_then(serde_json::Value::as_str).unwrap_or("png");
-
-        let ext = if command == "file.exportLayers" { "zip" } else { ext };
-
-        let name = format!("{doc_name}.{ext}");
-
-        let Some(path) = rfd::FileDialog::new().set_file_name(&name).add_filter(ext.to_uppercase(), &[ext]).save_file() else {
-            return;
-        };
-
-        if let Err(e) = std::fs::write(&path, bytes) {
-            self.toast(e.to_string(), cx);
-        }
-
-        cx.notify();
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// 一次拖入（`ui-egui/src/canvas/input.rs::import_dropped` 与 `home.rs::dropped` 的合并）：

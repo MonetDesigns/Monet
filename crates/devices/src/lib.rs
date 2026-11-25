@@ -1,6 +1,7 @@
 //! The external prototype device catalogue. Monet ships no devices compiled into the engine:
-//! every family, variant, colour and frame outline is read from `devices.json` in the user's
-//! devices directory, and each variant's bezel artwork is a separate SVG file in a subfolder.
+//! every family, variant, colour and bezel artwork is read from `devices.json` in the user's
+//! devices directory, and each variant's body is a real PNG in a family subfolder. The screen
+//! rectangle inside each PNG comes from the source artwork's `Screen` layer.
 //!
 //! The directory is `MONET_DEVICES_DIR` when set, otherwise `<APPDATA>/Monet/devices` on Windows
 //! and `<HOME>/.local/share/monet/devices` elsewhere. The desktop shell installs the factory
@@ -31,8 +32,10 @@ pub struct DeviceColor {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DeviceVariant {
     pub name: String,
-    /// Path to the bezel SVG, relative to the devices directory (e.g. `iphone-17/iphone-17.svg`).
-    pub frame: String,
+    /// Bezel PNGs by orientation (`portrait` / `landscape` / `frame`) then colour name.
+    /// Paths are relative to the devices directory (e.g. `iphone-17/iPhone_17_-_Black_-_Portrait.png`).
+    pub frame: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+    /// Screen size in logical points, upright.
     pub width: f64,
     pub height: f64,
     /// Phones and tablets turn; laptops and desktops don't.
@@ -44,6 +47,46 @@ pub struct DeviceVariant {
     /// The colours it comes in, the default first.
     #[serde(default)]
     pub colors: Vec<DeviceColor>,
+    /// The screen rectangle inside each orientation's PNG: `[x, y, w, h]` in PNG pixels.
+    #[serde(default, alias = "screenRects")]
+    pub screen_rects: std::collections::BTreeMap<String, [f64; 4]>,
+    /// Screen-window corner radius per orientation, in PNG pixels (measured from the alpha).
+    #[serde(default, alias = "screenRadius")]
+    pub screen_radii: std::collections::BTreeMap<String, f64>,
+    /// Body outer-outline corner radius per orientation, in PNG pixels. Content spilling into
+    /// the transparent corners outside this outline must be masked to the stage background.
+    #[serde(default, alias = "outerRadius")]
+    pub outer_radii: std::collections::BTreeMap<String, f64>,
+}
+
+impl DeviceVariant {
+    /// The bezel PNG for an orientation and colour name, with a same-orientation / first-colour
+    /// fallback so any (rotation, colour) pair resolves to a real file.
+    pub fn frame_for(&self, orientation: &str, color: &str) -> Option<&str> {
+        let pick = |o: &str| -> Option<&str> {
+            let m = self.frame.get(o)?;
+            m.get(color).or_else(|| m.values().next()).map(|s| s.as_str())
+        };
+        pick(orientation)
+            .or_else(|| pick("portrait"))
+            .or_else(|| pick("landscape"))
+            .or_else(|| pick("frame"))
+            .or_else(|| self.frame.values().find_map(|m| m.values().next().map(|s| s.as_str())))
+    }
+
+    /// The screen rectangle for an orientation, falling back to any orientation.
+    pub fn screen_rect(&self, orientation: &str) -> Option<[f64; 4]> {
+        self.screen_rects.get(orientation).copied()
+            .or_else(|| self.screen_rects.values().next().copied())
+    }
+
+    /// Corner radii for an orientation, falling back to any orientation.
+    pub fn radii(&self, orientation: &str) -> (f64, f64) {
+        let pick = |m: &std::collections::BTreeMap<String, f64>| {
+            m.get(orientation).copied().or_else(|| m.values().next().copied()).unwrap_or(0.0)
+        };
+        (pick(&self.screen_radii), pick(&self.outer_radii))
+    }
 }
 
 fn default_kind() -> String {
@@ -121,9 +164,9 @@ impl DeviceCatalog {
         self.variant(device)
     }
 
-    /// The absolute path of a variant's frame SVG within `dir`.
-    pub fn frame_path(&self, dir: &Path, variant: &DeviceVariant) -> PathBuf {
-        dir.join(&variant.frame)
+    /// The absolute path of a variant's bezel PNG within `dir`.
+    pub fn frame_path(&self, dir: &Path, variant: &DeviceVariant, orientation: &str, color: &str) -> Option<PathBuf> {
+        variant.frame_for(orientation, color).map(|rel| dir.join(rel))
     }
 }
 
@@ -146,8 +189,15 @@ pub fn install(lib: DeviceLibrary) {
     }
 }
 
+/// The installed catalogue (cloned; prefer [`with_catalog`] on hot paths to avoid the copy).
 pub fn catalog() -> DeviceCatalog {
     global().read().map(|g| g.catalog.clone()).unwrap_or_default()
+}
+
+/// Borrow the installed catalogue for `f` without cloning it — the per-frame presenter calls this.
+/// Returns `None` when the lock is poisoned.
+pub fn with_catalog<R>(f: impl FnOnce(&DeviceCatalog) -> R) -> Option<R> {
+    global().read().ok().map(|g| f(&g.catalog))
 }
 
 /// Where the external device catalogue lives.
@@ -172,8 +222,12 @@ pub fn load_dir(dir: &Path) -> Result<usize, String> {
     let mut warnings = Vec::new();
     for f in &cat.families {
         for v in &f.variants {
-            if !dir.join(&v.frame).is_file() {
-                warnings.push(format!("{}: frame not found: {}", v.name, v.frame));
+            for m in v.frame.values() {
+                if let Some(rel) = m.values().next()
+                    && !dir.join(rel).is_file()
+                {
+                    warnings.push(format!("{}: frame not found: {}", v.name, rel));
+                }
             }
         }
     }
@@ -240,7 +294,11 @@ pub fn bootstrap() -> Result<usize, String> {
     let cat = DeviceCatalog::from_json(&std::fs::read(src.join(MANIFEST_FILE)).unwrap())?;
     for f in &cat.families {
         for v in &f.variants {
-            copy_if_changed(Path::new(&v.frame))?;
+            for m in v.frame.values() {
+                for rel in m.values() {
+                    copy_if_changed(Path::new(rel))?;
+                }
+            }
         }
     }
     load_dir(&dir)
@@ -251,9 +309,36 @@ pub fn reload() -> Result<usize, String> {
     load_dir(&devices_dir())
 }
 
-/// Read the SVG bytes of a variant's frame from the installed directory.
-pub fn frame_bytes(variant: &DeviceVariant) -> Option<Vec<u8>> {
-    std::fs::read(devices_dir().join(&variant.frame)).ok()
+/// The pixel size `[w, h]` of an installed bezel PNG: reads only the 24-byte signature + IHDR,
+/// never the whole (multi-MB) file. Cached per path so a per-frame caller is cheap.
+pub fn frame_size(rel: &str) -> Option<[f64; 2]> {
+    use std::io::Read;
+    use std::sync::Mutex;
+    static CACHE: OnceLock<Mutex<std::collections::HashMap<String, Option<[f64; 2]>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
+    if let Some(hit) = cache.lock().ok().and_then(|m| m.get(rel).copied()) {
+        return hit;
+    }
+    let size = (|| {
+        let mut f = std::fs::File::open(devices_dir().join(rel)).ok()?;
+        let mut head = [0u8; 24];
+        f.read_exact(&mut head).ok()?;
+        if &head[..8] != b"\x89PNG\r\n\x1a\n" {
+            return None;
+        }
+        let w = u32::from_be_bytes([head[16], head[17], head[18], head[19]]);
+        let h = u32::from_be_bytes([head[20], head[21], head[22], head[23]]);
+        Some([w as f64, h as f64])
+    })();
+    if let Ok(mut m) = cache.lock() {
+        m.insert(rel.to_string(), size);
+    }
+    size
+}
+
+/// Read the PNG bytes of a variant's bezel from the installed directory.
+pub fn frame_bytes(variant: &DeviceVariant, orientation: &str, color: &str) -> Option<Vec<u8>> {
+    variant.frame_for(orientation, color).and_then(|rel| std::fs::read(devices_dir().join(rel)).ok())
 }
 
 #[cfg(test)]
@@ -261,11 +346,11 @@ mod tests {
     use super::*;
 
     const JSON: &str = r##"{
-        "version": 1,
+        "version": 2,
         "families": [
             {"id":"iphone-17","name":"iPhone 17","variants":[
-                {"name":"iPhone 17","frame":"iphone-17/iphone-17.svg","width":402,"height":874,"rotates":true,"kind":"phone","colors":[{"name":"Black","rgb":[56,57,61]}]},
-                {"name":"iPhone 17 Pro","frame":"iphone-17/iphone-17-pro.svg","width":402,"height":874,"rotates":true,"kind":"phone","colors":[{"name":"Silver","rgb":[215,215,213]}]}
+                {"name":"iPhone 17","frame":{"portrait":{"Black":"x/1.png"}},"width":402,"height":874,"rotates":true,"kind":"phone","colors":[{"name":"Black","rgb":[56,57,61]}],"screenRects":{"portrait":[72,69,1206,2622]}},
+                {"name":"iPhone 17 Pro","frame":{"portrait":{"Silver":"x/2.png"}},"width":402,"height":874,"rotates":true,"kind":"phone","colors":[{"name":"Silver","rgb":[215,215,213]}]}
             ]}
         ]
     }"##;
@@ -282,12 +367,21 @@ mod tests {
     }
 
     #[test]
+    fn bezel_png_and_screen_rect_resolve() {
+        let c = DeviceCatalog::from_json(JSON.as_bytes()).unwrap();
+        let v = c.variant("iPhone 17").unwrap();
+        assert_eq!(v.frame_for("portrait", "Black"), Some("x/1.png"));
+        assert_eq!(v.frame_for("landscape", "Black"), Some("x/1.png"), "falls back across orientations");
+        assert_eq!(v.screen_rect("portrait"), Some([72.0, 69.0, 1206.0, 2622.0]));
+    }
+
+    #[test]
     fn bundled_catalogue_parses() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("assets").join("devices").join(MANIFEST_FILE);
         let bytes = std::fs::read(&path).unwrap();
         let c = DeviceCatalog::from_json(&bytes).unwrap();
-        assert_eq!(c.families.len(), 9);
-        assert_eq!(c.variant_names().len(), 19);
-        assert_eq!(c.resolve("iPhone 17", Some("iPhone 17 Pro")).unwrap().colors[0].name, "Black");
+        assert_eq!(c.families.len(), 13);
+        assert_eq!(c.variant_names().len(), 25);
+        assert!(!c.resolve("iPhone 17", Some("iPhone 17 Pro")).unwrap().colors.is_empty());
     }
 }

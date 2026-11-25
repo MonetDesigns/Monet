@@ -42,6 +42,11 @@
 
 <br>
 
+<p align="center">
+  <a href="docs/images/motion-hero.mp4"><img src="docs/images/motion-hero.gif" alt="A 2.4 second looping Motion scene: a dark card whose fill shifts from slate to indigo to cyan, its stroke cycles indigo, pink and cyan while the stroke weight grows and shrinks, surrounded by a pulsing orb and floating chips" width="960"></a>
+</p>
+<p align="center"><sub><b>A 2.4 s Motion loop</b> — fill, stroke and stroke weight are keyed in the same timeline as the preset clips. <a href="docs/images/motion-hero.mp4">Watch the MP4</a> or <a href="docs/images/screenshots/08-motion-fill-stroke-weight.png">open the editor state</a>.</sub></p>
+
 ## A look around
 
 All screenshots below are of the running GPUI application (`cargo run -p figcraft-ui-gpui --example run`).
@@ -69,8 +74,8 @@ All screenshots below are of the running GPUI application (`cargo run -p figcraf
 </tr>
 <tr>
 <td width="50%" valign="top">
-  <img src="docs/images/screenshots/06-motion-timeline.png" alt="The motion timeline at the bottom of the window: a 1.5 second looping clip on a Hello layer with a Position track, three diamond keyframes at 0, 0.75 and 1.5 seconds, and playback controls on the left" width="100%">
-  <p align="center"><sub><b>Motion timeline</b>: keyframes on a looping Position track</sub></p>
+  <img src="docs/images/screenshots/08-motion-fill-stroke-weight.png" alt="The full Monet window in Motion mode: Motion Card selected in the layers panel, the canvas showing the animated card, the Motion inspector on the right, and the timeline below with Fill (teal), Stroke (pink) and Stroke weight (10 px) tracks at the 0.8 s playhead" width="100%">
+  <p align="center"><sub><b>Motion</b>: auto-keyed fill, stroke and stroke weight</sub></p>
 </td>
 <td width="50%" valign="top">
   <img src="docs/images/screenshots/07-variables.png" alt="The Variables window open over the editor, showing variable collections and their modes" width="100%">
@@ -119,9 +124,11 @@ are made upstream, not here.
       upstream project.
     </td>
     <td width="50%" valign="top">
-      <h3>🎬 Motion</h3>
-      Keyframes, easing and a timeline under the canvas that drives the same scene the canvas
-      draws, with looping clips and per-property tracks.
+      <h3>🎬 Motion, backed by the engine</h3>
+      Keyframes, easing and per-property tracks drive the same scene the canvas draws. Fill,
+      stroke and stroke weight auto-key from the inspector, presets cover enter/cycle/exit, and
+      the timeline exports <b>MP4 (H.264)</b>, GIF, WebM (AV1) and a PNG sequence off the UI
+      thread.
     </td>
   </tr>
   <tr>
@@ -131,12 +138,49 @@ are made upstream, not here.
       brush tip's soft edge and are stamped along the path.
     </td>
     <td width="50%" valign="top">
+      <h3>🧪 External WGSL materials</h3>
+      Point a layer at a <code>.wgsl</code> file, or scan a folder with
+      <code>FIGCRAFT_WGSL_DIR</code>. The shader runs as an offscreen pass over the canvas tile
+      with the layer's pixels as input; its uniforms appear as labelled fields in the Effects
+      panel, and bindings travel inside the document.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
       <h3>🔒 Offline and local-first</h3>
       No account, no server and no network round trip to open a file. The UI follows the system
       language and every string comes from the catalogue.
     </td>
+    <td width="50%" valign="top">
+      <h3>📦 Portable files</h3>
+      Documents save as <code>.fig</code>; the same engine exports PNG, SVG, WebM and PDF, and
+      development plugins load from a local <code>figcraft-plugin.json</code> manifest.
+    </td>
   </tr>
 </table>
+
+### Brushes and materials are files
+
+The brush engine is not a fixed set of built-in tips: it imports `.abr` libraries at runtime, and a
+stroke can stamp any tip along a vector path with spacing, jitter, scatter and its own seed. The
+three gestures below use the bundled `monet-defaults.abr` library.
+
+<p align="center">
+  <img src="docs/images/art-brushes.png" alt="Three brush strokes in crimson, blue and amber, each stamped from a different tip in the imported monet-defaults.abr library with a soft, bristled edge" width="900">
+  <br>
+  <sub><b>Local brushes</b> — ribbon, ink and bristle tips from an external <code>.abr</code> file.</sub>
+</p>
+
+WGSL materials work the same way at the shader level. A layer's binding names a `.wgsl` file and
+keeps its uniform values; the canvas cuts that node out of the CPU tile, runs the shader over the
+pixels behind it, and composites the result back. The weather card below is a glass material
+sampling the coloured backdrop under it.
+
+<p align="center">
+  <img src="docs/images/art-glass-weather.png" alt="A weather card with a translucent glass material: the purple, teal and orange backdrop shows through a frosted, refracted surface while the card's text and icons stay crisp" width="900">
+  <br>
+  <sub><b>External WGSL material</b> — a glass shader over the live canvas tile, with its uniforms exposed in the Effects panel.</sub>
+</p>
 
 ## Get started
 
