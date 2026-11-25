@@ -84,9 +84,9 @@
 </table>
 
 <p align="center">
-  <img src="docs/images/screenshots/09-animation-export.png" alt="Monet 完整窗口的 Motion 模式：选中 Motion Card，时间轴上显示 Fill、Stroke 和 Stroke weight 关键帧；右侧只有一个 Export 节，打开 Animate timeline 后出现 MP4 格式选择器和唯一的 Export Motion Card animation 按钮" width="900">
+  <img src="docs/images/screenshots/09-animation-export.png" alt="Monet 完整窗口的 Motion 模式：选中 Motion Card，时间轴上显示 Fill、Stroke 和 Stroke weight 关键帧；右侧 Export 节跟随当前选择，显示 MP4 格式选择器和 Export Motion Card 按钮，没有额外的动画开关" width="900">
   <br>
-  <sub><b>唯一的导出面</b> —— 右侧 Export 节在静态图片导出和 MP4、GIF、WebM、PNG 序列时间轴导出之间切换；不再有第二个导出对话框，保存/渲染都不占 UI 线程。</sub>
+  <sub><b>唯一的导出面</b> —— 右侧 Export 节导出当前选中的图层；在 Motion 模式下同一个节提供 MP4、GIF、WebM、PNG 序列时间轴导出，没有第二个对话框，也没有额外的动画开关。保存/渲染都不占 UI 线程。</sub>
 </p>
 
 ## 这是什么

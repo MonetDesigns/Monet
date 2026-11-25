@@ -2333,24 +2333,13 @@ pub(crate) fn export(f: &RightFields, d: &PanelData, col: f32, _n: &mut usize, c
     // page has no setting yet (the button falls back to PNG); only a non-page empty selection
     // collapses to an empty section.
     let rows = d.exports.clone().filter(|v| !v.is_empty()).unwrap_or_default();
-    // The Export section is the one export surface. In Motion mode a single selected layer also
-    // gets an animation switch here, so the timeline never needs a second Export dialog.
-    let animatable = motion && !page_mode && target.len() == 1;
-    let anim_on = animatable && f.export_animation.get();
-    if rows.is_empty() && !page_mode && !animatable {
+    // The selection is the export target. In Motion mode a single selected layer exports its
+    // timeline directly: no extra switch, no second Export dialog.
+    let anim_on = motion && !page_mode && target.len() == 1;
+    if rows.is_empty() && !page_mode && !anim_on {
         return Section::empty(tr("Export"), plus);
     }
     let mut sec = PanelSection::new(tr("Export")).header_trail(plus);
-    if animatable {
-        let state = f.export_animation.clone();
-        let wake = f.cmds.clone();
-        sec = sec.child(field_row_full(Checkbox::new("export-animation").label(tr("Animate timeline")).checked(anim_on).on_change(
-            move |on, _w, _cx| {
-                state.set(*on);
-                wake.wake();
-            },
-        )));
-    }
     // 预览框是整行宽（两列 + 间隙），图片再让出左右内边距与 8 pt 呼吸位。
     let full_w = col * 2.0 + crate::widgets::GRID_GAP;
     if anim_on {
@@ -2412,7 +2401,7 @@ pub(crate) fn export(f: &RightFields, d: &PanelData, col: f32, _n: &mut usize, c
         let scale = rows.first().and_then(|r| r.size.trim().trim_start_matches('@').trim_end_matches('x').parse::<f64>().ok()).unwrap_or(1.0);
         let cmd = CMDS[i];
         let params = json!({ "ids": &target, "format": EXTS[i], "fps": FPS[i], "scale": scale });
-        let label = if name.is_empty() { tr("Export animation").into() } else { trf("Export {name} animation", &[("name", &name)]).into() };
+        let label = if name.is_empty() { tr("Export").into() } else { trf("Export {name}", &[("name", &name)]).into() };
         (cmd, params, label)
     } else if page_mode {
         let fmt = rows.first().map(|r| r.format).unwrap_or("png");
