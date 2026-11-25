@@ -163,6 +163,13 @@ fn widest(items: &[Item], has_check: bool, window: &Window) -> f32 {
         .max(120.0)
 }
 
+/// 整卡宽度（最宽行 + 两侧内边距）：给「向上飞出」的调用方用 —— 它得先知道宽度才能把卡片
+/// 水平夹进窗口（`card` 自己只做纵向防溢出）。与 `card` 内部的取值完全同源。
+pub(crate) fn fit_width(items: &[Item], window: &Window) -> f32 {
+    let has_check = items.iter().any(|i| i.checked.is_some());
+    widest(items, has_check, window) + 2.0 * PAD
+}
+
 /// The rows alone, with no card chrome (the Actions palette puts them under its search field).
 ///
 /// Returns the rows **and** any open submenu cards as two separate vecs: a scrollable card puts the

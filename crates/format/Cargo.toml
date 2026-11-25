@@ -9,6 +9,12 @@ description = "Monet native file format (.figcraft: zip of document.json + image
 workspace = true
 
 [dependencies]
+craft-penpot = { workspace = true }
+craft-sketch = { workspace = true }
+craft-zip = { workspace = true }
+craft-figcraft-format = { workspace = true }
+craft-jpeg = { workspace = true }
+craft-image-codecs = { workspace = true }
 figcraft-doc = { workspace = true }
 figcraft-pathops = { workspace = true }
 figcraft-layout = { workspace = true }

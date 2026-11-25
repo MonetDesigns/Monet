@@ -27,6 +27,7 @@ use figcraft_geom::Rect;
 use figcraft_i18n::tr;
 use gpui::{Div, ImageSource, MouseButton, SharedString, Stateful, div, img, prelude::*, px, svg};
 use std::collections::BTreeMap;
+use std::rc::Rc;
 use std::time::Instant;
 
 /// 画面缩放档（eGUI `PresentScale`）：Fit 缩到放得下、FitWidth 填满宽度、Fill 铺满、
@@ -65,6 +66,16 @@ impl ScaleMode {
             ScaleMode::FitWidth => 1,
             ScaleMode::Fill => 2,
             ScaleMode::Actual => 3,
+        }
+    }
+
+    /// 菜单行的 pick 值（`id()` 的字符串形态）：行模型只传 `&str`。
+    fn pick_key(self) -> &'static str {
+        match self.id() {
+            1 => "1",
+            2 => "2",
+            3 => "3",
+            _ => "0",
         }
     }
 
@@ -155,8 +166,9 @@ pub struct OverlayState {
     pub position: OverlayPosition,
     pub close_on_outside: bool,
     pub background: Option<figcraft_color::Color>,
-    /// 触发层的页矩形（用于 `anchor_to` 的相对偏移）。
-    pub anchor: Option<figcraft_geom::Rect>,
+    /// 打开浮层的那个层，落在**被演示画框的页坐标**里（eGUI `OverlayState.anchor`）：
+    /// 手动位置与 `anchor_to` 都从它算相对偏移，并随窗口缩放 / 视图平移一起动。
+    pub anchor: Option<Rect>,
     pub offset: Option<[f64; 2]>,
     pub anchor_to: OverlayAnchor,
     pub opened: f64,
@@ -205,6 +217,14 @@ struct Snapshot {
     scroll: BTreeMap<NodeId, (f64, f64)>,
 }
 
+/// 演示里待确认的外链（eGUI `Presenter.link_notice`）：先提示，观众确认才交给系统浏览器。
+#[derive(Clone, Debug)]
+pub struct LinkNotice {
+    pub url: String,
+    /// 「Don't show this again」的勾选状态；`None` = 不给这个勾选项（链接不是观众点的）。
+    pub skip: Option<bool>,
+}
+
 /// 一次演示的运行时状态。
 #[derive(Clone, Debug)]
 pub struct PresentState {
@@ -239,8 +259,16 @@ pub struct PresentState {
     pub scale_open: bool,
     /// Inspect 的目标层（点击命中的层，eGUI `presenter.inspected`）。
     pub inspected: Option<NodeId>,
-    /// 待打开的外链（`Action::OpenUrl`）；由 lib 层取走并交给 GPUI。
-    pub pending_url: Option<String>,
+    /// 待打开的外链（`Action::OpenUrl`）；由 lib 层取走：按偏好弹确认条或直接打开。
+    pub pending_link: Option<String>,
+    /// 正在显示的外链确认条（eGUI `link_notice`）。
+    pub link_notice: Option<LinkNotice>,
+    /// 确认条点了「Open link」：直接开，不再过确认（由 lib 层取走）。
+    pub open_now: Option<String>,
+    /// 评论模式（eGUI `Shift+C`）：点画布在页坐标处开一条评论草稿。
+    pub commenting: bool,
+    /// 待提交评论的页坐标（有草稿时演示层显示输入条）。
+    pub comment_draft: Option<(f64, f64)>,
     /// 非 current 画框各自的挂起时钟；导航离开 / 进入时存取，落实「画框之间独立」。
     clocks: BTreeMap<NodeId, MotionClock>,
     /// 演示用的文档**快照**：源设计稿关掉之后预览标签仍然能打开 / 继续播
@@ -259,8 +287,6 @@ pub struct PresentState {
     rev: u64,
     /// 响应式原型要把被演示画框改成的大小（eGUI `Presenter::fit`）。
     fit: Option<(f64, f64)>,
-    /// 最近一次摆放的 (根, 摆放, 可视区)：把屏幕矩形换回页矩形用（eGUI `Presenter::shown`）。
-    shown: Option<(NodeId, Place, RectPx)>,
     scroll_anim: Option<ScrollAnim>,
     /// 时钟（秒）：定时器 / 覆盖层动画 / 闪烁都以它为准。
     pub clock: f64,
@@ -286,6 +312,9 @@ pub struct PresentState {
     delays_fired: Vec<(NodeId, usize)>,
     waiting: Vec<input::Waiting>,
     sections: std::collections::HashMap<NodeId, NodeId>,
+    /// 最近一帧显示的根、页→屏映射与裁切区（eGUI `Presenter.shown`）：打开浮层时
+    /// 用它把触发层的屏幕矩形换算成页坐标，浮层才能跟着画框缩放 / 平移。
+    shown: Option<(NodeId, Place, RectPx)>,
     pub pointer: Option<(f64, f64)>,
     inside: bool,
     down: bool,
@@ -321,7 +350,11 @@ impl PresentState {
             device_open: false,
             scale_open: false,
             inspected: None,
-            pending_url: None,
+            pending_link: None,
+            link_notice: None,
+            open_now: None,
+            commenting: false,
+            comment_draft: None,
             clocks: BTreeMap::new(),
             doc: None,
             source_ptr: 0,
@@ -332,7 +365,6 @@ impl PresentState {
             disp_rev: u64::MAX,
             rev: 0,
             fit: None,
-            shown: None,
             scroll_anim: None,
             clock: 0.0,
             epoch: Instant::now(),
@@ -355,6 +387,7 @@ impl PresentState {
             delays_fired: Vec::new(),
             waiting: Vec::new(),
             sections: std::collections::HashMap::new(),
+            shown: None,
             pointer: None,
             inside: false,
             down: false,
@@ -572,18 +605,6 @@ impl PresentState {
     /// 显示文档（渲染 / 命中用）。
     pub fn display(&self) -> Option<&Document> {
         self.disp.as_ref().or(self.laid.as_ref())
-    }
-
-    /// 屏幕矩形 → 页坐标矩形（eGUI `Presenter::page_rect`）。只有触发层属于当前根时才有意义。
-    fn page_rect(&self, r: Option<RectPx>) -> Option<Rect> {
-        let (root, place, _) = self.shown?;
-        if root != self.current {
-            return None;
-        }
-        let r = r?;
-        let (x0, y0) = place.page((f64::from(r.x), f64::from(r.y)));
-        let (x1, y1) = place.page((f64::from(r.x + r.w), f64::from(r.y + r.h)));
-        Some(Rect::new(x0, y0, x1, y1))
     }
 
     fn ensure_loaded(&mut self, doc: &Document) {
@@ -818,6 +839,14 @@ impl PresentState {
         self.rev += 1;
     }
 
+    /// 屏幕矩形 `r` 换算成最近一帧所显示画框的页坐标（eGUI `page_rect`）。不检查根：
+    /// 已有浮层时触发层就在浮层里，`shown` 记的是浮层的映射，正好是对的。
+    fn page_rect(&self, r: Option<RectPx>) -> Option<Rect> {
+        let (r, (_, place, _)) = (r?, self.shown?);
+        let (a, b) = (place.page((f64::from(r.x), f64::from(r.y))), place.page((f64::from(r.x + r.w), f64::from(r.y + r.h))));
+        Some(Rect::new(a.0, a.1, b.0, b.1))
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn perform(&mut self, a: &Action, node: NodeId, tr: Transition, dur: f64, easing: Easing, rect: Option<RectPx>, now: f64, depth: usize) -> bool {
         let Some(doc) = self.laid.clone() else { return false };
@@ -851,10 +880,10 @@ impl PresentState {
                 true
             }
             Action::OpenOverlay { dest, position, close_on_outside, background, offset, anchor } => {
+                let at = self.page_rect(rect);
                 if !doc.contains(*dest) {
                     return false;
                 }
-                let at = self.page_rect(rect);
                 self.delays_fired.retain(|(id, _)| !doc.is_ancestor(*dest, *id));
                 self.overlays.push(OverlayState {
                     id: *dest,
@@ -873,10 +902,10 @@ impl PresentState {
                 true
             }
             Action::SwapOverlay { dest } => {
+                let at = self.page_rect(rect);
                 if !doc.contains(*dest) {
                     return false;
                 }
-                let at = self.page_rect(rect);
                 self.delays_fired.retain(|(id, _)| !doc.is_ancestor(*dest, *id));
                 match self.overlays.last_mut() {
                     Some(o) => {
@@ -885,7 +914,7 @@ impl PresentState {
                         o.transition = tr;
                         o.dur = dur;
                         o.easing = easing;
-                        o.anchor = at;
+                        // 换内容不换锚点（eGUI `SwapOverlay`）：子菜单贴在打开它的那一层上。
                     }
                     None => self.overlays.push(OverlayState {
                         id: *dest,
@@ -906,11 +935,12 @@ impl PresentState {
             }
             Action::CloseOverlay => self.close_overlay(now),
             Action::OpenUrl { url, .. } => {
-                // eGUI 会先弹「打开链接」确认条；GPUI 侧先直接交给系统浏览器。
                 if url.trim().is_empty() {
                     return false;
                 }
-                self.pending_url = Some(url.clone());
+                // 只有观众自己点的链接才带「Don't show this again」；这里按统一提示处理，
+                // 由 lib 层结合 `prefs.link_notice_skipped` 决定直接打开还是弹确认条。
+                self.pending_link = Some(url.clone());
                 true
             }
             Action::ChangeTo { dest } => {
@@ -1256,7 +1286,13 @@ fn device_glass(stage: Div, g: &Geom, area: RectPx) -> Div {
 // ---- 旧的本地布局已移到 `present/layout.rs` ----
 
 /// 覆盖率层（全屏）：顶栏 +（设备机身 +）画面 + 过渡帧 + 底部导航（eGUI `player()`）。
-pub fn render(app: &CanvasApp, state: &PresentState, vp: (f32, f32), canvas: (f32, f32, f32, f32)) -> Stateful<Div> {
+pub fn render(
+    app: &CanvasApp,
+    state: &PresentState,
+    vp: (f32, f32),
+    canvas: (f32, f32, f32, f32),
+    window: &gpui::Window,
+) -> Stateful<Div> {
     let t = tokens();
     // 演示优先用自己那份文档快照：源设计稿被关掉后，预览标签依然能打开并继续播放
     // （用户 2026-11-17）。源文档还在时快照会随切进预览刷新，所以不会看到旧内容。
@@ -1588,106 +1624,118 @@ pub fn render(app: &CanvasApp, state: &PresentState, vp: (f32, f32), canvas: (f3
             })
             .child(paint_icon(icon, rgba(if enabled { t.text } else { t.text_tertiary }), 18.0))
     };
-    let menu_shell = |id: &'static str| {
-        div()
-            .id(id)
-            .flex_none()
-            .mb(px(6.0))
-            .w(px(212.0))
-            .max_h(px(384.0))
-            .overflow_y_scroll()
-            .rounded(pt(6.0))
-            .bg(rgba(t.menu))
-            .border_1()
-            .border_color(rgba(t.border))
-            .py(pt(4.0))
-            .flex()
-            .flex_col()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+    // ── 导航栏飞出菜单：设备 / 缩放 ─────────────────────────────────────────────
+    // 统一菜单控件（`menu_popup_in_aligned`：宽度下限 212、`TopStart` 从按钮上沿向上展开、
+    // 自带上下防溢出与内部滚动），不再手写卡面 / 行 / 定位。锚点是按钮每帧写入的跨帧探针，
+    // 所以窗口缩放、侧栏开合时菜单跟着按钮走。
+    let device_anchor = crate::widgets::menu_anchor("present-device-open");
+    let scale_anchor = crate::widgets::menu_anchor("present-scale-open");
+    let dismiss: Rc<dyn Fn(&mut gpui::Window, &mut gpui::App)> = Rc::new(|_, _| {});
+    // 菜单挂在演示层根上（那个容器的原点在窗口 `(0, TITLE_H)`，见函数末尾），而通用菜单
+    // 按**绝对坐标**落位；探针给的是窗口坐标，所以这里统一减掉标题栏高度换算一次。
+    // 若留在导航栏里，绝对坐标会被导航栏自己的 `bottom` 锚点再偏移一遍。
+    let in_layer = |r: gpui::Bounds<gpui::Pixels>| gpui::Bounds {
+        origin: gpui::point(r.origin.x, r.origin.y - px(crate::title_bar::TITLE_H)),
+        size: r.size,
     };
-    let menu_item = |label: SharedString, selected: bool, pick: Box<dyn Fn(&mut gpui::Window, &mut gpui::App)>| {
-        div()
-            .h(px(26.0))
-            .px(pt(10.0))
-            .flex()
-            .items_center()
-            .justify_between()
-            .rounded(pt(4.0))
-            .text_size(pt(11.0))
-            .text_color(rgba(if selected { t.text } else { t.menu_text }))
-            .cursor_pointer()
-            .hover(|s| s.bg(rgba(t.menu_hover)))
-            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                cx.stop_propagation();
-                pick(window, cx);
-            })
-            .child(label)
-            .when(selected, |d| d.child(paint_icon(Icon::Check, rgba(t.accent), 14.0)))
-    };
-
     let device_menu = if state.device_open {
-        let mut list = menu_shell("present-device-menu");
-        let none = menu_item(
-            tr("No device").into(),
-            settings.device == "None",
-            Box::new(|_, _| SET_DEVICE.with(|d| *d.borrow_mut() = Some("None".to_string()))),
-        );
-        list = list.child(none);
-        // 顶层只列 family；悬停某一行展开它的 variants（仿主菜单的二级菜单）。
-        let hover = HOVER_FAMILY.with(|h| h.borrow().clone());
-        for family in figcraft_engine::devices::family_names() {
-            let is_hover = hover.as_deref() == Some(family.as_str());
-            let selected = settings.device == family;
-            let f_pick = family.clone();
-            let f_variants = family.clone();
-            let row = menu_item(
-                SharedString::from(family.clone()),
-                selected,
-                Box::new(move |_, _| SET_DEVICE.with(|d| *d.borrow_mut() = Some(f_pick.clone()))),
-            );
-            let row = row
-                .on_mouse_move(move |_, _window, _cx| {
+        device_anchor.rect().map(|rect| {
+            // 顶层只列 family，variants 走统一菜单的二级子菜单（`Item::sub`，与主菜单 flyout
+            // 同一套 hover 展开 / 定位逻辑），不再手写卡面与缩进行。
+            let families = figcraft_engine::devices::family_names();
+            let hover = HOVER_FAMILY.with(|h| h.borrow().clone());
+            let mut items: Vec<crate::menu_card::Item> =
+                vec![crate::menu_card::Item::new("none", tr("No device")).key("none").checked(Some(settings.device == "None"))];
+            // 行下标 → family：hover 回调只给下标，子菜单的展开态靠它写回 `HOVER_FAMILY`。
+            let mut hover_map: Vec<Option<String>> = vec![None];
+            for family in families.iter() {
+                let selected = settings.device == *family;
+                let sub = figcraft_engine::devices::variant_names(family)
+                    .into_iter()
+                    .map(|v| {
+                        let selected_v = settings.variant == v || (settings.variant.is_empty() && settings.device == v);
+                        crate::menu_card::Item::new("variant", SharedString::from(v.clone()))
+                            .key(SharedString::from(format!("variant:{v}")))
+                            .checked(Some(selected_v))
+                    })
+                    .collect::<Vec<_>>();
+                items.push(
+                    crate::menu_card::Item::new("family", SharedString::from(family.clone()))
+                        .key(SharedString::from(format!("family:{family}")))
+                        .checked(Some(selected))
+                        .sub(sub),
+                );
+                hover_map.push(Some(family.clone()));
+            }
+            let open_sub = hover.as_deref().and_then(|f| families.iter().position(|x| x == f)).map(|i| i + 1);
+            let pick: crate::menu_card::OnPick = Rc::new(|key: &str, _w, _cx| {
+                if let Some(f) = key.strip_prefix("family:") {
+                    SET_VARIANT.with(|x| *x.borrow_mut() = None);
+                    SET_DEVICE.with(|d| *d.borrow_mut() = Some(f.to_string()));
+                } else if let Some(v) = key.strip_prefix("variant:") {
+                    SET_VARIANT.with(|x| *x.borrow_mut() = Some(v.to_string()));
+                    SET_DEVICE.with(|d| *d.borrow_mut() = None);
+                } else {
+                    SET_VARIANT.with(|x| *x.borrow_mut() = None);
+                    SET_DEVICE.with(|d| *d.borrow_mut() = Some("None".to_string()));
+                }
+            });
+            let hover_cb: crate::menu_card::OnSub = Rc::new({
+                let map = hover_map;
+                move |i, _w, _cx| {
+                    let f = map.get(i).cloned().flatten();
                     HOVER_FAMILY.with(|h| {
                         let mut h = h.borrow_mut();
-                        if h.as_deref() != Some(family.as_str()) {
-                            *h = Some(family.clone());
+                        if *h != f {
+                            *h = f;
                         }
                     });
-                })
-                .child(paint_icon(Icon::ChevronRight, rgba(t.menu_text), 12.0));
-            list = list.child(row);
-            if is_hover {
-                for v in figcraft_engine::devices::variant_names(&f_variants) {
-                    let selected_v = settings.variant == v || (settings.variant.is_empty() && settings.device == v);
-                    let vv = v.clone();
-                    list = list.child(
-                        menu_item(
-                            SharedString::from(format!("    {v}")),
-                            selected_v,
-                            Box::new(move |_, _| {
-                                SET_VARIANT.with(|x| *x.borrow_mut() = Some(vv.clone()));
-                                SET_DEVICE.with(|d| *d.borrow_mut() = None);
-                            }),
-                        )
-                        .pl(pt(18.0)),
-                    );
                 }
-            }
-        }
-        Some(list)
+            });
+            let row_h = crate::menu_metrics::MENU_ROW_H;
+            let card_h = crate::menu_card::height(&items, row_h);
+            let card_w = crate::menu_card::fit_width(&items, window).max(212.0);
+            let vh = vp.1 - crate::title_bar::TITLE_H;
+            let left = f32::from(rect.origin.x).min((vp.0 - card_w - 8.0).max(8.0)).max(8.0);
+            let top = (f32::from(rect.origin.y) - crate::title_bar::TITLE_H - card_h - 4.0).max(8.0);
+            crate::menu_card::card(
+                left,
+                top,
+                crate::widgets::Width::Min(212.0),
+                row_h,
+                &items,
+                open_sub,
+                pick,
+                Rc::new(|_, _, _| {}),
+                hover_cb,
+                window,
+                vh,
+            )
+        })
     } else {
         None
     };
     let scale_menu = if state.scale_open {
-        let mut list = menu_shell("present-scale-menu");
-        for m in [ScaleMode::Fit, ScaleMode::FitWidth, ScaleMode::Fill, ScaleMode::Actual] {
-            list = list.child(menu_item(
-                SharedString::from(m.label()),
-                state.scale == m,
-                Box::new(move |_, _| SET_SCALE.with(|s| *s.borrow_mut() = Some(m.id()))),
-            ));
-        }
-        Some(list)
+        scale_anchor.rect().map(|rect| {
+            let rows: Vec<crate::widgets::MenuRow> = [ScaleMode::Fit, ScaleMode::FitWidth, ScaleMode::Fill, ScaleMode::Actual]
+                .iter()
+                .map(|m| crate::widgets::MenuRow::row(m.label()).key(m.pick_key()).checked(Some(state.scale == *m)))
+                .collect();
+            crate::widgets::menu::menu_popup_in_aligned(
+                in_layer(rect),
+                Some(212.0),
+                rows,
+                Rc::new(|key: &str, _w, _cx| {
+                    if let Ok(id) = key.parse::<u8>() {
+                        SET_SCALE.with(|s| *s.borrow_mut() = Some(id));
+                    }
+                }),
+                dismiss.clone(),
+                vp.0,
+                vp.1 - crate::title_bar::TITLE_H,
+                crate::widgets::RectAlign::TopStart,
+            )
+        })
     } else {
         None
     };
@@ -1730,6 +1778,11 @@ pub fn render(app: &CanvasApp, state: &PresentState, vp: (f32, f32), canvas: (f3
                         cx.stop_propagation();
                         ACTION.with(|a| a.set(10));
                     })
+                    .child({
+                        // 跨帧锚点：飞出的菜单按这个矩形定位（与下拉菜单同一套注册表）。
+                        let a = device_anchor.clone();
+                        gpui::canvas(move |bounds, _w, _cx| a.seed(bounds), |_, _, _, _| {}).absolute().size_full()
+                    })
                     .child(div().text_size(pt(11.0)).text_color(rgba(t.text)).child(device_label))
                     .child(paint_icon(Icon::ChevronDown, rgba(t.text_secondary), 12.0)),
             )
@@ -1748,6 +1801,10 @@ pub fn render(app: &CanvasApp, state: &PresentState, vp: (f32, f32), canvas: (f3
                         cx.stop_propagation();
                         ACTION.with(|a| a.set(11));
                     })
+                    .child({
+                        let a = scale_anchor.clone();
+                        gpui::canvas(move |bounds, _w, _cx| a.seed(bounds), |_, _, _, _| {}).absolute().size_full()
+                    })
                     .child(div().text_size(pt(11.0)).text_color(rgba(t.text)).child(SharedString::from(state.scale.label())))
                     .child(paint_icon(Icon::ChevronDown, rgba(t.text_secondary), 12.0)),
             );
@@ -1760,13 +1817,11 @@ pub fn render(app: &CanvasApp, state: &PresentState, vp: (f32, f32), canvas: (f3
             .flex_col()
             .items_center()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .children(device_menu)
-            .children(scale_menu)
             .child(pill)
     };
 
     // ── 侧面板：Inspect / Comments（eGUI `show()` 的右栏，宽 280）────────────────
-    let side_panel = if !pane && (state.inspect || state.comments) {
+    let side_panel = if !pane && !state.hide_ui && (state.inspect || state.comments) {
         let title: SharedString = if state.inspect { tr("Inspect").into() } else { tr("Comments").into() };
         let mut body = div().flex_1().min_h(px(0.0)).flex().flex_col().px(pt(12.0)).pt(pt(10.0));
         if state.inspect {
@@ -1964,6 +2019,120 @@ pub fn render(app: &CanvasApp, state: &PresentState, vp: (f32, f32), canvas: (f3
             .child(stage_el);
     }
 
+    // ── 外链确认条（eGUI `link_notice`）：观众点链接先确认，可勾「不再提示」──────────
+    let link_notice = state.link_notice.as_ref().map(|n| {
+        let notice_btn = |i: u8, label: SharedString, action: u8, primary: bool| {
+            div()
+                .id(("present-notice-btn", u64::from(i)))
+                .h(px(24.0))
+                .px(pt(10.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(pt(5.0))
+                .bg(rgba(if primary { t.accent } else { t.field }))
+                .hover(|s| s.opacity(0.9))
+                .text_size(pt(11.5))
+                .text_color(rgba(if primary { t.accent_on } else { t.text }))
+                .cursor_pointer()
+                .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                    cx.stop_propagation();
+                    ACTION.with(|a| a.set(action));
+                })
+                .child(label)
+        };
+        let skip_row = n.skip.is_some().then(|| {
+            let on = n.skip == Some(true);
+            crate::widgets::Checkbox::new("present-notice-skip")
+                .label(tr("Don't show this again"))
+                .checked(on)
+                .on_change(|_, _, cx| {
+                    cx.stop_propagation();
+                    ACTION.with(|a| a.set(22));
+                })
+        });
+        div()
+            .id("present-link-notice")
+            .absolute()
+            .top(px(56.0))
+            .left(px(0.0))
+            .right(px(0.0))
+            .flex()
+            .justify_center()
+            .child(
+                div()
+                    .w(px(340.0))
+                    .flex()
+                    .flex_col()
+                    .gap(pt(8.0))
+                    .p(pt(12.0))
+                    .rounded(pt(8.0))
+                    .bg(rgba(t.panel))
+                    .border_1()
+                    .border_color(rgba(t.border))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(
+                        div()
+                            .text_size(pt(12.0))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(rgba(t.text))
+                            .child(tr("Leaving the prototype")),
+                    )
+                    .child(
+                        div()
+                            .text_size(pt(11.0))
+                            .text_color(rgba(t.text_secondary))
+                            .child(tr("This link opens a website outside the prototype:")),
+                    )
+                    .child(
+                        div()
+                            .text_size(pt(11.0))
+                            .text_color(rgba(t.text))
+                            .overflow_hidden()
+                            .child(SharedString::from(n.url.clone())),
+                    )
+                    .children(skip_row)
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .justify_end()
+                            .gap(pt(6.0))
+                            .child(notice_btn(0, tr("Cancel").into(), 21, false))
+                            .child(notice_btn(1, tr("Open link").into(), 20, true)),
+                    ),
+            )
+    });
+
+    // ── 评论输入条（eGUI 演示层评论模式）：点画布后在这里写评论 ──────────────────
+    let composer = state.comment_draft.is_some().then(|| {
+        let field = comment_field();
+        div()
+            .id("present-comment-composer")
+            .absolute()
+            .left(px(0.0))
+            .right(px(0.0))
+            .bottom(px(16.0))
+            .flex()
+            .justify_center()
+            .child(
+                div()
+                    .w(px(340.0))
+                    .flex()
+                    .flex_col()
+                    .gap(pt(6.0))
+                    .p(pt(10.0))
+                    .rounded(pt(8.0))
+                    .bg(rgba(t.panel))
+                    .border_1()
+                    .border_color(rgba(t.border))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(div().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(tr("New comment")))
+                    .children(field)
+                    .child(div().text_size(pt(10.5)).text_color(rgba(t.text_tertiary)).child(tr("Enter to post · Esc to cancel"))),
+            )
+    });
+
     // eGUI 的演示覆盖 CentralPanel，标题栏（含 tab strip 的 PresentTab）仍显示在上方。
     // GPUI 这里从 TITLE_H 起铺，别把标签栏盖掉（用户 2026-11-17：标签栏搞丢了）。
     div()
@@ -1976,17 +2145,27 @@ pub fn render(app: &CanvasApp, state: &PresentState, vp: (f32, f32), canvas: (f3
         .flex()
         .flex_col()
         .bg(rgba(t.canvas))
-        .child(bar)
+        .children((!state.hide_ui).then_some(bar))
         .child(stage_el)
+        .children(link_notice)
+        .children(composer)
+        // 导航栏的设备 / 缩放飞出菜单：挂在层根上、最后渲染，才压在画面之上。
+        .children(device_menu)
+        .children(scale_menu)
 }
 
 thread_local! {
     /// 各窗口最近一帧的摆放结果（窗口坐标，按窗口 id 存，避免多窗口互相覆盖）。
     /// 输入处理在 sync 帧读取上一帧的几何。
     static GEOMS: std::cell::RefCell<Vec<(u64, Geom)>> = const { std::cell::RefCell::new(Vec::new()) };
-    /// 顶栏 / 导航按钮：3 退出、4 重播、5 评论、6 Inspect、8 上一帧、9 下一帧、
-    /// 10 设备菜单、11 缩放菜单。
+    /// 顶栏 / 导航按钮：3 退出、4 重播、5 评论、6 Inspect、7 隐藏界面、8 上一帧、9 下一帧、
+    /// 10 设备菜单、11 缩放菜单、20 打开外链、21 取消外链提示、22 切换「不再提示」、
+    /// 23 切换评论模式、24 放弃评论草稿。
     pub static ACTION: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+    /// 评论输入框（通用控件 `widgets::text_field`）：演示里点画布建评论时创建。
+    static COMMENT_FIELD: std::cell::RefCell<Option<gpui::Entity<crate::widgets::TextField>>> = const { std::cell::RefCell::new(None) };
+    /// 评论输入框提交的文字（提交回调 → lib 层执行 `comment.add`）。
+    static COMMENT_TEXT: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
     /// 导航栏下拉里选中的设备 family（`proto.settings` 落地）。
     pub static SET_DEVICE: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
     /// 导航栏下拉里选中的分型号（`proto.settings` 的 `variant`）。
@@ -2000,6 +2179,38 @@ thread_local! {
 /// 本窗口最近一帧的几何。
 pub fn geom_of(wid: u64) -> Option<Geom> {
     GEOMS.with(|q| q.borrow().iter().rev().find(|(w, _)| *w == wid).map(|(_, g)| g.clone()))
+}
+
+/// 评论输入框（存在时演示层在底部显示输入条）。
+pub fn comment_field() -> Option<gpui::Entity<crate::widgets::TextField>> {
+    COMMENT_FIELD.with(|f| f.borrow().clone())
+}
+
+/// 创建并聚焦评论输入框（通用控件 `widgets::text_field`）；Enter 提交的文字经
+/// [`take_comment_text`] 交给 lib 层执行 `comment.add`。
+pub fn create_comment_field(cx: &mut gpui::App, window: &mut gpui::Window) {
+    let none = crate::widgets::Slot::None;
+    let field = crate::widgets::text_field(cx, 260.0, "", "Add a comment", none.clone(), none);
+    field.update(cx, |tf, _| {
+        tf.set_on_commit(|text, _w, _cx| {
+            if !text.trim().is_empty() {
+                COMMENT_TEXT.with(|t| *t.borrow_mut() = Some(text.to_string()));
+            }
+        });
+    });
+    let edit = field.read(cx).edit();
+    edit.update(cx, |e, _| e.focus_editor(window));
+    COMMENT_FIELD.with(|f| *f.borrow_mut() = Some(field));
+}
+
+/// 取走提交的评论文本（提交成功后由 lib 层消费）。
+pub fn take_comment_text() -> Option<String> {
+    COMMENT_TEXT.with(|t| t.borrow_mut().take())
+}
+
+/// 关掉评论输入框（提交完成或取消草稿）。
+pub fn clear_comment_field() {
+    COMMENT_FIELD.with(|f| *f.borrow_mut() = None);
 }
 
 /// 处理本帧排队的指针 / 滚轮 / 键盘事件（由 `sync_present` 调用）。

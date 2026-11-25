@@ -299,7 +299,7 @@ pub(crate) fn editor_popover(f: &RightFields, d: &PanelData, cx: &mut App, vp: S
     };
     // 浮窗和右栏正文同一帧画，槽位从 `PROTO_EDITOR_SLOT` 起，绝不与正文撞同一个编辑器实体。
     let mut n = PROTO_EDITOR_SLOT;
-    let rows = editor_rows(f, it, k, cx, &mut n);
+    let rows = editor_rows(f, it, k, &p.frames, cx, &mut n);
     let y = ANCHOR_Y.with(|a| a.get());
     let anchor = point(px(f32::from(vp.width) - right_w - 8.0), px(if y > 8.0 { y } else { 120.0 }));
     // 外壳先建出来：正文的可用高度要从卡片**真实落点**算（egui `max_h = screen.max.y - pos.y - 64`）。
@@ -335,7 +335,14 @@ fn editor_slot(n: &mut usize) -> usize {
 
 /// 交互详情浮窗的正文：触发器 / 延迟 / 动作列表 / 转场 / 缓动 / 时长
 /// （egui `proto_panel.rs::editor_popover` 的 body）。
-fn editor_rows(f: &RightFields, it: &InteractionRow, i: usize, cx: &mut App, n: &mut usize) -> Vec<crate::widgets::FieldRow> {
+fn editor_rows(
+    f: &RightFields,
+    it: &InteractionRow,
+    i: usize,
+    frames: &[(figcraft_doc::NodeId, String)],
+    cx: &mut App,
+    n: &mut usize,
+) -> Vec<crate::widgets::FieldRow> {
     let mut out = Vec::new();
     // ── Trigger ──
     out.push(sublabel_row(tr("Trigger")));
@@ -398,29 +405,64 @@ fn editor_rows(f: &RightFields, it: &InteractionRow, i: usize, cx: &mut App, n: 
         out.push(field_row_full(field));
     }
 
-    // ── Actions：每条一行（摘要 + 删除），另有「+ Navigate to」加一条 ──
+    // ── Actions：每条一行（摘要 + 上移 / 下移 / 删除），行下按类型给字段；末尾是类型选择 ──
     out.push(sublabel_row(if it.actions.len() > 1 { tr("Actions") } else { tr("Action") }));
+    let first_dest = it.actions.iter().find_map(|(_, a)| a.get("dest").cloned());
     for (k, (label, action)) in it.actions.iter().enumerate() {
-        // 删掉第 k 条：把剩下的整组写回（`proto.interaction.set {actions}`）。
-        let mut rest: Vec<Value> = it.actions.iter().map(|(_, a)| a.clone()).collect();
-        rest.remove(k);
-        let remove = icon_cmd(Icon::Minus, "proto.interaction.set", json!({ "index": i, "actions": rest }), f, false);
+        let mut trail: Vec<IconButton> = Vec::new();
+        if k > 0 {
+            trail.push(icon_cmd(Icon::ChevronUp, "proto.action.move", json!({ "index": i, "path": [k], "to": k - 1 }), f, false));
+        }
+        if k + 1 < it.actions.len() {
+            trail.push(icon_cmd(Icon::ChevronDown, "proto.action.move", json!({ "index": i, "path": [k], "to": k + 1 }), f, false));
+        }
+        // 一条交互至留一个动作（引擎规则）：只剩一条时不给删除。
+        if it.actions.len() > 1 {
+            trail.push(icon_cmd(Icon::Minus, "proto.action.remove", json!({ "index": i, "path": [k] }), f, false));
+        }
         let line = div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(pt(6.0))
-            .w_full()
-            .child(div().flex_1().min_w(px(0.0)).text_size(pt(11.0)).text_color(rgba(tokens().text)).child(SharedString::from(label.clone())));
-        out.push(field_row_full_trailing(line, vec![remove]));
+            .flex_1()
+            .min_w(px(0.0))
+            .text_size(pt(11.0))
+            .text_color(rgba(tokens().text))
+            .child(SharedString::from(label.clone()));
+        out.push(field_row_full_trailing(line, trail));
+
+        match action.get("type").and_then(Value::as_str).unwrap_or_default() {
+            kind @ ("navigate" | "changeTo" | "scrollTo" | "openOverlay" | "swapOverlay") => {
+                let rows = frame_target_rows(frames, action, i, &[k]);
+                out.push(field_row_full(pick_dropdown(f, dest_label(frames, action), 0.0, rows)));
+                if kind == "openOverlay" {
+                    out.extend(overlay_rows(f, action, i, k));
+                }
+            }
+            "openUrl" => {
+                let url = action.get("url").and_then(Value::as_str).unwrap_or_default().to_string();
+                let field = f.row_field(
+                    cx,
+                    editor_slot(n),
+                    &url,
+                    RowEditCtx {
+                        cmd: "proto.action.set",
+                        params: json!({ "index": i, "path": [k], "action": action.clone() }),
+                        key: "url",
+                        scale: 1.0,
+                        string_value: true,
+                        paint: None,
+                        nest: Some("action"),
+                        nest_key: None,
+                        paint_color: None,
+                    },
+                );
+                out.push(sublabel_row(tr("URL")));
+                out.push(field_row_full(field));
+            }
+            "conditional" => out.extend(conditional_rows(f, action, i, k, cx, n)),
+            _ => {}
+        }
     }
-    // 追加一条导航（目标 = 本 frame 之外的第一个 frame）。
-    let add_params = match it.actions.first().and_then(|(_, a)| a.get("dest")).cloned() {
-        Some(dest) => json!({ "index": i, "action": { "type": "navigate", "dest": dest } }),
-        None => json!({ "index": i, "action": { "type": "back" } }),
-    };
-    let add = icon_cmd(Icon::Plus, "proto.interaction.set", add_params, f, false);
-    out.push(field_row_full_trailing(plain_label(tr("Add action")), vec![add]));
+    // 新增动作：类型选择（eGUI `proto_editor.rs` 的 action kind 菜单）。
+    out.push(field_row_full(pick_dropdown(f, tr("Add action"), 0.0, action_kind_rows(first_dest, frames))));
 
     // ── Transition / Easing / Duration ──
     out.push(sublabel_row(tr("Transition")));
@@ -495,6 +537,145 @@ fn editor_rows(f: &RightFields, it: &InteractionRow, i: usize, cx: &mut App, n: 
 /// `afterDelay` trigger 里的毫秒。
 fn ms_of(trigger: &Value) -> u64 {
     trigger.get("ms").and_then(Value::as_u64).unwrap_or(300)
+}
+
+/// 新增动作的类型清单（eGUI `proto_editor.rs` 的 kind 菜单）；默认目标取同一条交互已有的 dest。
+fn action_kind_rows(dest: Option<Value>, frames: &[(figcraft_doc::NodeId, String)]) -> Vec<(String, &'static str, Value)> {
+    let d = || dest.clone().or_else(|| frames.first().map(|(id, _)| json!(id.0))).unwrap_or_else(|| json!(0));
+    let kinds: Vec<(&'static str, Value)> = vec![
+        (tr("Navigate to"), json!({ "type": "navigate", "dest": d() })),
+        (tr("Change to"), json!({ "type": "changeTo", "dest": d() })),
+        (tr("Back"), json!({ "type": "back" })),
+        (tr("Scroll to"), json!({ "type": "scrollTo", "dest": d() })),
+        (tr("Open link"), json!({ "type": "openUrl", "url": "https://" })),
+        (tr("Open overlay"), json!({ "type": "openOverlay", "dest": d(), "position": "center" })),
+        (tr("Swap overlay"), json!({ "type": "swapOverlay", "dest": d() })),
+        (tr("Close overlay"), json!({ "type": "closeOverlay" })),
+        (tr("Conditional"), json!({ "type": "conditional", "blocks": [{ "expression": "1 == 1", "actions": [] }] })),
+    ];
+    kinds.into_iter().map(|(l, v)| (l.to_string(), "proto.action.add", json!({ "action": v }))).collect()
+}
+
+/// 目标（`dest`）下拉：本页顶层 frame。
+fn frame_target_rows(frames: &[(figcraft_doc::NodeId, String)], action: &Value, i: usize, path: &[usize]) -> Vec<(String, &'static str, Value)> {
+    frames
+        .iter()
+        .map(|(id, name)| {
+            let mut a = action.clone();
+            a["dest"] = json!(id.0);
+            (name.clone(), "proto.action.set", json!({ "index": i, "path": path, "action": a }))
+        })
+        .collect()
+}
+
+/// 当前 `dest` 对应的 frame 名，没有就用提示文案。
+fn dest_label(frames: &[(figcraft_doc::NodeId, String)], action: &Value) -> String {
+    let dest = action.get("dest").and_then(Value::as_u64);
+    frames.iter().find(|(id, _)| Some(id.0) == dest).map(|(_, n)| n.clone()).unwrap_or_else(|| tr("Choose target").to_string())
+}
+
+/// `openOverlay` 的 position / anchor / closeOnOutside（eGUI `proto_editor.rs`）。
+fn overlay_rows(f: &RightFields, action: &Value, i: usize, k: usize) -> Vec<crate::widgets::FieldRow> {
+    let mut out = Vec::new();
+    let with = |key: &str, v: Value| {
+        let mut a = action.clone();
+        a[key] = v;
+        json!({ "index": i, "path": [k], "action": a })
+    };
+    // Position：camelCase 字符串（`overlayPosition` 的 serde 形）。
+    let positions = [
+        (tr("Center"), "center"),
+        (tr("Top left"), "topLeft"),
+        (tr("Top center"), "topCenter"),
+        (tr("Top right"), "topRight"),
+        (tr("Bottom left"), "bottomLeft"),
+        (tr("Bottom center"), "bottomCenter"),
+        (tr("Bottom right"), "bottomRight"),
+        (tr("Manual"), "manual"),
+    ];
+    let cur = action.get("position").and_then(Value::as_str).unwrap_or("center");
+    let prow: Vec<(String, &'static str, Value)> =
+        positions.iter().map(|(l, v)| (l.to_string(), "proto.action.set", with("position", json!(v)))).collect();
+    let cur_label = positions.iter().find(|(_, v)| *v == cur).map_or(tr("Center").to_string(), |(l, _)| l.to_string());
+    out.push(sublabel_row(tr("Position")));
+    out.push(field_row_full(pick_dropdown(f, cur_label, 0.0, prow)));
+    // Anchor：屏幕 / 触发层内 / 触发层外。
+    let anchors = [(tr("Screen"), "screen"), (tr("Trigger inside"), "triggerInside"), (tr("Trigger outside"), "triggerOutside")];
+    let acur = action.get("anchor").and_then(Value::as_str).unwrap_or("screen");
+    let arow: Vec<(String, &'static str, Value)> =
+        anchors.iter().map(|(l, v)| (l.to_string(), "proto.action.set", with("anchor", json!(v)))).collect();
+    let a_label = anchors.iter().find(|(_, v)| *v == acur).map_or(tr("Screen").to_string(), |(l, _)| l.to_string());
+    out.push(sublabel_row(tr("Anchor")));
+    out.push(field_row_full(pick_dropdown(f, a_label, 0.0, arow)));
+    // Close on click outside：勾选即写 closeOnOutside。
+    let on = action.get("closeOnOutside").and_then(Value::as_bool).unwrap_or(true);
+    let toggle = icon_cmd(Icon::Check, "proto.action.set", with("closeOnOutside", json!(!on)), f, on);
+    out.push(field_row_full_trailing(plain_label(tr("Close on click outside")), vec![toggle]));
+    out
+}
+
+/// 条件动作：每个 if / else if / else 分支（条件表达式 + 块内动作 + 删除），以及新增分支。
+fn conditional_rows(f: &RightFields, action: &Value, i: usize, k: usize, cx: &mut App, n: &mut usize) -> Vec<crate::widgets::FieldRow> {
+    use figcraft_doc::Variables;
+    use figcraft_doc::proto::Expr;
+    let mut out = Vec::new();
+    let blocks: Vec<Value> = action.get("blocks").and_then(Value::as_array).cloned().unwrap_or_default();
+    let has_else = blocks.iter().any(|b| b.get("condition").is_none_or(Value::is_null));
+    for (b, block) in blocks.iter().enumerate() {
+        let cond = block.get("condition").filter(|c| !c.is_null());
+        let label = match cond {
+            None => tr("Else"),
+            Some(_) if b == 0 => tr("If"),
+            Some(_) => tr("Else if"),
+        };
+        let remove = icon_cmd(Icon::Minus, "proto.conditional.removeBlock", json!({ "index": i, "path": [k], "block": b }), f, false);
+        out.push(field_row_full_trailing(plain_label(label), vec![remove]));
+        if let Some(c) = cond {
+            // 条件以文本编辑：`Expr` 反序列化后显示，提交走 `expression`。
+            let text = serde_json::from_value::<Expr>(c.clone()).map(|e| e.display(&Variables::default())).unwrap_or_default();
+            let field = f.row_field(
+                cx,
+                editor_slot(n),
+                &text,
+                RowEditCtx {
+                    cmd: "proto.conditional.setCondition",
+                    params: json!({ "index": i, "path": [k], "block": b }),
+                    key: "expression",
+                    scale: 1.0,
+                    string_value: true,
+                    paint: None,
+                    nest: None,
+                    nest_key: None,
+                    paint_color: None,
+                },
+            );
+            out.push(field_row_full(field));
+        }
+        // 块内动作：摘要 + 删除（编辑条件块内部的字段放在后续迭代）。
+        let acts = block.get("actions").and_then(Value::as_array).cloned().unwrap_or_default();
+        if acts.is_empty() {
+            out.push(field_row_full(plain_label(tr("No actions"))));
+        }
+        for (j, a) in acts.iter().enumerate() {
+            let text = a.get("type").and_then(Value::as_str).unwrap_or_default().to_string();
+            let remove = icon_cmd(Icon::Minus, "proto.action.remove", json!({ "index": i, "path": [k, b, j] }), f, false);
+            let line = div()
+                .flex_1()
+                .min_w(px(0.0))
+                .text_size(pt(11.0))
+                .text_color(rgba(tokens().text_secondary))
+                .child(SharedString::from(text));
+            out.push(field_row_full_trailing(line, vec![remove]));
+        }
+    }
+    out.push(field_row_full_trailing(plain_label(tr("Add else if")), vec![icon_cmd(Icon::Plus, "proto.conditional.addBlock", json!({ "index": i, "path": [k] }), f, false)]));
+    if !has_else {
+        out.push(field_row_full_trailing(
+            plain_label(tr("Add else")),
+            vec![icon_cmd(Icon::Plus, "proto.conditional.addBlock", json!({ "index": i, "path": [k], "else": true }), f, false)],
+        ));
+    }
+    out
 }
 
 /// 一条交互行：连接字形 + 触发器（半粗）/ 动作摘要（次要）+ 删除；点行展开编辑器。

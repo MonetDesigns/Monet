@@ -67,6 +67,7 @@ pub use dev::annotations;
 pub use dev::code_connect;
 pub use dev::codegen;
 pub use dev::component_codegen;
+pub use dev::design_context;
 pub use dev::dev_measurements;
 pub use dev::dev_resources;
 pub use dev::devcompare;
@@ -223,6 +224,8 @@ mod board_connector_tests;
 #[cfg(test)]
 mod board_grid_tests;
 #[cfg(test)]
+mod board_code_tests;
+#[cfg(test)]
 mod board_mindmap_tests;
 #[cfg(test)]
 mod board_reshape_tests;
@@ -239,6 +242,8 @@ mod boolean_cap_tests;
 #[cfg(test)]
 mod booleans_tests;
 #[cfg(test)]
+mod boolean_radius_tests;
+#[cfg(test)]
 mod bound_alpha_tests;
 #[cfg(test)]
 mod branch_live_tests;
@@ -252,6 +257,8 @@ mod brush_tests;
 mod canvas_fixes_tests;
 #[cfg(test)]
 mod code_connect_tests;
+#[cfg(test)]
+mod design_context_tests;
 #[cfg(test)]
 mod collab_ids_tests;
 #[cfg(test)]
@@ -437,6 +444,8 @@ mod live_signal_tests;
 #[cfg(test)]
 mod live_tests;
 #[cfg(test)]
+mod marquee_behaviour_tests;
+#[cfg(test)]
 mod mask_tests;
 #[cfg(test)]
 mod masks_behaviour_tests;
@@ -482,6 +491,8 @@ mod paint_tests;
 mod panels_behaviour_tests;
 #[cfg(test)]
 mod paste_missing_image_tests;
+#[cfg(test)]
+mod paste_sibling_tests;
 #[cfg(test)]
 mod path_read_caps_tests;
 #[cfg(test)]
@@ -660,6 +671,8 @@ mod vector_path_set_tests;
 mod version_preview_tests;
 #[cfg(test)]
 mod version_tests;
+#[cfg(test)]
+mod view_autopan_tests;
 #[cfg(test)]
 mod view_behaviour_tests;
 #[cfg(test)]

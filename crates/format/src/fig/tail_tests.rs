@@ -562,8 +562,37 @@ fn vectors_import_as_editable_networks() {
 }
 
 #[test]
+fn per_point_smoothing_and_cap_size_import_from_style_rows() {
+    let mut blob = square_blob();
+    // Vertex 1's style row is id 1; add both new fields to that row.
+    let mut message = tail_message();
+    {
+        let Kv::Array(nodes) = field_mut(&mut message, "nodeChanges").unwrap() else { panic!() };
+        let wave = nodes.iter_mut().find(|node| node.get("name").and_then(Kv::str) == Some("Wave")).unwrap();
+        let vd = field_mut(wave, "vectorData").unwrap();
+        let Kv::Array(rows) = field_mut(vd, "styleOverrideTable").unwrap() else { panic!() };
+        let Kv::Object(row) = rows.first_mut().unwrap() else { panic!() };
+        row.push(("cornerSmoothing", f(0.6)));
+        row.push(("strokeCapSize", f(3.0)));
+    }
+    {
+        let Kv::Array(blobs) = field_mut(&mut message, "blobs").unwrap() else { panic!() };
+        blobs[1] = o(vec![("bytes", Kv::Bytes(blob))]);
+    }
+    let (doc, warnings) = import(&canvas(&schema(), &message), "Tail").unwrap();
+    let wave = network_of(&doc, "Wave");
+    assert_eq!(wave.vertices[1].smoothing, Some(f64::from(0.6_f32)));
+    assert_eq!(wave.vertices[1].cap_size, Some(3.0));
+    assert_eq!(wave.vertices[0].smoothing, None);
+    assert!(
+        !warnings.iter().any(|w| w.contains("style settings of some vector segments aren't supported")),
+        "{warnings:?}"
+    );
+}
+
+#[test]
 fn per_segment_stroke_styles_are_reported() {
-    let styled_import = |segment_style: u32| {
+    let styled_import = |segment_style: u32, extra_style_field: Option<(&'static str, Kv<'static>)>| {
         let mut blob = square_blob();
         // The first segment's style id follows the counts and the vertices (12 bytes each).
         blob[12 + 4 * 12..12 + 4 * 12 + 4].copy_from_slice(&segment_style.to_le_bytes());
@@ -573,6 +602,14 @@ fn per_segment_stroke_styles_are_reported() {
         let Kv::Object(fields) = &mut message else { panic!() };
         let Kv::Array(blobs) = &mut fields.iter_mut().find(|(key, _)| *key == "blobs").unwrap().1 else { panic!() };
         blobs[1] = o(vec![("bytes", Kv::Bytes(blob))]);
+        if let Some((key, value)) = extra_style_field {
+            let Kv::Array(nodes) = field_mut(&mut message, "nodeChanges").unwrap() else { panic!() };
+            let wave = nodes.iter_mut().find(|node| node.get("name").and_then(Kv::str) == Some("Wave")).unwrap();
+            let vd = field_mut(wave, "vectorData").unwrap();
+            let Kv::Array(rows) = field_mut(vd, "styleOverrideTable").unwrap() else { panic!() };
+            let Kv::Object(row) = rows.first_mut().unwrap() else { panic!() };
+            row.push((key, value));
+        }
         let (doc, warnings) = import(&canvas(&schema(), &message), "Tail").unwrap();
         assert_eq!(network_of(&doc, "Wave").segments.len(), 4);
         warnings
@@ -582,12 +619,17 @@ fn per_segment_stroke_styles_are_reported() {
     assert!(!plain.iter().any(|w| w.contains("vector segments")), "{plain:?}");
     let uninterpreted = |w: &String| w.contains("style settings of some vector segments aren't supported; those segments use the layer's stroke");
     let missing = |w: &String| w.contains("some vector segments refer to style settings missing from the file; they use the layer's stroke");
-    // Style 1 has a row in the layer's override table; its contents are not applied.
-    let known = styled_import(1);
-    assert_eq!(known.iter().filter(|w| uninterpreted(w)).count(), 1, "{known:?}");
+    // Style 1 has a row in the layer's override table whose settings are all applied (a corner
+    // radius, handle mirroring and a join): nothing is left uninterpreted, so nothing is reported.
+    let known = styled_import(1, None);
+    assert!(!known.iter().any(uninterpreted), "{known:?}");
     assert!(!known.iter().any(missing), "{known:?}");
+    // A row that also sets something the document has no per-point field for (an arrow's size)
+    // is reported: those segments take the layer's stroke settings.
+    let partly = styled_import(1, Some(("strokeCapSize", f(3.0))));
+    assert_eq!(partly.iter().filter(|w| uninterpreted(w)).count(), 1, "{partly:?}");
     // Style 7 names no row at all.
-    let unknown = styled_import(7);
+    let unknown = styled_import(7, None);
     assert_eq!(unknown.iter().filter(|w| missing(w)).count(), 1, "{unknown:?}");
     assert!(!unknown.iter().any(uninterpreted), "{unknown:?}");
 }

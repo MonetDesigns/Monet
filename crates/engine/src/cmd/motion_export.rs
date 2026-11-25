@@ -11,7 +11,6 @@
 //! WebM/AV1 export is intentionally not included here — it needs the `rav1e` encoder and is a
 //! separate, larger step.
 
-use std::io::{Cursor, Write};
 
 use base64::Engine as _;
 use figcraft_doc::Document;
@@ -19,11 +18,7 @@ use figcraft_doc::NodeId;
 use figcraft_doc::anim::motion::{TimelineSettings, evaluate};
 use figcraft_geom::Rect;
 use figcraft_render::{Pixmap, View};
-use image::codecs::gif::{GifEncoder, Repeat};
-use image::{Delay, Frame, RgbaImage};
 use serde_json::{Value, json};
-use zip::ZipWriter;
-use zip::write::SimpleFileOptions;
 
 use crate::params::*;
 use crate::{Result, Session, bad};
@@ -43,6 +38,8 @@ pub enum AnimFormat {
     Webm,
     /// A zip of numbered PNG files.
     PngZip,
+    /// H.264/AVC in an MP4 container.
+    Mp4,
 }
 
 impl AnimFormat {
@@ -51,6 +48,7 @@ impl AnimFormat {
             Self::Gif => "GIF",
             Self::Webm => "WebM (AV1)",
             Self::PngZip => "PNG frames",
+            Self::Mp4 => "MP4 (H.264)",
         }
     }
     pub fn extension(self) -> &'static str {
@@ -58,6 +56,7 @@ impl AnimFormat {
             Self::Gif => "gif",
             Self::Webm => "webm",
             Self::PngZip => "zip",
+            Self::Mp4 => "mp4",
         }
     }
     /// `gif`, `webm`, `png`, `zip` / `png-zip` (case-insensitive).
@@ -66,6 +65,7 @@ impl AnimFormat {
             "gif" => Some(Self::Gif),
             "webm" | "av1" => Some(Self::Webm),
             "png" | "zip" | "png-zip" | "pngzip" => Some(Self::PngZip),
+            "mp4" | "h264" => Some(Self::Mp4),
             _ => None,
         }
     }
@@ -162,43 +162,6 @@ pub fn frame_times(timeline: &TimelineSettings, fps: u32) -> Vec<f64> {
     out
 }
 
-/// Encode premultiplied Pixmap frames as an animated GIF with the given per-frame delays (ms).
-pub fn encode_gif(frames: &[Pixmap], delays_ms: &[u32], repeating: bool) -> Result<Vec<u8>> {
-    let mut out = Vec::new();
-    {
-        let mut enc = GifEncoder::new(&mut out);
-        if repeating {
-            enc.set_repeat(Repeat::Infinite).map_err(|e| bad("motion.export", format!("gif repeat: {e}")))?;
-        }
-        let mut imgs = Vec::with_capacity(frames.len());
-        for (pix, ms) in frames.iter().zip(delays_ms.iter()) {
-            let (w, h) = (pix.width(), pix.height());
-            let img = RgbaImage::from_raw(w, h, figcraft_render::to_rgba8(pix)).ok_or_else(|| bad("motion.export", "gif frame size mismatch"))?;
-            imgs.push(Frame::from_parts(img, 0, 0, Delay::from_numer_denom_ms((*ms).max(10), 1)));
-        }
-        enc.encode_frames(imgs).map_err(|e| bad("motion.export", format!("gif encode: {e}")))?;
-    }
-    Ok(out)
-}
-
-/// Pack Pixmap frames into a zip of numbered PNG files (`base_0001.png`, ...).
-pub fn write_png_zip(frames: &[Pixmap], base: &str) -> Result<Vec<u8>> {
-    let mut buf = Cursor::new(Vec::new());
-    {
-        let mut zw = ZipWriter::new(&mut buf);
-        let opts = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-        let digits = frames.len().to_string().len().max(4);
-        for (i, pix) in frames.iter().enumerate() {
-            let name = format!("{base}_{:0digits$}.png", i + 1);
-            let png = figcraft_render::encode_png(pix).map_err(|e| bad("motion.export", format!("png encode: {e}")))?;
-            zw.start_file(name, opts).map_err(|e| bad("motion.export", format!("zip entry: {e}")))?;
-            zw.write_all(&png).map_err(|e| bad("motion.export", format!("zip write: {e}")))?;
-        }
-        zw.finish().map_err(|e| bad("motion.export", format!("zip finish: {e}")))?;
-    }
-    Ok(buf.into_inner())
-}
-
 /// The `motion.export` command: no document write, no undo — it only reads and encodes.
 pub fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "motion.export";
@@ -233,25 +196,43 @@ pub fn run(s: &mut Session, p: &Value) -> Result<Value> {
     // WebM is streamed: `encode_webm` renders each frame itself. Rendering them up front first
     // would double the (already slow) AV1 work, so only Gif/PngZip pre-build a frame Vec.
     let (bytes, ext) = match format {
+        AnimFormat::Mp4 => {
+            let mut rendered = Vec::with_capacity(times.len());
+            for t in &times {
+                let pm = anim.render(*t).ok_or_else(|| bad(cmd, "a frame failed to render"))?;
+                rendered.push(figcraft_motion_codec::FrameRgba::new(pm.width(), pm.height(), figcraft_render::to_rgba8(&pm)).map_err(|e| bad(cmd, e))?);
+            }
+            let o = figcraft_motion_codec::Mp4Options { fps, crf: (100.0 - quality as f64 / 4.0) as f32 };
+            let bytes = figcraft_motion_codec::encode_mp4(&rendered, &o, [255, 255, 255]).map_err(|e| bad(cmd, e))?;
+            (bytes, "mp4")
+        }
         AnimFormat::Webm => {
-            let o = super::motion_webm::WebmOptions { fps, quality, speed, ..Default::default() };
-            (super::motion_webm::encode_webm(&anim, &o)?, "webm")
+            // WebM is streamed through the codec crate. Frames are fed by a closure that draws
+            // on demand, so the (slow) AV1 work is not doubled by pre-building every Pixmap.
+            let mut rendered = Vec::with_capacity(times.len());
+            for t in &times {
+                let pm = anim.render(*t).ok_or_else(|| bad(cmd, "a frame failed to render"))?;
+                rendered.push(figcraft_motion_codec::FrameRgba::new(pm.width(), pm.height(), figcraft_render::to_rgba8(&pm)).map_err(|e| bad(cmd, e))?);
+            }
+            let o = figcraft_motion_codec::WebmOptions { fps, quality, speed, ..Default::default() };
+            (figcraft_motion_codec::encode_webm(&rendered, &o).map_err(|e| bad(cmd, e))?, "webm")
         }
         _ => {
             let mut frames = Vec::with_capacity(times.len());
             for t in &times {
-                frames.push(anim.render(*t).ok_or_else(|| bad(cmd, "a frame failed to render"))?);
+                let pm = anim.render(*t).ok_or_else(|| bad(cmd, "a frame failed to render"))?;
+                frames.push(figcraft_motion_codec::FrameRgba::new(pm.width(), pm.height(), figcraft_render::to_rgba8(&pm)).map_err(|e| bad(cmd, e))?);
             }
             match format {
                 AnimFormat::Gif => {
                     let step = (1000.0 / fps as f64).round().max(1.0) as u32;
-                    (encode_gif(&frames, &vec![step; frames.len()], anim.timeline().looping)?, "gif")
+                    (figcraft_motion_codec::encode_gif(&frames, &vec![step; frames.len()], anim.timeline().looping).map_err(|e| bad(cmd, e))?, "gif")
                 }
                 AnimFormat::PngZip => {
                     let name = s.doc()?.node(node).map(|n| n.name.clone()).unwrap_or_else(|| "animation".into());
-                    (write_png_zip(&frames, &name)?, "zip")
+                    (figcraft_motion_codec::write_png_zip(&frames, &name).map_err(|e| bad(cmd, e))?, "zip")
                 }
-                AnimFormat::Webm => return Err(bad(cmd, "webm is streamed, handled above")),
+                AnimFormat::Webm | AnimFormat::Mp4 => return Err(bad(cmd, "handled above")),
             }
         }
     };
@@ -324,15 +305,36 @@ mod tests {
         let (d, frame, _) = animated_doc();
         let anim = Animation::new(&d, frame, 1.0).unwrap();
         let times = anim.frame_times(10);
-        let frames: Vec<Pixmap> = times.iter().map(|t| anim.render(*t).unwrap()).collect();
-        let gif = encode_gif(&frames, &vec![100; frames.len()], true).unwrap();
+        let frames: Vec<figcraft_motion_codec::FrameRgba> = times
+            .iter()
+            .map(|t| {
+                let pm = anim.render(*t).unwrap();
+                figcraft_motion_codec::FrameRgba::new(pm.width(), pm.height(), figcraft_render::to_rgba8(&pm)).unwrap()
+            })
+            .collect();
+        let gif = figcraft_motion_codec::encode_gif(&frames, &vec![100; frames.len()], true).unwrap();
         assert_eq!(&gif[0..6], b"GIF89a", "a real animated GIF");
         assert!(gif.len() > 100);
-        let zip = write_png_zip(&frames, "Card").unwrap();
+        let zip = figcraft_motion_codec::write_png_zip(&frames, "Card").unwrap();
         assert_eq!(&zip[0..2], b"PK", "a real zip");
-        let mut zs = zip::ZipArchive::new(Cursor::new(zip)).unwrap();
+        let mut zs = zip::ZipArchive::new(std::io::Cursor::new(zip)).unwrap();
         assert_eq!(zs.len(), frames.len());
         assert!(zs.by_name("Card_0001.png").is_ok());
+    }
+
+    #[test]
+    fn mp4_export_produces_an_mp4_container() {
+        use serde_json::json;
+        let (d, frame, _) = animated_doc();
+        let mut s = Session::with_document(d);
+        let out = s.execute("motion.export", &json!({"id": frame.0, "format": "mp4", "fps": 10, "scale": 0.5})).unwrap();
+        assert_eq!(out["format"], "mp4");
+        let data = base64::engine::general_purpose::STANDARD.decode(out["data"].as_str().unwrap()).unwrap();
+        // ISO BMFF: ftyp box first, isom brand, and an avc1 sample entry somewhere in moov.
+        assert_eq!(&data[4..8], b"ftyp", "an ISO BMFF file");
+        assert!(data.windows(4).any(|w| w == b"isom"), "isom brand");
+        assert!(data.windows(4).any(|w| w == b"avc1"), "H.264 sample entry");
+        assert!(data.len() > 200, "real encoded frames, not just a header");
     }
 
     #[test]

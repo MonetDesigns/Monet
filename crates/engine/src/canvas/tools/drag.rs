@@ -250,8 +250,16 @@ impl Session {
                             // 而不是复制一个变体。把落点父级当成集合外，`copy_in_file` 就会
                             // `create_instance_at`（变体留在集合内时才另建变体）。
                             let from_set = doc.node(parent).is_some_and(|p| matches!(p.kind, NodeKind::ComponentSet { .. }));
+                            // Reparenting to the page drops the set's transform from the copy's
+                            // local one; capture the source's world transform and restore it so
+                            // the copy starts where the variant actually was.
+                            let world = from_set.then(|| doc.world_transform(*i));
                             let (parent, idx) = if from_set { (page, None) } else { (parent, idx) };
-                            copies.push(crate::components::copy_in_file(doc, *i, parent, idx)?);
+                            let copy = crate::components::copy_in_file(doc, *i, parent, idx)?;
+                            if let Some(world) = world {
+                                doc.set_world_transform(copy, world)?;
+                            }
+                            copies.push(copy);
                         }
                         crate::library::count_inserted(doc, &copies);
                         // Connectors copied with what they join join the copies.
@@ -666,7 +674,7 @@ impl Session {
     /// text included, children by the same factor whatever their constraints.
     fn scale_drag(&mut self, ev: &PointerEvent, r: &ResizeStart, q: Point, guides: Vec<Guide>) -> Result<()> {
         let (frame, w0, h0) = r.frame;
-        let Some((k, pivot)) = scale_factor(r.handle, q, w0, h0, self.tool.scale_anchor, ev.alt) else { return Ok(()) };
+        let Some((k, pivot)) = scale_factor(r.handle, q, w0, h0, ev.alt) else { return Ok(()) };
         let nodes = r.nodes.clone();
         let inv = frame.inverse();
         // A layer's place in the box scales about the pivot; a negative factor turns it over.

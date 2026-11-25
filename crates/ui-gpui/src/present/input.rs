@@ -44,14 +44,29 @@ fn mods_empty(m: KeyMods) -> bool {
 }
 
 /// 演示层是否希望消费这个按键（原型触发器优先，其次播放器自己的键）。
-pub fn wants_key(doc: &Document, root: NodeId, key: &str, mods: KeyMods, pane: bool) -> bool {
+pub fn wants_key(doc: &Document, root: NodeId, key: &str, mods: KeyMods, pane: bool, notice: bool, draft: bool) -> bool {
     let used =
         doc.subtree(root).into_iter().any(|id| doc.node(id).is_some_and(|n| n.interactions.iter().any(|it| it.trigger.fires_on_key(key, mods))));
     if used {
         return true;
     }
+    // 播放器自己的键：Cmd/Ctrl+\ 收起界面（#1826）；Shift+C 切换评论模式（#2209）。
+    if (mods.ctrl || mods.cmd) && key == "\\" {
+        return true;
+    }
+    if mods.shift && !mods.ctrl && !mods.cmd && !mods.alt && key.eq_ignore_ascii_case("c") {
+        return true;
+    }
+    // 评论草稿显示时 Esc 取消（其它键留给输入框）。
+    if draft && mods_empty(mods) && key.eq_ignore_ascii_case("escape") {
+        return true;
+    }
     if !mods_empty(mods) {
         return false;
+    }
+    // 外链确认条显示时 Esc / Enter 归它（其它时候不抢）。
+    if notice && mods_empty(mods) && matches!(key.to_ascii_lowercase().as_str(), "escape" | "enter") {
+        return true;
     }
     matches!(key.to_ascii_lowercase().as_str(), "r" | "arrowleft" | "arrowright" | "space" | "n") || (key.eq_ignore_ascii_case("z") && !pane)
 }
@@ -212,6 +227,36 @@ pub fn tick(st: &mut PresentState, geom: Option<&Geom>, now: f64) {
             Ev::Key(k, m) => keys.push((k, m)),
         }
     }
+    // Shift+C：切换评论模式（eGUI #2209）。
+    for (k, m) in &keys {
+        if m.shift && !m.ctrl && !m.cmd && !m.alt && k.eq_ignore_ascii_case("c") {
+            super::ACTION.with(|a| a.set(23));
+        }
+    }
+    // 外链确认条显示时吞掉舞台输入（eGUI：只有提示条自己的按钮/回车/esc 有用）。
+    if st.link_notice.is_some() {
+        for (k, _) in &keys {
+            match k.as_str() {
+                "escape" => super::ACTION.with(|a| a.set(21)),
+                "enter" => super::ACTION.with(|a| a.set(20)),
+                _ => {}
+            }
+        }
+        st.pointer = None;
+        st.down = false;
+        return;
+    }
+    // 评论草稿显示时舞台不再响应原型输入（Esc 取消草稿）。
+    if st.comment_draft.is_some() {
+        for (k, _) in &keys {
+            if k.eq_ignore_ascii_case("escape") {
+                super::ACTION.with(|a| a.set(24));
+            }
+        }
+        st.pointer = None;
+        st.down = false;
+        return;
+    }
     st.pointer = pos;
     st.down = down_now;
     st.last_move_at = last_move_at;
@@ -336,6 +381,13 @@ pub fn tick(st: &mut PresentState, geom: Option<&Geom>, now: f64) {
     // 按下 / 拖拽 / 松开。eGUI 只在指针位于播放区内时才认按下（`over_area`），
     // 否则在 Inspect 侧栏等区域点一下也会闪热区提示。
     if let Some(&(px, py)) = pressed.first().filter(|_| st.inside) {
+        // 评论模式：点画布在页坐标处开一条评论草稿（eGUI #2209）。
+        if st.commenting {
+            let (x, y) = place.page((f64::from(px), f64::from(py)));
+            st.comment_draft = Some((x, y));
+            st.press = None;
+            return;
+        }
         st.press = Some((px, py));
         st.dragged = false;
         st.wheel = None;
@@ -442,6 +494,11 @@ pub fn tick(st: &mut PresentState, geom: Option<&Geom>, now: f64) {
 
     // 按键：原型触发器优先，其次播放器自己的键。
     for (key, mods) in &keys {
+        // Cmd/Ctrl + \：收起 / 恢复播放器界面（eGUI `hide_ui`，#1826）。
+        if (mods.ctrl || mods.cmd) && key == "\\" {
+            super::ACTION.with(|a| a.set(7));
+            continue;
+        }
         let found = evaluated.subtree(root).into_iter().find_map(|id| find_trigger(&evaluated, id, |t| t.fires_on_key(key, *mods)).map(|k| (id, k)));
         if let Some((id, k)) = found {
             if st.fire_node(id, k, now) {

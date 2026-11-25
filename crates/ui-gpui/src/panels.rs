@@ -929,6 +929,41 @@ fn nf_cmd(cx: &mut App, lead: &'static str, step: f64, cmd: &'static str, key: &
     })
 }
 
+/// What typing `text` into a point coordinate field sends as the field's value.
+fn point_axis_value(text: &str) -> Option<serde_json::Value> {
+    use crate::field_math::{Rel, Typed};
+    Some(match crate::field_math::parse(text, false)? {
+        Typed::Value(v) => serde_json::json!(v),
+        Typed::Rel(Rel::Add(n)) => serde_json::json!({ "add": n }),
+        Typed::Rel(Rel::Mul(n)) => serde_json::json!({ "mul": n }),
+        Typed::Rel(Rel::Div(n)) => serde_json::json!({ "div": n }),
+    })
+}
+
+/// A vector point coordinate field: a plain number sets every selected point's own coordinate,
+/// while `+10`, `*2`, `/4` and `50%` apply a relative edit to each point separately. The engine's
+/// `vector.edit.position` owns both forms, so the panel only has to translate what was typed.
+fn nf_point_axis(
+    cx: &mut App,
+    lead: &'static str,
+    key: &'static str,
+    cmds: &Cmds,
+) -> Entity<TextField> {
+    let cmds = cmds.clone();
+    TextField::build(cx, DEFAULT_COL, move |tf, _| {
+        tf.set_lead(Slot::Text(SharedString::from(lead)));
+        tf.set_numeric("", 1.0);
+        let cmds = cmds.clone();
+        // Parse the raw draft: a Mixed field has no kept value, so resolving first would turn
+        // `+10` into the absolute 10. `point_axis_value` keeps the relative operator for the
+        // engine to apply to each point's own coordinate.
+        tf.set_on_commit_draft(move |text, _window, _cx| {
+            let Some(v) = point_axis_value(&text) else { return };
+            cmds.push(Cmd { id: "vector.edit.position", params: Some(serde_json::json!({ key: v })) });
+        });
+    })
+}
+
 /// One of the Scale tool's three fields (egui `scale_panel.rs`).
 ///
 /// `axis`: 0 = W, 1 = H, 2 = factor. W/H divide by the current bounds to get a factor; all three
@@ -1317,9 +1352,9 @@ impl RightFields {
             dev_res_add: std::rc::Rc::new(std::cell::RefCell::new(false)),
             dev_res_edit: std::rc::Rc::new(std::cell::RefCell::new(None)),
             asset_fmt: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
-            // 矢量点面板：命令由引擎按当前 `vector_edit` 的选区执行，参数只带值。
-            vpt_x: nf_cmd(cx, "X", 1.0, "vector.edit.position", "x", false, &cmds),
-            vpt_y: nf_cmd(cx, "Y", 1.0, "vector.edit.position", "y", false, &cmds),
+            // 矢量点面板：X/Y 显示选中点的公共坐标（不一致为 Mixed），输入可带相对编辑。
+            vpt_x: nf_point_axis(cx, "X", "x", &cmds),
+            vpt_y: nf_point_axis(cx, "Y", "y", &cmds),
             vpt_w: nf_cmd(cx, "W", 1.0, "vector.edit.resize", "width", true, &cmds),
             vpt_h: nf_cmd(cx, "H", 1.0, "vector.edit.resize", "height", true, &cmds),
             vpt_radius: nf_cmd(cx, tr("R"), 1.0, "vector.edit.cornerRadius", "radius", true, &cmds),
@@ -3171,7 +3206,7 @@ mod cmd_queue_tests {
 /// `if`（或 `section_header(..., empty)`），防止装配层再次退化成「无条件全画」。
 #[cfg(test)]
 mod visibility_tests {
-    use super::{HeaderSel, PanelSel, visibility};
+    use super::{HeaderSel, PanelSel, point_axis_value, visibility};
 
     /// `参考实现 right.rs::header` 的分支：Frame / Group / Text / 形状 / 组件 / 已选矢量点。
     #[test]
@@ -3291,6 +3326,19 @@ mod visibility_tests {
         assert!(visibility::dim_header(Some(0)), "an empty list dims the header");
         assert!(!visibility::dim_header(Some(1)));
         assert!(!visibility::dim_header(Some(7)));
+    }
+
+    #[test]
+    fn point_axis_typing_is_a_value_or_a_relative_edit() {
+        use serde_json::json;
+        assert_eq!(point_axis_value("12.5"), Some(json!(12.5)));
+        assert_eq!(point_axis_value("1+2"), Some(json!(3.0)));
+        assert_eq!(point_axis_value("+10"), Some(json!({"add": 10.0})));
+        assert_eq!(point_axis_value("*2"), Some(json!({"mul": 2.0})));
+        assert_eq!(point_axis_value("/4"), Some(json!({"div": 4.0})));
+        assert_eq!(point_axis_value("50%"), Some(json!({"mul": 0.5})));
+        assert_eq!(point_axis_value("+10%"), Some(json!({"mul": 1.1})));
+        assert_eq!(point_axis_value("abc"), None);
     }
 
     /// The command each conditional button raises must exist, otherwise the button is

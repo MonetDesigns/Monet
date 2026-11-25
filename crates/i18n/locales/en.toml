@@ -1970,6 +1970,7 @@ name = "English"
 "{n} inserted" = { one = "{n} inserted", other = "{n} inserted" }
 "{n} instances" = { one = "{n} instance", other = "{n} instances" }
 "{n} layers" = { one = "{n} layer", other = "{n} layers" }
+"{n} variants" = { one = "{n} variant", other = "{n} variants" }
 "{n} layers as one file" = { one = "{n} layer as one file", other = "{n} layers as one file" }
 "{n} layers selected" = { one = "{n} layer selected", other = "{n} layers selected" }
 "{n} layers · {parts}" = { one = "{n} layer · {parts}", other = "{n} layers · {parts}" }

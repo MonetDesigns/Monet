@@ -93,6 +93,10 @@ pub struct TextEdit {
     /// `render()` 里的失焦轮询上，点画布时会漏掉。
     focus_out: Option<gpui::Subscription>,
     on_commit: Option<CommitHandler>,
+    /// Like `on_commit`, but receives the raw draft before number resolution. Fields whose
+    /// callback parses expressions (e.g. `+10` for a Mixed vector point) need the original text:
+    /// resolving it to a scalar first turns the relative edit into an absolute value.
+    on_commit_draft: Option<CommitHandler>,
     /// 每改一个字符就回调一次（首页搜索这类「边打边过滤」用；`on_commit` 只在 Enter / 失焦时给）。
     on_change: Option<CommitHandler>,
     /// Scrub state: the value at drag start and the accumulated amount (egui's `scrub_id`).
@@ -125,6 +129,7 @@ impl TextEdit {
             focus: cx.focus_handle(),
             focus_out: None,
             on_commit: None,
+            on_commit_draft: None,
             on_change: None,
             scrub: None,
             scrub_x: None,
@@ -236,6 +241,11 @@ impl TextEdit {
         self.on_commit = Some(Rc::new(f));
     }
 
+    /// Commit callback that sees the unmodified draft (before number/expression resolution).
+    pub fn set_on_commit_draft(&mut self, f: impl Fn(&str, &mut Window, &mut App) + 'static) {
+        self.on_commit_draft = Some(Rc::new(f));
+    }
+
     /// 每改一次文本就回调（含输入法逐字上屏、退格、粘贴）。和 `set_on_commit` 互不影响。
     pub fn set_on_change(&mut self, f: impl Fn(&str, &mut Window, &mut App) + 'static) {
         self.on_change = Some(Rc::new(f));
@@ -315,6 +325,9 @@ impl TextEdit {
         self.editing = false;
         self.select_all_pending = false;
         let draft = self.input.buffer.text().to_string();
+        if let Some(cb) = self.on_commit_draft.clone() {
+            cb(&draft, window, cx);
+        }
         let value = self.resolve_number(&draft);
         let changed = value != self.kept;
         self.value = value.clone();

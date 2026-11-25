@@ -15,7 +15,6 @@ pub mod layout;
 pub mod library;
 pub mod lists;
 pub mod motion_export;
-pub mod motion_webm;
 pub mod page;
 pub mod props;
 pub mod proto;
@@ -126,6 +125,7 @@ fn registry() -> &'static Registry {
         list.extend(crate::templates::specs());
         list.extend(crate::datafill::specs());
         list.extend(crate::textfit::specs());
+        list.extend(crate::design_context::specs());
         list.extend(crate::board::specs());
         list.extend(facilitate::specs());
         list.extend(crate::board_grid::specs());

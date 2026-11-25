@@ -1406,12 +1406,13 @@ fn paint_swatch(
         fills: row.fills,
         index: row.index,
         image: row.image.clone(),
-        image_preview: row.image_preview.clone(),
         image_profile: row.image_profile.clone(),
+        image_color_profile: row.image_color_profile,
         image_presets: row.image_presets.clone(),
         pattern_sources: row.pattern_sources.clone(),
     };
-    color_pick(f, cf, current, cmd, json!({ "index": row.index }), "color", base, format!("color-{side}-{}", row.index), styles, extras)
+    let params = json!({ "index": row.index, "ids": ids });
+    color_pick(f, cf, current, cmd, params, "color", base, format!("color-{side}-{}", row.index), styles, extras)
 }
 
 // ───────────────────────────────────────────────────────────────────────────────────────────────

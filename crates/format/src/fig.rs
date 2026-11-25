@@ -9,7 +9,14 @@
 //! layer tree, plus blobs (vector outlines and editable vector networks, [`network`], and the bytes
 //! of images that travel inside the message, [`embedded_images`]). [`map`]
 //! turns that into the REST API file JSON shape and the REST importer builds the document, so both
-//! imports share one mapping. Layer kinds the editor doesn't have (sticky notes, connectors,
+//! imports share one mapping.
+//!
+//! Local maintenance: this module is the maintained `.fig` importer; the upstream wire layer and
+//! rest baseline are kept beside it in `vendor/craft-fig/` (see its `MAINTENANCE.md`). When taking
+//! newer upstream code, read it as a reference, take wire/parse fixes into this module, and keep
+//! the extra per-point support (radius, cap, join, smoothing, cap size, region paints) local.
+//!
+//! Layer kinds the editor doesn't have (sticky notes, connectors,
 //! tables, …) come in as the closest frames, text and vectors. Anything not understood is skipped
 //! with a warning; malformed input never panics.
 

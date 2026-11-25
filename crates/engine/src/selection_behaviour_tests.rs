@@ -214,8 +214,8 @@ fn marquee_selects_what_it_touches() {
             (450.0, 40.0),
             NONE,
             vec![],
-            vec![],
-            "from the canvas, a top-level frame is selected only when the marquee covers all of it",
+            vec![k.g, k.n],
+            "a partly covered frame yields the children the marquee touches (upstream Figma rule)",
         ),
         ((-10.0, -10.0), (450.0, 310.0), NONE, vec![], vec![k.f], "a marquee covering a top-level frame selects the frame"),
         (

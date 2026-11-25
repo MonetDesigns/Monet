@@ -3,6 +3,7 @@
 //! 拖放目标 → 选中轮廓与变换框（含连接线端点、旋转原点）→ 框选 → 钢笔/橡皮筋/套索/橡皮 →
 //! 吸附参考线与尺寸。
 
+use figcraft_color::{ImagePaint, ImageScaleMode, PaintKind};
 use figcraft_doc::{Document, NodeId, NodeKind};
 use figcraft_engine::tools::{ToolId, selection_box, selection_frame};
 use figcraft_geom::Point;
@@ -10,7 +11,7 @@ use std::sync::Arc;
 
 use super::geom::*;
 use super::outline::{crisp_line, draw_outline, node_quad, outline_colour, quad, stroke};
-use super::painter::Painter;
+use super::painter::{Label, Painter, text_size};
 use super::rulers::fmt;
 use crate::app::CanvasApp;
 use crate::theme::{COMPONENT, SLOT, Tokens, stroke as s};
@@ -180,11 +181,10 @@ pub(super) fn overlays(
                 }
             }
         }
-        // 组件实例（被拉出来实际使用的组件）不画名称文字栏：它本体像组件一样直接选中，
-        // 不需要上方那条灰/红文字。画框、section、组件/组件集仍照旧有名称。
+        // Same gate as the egui reference: instances keep their name label too, so a click on
+        // it selects the instance and a double click renames it.
         let labelled = focus.is_none()
             && (n.kind.is_frame_like() || matches!(n.kind, NodeKind::Section { .. }))
-            && !matches!(n.kind, NodeKind::Instance { .. })
             && !n.is_board_atom();
         if labelled && let Some(q) = super::frame_labels::draw(app, painter, t, &doc, *c, sel.contains(c), renaming == Some(*c))
         {
@@ -194,7 +194,10 @@ pub(super) fn overlays(
 
     // ── Hover 轮廓（测量时改为用红色标出被量的框）。
     // 名称行右侧的开发状态按钮也算「悬停在这个框上」：和悬停名称文字得到同一条 hover 轮廓。
-    let hover = ds.hover.or_else(|| app.pointer.and_then(|p| super::frame_labels::status_slot_owner(app, &doc, page, p)));
+    // Focus view draws no frame labels, so its status slots are not hover targets either.
+    let hover = ds
+        .hover
+        .or_else(|| app.pointer.filter(|_| ds.focused().is_none()).and_then(|p| super::frame_labels::status_slot_owner(app, &doc, page, p)));
     if let Some(h) = hover
         && !sel.contains(&h)
         && matches!(app.session.tool.tool, ToolId::Move | ToolId::Scale)
@@ -284,7 +287,34 @@ pub(super) fn overlays(
             let is_line = sel.len() == 1 && matches!(sel.first().and_then(|i| doc.node(*i)).map(|n| &n.kind), Some(NodeKind::Line));
             // 选中的连接线：手柄就是它的两个端点（可拖到别的对象上）。
             let connector = figcraft_engine::board::selected_connector_ends(&doc, &sel).map(|(_, ends)| ends);
-            let mut label = if is_line { fmt(w) } else { format!("{} × {}", fmt(w), fmt(h)) };
+            // 尺寸标签：宽或高是 Fill / Hug 时，在对应数字后隔一个空格显示术语（右栏同款）。
+            let sizing_label = |axis: figcraft_doc::Sizing| -> String {
+                match axis {
+                    figcraft_doc::Sizing::Fill => format!(" {}", figcraft_i18n::tr("Fill|sizing")),
+                    figcraft_doc::Sizing::Hug => format!(" {}", figcraft_i18n::tr("Hug")),
+                    figcraft_doc::Sizing::Fixed => String::new(),
+                }
+            };
+            let (sw, sh) = if sel.len() == 1 {
+                doc.node(sel[0]).map(|n| (n.child_layout.sizing_h, n.child_layout.sizing_v)).unwrap_or_default()
+            } else {
+                Default::default()
+            };
+            // 组件变体集：尺寸标签改显示变体数（如 "4 Variants"），不显示宽×高。
+            let set_variants = if sel.len() == 1 {
+                doc.node(sel[0]).filter(|n| matches!(n.kind, NodeKind::ComponentSet { .. })).map(|n| {
+                    n.children.iter().filter(|c| doc.node(**c).is_some_and(|cn| matches!(cn.kind, NodeKind::Component { .. }))).count()
+                })
+            } else {
+                None
+            };
+            let mut label = if let Some(count) = set_variants {
+                figcraft_i18n::trn("{n} variants", count, &[])
+            } else if is_line {
+                fmt(w)
+            } else {
+                format!("{}{} × {}{}", fmt(w), sizing_label(sw), fmt(h), sizing_label(sh))
+            };
             let scale = app.session.tool.overlay.scale;
             if let Some(hint) = scale {
                 label = format!("{label} · {}x", fmt(hint.factor.abs()));
@@ -292,8 +322,9 @@ pub(super) fn overlays(
             // 屏幕上小于手柄的层只显示轮廓（手柄仍在框外应答）。
             let tiny = figcraft_engine::tools::box_sides_px(&b, zoom).1 < figcraft_engine::tools::SMALL_BOX_PX;
             let measuring = app.session.tool.overlay.measure_box.is_some();
+            let cropping = app.crop.is_some();
             let handles =
-                if measuring || app.session.tool.dev_mode || connector.is_some() || sel.iter().any(|i| figcraft_engine::tools::locked_in(&doc, *i)) {
+                if cropping || measuring || app.session.tool.dev_mode || connector.is_some() || sel.iter().any(|i| figcraft_engine::tools::locked_in(&doc, *i)) {
                     0
                 } else if is_line {
                     2
@@ -302,6 +333,11 @@ pub(super) fn overlays(
                 } else {
                     4
                 };
+            // 组件变体 / 组件变体集才挂「+」：独立组件没有，普通图层没有。
+            let add_variant = sel.len() == 1
+                && sel.first().and_then(|i| doc.node(*i)).is_some_and(|n| {
+                    matches!(n.kind, NodeKind::ComponentSet { .. }) || figcraft_engine::components::variant_set(&doc, n.id).is_some()
+                });
             size_label = transform_box(
                 app,
                 painter,
@@ -310,7 +346,11 @@ pub(super) fn overlays(
                 sel.len() > 1,
                 handles,
                 (!measuring && connector.is_none()).then_some(label),
+                add_variant,
             );
+            if cropping {
+                crop_marks(app, painter, &doc, t);
+            }
             for end in connector.into_iter().flatten().filter(|_| !app.session.tool.dev_mode) {
                 let c = app.to_screen(end.x, end.y);
                 painter.circle_filled(c, 5.0, Color32::WHITE);
@@ -476,6 +516,51 @@ pub(super) fn overlays(
 
 /// 选中椭圆的圆弧手柄（悬停/拖动中的那个略大，Start 中间带一个小点），
 /// 拖动时在旁边显示读数 —— 照搬 `ui-egui/src/canvas/overlays.rs` 的 `arc_overlay`。
+/// Crop mode's own marks: the crop rectangle, its corner squares, and the L-brackets / edge bars.
+fn crop_marks(app: &CanvasApp, painter: &mut Painter, doc: &Document, t: &Tokens) {
+    let Some((id, index)) = app.crop else { return };
+    let Some(n) = doc.node(id) else { return };
+    let Some(PaintKind::Image(img)) = n.fills.get(index).map(|p| &p.kind) else { return };
+    if img.scale_mode != ImageScaleMode::Crop {
+        return;
+    }
+    let Some(data) = doc.images.get(&img.image) else { return };
+    let crop = img.effective_crop(f64::from(data.width), f64::from(data.height), n.width, n.height);
+    let (x0, y0, x1, y1) = ImagePaint::crop_rect(crop);
+    let world = doc.world_transform(id);
+    let corners = [(x0 * n.width, y0 * n.height), (x1 * n.width, y0 * n.height), (x1 * n.width, y1 * n.height), (x0 * n.width, y1 * n.height)].map(|(x, y)| {
+        let p = world * Point::new(x, y);
+        app.to_screen(p.x, p.y)
+    });
+    let accent = accent(app);
+    quad(painter, corners, stroke(Color32::WHITE, 2.0));
+    quad(painter, corners, stroke(accent, 1.0));
+    for p in corners {
+        let r = Rect::from_center_size(p, vec2(8.0, 8.0));
+        painter.rect_filled(r, CornerRadius::ZERO, Color32::WHITE);
+        painter.rect_stroke(r, CornerRadius::ZERO, stroke(accent, 1.0), super::geom::StrokeKind::Inside);
+    }
+    const W: f32 = 5.0;
+    let halo = stroke(Color32::from_black_alpha(50), W + 2.0);
+    let mark = stroke(accent, W);
+    let mut draw = |pts: Vec<Pos2>| {
+        painter.add_shape(pts.clone(), false, Color32::TRANSPARENT, halo);
+        painter.add_shape(pts, false, Color32::TRANSPARENT, mark);
+    };
+    for i in 0..4 {
+        let (p, prev, next) = (corners[i], corners[(i + 3) % 4], corners[(i + 1) % 4]);
+        let (to_prev, to_next) = ((prev - p).normalized(), (next - p).normalized());
+        let at = p + (to_prev + to_next) * (W / 2.0);
+        let leg = |dir: Vec2, len: f32| at + dir * 22.0_f32.min(len / 3.0);
+        draw(vec![leg(to_prev, (prev - p).length()), at, leg(to_next, (next - p).length())]);
+        let len = (next - p).length();
+        let mid = p + (next - p) * 0.5 + to_prev * (W / 2.0);
+        let half = to_next * 12.0_f32.min(len / 6.0);
+        draw(vec![mid - half, mid + half]);
+    }
+    let _ = t;
+}
+
 fn arc_overlay(app: &CanvasApp, painter: &mut Painter, col: Color32) {
     use figcraft_engine::arc_handles::ArcHandle;
     let Some(hs) = app.session.arc_handles() else { return };
@@ -528,6 +613,14 @@ fn bezier_handle(painter: &mut Painter, a: Pos2, b: Pos2, size: f32, col: Color3
     painter.circle_stroke(b, size, stroke(Color32::from_gray(0), 1.0));
 }
 
+/// 选中框下方「+」的矩形：尺寸框顶边 = 对象下边缘 + 9，框高约 17，故加号顶边 = 下边缘 + 30。
+/// 绘制与命中共用，保证按钮画在哪就能点在哪。
+pub fn add_variant_rect(cx: f32, y1: f32) -> Rect {
+    // 尺寸框顶边 = y1 + 7，高 = 13 + 上下各 2 = 17，底部再留 4 → + 顶边 y1 + 28。
+    let top = y1 + 7.0 + SIZE_PILL_GLYPH_H + 4.0 + 4.0;
+    super::frame_labels::add_variant_slot(cx, top - super::frame_labels::ADD_VARIANT_TOP)
+}
+
 /// 变换框（屏幕四角 tl、tr、br、bl）：`outline` 时画轮廓，前 `handles` 个角手柄，
 /// 显示尺寸时在下方画尺寸 `label`（返回尺寸 pill 的矩形）。
 fn transform_box(
@@ -538,6 +631,7 @@ fn transform_box(
     outline: bool,
     handles: usize,
     label: Option<String>,
+    add_variant: bool,
 ) -> Option<Rect> {
     if outline {
         // 变换框也按设备像素吸附（见 `outline::crisp_rect`）：直接描 1px 路径时四条边
@@ -558,9 +652,15 @@ fn transform_box(
         // Keep the requested layer-colour background, but choose a legible foreground: a light
         // Yellow (#FFCC00) with white text was ~1.5:1. Dark ink on light fills, white on dark.
         let fg = contrasting_ink(col);
-        // 尺寸框：顶边在对象下边缘下方 7（2026-11-22 设计稿），左右各 6、上下各 2 的内边距
-        // （设计稿 61×17 的块 = 49 的文字 + 6+6 / 13 + 2+2），圆角 3。
-        return Some(pill_with_bg(painter, pos2(cx, bottom + 7.0), Align2::CENTER_TOP, label, col, fg, col, 6.0));
+        // 尺寸框铁律：文字框顶边距对象下边缘 9；背景块距文字上下各 2、左右各 6，圆角 3。
+        // （`pill_with_bg` 的 `+ vec2(pad_x*2, 4)` 与 `galley` 的 `+2` 纵向内缩即上下 2。）
+        let pill = pill_with_bg(painter, pos2(cx, bottom + 7.0), Align2::CENTER_TOP, label, col, fg, col, 6.0);
+        // 组件变体 / 组件变体集的「+」：紧贴在尺寸框下方（同一居中 x）。画在选中框这条路径上，
+        // 因为变体在 ComponentSet 内部、不会走顶层帧标签 frame_labels::draw 那条路径。
+        if add_variant {
+            super::frame_labels::add_variant_button(painter, add_variant_rect(cx, bottom));
+        }
+        return Some(pill);
     }
     None
 }
@@ -570,11 +670,34 @@ pub(super) fn pill(painter: &mut Painter, at: Pos2, align: Align2, text: String,
     pill_with_bg(painter, at, align, text, col, Color32::WHITE, under_white(col), 4.0)
 }
 
+/// 尺寸框铁律：背景块宽度 = 文字实测宽 + 左右固定边距（各 `pad_x`），高度 = 文字高 + 上下各 2；
+/// 圆角 3。文字宽度用当前字号逐字量，不写死任何总宽 —— 数字位数不同框就跟着变。
+/// 尺寸框文字高：设计稿 Group 234 / Frame 232 内文字 `205x203`（11pt）实测 13，
+/// 背景框 61×17 = 文字 13 + 上下各 2，圆角 3，padding 左右各 6。
+const SIZE_PILL_GLYPH_H: f32 = 13.0;
+
+pub(super) fn pill_rect(text: &str, at: Pos2, align: Align2, pad_x: f32) -> (Rect, Vec2) {
+    let w = text_size(text, semibold(11.0)).x;
+    // 框宽 = 文字宽 + 左右各 pad_x；框高 = 真实字形高 + 上下各 2。
+    let glyph = vec2(w, SIZE_PILL_GLYPH_H);
+    let size = glyph + vec2(pad_x * 2.0, 4.0);
+    (align.anchor_size(at, size), glyph)
+}
+
 fn pill_with_bg(painter: &mut Painter, at: Pos2, align: Align2, text: String, _col: Color32, fg: Color32, bg: Color32, pad_x: f32) -> Rect {
-    let galley = painter.layout_no_wrap(text, semibold(11.0), fg);
-    let r = align.anchor_size(at, galley.size() + vec2(pad_x * 2.0, 4.0));
-    painter.rect_filled(r, CornerRadius::same(3), bg);
-    painter.galley(r.min + vec2(pad_x, 2.0), galley, fg);
+    let (r, glyph) = pill_rect(&text, at, align, pad_x);
+    // 背景交给 GPUI 按**真实字形宽度**画（Label.pill）：padding 精确到上下 2、左右 6，
+    // 圆角 3，文字上下对称居中。不再用估算宽画框再塞字（那样留白不均、贴不紧文字外框）。
+    painter.labels.push(Label {
+        rect: r,
+        text,
+        font: semibold(11.0),
+        color: fg,
+        align: Align2::CENTER_CENTER,
+        angle: None,
+        pill: Some((bg, pad_x, 2.0)),
+    });
+    let _ = glyph;
     r
 }
 
@@ -598,4 +721,40 @@ fn under_white(col: Color32) -> Color32 {
 /// 一条闭合四边形轮廓（供其它模块用）。
 pub(super) fn _quad(painter: &mut Painter, q: [Pos2; 4], st: Stroke) {
     quad(painter, q, st);
+}
+
+#[cfg(test)]
+mod size_pill_tests {
+    use super::pill_rect;
+    use crate::canvas::geom::{Align2, pos2};
+
+    /// 尺寸框铁律：距对象下边缘 7，框高 = 文字 13 + 上下各 2 = 17，
+    /// 宽 = 文字宽 + 左右各 6，圆角 3。
+    #[test]
+    fn size_pill_obeys_the_7_2_6_3_rule() {
+        let (r, glyph) = super::pill_rect("110 × 116", pos2(0.0, 0.0), Align2::LEFT_TOP, 6.0);
+        assert_eq!(r.height(), 17.0);            // 13 字形 + 2 + 2（设计稿 Frame 232）
+        assert_eq!(r.width(), glyph.x + 12.0);   // 左右各 6
+    }
+
+    /// 尺寸框宽度 = 文字实测宽 + 左右各 6，高度 = 文字高 + 上下各 2；位数变化框跟着变。
+    #[test]
+    fn size_pill_width_follows_text_with_fixed_margins() {
+        let (short, _) = pill_rect("1 × 1", pos2(0.0, 0.0), Align2::CENTER_TOP, 6.0);
+        let (long, _) = pill_rect("1000 × 1000", pos2(0.0, 0.0), Align2::CENTER_TOP, 6.0);
+        assert!(long.width() > short.width() + 20.0, "{} vs {}", long.width(), short.width());
+        assert_eq!(short.height(), long.height()); // 上下边距固定 2
+    }
+}
+
+#[cfg(test)]
+mod add_variant_rect_tests {
+    use super::add_variant_rect;
+
+    /// 加号 = 尺寸框下方 4；与绘制、命中共用同一几何。
+    #[test]
+    fn add_variant_rect_sits_below_the_size_pill() {
+        let r = add_variant_rect(200.0, 403.0);
+        assert_eq!((r.min.x, r.min.y, r.width(), r.height()), (192.0, 431.0, 16.0, 16.0));
+    }
 }

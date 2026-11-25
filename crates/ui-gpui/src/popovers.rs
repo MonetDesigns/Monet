@@ -574,8 +574,8 @@ pub(crate) struct PaintPickerExtras {
     pub fills: bool,
     pub index: usize,
     pub image: Option<(String, Option<figcraft_doc::ImageData>)>,
-    pub image_preview: Option<(u32, u32, Vec<u8>)>,
     pub image_profile: Option<String>,
+    pub image_color_profile: figcraft_color::ColorProfile,
     pub image_presets: Vec<(String, figcraft_color::ImageFilters)>,
     pub pattern_sources: Vec<(u64, String)>,
 }
@@ -697,6 +697,8 @@ struct ColorState {
     image_naming: Rc<Cell<bool>>,
     /// 取色器图片预览贴图：按图片键缓存，不在每帧重建 GPU 纹理。
     image_texture: Rc<RefCell<Option<(String, (u32, u32), Arc<RenderImage>)>>>,
+    /// 图片字节注册入口：图层 paint 走 `image.replace`，样式 / 选区颜色走这里先注册再用 paint 写回。
+    register_image: Rc<RefCell<Option<Rc<dyn Fn(Vec<u8>, &mut App) -> Option<String>>>>>,
     /// 取色器自己的子浮层：点击渐变断点颜色 / 头部「+」时，在本卡片**左边**再开一张卡，
     /// 不占 root 的单槽，因此取色器本身不会被替换掉。
     sub: Rc<RefCell<Option<Box<WindowState>>>>,
@@ -2960,6 +2962,39 @@ impl WindowState {
 
     /// 登记当帧的内部菜单与其关闭回调。`render()` 据此在窗口根垫一层透明 backdrop：
     /// 点击菜单以外的任何位置都会关闭菜单（通用行为）。
+    /// 图片替换成功后，从文档重新读取当前目标的 paint 与图片预览，避免继续编辑旧镜像。
+    pub(crate) fn refresh_color_from_doc(&mut self, doc: &figcraft_doc::Document) {
+        let Some(c) = &mut self.color else { return };
+        let Some(p) = &mut c.paint else { return };
+        let Some(id) = p.extras.ids.first().copied() else { return };
+        let Some(n) = doc.node(id) else { return };
+        let list = if p.extras.fills { &n.fills } else { &n.strokes };
+        let Some(paint) = list.get(p.extras.index) else { return };
+        p.paint = paint.clone();
+        if let Some(state) = &c.paint_state {
+            *state.borrow_mut() = paint.clone();
+        }
+        if let figcraft_color::PaintKind::Image(img) = &paint.kind {
+            let data = doc.images.get(&img.image).cloned();
+            let profile = figcraft_render::images::profile_name(&img.image, data.as_ref());
+            p.extras.image = Some((img.image.clone(), data));
+            p.extras.image_profile = profile;
+            p.extras.image_color_profile = doc.color_profile;
+        } else {
+            p.extras.image = None;
+            p.extras.image_profile = None;
+        }
+        *c.image_texture.borrow_mut() = None;
+        let _ = c.image_pending.take();
+    }
+
+    /// 由根视图注入图片注册入口；打开中的取色器据此支持样式 / 选区颜色目标的上传。
+    pub(crate) fn set_image_callback(&mut self, cb: Rc<dyn Fn(Vec<u8>, &mut App) -> Option<String>>) {
+        if let Some(c) = &self.color {
+            *c.register_image.borrow_mut() = Some(cb);
+        }
+    }
+
     fn push_overlay(&self, el: AnyElement, dismiss: Rc<dyn Fn(&mut Window, &mut App)>) {
         self.overlays.borrow_mut().push(el);
         self.overlay_dismiss.borrow_mut().push(dismiss);
@@ -3124,6 +3159,7 @@ impl WindowState {
             image_preset_name: cx.new(|cx| TextEdit::new(cx)),
             image_naming: Rc::new(Cell::new(false)),
             image_texture: Rc::new(RefCell::new(None)),
+            register_image: Rc::new(RefCell::new(None)),
             sub: Rc::new(RefCell::new(None)),
             nested: false,
             uid: {
@@ -3635,7 +3671,7 @@ impl WindowState {
                                 gpui::linear_gradient(180.0, gpui::linear_color_stop(clear, 0.0), gpui::linear_color_stop(black, 1.0)),
                             ));
                             if let Some(min) = aa_min_paint {
-                                paint_contrast_dots(window, bounds, SpectrumShape::Square, hue, aa_bg_paint, min);
+                                paint_contrast_dots(window, bounds, SpectrumShape::Square, hue, aa_bg_paint, alpha, min);
                             }
                             // AA 达标边界白线：一条连续 stroke 折线（lyon 自动补 join + 抗锯齿）。
                             if let Some((lighter, darker)) = &aa_boundary_paint {
@@ -4027,7 +4063,7 @@ impl WindowState {
             let close_for_dismiss = close.clone();
             let on_pick: Rc<dyn Fn(&str, &mut Window, &mut App)> = Rc::new(move |label, window, cx| {
                 if let Some(i) = labels.iter().position(|l| tr(l) == label) {
-                    if i == 2 && extras.fills && !extras.ids.is_empty() {
+                    if i == 2 && extras.fills && extras.ids.len() == 1 {
                         cmds.push(Cmd {
                             id: "image.crop",
                             params: Some(json!({ "ids": extras.ids, "index": extras.index })),
@@ -4053,7 +4089,7 @@ impl WindowState {
             );
         }
 
-        // 图片调整预设：内置 + 文件内保存的预设 + 另存为（引擎命令，不造新名字）。
+        // 图片调整预设：内置 + 文件内保存的预设 + 另存为；每项按稳定 key 派发，显示名只用于显示。
         if let Some(anchor) = c.image_preset_anchor.get()
             && let (Some(p), Some(state)) = (&c.paint, &c.paint_state)
         {
@@ -4061,55 +4097,52 @@ impl WindowState {
                 figcraft_color::PaintKind::Image(i) => i.filters,
                 _ => figcraft_color::ImageFilters::NONE,
             };
-            let mut labels: Vec<String> = figcraft_color::ImageFilters::PRESETS
+            let mut entries: Vec<(String, String, figcraft_color::ImageFilters)> = figcraft_color::ImageFilters::PRESETS
                 .iter()
                 .filter(|(id, ..)| *id != "reset")
-                .map(|(_, label, _)| tr(label).to_string())
+                .map(|(id, label, f)| (format!("builtin:{id}"), tr(label).to_string(), *f))
                 .collect();
-            let saved: Vec<String> = p.extras.image_presets.iter().map(|(name, _)| name.clone()).collect();
-            labels.extend(saved.iter().cloned());
-            let active = figcraft_color::ImageFilters::PRESETS
+            entries.extend(
+                p.extras
+                    .image_presets
+                    .iter()
+                    .map(|(name, f)| (format!("saved:{name}"), name.clone(), *f)),
+            );
+            let active_key = entries.iter().find(|(_, _, f)| *f == current).map(|(k, _, _)| k.clone()).unwrap_or_default();
+            let mut rows: Vec<MenuRow> = entries
                 .iter()
-                .filter(|(id, ..)| *id != "reset")
-                .find(|(_, _, f)| *f == current)
-                .map(|(_, label, _)| tr(label).to_string())
-                .or_else(|| p.extras.image_presets.iter().find(|(_, f)| *f == current).map(|(n, _)| n.clone()))
-                .unwrap_or_default();
-            let mut rows: Vec<MenuRow> = labels.iter().map(|l| MenuRow::row(SharedString::from(l.clone())).checked(Some(*l == active))).collect();
-            rows.push(MenuRow::row(SharedString::from(tr("Save as preset…"))).separator());
+                .map(|(k, label, _)| MenuRow::row(SharedString::from(label.clone())).key(k.clone()).checked(Some(*k == active_key)))
+                .collect();
+            for (name, _) in &p.extras.image_presets {
+                rows.push(
+                    MenuRow::row(SharedString::from(name.clone()))
+                        .key(format!("delete:{name}"))
+                        .trail(SharedString::from(tr("Delete"))),
+                );
+            }
+            rows.push(MenuRow::row(SharedString::from(tr("Save as preset…"))).key("__save").separator());
             let cmds = self.cmds.clone();
-            let p_extras_ids = p.extras.ids.clone();
-            let p_extras_fills = p.extras.fills;
-            let p_extras_index = p.extras.index;
             let name_ed = c.image_preset_name.clone();
             let naming = c.image_naming.clone();
-            let saved_count = saved.len();
+            let saved_count = p.extras.image_presets.len();
+            let write = p.on_write.clone();
+            let st = state.clone();
             let close = c.image_preset_anchor.clone();
             let close_for_dismiss = close.clone();
-            let on_pick: Rc<dyn Fn(&str, &mut Window, &mut App)> = Rc::new(move |label, window, cx| {
-                if label == tr("Save as preset…") {
+            let on_pick: Rc<dyn Fn(&str, &mut Window, &mut App)> = Rc::new(move |key, window, cx| {
+                if key == "__save" {
                     name_ed.update(cx, |ed, _| ed.set_value(format!("Preset {}", saved_count + 1)));
                     naming.set(true);
-                } else if let Some((id, _, _)) = figcraft_color::ImageFilters::PRESETS.iter().find(|(_, l, _)| tr(l) == label) {
-                    cmds.push(Cmd {
-                        id: "image.adjust",
-                        params: Some(json!({
-                            "ids": p_extras_ids,
-                            "target": if p_extras_fills { "fill" } else { "stroke" },
-                            "index": p_extras_index,
-                            "preset": id,
-                        })),
-                    });
-                } else if saved.iter().any(|n| n == label) {
-                    cmds.push(Cmd {
-                        id: "image.adjust",
-                        params: Some(json!({
-                            "ids": p_extras_ids,
-                            "target": if p_extras_fills { "fill" } else { "stroke" },
-                            "index": p_extras_index,
-                            "preset": label,
-                        })),
-                    });
+                } else if let Some(name) = key.strip_prefix("delete:") {
+                    cmds.push(Cmd { id: "image.deletePreset", params: Some(json!({ "name": name })) });
+                } else if let Some((_, _, filters)) = entries.iter().find(|(k, _, _)| k == key) {
+                    // 通过目标感知的 paint 写回，同步取色器镜像，避免后续滑条拿旧 filters 覆盖。
+                    let mut np = st.borrow().clone();
+                    if let figcraft_color::PaintKind::Image(i) = &mut np.kind {
+                        i.filters = *filters;
+                    }
+                    *st.borrow_mut() = np.clone();
+                    write(np, window, cx);
                 }
                 close.set(None);
             });
@@ -4134,50 +4167,22 @@ impl WindowState {
             };
             let rows: Vec<MenuRow> = sources
                 .iter()
-                .map(|(id, name)| MenuRow::row(SharedString::from(name.clone())).checked(Some(*id == current)))
+                .map(|(id, name)| MenuRow::row(SharedString::from(name.clone())).key(id.to_string()).checked(Some(*id == current)))
                 .collect();
-            let cmds = self.cmds.clone();
             let write = p.on_write.clone();
             let st = state.clone();
-            let extras = p.extras.clone();
             let close = c.pattern_source_anchor.clone();
             let close_for_dismiss = close.clone();
-            let on_pick: Rc<dyn Fn(&str, &mut Window, &mut App)> = Rc::new(move |label, window, cx| {
-                if let Some((id, _)) = sources.iter().find(|(_, name)| name == label) {
-                    let pt = match &st.borrow().kind {
-                        figcraft_color::PaintKind::Pattern(pt) => pt.clone(),
-                        _ => figcraft_color::PatternPaint::new(*id),
-                    };
-                    let tile = match pt.tile {
-                        figcraft_color::PatternTile::Grid => "grid",
-                        figcraft_color::PatternTile::HorizontalHex => "horizontalHex",
-                        figcraft_color::PatternTile::VerticalHex => "verticalHex",
-                    };
-                    let align = match pt.align {
-                        figcraft_color::PatternAlign::Start => "start",
-                        figcraft_color::PatternAlign::Center => "center",
-                        figcraft_color::PatternAlign::End => "end",
-                    };
-                    if extras.fills && !extras.ids.is_empty() {
-                        cmds.push(Cmd {
-                            id: "fill.pattern",
-                            params: Some(json!({
-                                "source": id,
-                                "ids": extras.ids,
-                                "index": extras.index,
-                                "tile": tile,
-                                "scale": pt.scale,
-                                "spacing": [pt.spacing.0, pt.spacing.1],
-                                "align": align,
-                            })),
-                        });
-                    } else {
-                        let mut np = st.borrow().clone();
-                        if let figcraft_color::PaintKind::Pattern(pat) = &mut np.kind {
-                            pat.source = *id;
-                        }
-                        write(np, window, cx);
+            let on_pick: Rc<dyn Fn(&str, &mut Window, &mut App)> = Rc::new(move |key, window, cx| {
+                if let Ok(id) = key.parse::<u64>() {
+                    // 来源候选已在快照里排除自身/子层；直接走目标感知写回，镜像与文档一起更新。
+                    let mut np = st.borrow().clone();
+                    match &mut np.kind {
+                        figcraft_color::PaintKind::Pattern(pt) => pt.source = id,
+                        _ => np.kind = figcraft_color::Paint::pattern(id).kind,
                     }
+                    *st.borrow_mut() = np.clone();
+                    write(np, window, cx);
                 }
                 close.set(None);
             });
@@ -4497,13 +4502,47 @@ impl WindowState {
     }
 
     /// 图片预览格：棋盘底 + 当前图片按原比例居中，下面挂真实的系统文件选择按钮。
+    /// 预览只在取色器打开且确实有图片时栅格化，右栏快照不带 GPU 资源。
     fn image_well(&self, c: &ColorState, p: &PaintPicker, img: Option<&figcraft_color::ImagePaint>) -> AnyElement {
         let t = tokens();
         let cmds = self.cmds.clone();
         let extras = p.extras.clone();
         let tex = c.image_texture.clone();
         let key = img.map(|i| i.image.clone()).unwrap_or_default();
-        let preview = extras.image_preview.clone();
+        let image_data = extras.image.clone();
+        let color_profile = extras.image_color_profile;
+        let register_image = c.register_image.clone();
+        let write = p.on_write.clone();
+        let Some(state) = c.paint_state.clone() else { return div().into_any_element() };
+        let upload: std::rc::Rc<dyn Fn(std::path::PathBuf, &mut Window, &mut App)> = std::rc::Rc::new({
+            let cmds = cmds.clone();
+            let extras = extras.clone();
+            let register_image = register_image.clone();
+            let write = write.clone();
+            let state = state.clone();
+            move |path, window, cx| {
+                if extras.ids.is_empty() {
+                    // 样式 / 选区颜色没有图层命令目标：先把字节注册进当前文档，
+                    // 再沿取色器自己的目标感知写回器替换 paint，绝不拿画布选区顶替。
+                    let Some(bytes) = std::fs::read(&path).ok() else { return };
+                    let Some(hash) = register_image.borrow().as_ref().and_then(|f| f(bytes, cx)) else { return };
+                    let mut np = state.borrow().clone();
+                    np.kind = figcraft_color::Paint::image(hash, figcraft_color::ImageScaleMode::Fill).kind;
+                    *state.borrow_mut() = np.clone();
+                    write(np, window, cx);
+                    return;
+                }
+                cmds.push(Cmd {
+                    id: "image.replace",
+                    params: Some(json!({
+                        "ids": extras.ids,
+                        "target": if extras.fills { "fill" } else { "stroke" },
+                        "index": extras.index,
+                        "path": path.to_string_lossy(),
+                    })),
+                });
+            }
+        });
         let canvas = gpui::canvas(
             |_, _, _| {},
             move |bounds, _, window, _| {
@@ -4514,9 +4553,22 @@ impl WindowState {
                 crate::widgets::swatch::checker(window, frame, 8.0);
                 let stale = tex.borrow().as_ref().is_none_or(|(k, _, _)| k != &key);
                 if stale
-                    && let Some((w, h, rgba)) = &preview
+                    && let Some((_, Some(data))) = &image_data
                 {
-                    *tex.borrow_mut() = Some((key.clone(), (*w, *h), crate::canvas::render_worker::wrap_rgba(*w, *h, rgba.clone())));
+                    let pix = crate::render_stack::on_render_stack(|| {
+                        figcraft_render::images::shown(
+                            &key,
+                            Some(data),
+                            &figcraft_color::ImageFilters::default(),
+                            color_profile,
+                            208.0,
+                        )
+                    })
+                    .flatten();
+                    if let Some(pix) = pix {
+                        *tex.borrow_mut() =
+                            Some((key.clone(), (pix.width(), pix.height()), crate::canvas::render_worker::wrap_rgba(pix.width(), pix.height(), figcraft_render::to_rgba8(&pix))));
+                    }
                 }
                 if let Some((_, (iw, ih), image)) = tex.borrow().as_ref() {
                     let (fw, fh) = (f32::from(frame.size.width), f32::from(frame.size.height));
@@ -4531,6 +4583,23 @@ impl WindowState {
                 }
             },
         );
+        let well = {
+            div()
+                .h(pt(110.0))
+                .border_1()
+                .border_color(rgba(t.border))
+                .rounded(pt(4.0))
+                .overflow_hidden()
+                .child(canvas.size_full())
+                .on_drop::<gpui::ExternalPaths>({
+                    let upload = upload.clone();
+                    move |paths: &gpui::ExternalPaths, window, cx| {
+                        if let Some(path) = paths.paths().first() {
+                            upload(path.clone(), window, cx);
+                        }
+                    }
+                })
+        };
         div()
             .w(pt(PANEL_W))
             .h(pt(150.0))
@@ -4538,15 +4607,7 @@ impl WindowState {
             .flex()
             .flex_col()
             .gap(pt(8.0))
-            .child(
-                div()
-                    .h(pt(110.0))
-                    .border_1()
-                    .border_color(rgba(t.border))
-                    .rounded(pt(4.0))
-                    .overflow_hidden()
-                    .child(canvas.size_full()),
-            )
+            .child(well)
             .child(
                 div()
                     .h(pt(24.0))
@@ -4562,22 +4623,14 @@ impl WindowState {
                     .text_color(rgba(t.text))
                     .hover(|s| s.bg(rgba(t.hover)))
                     .child(tr("Upload from computer"))
-                    .on_mouse_down(MouseButton::Left, move |_, _, _| {
-                        let Some(path) = rfd::FileDialog::new().set_title(tr("Choose image")).add_filter(tr("Images"), &["png", "jpg", "jpeg", "webp", "gif", "tif", "tiff"]).pick_file() else {
-                            return;
-                        };
-                        if extras.ids.is_empty() {
-                            return;
+                    .on_mouse_down(MouseButton::Left, {
+                        let upload = upload.clone();
+                        move |_, window, cx| {
+                            let Some(path) = rfd::FileDialog::new().set_title(tr("Choose image")).add_filter(tr("Images"), &["png", "jpg", "jpeg", "webp", "gif", "tif", "tiff"]).pick_file() else {
+                                return;
+                            };
+                            upload(path, window, cx);
                         }
-                        cmds.push(Cmd {
-                            id: "image.replace",
-                            params: Some(json!({
-                                "ids": extras.ids,
-                                "target": if extras.fills { "fill" } else { "stroke" },
-                                "index": extras.index,
-                                "path": path.to_string_lossy(),
-                            })),
-                        });
                     }),
             )
             .into_any_element()
@@ -4684,19 +4737,6 @@ impl WindowState {
             let naming = c.image_naming.clone();
             let save_cmds = self.cmds.clone();
             let filters = img.filters;
-            name.update(cx, |ed, _| {
-                ed.set_on_commit(move |text, window, cx| {
-                    let text = text.trim();
-                    if !text.is_empty() {
-                        save_cmds.push(Cmd {
-                            id: "image.savePreset",
-                            params: Some(json!({ "name": text, "filters": filters })),
-                        });
-                        window.refresh();
-                    }
-                    naming.set(false);
-                });
-            });
             out.push(
                 div()
                     .w(pt(PANEL_W))
@@ -4719,11 +4759,45 @@ impl WindowState {
                             .text_size(pt(11.0))
                             .text_color(rgba(t.text))
                             .child(tr("Save"))
-                            .on_mouse_down(MouseButton::Left, move |_, window, _| {
-                                // TextEdit 失焦即提交；按钮只负责让输入离开焦点。
-                                window.blur();
+                            .on_mouse_down(MouseButton::Left, {
+                                let name = name.clone();
+                                let save_cmds = save_cmds.clone();
+                                let naming = naming.clone();
+                                move |_, window, cx| {
+                                    // Commit the editor first: typed characters stay in the
+                                    // draft until commit, and `value()` only sees committed text.
+                                    name.update(cx, |e, cx| { e.finish_edit(window, cx); });
+                                    let draft = name.read(cx).value().trim().to_string();
+                                    if !draft.is_empty() {
+                                        save_cmds.push(Cmd {
+                                            id: "image.savePreset",
+                                            params: Some(json!({ "name": draft, "filters": filters })),
+                                        });
+                                    }
+                                    naming.set(false);
+                                    window.refresh();
+                                }
                             }),
                     )
+                    .on_key_down({
+                        let name = name.clone();
+                        let save_cmds = save_cmds.clone();
+                        let naming = naming.clone();
+                        move |e: &gpui::KeyDownEvent, window, cx| {
+                            if e.keystroke.key.as_str() != "enter" {
+                                return;
+                            }
+                            let draft = name.read(cx).value().trim().to_string();
+                            if !draft.is_empty() {
+                                save_cmds.push(Cmd {
+                                    id: "image.savePreset",
+                                    params: Some(json!({ "name": draft, "filters": filters })),
+                                });
+                            }
+                            naming.set(false);
+                            window.refresh();
+                        }
+                    })
                     .into_any_element(),
             );
         }
@@ -4840,8 +4914,8 @@ impl WindowState {
                 .child(align_dropdown)
                 .into_any_element(),
         ];
-        let number = |cx: &mut App, value: f64, suffix: &'static str, lo: f64, hi: f64, setter: std::rc::Rc<dyn Fn(&mut figcraft_color::PatternPaint, f64)>| {
-            let field = number_field_ranged(cx, 64.0, Some(value), suffix, 1.0, Slot::None, Some(lo), Some(hi));
+        let number = |cx: &mut App, value: f64, suffix: &'static str, lo: f64, hi: f64, lead: Slot, setter: std::rc::Rc<dyn Fn(&mut figcraft_color::PatternPaint, f64)>| {
+            let field = number_field_ranged(cx, 72.0, Some(value), suffix, 1.0, lead, Some(lo), Some(hi));
             let fw = write.clone();
             let fs = st.clone();
             field.update(cx, move |tf, _| {
@@ -4857,13 +4931,13 @@ impl WindowState {
             field
         };
         let (lo, hi) = figcraft_color::PatternPaint::SCALE_RANGE;
-        let scale = number(cx, pat.scale * 100.0, "%", lo * 100.0, hi * 100.0, std::rc::Rc::new(move |pt, v| {
+        let scale = number(cx, pat.scale * 100.0, "%", lo * 100.0, hi * 100.0, Slot::Icon(Icon::Scale), std::rc::Rc::new(move |pt, v| {
             pt.scale = (v / 100.0).clamp(lo, hi)
         }));
-        let gap_x = number(cx, pat.spacing.0, "", 0.0, figcraft_color::PatternPaint::MAX_SPACING, std::rc::Rc::new(|pt, v| {
+        let gap_x = number(cx, pat.spacing.0, "", 0.0, figcraft_color::PatternPaint::MAX_SPACING, Slot::Icon(Icon::PaddingLeft), std::rc::Rc::new(|pt, v| {
             pt.spacing.0 = v.clamp(0.0, figcraft_color::PatternPaint::MAX_SPACING)
         }));
-        let gap_y = number(cx, pat.spacing.1, "", 0.0, figcraft_color::PatternPaint::MAX_SPACING, std::rc::Rc::new(|pt, v| {
+        let gap_y = number(cx, pat.spacing.1, "", 0.0, figcraft_color::PatternPaint::MAX_SPACING, Slot::Icon(Icon::PaddingTop), std::rc::Rc::new(|pt, v| {
             pt.spacing.1 = v.clamp(0.0, figcraft_color::PatternPaint::MAX_SPACING)
         }));
         out.push(
@@ -4887,12 +4961,16 @@ impl WindowState {
     /// 纯色 / 渐变 / 图片 / 图案 四格 24 pt 图标按钮 + 右侧混合模式按钮，底边 1 px 分隔。
     fn picker_toolbar(&self, c: &ColorState) -> gpui::Div {
         let t = tokens();
-        let kind_idx = match c.paint_state.as_ref().map(|s| s.borrow().kind.clone()) {
+        let kind_idx = if c.image_pending.get() {
+            2usize
+        } else {
+            match c.paint_state.as_ref().map(|s| s.borrow().kind.clone()) {
             Some(figcraft_color::PaintKind::Solid { .. }) => 0usize,
             Some(figcraft_color::PaintKind::Gradient(_)) => 1,
             Some(figcraft_color::PaintKind::Image(_)) => 2,
             Some(figcraft_color::PaintKind::Pattern(_)) => 3,
             _ => 0,
+            }
         };
         let write = c.paint.as_ref().map(|p| p.on_write.clone());
         let state = c.paint_state.clone();
@@ -5865,12 +5943,18 @@ impl WindowState {
                     let anchor_key = format!("style-editor-paint-{}-{}", sid, idx);
                     let hit = window_trigger_top(&anchor_key);
                     let anchored_key = anchor_key.clone();
+                    // A style paint picker is a child of this window; it needs the same image
+                    // registration callback or its upload control silently does nothing.
+                    let register_image = self.color.as_ref().map(|c| c.register_image.clone());
                     cf = cf.on_swatch(move |pos: Point<Pixels>, window, cx: &mut App| {
                         // 往**左**让 8 pt：取色器右缘贴着面板左缘排开（`open_pos` 会把它放在
                         // 锚点左侧），两个卡片并排而不是一开一关。
                         let top = anchored_top(&anchored_key, window);
                         let anchor = Point { x: pos.x - px(8.0), y: pos.y };
                         let mut child = Self::color(cx, anchor, current, Some(pick.clone()), Default::default(), on_pick.clone(), open_cmds.clone());
+                        if let Some(cb) = register_image.as_ref().and_then(|r| r.borrow().clone()) {
+                            child.set_image_callback(cb);
+                        }
                         child.anchor_to_button_top(top);
                         *slot.borrow_mut() = Some(Box::new(child));
                         open_cmds.wake();
@@ -7490,7 +7574,15 @@ fn spectrum_color_at(shape: SpectrumShape, x: f32, y: f32, hue: f32) -> Option<C
 }
 
 /// 对比度不足处铺 6 pt 点阵（白色 25% 圆点），覆盖整个色板但只在未达标区域落点。
-fn paint_contrast_dots(window: &mut Window, bounds: Bounds<Pixels>, shape: SpectrumShape, hue: f32, bg: figcraft_color::Color, min: f32) {
+fn paint_contrast_dots(
+    window: &mut Window,
+    bounds: Bounds<Pixels>,
+    shape: SpectrumShape,
+    hue: f32,
+    bg: figcraft_color::Color,
+    alpha: f32,
+    min: f32,
+) {
     let bx = f32::from(bounds.origin.x);
     let by = f32::from(bounds.origin.y);
     let mut y = 5.0f32;
@@ -7498,7 +7590,8 @@ fn paint_contrast_dots(window: &mut Window, bounds: Bounds<Pixels>, shape: Spect
         let mut x = 5.0f32;
         while x < SPECTRUM {
             if let Some(c) = spectrum_color_at(shape, x, y, hue) {
-                if figcraft_color::contrast_ratio(picker_color(c), bg) < min {
+                let c = picker_color(c).with_alpha(alpha);
+                if figcraft_color::contrast_ratio(c, bg) < min {
                     let dot = Bounds { origin: point(px(bx + x - 1.0), px(by + y - 1.0)), size: size(px(2.0), px(2.0)) };
                     window.paint_quad(
                         gpui::fill(dot, rgba(Color32::from_white_alpha(64))).corner_radii(Corners {
@@ -7544,11 +7637,11 @@ fn ring_texture(hue: f32) -> Arc<RenderImage> {
 }
 
 /// 环状色域：贴图 + 对比度点阵 + 达标白线。外环拖色相、内部固定三角拖 s/v。
-fn paint_ring(window: &mut Window, bounds: Bounds<Pixels>, hue: f32, bg: figcraft_color::Color, min: Option<f32>) {
+fn paint_ring(window: &mut Window, bounds: Bounds<Pixels>, hue: f32, bg: figcraft_color::Color, alpha: f32, min: Option<f32>) {
     let image = ring_texture(hue);
     let _ = window.paint_image(bounds, Corners::default(), image, 0, false);
     if let Some(min) = min {
-        paint_contrast_dots(window, bounds, SpectrumShape::Ring, hue, bg, min);
+        paint_contrast_dots(window, bounds, SpectrumShape::Ring, hue, bg, alpha, min);
         let bx = f32::from(bounds.origin.x);
         let by = f32::from(bounds.origin.y);
         let tri = ring_triangle(RING_R, RING_R);
@@ -7595,6 +7688,7 @@ fn ring_spectrum(
     let start_hue_win = c.ring_hue.clone();
     let keep = (hsb.s, hsb.b);
     let hue = hsb.h;
+    let alpha = f32::from(current.0[3]) / 255.0;
     let pick = {
         let pick = pick;
         let cur = c.current.clone();
@@ -7611,7 +7705,7 @@ fn ring_spectrum(
     let canvas = gpui::canvas(
         move |bounds, _, _| prepaint.set(Some(bounds)),
         move |bounds, _, window, _| {
-            paint_ring(window, bounds, hue, bg, min);
+            paint_ring(window, bounds, hue, bg, alpha, min);
             let dragging = drag_win.clone();
             let hit = move_hit.clone();
             let pick = move_pick.clone();
@@ -7661,20 +7755,25 @@ fn ring_spectrum(
             let dx = x - RING_R;
             let dy = y - RING_R;
             let r = (dx * dx + dy * dy).sqrt();
-            if (RING_INNER_R - 4.0..=RING_R + 4.0).contains(&r) {
-                drag_down.set(Some(0));
-                let h = hue_at(dx, dy);
-                click_pick(h, keep.0, keep.1, window, cx);
-                return;
-            }
+            // The SV handle sits near the triangle's edge, inside the expanded ring band. Test
+            // the triangle (and a small grab radius around the handle) first, or pressing the
+            // handle would jump to the hue under it and change the colour instead of the SV.
             let tri = ring_triangle(RING_R, RING_R);
-            let weights = ring_bary((x, y), &tri).map(|w| w.max(0.0));
-            let sum = weights[0] + weights[1] + weights[2];
-            if sum > 0.0 {
+            let sv = ring_point_from_sv(&tri, keep.0, keep.1);
+            let near_handle = (x - sv.0).hypot(y - sv.1) <= 10.0;
+            let raw = ring_bary((x, y), &tri);
+            if near_handle || raw.iter().all(|w| *w >= -0.001) {
+                let weights = raw.map(|w| w.max(0.0));
                 drag_down.set(Some(1));
                 start_hue_down.set(hue);
                 let (s, v) = ring_sv(weights);
                 click_pick(hue, s, v, window, cx);
+                return;
+            }
+            if (RING_INNER_R - 4.0..=RING_R + 4.0).contains(&r) {
+                drag_down.set(Some(0));
+                let h = hue_at(dx, dy);
+                click_pick(h, keep.0, keep.1, window, cx);
             }
         })
 }

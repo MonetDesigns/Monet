@@ -307,7 +307,9 @@ fn scrolling_flows_and_prototype_device() {
     ] {
         let got = device(d).device;
         assert_eq!(got, want);
-        assert!(got == "None" || PrototypeSettings::DEVICES.iter().any(|d| d.name == got), "{got}");
+        // The device catalogue is external now: rely on `device()` to resolve the name
+        // instead of the built-in DEVICES table that used to live on PrototypeSettings.
+        assert!(got == "None" || device(json!({"type": "PRESET", "presetIdentifier": got})).device().is_some(), "{got}");
     }
     // Custom sizes keep their screen (turned ones swap their sides).
     for (rotation, want) in [("NONE", (1920.0, 1080.0)), ("CCW_90", (1080.0, 1920.0))] {

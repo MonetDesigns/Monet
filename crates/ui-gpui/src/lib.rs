@@ -503,6 +503,9 @@ pub struct PaneState {
     /// 上一次按下的时间与位置（判双击）。
     last_down: Option<(Instant, Pos2)>,
 
+    /// 上一帧的时间，用于算自动平移的 dt（照搬上游 autopan.rs 的 `unstable_dt`，clamp 到 0.1 s）。
+    autopan_last: Option<Instant>,
+
     /// 左键当前是否按下（光标要变握拳）。
     primary_down: bool,
 
@@ -666,6 +669,10 @@ pub struct PaneState {
     /// 是哪一个」，控件状态由它自己保留。
     dialog: Option<dialogs::DialogState>,
 
+    /// 打开文件后待查缺失字体的文档（`ui-egui/src/dialogs/missing_fonts.rs::check_later` 的
+    /// `font_checks`）：字体索引完成、且没有别的对话框在等时才查，免得先报一堆「全缺」。
+    font_checks: Vec<u64>,
+
     /// 原型演示（None = 未打开）。
     present: Option<present::PresentState>,
     /// 演示标签栏（eGUI `app.ui.presents`）：每个演示一个 tab，切回设计保留播放器状态。
@@ -775,6 +782,9 @@ impl CanvasView {
         if self.pane_wid == wid {
             return;
         }
+        // A crop target belongs to the pane that opened it: leaving it must not turn off
+        // transform handles or draw crop marks on a same-id image in another pane.
+        self.app.crop = None;
         let old = self.pane_wid;
         let next = match self.panes.remove(&wid) {
             Some(n) => n,
@@ -1158,6 +1168,8 @@ impl CanvasView {
 
             last_down: None,
 
+            autopan_last: None,
+
             primary_down: false,
 
             left_w: panels::DEFAULT_LEFT_PANEL,
@@ -1282,6 +1294,8 @@ impl CanvasView {
             board_fac: std::rc::Rc::new(std::cell::RefCell::new(board_facilitate::State::default())),
 
             dialog: None,
+
+            font_checks: Vec::new(),
 
             present: None,
             present_tabs: Vec::new(),
@@ -1825,6 +1839,32 @@ impl CanvasView {
 
     /// 才真正有 UI 反应（以前 GPUI 完全不消费这些请求，我只能用右栏状态硬同步）。
 
+    /// `image.replace` 成功后原位刷新打开中的取色器。
+    fn refresh_picker_image(&mut self) {
+        let doc = {
+            let Ok(ds) = self.app.session.ds() else { return };
+            ds.doc.clone()
+        };
+        let Some(Popup::Window(w)) = &mut self.popup else { return };
+        w.refresh_color_from_doc(&doc);
+    }
+
+    /// 把图片字节按内容键注册到当前文档，返回键给取色器写 paint。
+    /// 图层 paint 不走这里（`image.replace` 自己注册），这里只服务样式 / 选区颜色目标。
+    fn register_image(&mut self, uid: u64, bytes: Vec<u8>) -> Option<String> {
+        use std::hash::{Hash, Hasher};
+        let (w, h) = image::ImageReader::new(std::io::Cursor::new(&bytes)).with_guessed_format().ok()?.into_dimensions().ok()?;
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        bytes.hash(&mut hasher);
+        let hash = format!("img{:016x}{:08x}", hasher.finish(), bytes.len());
+        // Register into the document the picker was opened for, not the session's global
+        // active one: another window rendering can switch `active`, and the paint written to
+        // this picker would then reference a key its own document does not contain.
+        let ds = self.app.session.docs.iter_mut().find(|d| d.uid == uid)?;
+        ds.doc_mut().images.insert(hash.clone(), figcraft_doc::ImageData { bytes: std::sync::Arc::new(bytes), width: w, height: h });
+        Some(hash)
+    }
+
     fn sync_ui_requests(&mut self, cx: &mut Context<Self>) {
         if *self.extra_state.dismiss.borrow() {
             *self.extra_state.dismiss.borrow_mut() = false;
@@ -1882,6 +1922,23 @@ impl CanvasView {
 
                     cx.notify();
 
+                    continue;
+                }
+
+                // Crop image: the engine has already switched the fill to Crop mode; take the
+                // canvas over by closing the colour picker and selecting that one layer.
+                "image.crop" => {
+                    self.popup = None;
+                    self.app.crop = r
+                        .data
+                        .get("id")
+                        .and_then(figcraft_engine::params::id_of)
+                        .zip(r.data.get("index").and_then(serde_json::Value::as_u64))
+                        .map(|(id, i)| (id, i as usize));
+                    if let Some((id, _)) = self.app.crop {
+                        let _ = self.app.session.execute("select.set", &serde_json::json!({ "ids": [id] }));
+                    }
+                    cx.notify();
                     continue;
                 }
 
@@ -2624,6 +2681,17 @@ impl CanvasView {
 
         let action = present::ACTION.with(|a| a.replace(0));
 
+        // 评论草稿提交（Enter）：按草稿的页坐标写入 `comment.add`，再收起输入条。
+        if let Some(text) = present::take_comment_text()
+            && let Some((x, y)) = self.present.as_ref().and_then(|st| st.comment_draft)
+        {
+            let _ = self.app.session.execute("comment.add", &serde_json::json!({ "x": x, "y": y, "text": text }));
+            if let Some(st) = self.present.as_mut() {
+                st.comment_draft = None;
+            }
+            present::clear_comment_field();
+        }
+
         // 导航栏下拉：设备 / 缩放（eGUI `navigation_bar` 的两个 ComboBox）。
         if let Some(variant) = present::take_variant_choice() {
             let _ = self.app.session.execute("proto.settings", &serde_json::json!({ "variant": variant }));
@@ -2684,6 +2752,27 @@ impl CanvasView {
                 5 => st.comments = !st.comments,
                 6 => st.inspect = !st.inspect,
                 7 => st.hide_ui = !st.hide_ui,
+                20 => {
+                    // 外链确认条：Open link（记住「不再提示」）。
+                    if let Some(n) = st.link_notice.take() {
+                        if n.skip == Some(true) {
+                            let _ = self.app.session.execute("proto.linkNotice", &serde_json::json!({ "show": false }));
+                        }
+                        st.open_now = Some(n.url);
+                    }
+                }
+                21 => st.link_notice = None,
+                22 => {
+                    if let Some(n) = st.link_notice.as_mut() {
+                        n.skip = Some(n.skip != Some(true));
+                    }
+                }
+                23 => st.commenting = !st.commenting,
+                24 => {
+                    // 放弃评论草稿（Esc）：收起输入条。
+                    st.comment_draft = None;
+                    present::clear_comment_field();
+                }
                 12 => st.preview = false,
                 10 => {
                     st.device_open = !st.device_open;
@@ -2926,6 +3015,11 @@ impl CanvasView {
 
                         // A23：导出命令没给路径时引擎只回 base64，UI 负责弹保存对话框落盘。
                         self.deliver_download(c.id, &result, cx);
+
+                        // 图片替换成功：原位刷新打开中的取色器 paint / 预览。
+                        if c.id == "image.replace" {
+                            self.refresh_picker_image();
+                        }
                     }
 
                     Err(e) => {
@@ -3278,6 +3372,55 @@ impl CanvasView {
         self.app.guide_cursor = None;
 
         canvas::guides::input(&mut self.app, pos, pressed, released, alt)
+    }
+
+    /// 自动平移是否该启动（照搬上游 `ui-egui/src/canvas/autopan.rs::wanted`）：左键拖着一层 /
+    /// 选框 / 正在画的形状，没有手动平移、没在编辑文字或矢量，且手势本身允许 (#2015)。
+    fn autopan_wanted(&self) -> bool {
+        if !self.primary_down || self.pan.is_some() || self.pointer.is_none() {
+            return false;
+        }
+        let Ok(ds) = self.app.session.ds() else { return false };
+        ds.text_edit.is_none() && ds.vector_edit.is_none() && self.app.session.tool.autopans(ds.view.zoom)
+    }
+
+    /// 每帧推进一次自动平移（照搬上游 `autopan.rs::pan`）：指针停在画布边缘时按
+    /// `ViewState::autopan_velocity` 的速度平移视图，并让正拖着的东西跟着文档点走。
+    /// 返回是否平移了 —— 调用方据此续帧，指针不动也持续平移。
+    fn autopan_frame(&mut self, window: &mut Window) -> bool {
+        if !self.autopan_wanted() {
+            self.autopan_last = None;
+            return false;
+        }
+        let now = Instant::now();
+        // 上游的 `unstable_dt`:卡住的一帧不能把视图一下甩出去。
+        let dt = self.autopan_last.map(|t| (now - t).as_secs_f64()).unwrap_or(1.0 / 60.0).clamp(0.0, 0.1);
+        self.autopan_last = Some(now);
+        let pos = self.local(window.mouse_position());
+        let (px, py) = (f64::from(pos.x), f64::from(pos.y));
+        let (vw, vh) = match self.app.session.ds() {
+            Ok(ds) => (ds.view.vw, ds.view.vh),
+            Err(_) => return false,
+        };
+        let (vx, vy) = figcraft_engine::ViewState::autopan_velocity(px, py, vw, vh);
+        if vx == 0.0 && vy == 0.0 {
+            return false;
+        }
+        let moved = match self.app.session.ds_mut() {
+            Ok(ds) => ds.view.autopan(px, py, dt),
+            Err(_) => return false,
+        };
+        if !moved {
+            return false;
+        }
+        if let Ok(ds) = self.app.session.ds_mut() {
+            ds.revision += 1;
+        }
+        // 视图移动后重新喂一次指针:拖着的层/选框/形状要落在指针下的新文档点上。
+        // 先拷出修饰键，避免 &self.mods 的不可变借用和 &mut self 冲突。
+        let mods = self.mods;
+        self.send(PointerKind::Move, pos, &mods);
+        true
     }
 
     /// 把一次指针事件交给引擎（对应原文 `pointer_event` + `session.pointer`）。
@@ -3759,8 +3902,38 @@ impl CanvasView {
     /// A12：导入报告的判定与数据在 [`dialogs::import_report_data`]（纯函数、可单测）；
     /// 这里只负责在命令成功后把它交给通用对话框壳。
     fn capture_import_report(&mut self, command: &str, params: &serde_json::Value, result: &serde_json::Value, cx: &mut Context<Self>) {
+        // 字体检查与导入报告一样，都在「命令成功后」这里收敛（egui `app/commands.rs` 的
+        // `missing_fonts::check_later`）。字体索引在后台完成，这里只入队 uid，等索引完成后
+        // 再查，免得刚打开就把所有字体报成缺失。
+        if matches!(command, "file.open" | "file.openRecent" | "file.import")
+            && result.get("summary").is_some()
+            && let Ok(ds) = self.app.session.ds()
+        {
+            let uid = ds.uid;
+            if !self.font_checks.contains(&uid) {
+                self.font_checks.push(uid);
+            }
+        }
         if let Some(data) = dialogs::import_report_data(command, params, result) {
             self.open_dialog(dialogs::Kind::ImportReport, &data, cx);
+        }
+    }
+
+    /// 打开文件后入队的文档，等字体索引完成、且没有别的对话框在等时才查缺失字体
+    /// （egui `missing_fonts::list_when_known`）。没有缺失就安静跳过，不弹空清单。
+    fn sync_font_checks(&mut self, cx: &mut Context<Self>) {
+        if self.font_checks.is_empty() || self.dialog.is_some() || !figcraft_text::installed_fonts_known() {
+            return;
+        }
+        let uid = self.font_checks.remove(0);
+        let has_missing = {
+            let Ok(ds) = self.app.session.ds() else { return };
+            ds.uid == uid && !figcraft_engine::fonts::missing(&ds.doc).is_empty()
+        };
+        if has_missing {
+            let _ = self.app.session.execute("text.missingFonts", &serde_json::json!({}));
+            self.stamp_ui_requests();
+            cx.notify();
         }
     }
 
@@ -4333,6 +4506,31 @@ impl CanvasView {
     fn label_slot_press(&mut self, pos: Pos2, cx: &mut Context<Self>) -> bool {
         let hit = {
             let Ok(ds) = self.app.session.ds() else { return false };
+            // 组件变体 / 变体集的「+」画在选中框下方（overlays::transform_box），命中也按同一几何。
+            // 变体在 ComponentSet 内部，不走顶层帧标签 slot_at 那条路径。
+            // The button is drawn only when dimensions are shown; the hit test must match it.
+            if ds.selection.len() == 1
+                && self.app.session.prefs.show_dimensions
+                && ds.selection.first().is_some_and(|i| {
+                    ds.doc.node(*i).is_some_and(|n| {
+                        matches!(n.kind, figcraft_doc::NodeKind::ComponentSet { .. })
+                            || figcraft_engine::components::variant_set(&ds.doc, n.id).is_some()
+                    })
+                })
+                && let Some(b) = figcraft_engine::tools::selection_box(&ds.doc, &ds.selection)
+            {
+                let screen: Vec<_> = b.iter().map(|p| self.app.to_screen(p.x, p.y)).collect();
+                let mid_x = screen.iter().map(|p| p.x).sum::<f32>() / 4.0;
+                let y1 = screen.iter().map(|p| p.y).fold(f32::MIN, f32::max);
+                if canvas::overlays::add_variant_rect(mid_x, y1).contains(pos) {
+                    self.run_command("component.addVariant", serde_json::json!({ "id": ds.selection[0].0 }), cx);
+                    return true;
+                }
+            }
+            // Focus view draws no labels or status slots: let the click reach the canvas.
+            if ds.focused().is_some() {
+                return false;
+            }
             canvas::frame_labels::slot_at(&self.app, &ds.doc, ds.page, &ds.selection, pos)
         };
         let Some((hit, rect)) = hit else { return false };
@@ -4876,6 +5074,18 @@ impl CanvasView {
 
             return;
         }
+
+        // 取色器的图片上传给样式 / 选区颜色目标用：字节注册进当前文档，
+        // 再由取色器自己的目标感知写回器替换 paint。
+        let root = cx.entity().downgrade();
+        // Capture the document identity now: by the time a file is dropped, another window
+        // may have become the session's active document.
+        let uid = self.app.session.ds().ok().map(|d| d.uid);
+        w.set_image_callback(Rc::new(move |bytes, cx: &mut App| {
+            let this = root.upgrade()?;
+            let uid = uid?;
+            this.update(cx, |cv, _| cv.register_image(uid, bytes))
+        }));
 
         self.popup = Some(Popup::Window(w));
 
@@ -5706,6 +5916,10 @@ impl Render for CanvasView {
 
         self.sync_motion(cx);
 
+        // 字体索引在后台完成：打开文件后入队的缺失字体检查到这里才可能弹窗。
+
+        self.sync_font_checks(cx);
+
         // 引擎 ui_requests：先消费命令留下的 UI 请求（切标签 / 开面板），再同步 Dev Mode。
 
         self.sync_ui_requests(cx);
@@ -5716,6 +5930,11 @@ impl Render for CanvasView {
 
         // egui 在 `FigApp::sync_dev_mode()` 做同一件事（进入时结束文字/矢量编辑、丢掉手势）。
 
+        // Inspect shares the right panel with the Motion inspector, and `render` still shows
+        // Motion while it is open. Close it before switching, as the toolbar Inspect action does.
+        if self.fields.right_tab() == 2 && self.motion {
+            self.set_motion_open(false, cx);
+        }
         self.sync_dev_mode();
 
         // Prototype 标签：画布原型连线只在 Prototype（非演示态）下画/收输入；
@@ -5932,6 +6151,10 @@ impl Render for CanvasView {
             canvas::guides::end_released(&mut self.app);
         }
 
+        // 自动平移（#2015）：拖到画布边缘时推进视图，并让拖着的东西跟着文档点走。
+        // 放在画布渲染之前，这样本帧就画出平移后的视图；返回 true 时本帧续帧。
+        let autopan_ticking = self.autopan_frame(window);
+
         // Motion 播放头预览：本帧让整条画布链路（渲染请求 / 当帧同步补丁 / 所有叠加层）
         // 都读到同一份求值后的文档，画完立刻还原。只替换 `Arc<Document>` 这一份，
         // 同一帧内还原；引擎的写操作仍走输入事件里的 `ds.doc`。
@@ -6112,7 +6335,7 @@ impl Render for CanvasView {
 
                 // 播放中同样要续帧：动画的每一帧都是新的一帧画面。
 
-                if in_flight || motion_playing || present_playing || duration_ticking || fac_ticking {
+                if in_flight || motion_playing || present_playing || duration_ticking || fac_ticking || autopan_ticking {
                     window.request_animation_frame();
                 }
             },
@@ -6157,6 +6380,38 @@ impl Render for CanvasView {
                     .path(key)
                     .with_transformation(gpui::Transformation::rotate(gpui::radians(angle)));
                 texts.push(rotated.into_any_element());
+                continue;
+            }
+
+            // 自带背景的标签（尺寸框）：GPUI 按真实字形宽度撑开 div，padding 即边距，
+            // 左右/上下都精确对称，不靠估算宽画框再居中塞字。
+            if let Some((bg, pad_x, pad_y)) = l.pill {
+                // 用足够宽的透明 wrapper 按 rect 中心水平居中；pill 自身宽度由真实文字撑开，
+                // 不依赖估算宽，因此左右 padding 精确、文字紧贴外框。
+                let wrap_w = l.rect.width().max(1.0) + 64.0;
+                let pill = div()
+                    .absolute()
+                    .left(px(l.rect.center().x - wrap_w / 2.0))
+                    .top(px(l.rect.min.y))
+                    .w(px(wrap_w))
+                    .flex()
+                    .justify_center()
+                    .child(
+                div()
+                    .px(px(pad_x))
+                    .py(px(pad_y))
+                    .bg(canvas::painter::to_rgba(bg))
+                    .rounded(px(3.0))
+                    .child(
+                        div()
+                            .text_size(px(l.font.size))
+                            .text_color(canvas::painter::to_rgba(l.color))
+                            .line_height(px(l.font.size * 1.18))
+                            .whitespace_nowrap()
+                            .child(l.text.clone()),
+                    )
+                );
+                texts.push(pill.into_any_element());
                 continue;
             }
 
@@ -7032,6 +7287,25 @@ impl Render for CanvasView {
 
                     cx.notify();
                     return;
+                }
+
+                // 当前模式自己的键先于菜单快捷键（上游 `shortcuts.rs:458` 的
+                // `session.tool_key`）：矢量编辑模式的工具与推点、画笔的 Enter 收尾、形状
+                // 构建器，以及**选中的参考线**（Delete 删、方向键移、Escape 取消选中）。
+                // 漏掉这一层会让参考线删不掉、矢量点键全失效。
+                let mode_key = canonical_key(&e.keystroke.key);
+                match this.app.session.tool_key(&mode_key, e.keystroke.modifiers.shift, e.keystroke.modifiers.alt, e.keystroke.modifiers.platform) {
+                    Ok(true) => {
+                        cx.notify();
+                        cx.stop_propagation();
+                        return;
+                    }
+                    Ok(false) => {}
+                    Err(err) => {
+                        this.toast(err.to_string(), cx);
+                        cx.stop_propagation();
+                        return;
+                    }
                 }
 
                 // 命令快捷键：键名规范化后查引擎的 keymap（和原文 `shortcuts.rs` 同一条路）。
@@ -8177,6 +8451,11 @@ impl Render for CanvasView {
 
         // 首页 / 空白创建页是整窗面板：这两者在前时不能把播放器层铺上去，否则「点首页」
         // 画面不变、看起来像没反应（用户 2026-11-17）。
+        // 评论草稿：首次出现时创建并聚焦输入框（通用控件 `widgets::text_field`）。
+        if self.present.as_ref().is_some_and(|st| st.comment_draft.is_some()) && present::comment_field().is_none() {
+            present::create_comment_field(cx, window);
+        }
+
         let present_el: Vec<AnyElement> = self
             .present
             .as_ref()
@@ -8188,13 +8467,28 @@ impl Render for CanvasView {
                 let vw = f32::from(vp.width);
                 let vh = f32::from(vp.height);
                 let canvas = (dock.center_x(), dock.titlebar_h, dock.center_w(vw), (vh - dock.titlebar_h - dock.bottom_h).max(1.0));
-                present::render(&self.app, st, (vw, vh), canvas).into_any_element()
+                present::render(&self.app, st, (vw, vh), canvas, window).into_any_element()
             })
             .into_iter()
             .collect();
 
-        // 演示里点了「打开链接」：取走待办 URL 交给系统浏览器（与 devmode 同一道闸）。
-        if let Some(url) = self.present.as_mut().and_then(|st| st.pending_url.take())
+        // 演示里点了「打开链接」：先出确认条（eGUI `link_notice`）；偏好里勾过「不再提示」就直接开。
+        let link_notice_skipped = self.app.session.prefs.link_notice_skipped;
+        if let Some(st) = self.present.as_mut()
+            && let Some(url) = st.pending_link.take()
+            && figcraft_engine::doc_urls::openable(&url)
+        {
+            if link_notice_skipped || st.link_notice.is_some() {
+                // 已有提示在显示时后续链接直接丢弃（eGUI 同样只看第一条）。
+                if st.link_notice.is_none() {
+                    cx.open_url(&url);
+                }
+            } else {
+                st.link_notice = Some(present::LinkNotice { url, skip: Some(false) });
+            }
+        }
+        // 确认条里点了「Open link」：直接交给系统浏览器。
+        if let Some(url) = self.present.as_mut().and_then(|st| st.open_now.take())
             && figcraft_engine::doc_urls::openable(&url)
         {
             cx.open_url(&url);
@@ -8400,7 +8694,9 @@ impl Render for CanvasView {
                     let mods = figcraft_doc::proto::KeyMods { ctrl: m.control, alt: m.alt, shift: m.shift, cmd: m.platform };
                     let pane = st.preview;
                     let root = st.overlays.last().map_or(st.current, |o| o.id);
-                    let uses = st.display().or(st.doc.as_deref()).is_some_and(|d| present::wants_key(d, root, &key, mods, pane));
+                    let uses = st.display().or(st.doc.as_deref()).is_some_and(|d| {
+                        present::wants_key(d, root, &key, mods, pane, st.link_notice.is_some(), st.comment_draft.is_some())
+                    });
                     if uses {
                         present::push_key(key, mods);
                         cx.stop_propagation();

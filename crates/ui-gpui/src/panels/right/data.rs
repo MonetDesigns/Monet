@@ -37,10 +37,10 @@ pub struct PaintRow {
     pub variables: Vec<String>,
     /// 图片填充：当前图片键与原始字节（上传新图时走 `image.replace` 的真实命令）。
     pub image: Option<(String, Option<figcraft_doc::ImageData>)>,
-    /// 图片预览的直 RGBA 像素（渲染器产出，取色器只负责包成贴图）。
-    pub image_preview: Option<(u32, u32, Vec<u8>)>,
-    /// 图片自带的色彩配置描述。
+    /// 图片自带的色彩配置描述（只在取色器打开时用，不在右栏快照里栅格化）。
     pub image_profile: Option<String>,
+    /// 图片解码时用的文档色彩配置。
+    pub image_color_profile: figcraft_color::ColorProfile,
     /// 文件里保存的图片调整预设。
     pub image_presets: Vec<(String, figcraft_color::ImageFilters)>,
     /// 可作为图案源、且与当前选区无关的图层（组件 + 顶层图层，最多 64 个）。
@@ -1426,7 +1426,14 @@ pub fn read_vector(doc: &Document, ve: &figcraft_engine::vectoredit::VectorEdit)
     let round = |v: f64| (v * 100.0).round() / 100.0;
     let net = vectoredit::network(doc, ve.id);
     let pts = net.map(|n| vectoredit::selected_points(n, ve)).unwrap_or_default();
-    let pos = vectoredit::selection_position(doc, ve);
+    // X / Y are the coordinate the selected points share (within 1e-6), not the selection box's
+    // top-left: `vector.edit.position` sets each point's own coordinate, so a Mixed field has to
+    // read each point's own value before it can offer a relative edit.
+    let parent_pts = vectoredit::selected_parent_points(doc, ve);
+    let shared = |axis: fn(&figcraft_geom::Point) -> f64| {
+        let first = parent_pts.first().map(axis)?;
+        parent_pts.iter().all(|p| (axis(p) - first).abs() < 1e-6).then(|| round(first))
+    };
     let b = vectoredit::transform::point_box(doc, ve).filter(|b| b.points.len() > 1);
     let (bw, bh) = match &b {
         Some(b) => (Some(round(b.width)), Some(round(b.height))),
@@ -1453,8 +1460,8 @@ pub fn read_vector(doc: &Document, ve: &figcraft_engine::vectoredit::VectorEdit)
     VectorData {
         count: pts.len(),
         has_selection: !ve.vertices.is_empty() || !ve.segments.is_empty(),
-        x: pos.map(|p| round(p.x)),
-        y: pos.map(|p| round(p.y)),
+        x: shared(|p| p.x),
+        y: shared(|p| p.y),
         w: bw,
         h: bh,
         radius: same(pts.iter().map(|v| vertex(v).map(|x| x.radius))).flatten().map(round),
@@ -1945,32 +1952,18 @@ fn paint_bind_key(n: &figcraft_doc::Node, fills: bool, index: usize) -> String {
 
 /// 图片填充的快照：原始字节留着给 `image.replace`，预览在右栏侧就栅格化成直 RGBA，
 /// 取色器只把字节包成贴图，不在浮层里再碰文档。
-fn image_snapshot(
-    doc: &Document,
-    paint: &Paint,
-) -> (Option<(String, Option<figcraft_doc::ImageData>)>, Option<(u32, u32, Vec<u8>)>, Option<String>) {
+fn image_snapshot(doc: &Document, paint: &Paint) -> (Option<(String, Option<figcraft_doc::ImageData>)>, Option<String>) {
     let figcraft_color::PaintKind::Image(img) = &paint.kind else {
-        return (None, None, None);
+        return (None, None);
     };
     let data = doc.images.get(&img.image).cloned();
     let profile = figcraft_render::images::profile_name(&img.image, data.as_ref());
-    let preview = crate::render_stack::on_render_stack(|| {
-        let pix = figcraft_render::images::shown(
-            &img.image,
-            data.as_ref(),
-            &figcraft_color::ImageFilters::default(),
-            doc.color_profile,
-            208.0,
-        )?;
-        Some((pix.width(), pix.height(), figcraft_render::to_rgba8(&pix)))
-    })
-    .flatten();
-    (Some((img.image.clone(), data)), preview, profile)
+    (Some((img.image.clone(), data)), profile)
 }
 
 /// 图案源：组件 + 当前页顶层图层，排除与选区互为祖先的（自己的子层不能平铺自己）。
-fn paint_pattern_sources(doc: &Document, ids: &[NodeId]) -> Vec<(u64, String)> {
-    let top = doc.pages.first().and_then(|p| doc.node(*p)).map(|p| p.children.clone()).unwrap_or_default();
+fn paint_pattern_sources(doc: &Document, ids: &[NodeId], page: Option<NodeId>) -> Vec<(u64, String)> {
+    let top = page.and_then(|p| doc.node(p)).map(|p| p.children.clone()).unwrap_or_default();
     let comps = doc.nodes().filter(|n| matches!(n.kind, NodeKind::Component { .. })).map(|n| n.id);
     let mut out = Vec::new();
     for id in comps.chain(top) {
@@ -1990,11 +1983,11 @@ fn paint_pattern_sources(doc: &Document, ids: &[NodeId]) -> Vec<(u64, String)> {
     out
 }
 
-fn paint_rows(doc: &Document, ids: &[NodeId], fills: bool) -> Option<Vec<PaintRow>> {
+fn paint_rows(doc: &Document, ids: &[NodeId], page: Option<NodeId>, fills: bool) -> Option<Vec<PaintRow>> {
     let list = common(doc, ids, |n| if fills { n.fills.clone() } else { n.strokes.clone() })?;
     let color_vars: Vec<String> =
         doc.variables.variables.iter().filter(|v| v.kind == figcraft_doc::VariableType::Color).map(|v| v.name.clone()).collect();
-    let pattern_sources = paint_pattern_sources(doc, ids);
+    let pattern_sources = paint_pattern_sources(doc, ids, page);
     let image_presets: Vec<(String, figcraft_color::ImageFilters)> =
         doc.image_presets.iter().map(|p| (p.name.clone(), p.filters)).collect();
     Some(
@@ -2006,7 +1999,7 @@ fn paint_rows(doc: &Document, ids: &[NodeId], fills: bool) -> Option<Vec<PaintRo
                     Some(c) => (true, c.to_hex()),
                     None => (false, crate::widgets::paint_name(p).to_string()),
                 };
-                let (image, image_preview, image_profile) = image_snapshot(doc, p);
+                let (image, image_profile) = image_snapshot(doc, p);
                 let key = ids.first().and_then(|id| doc.node(*id)).map(|n| paint_bind_key(n, fills, index)).unwrap_or_default();
                 let bound = ids
                     .first()
@@ -2026,8 +2019,8 @@ fn paint_rows(doc: &Document, ids: &[NodeId], fills: bool) -> Option<Vec<PaintRo
                     bind_field: key,
                     variables: color_vars.clone(),
                     image,
-                    image_preview,
                     image_profile,
+                    image_color_profile: doc.color_profile,
                     image_presets: image_presets.clone(),
                     pattern_sources: pattern_sources.clone(),
                 }
@@ -2246,8 +2239,8 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
     // 多选主组件 → 「Combine as variants」按钮（lizard `combine_ui`）。
     d.combine_ids = if ids.len() >= 2 && figcraft_engine::cmd::component::can_combine_variants(doc, ids) { ids.to_vec() } else { Vec::new() };
 
-    d.fills = paint_rows(doc, ids, true);
-    d.strokes = paint_rows(doc, ids, false);
+    d.fills = paint_rows(doc, ids, page, true);
+    d.strokes = paint_rows(doc, ids, page, false);
     d.stroke_align = common(doc, ids, |n| n.stroke.align).map(|a| match a {
         figcraft_doc::StrokeAlign::Inside => tr("Inside"),
         figcraft_doc::StrokeAlign::Center => tr("Center"),

@@ -78,6 +78,12 @@ pub enum PdfError {
     Write(String),
 }
 
+impl From<craft_pdf::write::WriteError> for PdfError {
+    fn from(e: craft_pdf::write::WriteError) -> Self {
+        Self::Write(e.to_string())
+    }
+}
+
 /// Largest page side, in points (PDF 1.7 has no hard limit; viewers cope with this).
 pub const MAX_PAGE_SIDE: f64 = 200_000.0;
 
@@ -149,7 +155,9 @@ fn link_annotation(r: Rect, url: String, w: f64, h: f64) -> Option<krilla::annot
     }
     let r = r.intersect(Rect::new(0.0, 0.0, w, h));
     let url = url.trim();
-    if !(r.width() > 0.0 && r.height() > 0.0) || url.is_empty() || url.len() > MAX_URL {
+    // `safe_url` 是 craft-libs 的 craft-pdf 收的口子：`javascript:`、`data:` 之类会被 PDF 阅读器
+    // 当成脚本/载荷执行或外连，导出时空链接比留着由查看器解释更安全。
+    if !(r.width() > 0.0 && r.height() > 0.0) || url.is_empty() || url.len() > MAX_URL || !craft_pdf::safe_url(url) {
         return None;
     }
     let rect = krilla::geom::Rect::from_ltrb(r.x0 as f32, r.y0 as f32, r.x1 as f32, r.y1 as f32)?;
@@ -161,7 +169,13 @@ fn rect_finite(r: Rect) -> bool {
     r.x0.is_finite() && r.y0.is_finite() && r.x1.is_finite() && r.y1.is_finite()
 }
 
+/// Writes the document, with the writer's panics turned into `PdfError::Write` (`craft_pdf::write`
+/// — a malformed glyph or a rejected font used to abort the whole app on a worker thread).
 fn write(doc: &Document, pages: &[(Vec<NodeId>, Rect)], opts: &PdfOptions) -> Result<Vec<u8>, PdfError> {
+    craft_pdf::write::guard(|| write_inner(doc, pages, opts))
+}
+
+fn write_inner(doc: &Document, pages: &[(Vec<NodeId>, Rect)], opts: &PdfOptions) -> Result<Vec<u8>, PdfError> {
     let mut pdf = krilla::Document::new();
     let mut meta = krilla::metadata::Metadata::new().creator("Monet".into()).producer("Monet".into());
     if let Some(t) = opts.title.as_ref().filter(|t| !t.trim().is_empty()) {

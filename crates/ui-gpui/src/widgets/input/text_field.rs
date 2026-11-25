@@ -59,6 +59,7 @@ struct Pending {
     readonly: Option<bool>,
     search_clear: Option<bool>,
     on_commit: Option<CommitHandler>,
+    on_commit_draft: Option<CommitHandler>,
     on_change: Option<CommitHandler>,
 }
 
@@ -131,6 +132,11 @@ impl TextField {
     pub fn set_range(&mut self, min: Option<f64>, max: Option<f64>) {
         self.pending.range = Some((min, max));
     }
+    /// Commit callback that sees the unmodified draft (before number/expression resolution).
+    pub fn set_on_commit_draft(&mut self, f: impl Fn(&str, &mut Window, &mut App) + 'static) {
+        self.pending.on_commit_draft = Some(Rc::new(f));
+    }
+
     pub fn set_on_commit(&mut self, f: impl Fn(&str, &mut Window, &mut App) + 'static) {
         self.pending.on_commit = Some(Rc::new(f));
     }
@@ -221,6 +227,9 @@ impl TextField {
             }
             if let Some(cb) = p.on_commit {
                 e.set_on_commit(move |t, w, cx| cb(t, w, cx));
+            }
+            if let Some(cb) = p.on_commit_draft {
+                e.set_on_commit_draft(move |t, w, cx| cb(t, w, cx));
             }
             if let Some(cb) = p.on_change {
                 e.set_on_change(move |t, w, cx| cb(t, w, cx));

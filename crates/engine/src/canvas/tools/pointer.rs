@@ -59,13 +59,6 @@ impl Session {
         if let Some(f) = self.ds()?.focused() {
             hits.retain(|h| *h != f && doc.is_ancestor(f, *h));
         }
-        // A marquee over a frame from outside selects the frame only when it covers it fully.
-        if within.is_none() && !deep {
-            hits.retain(|h| {
-                let full = doc.world_bounds(*h).is_some_and(|b| r.contains(b.origin()) && r.contains(Point::new(b.x1, b.y1)));
-                full || !doc.node(*h).is_some_and(|n| n.kind.is_frame_like() || matches!(n.kind, NodeKind::Section { .. }))
-            });
-        }
         // Shift toggles: what was selected and is touched again comes out.
         let mut sel: Vec<NodeId> = base.iter().copied().filter(|b| !(additive && hits.contains(b))).collect();
         for h in hits {

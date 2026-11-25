@@ -48,7 +48,7 @@ fn fill_text(d: &mut Document, parent: NodeId) -> NodeId {
 }
 
 #[test]
-fn hug_parent_treats_fill_children_as_fixed() {
+fn hug_parent_treats_fill_along_the_flow_as_fixed_and_takes_the_line_across() {
     let mut d = Document::new("t");
     let p = page(&d);
     let f = al(&mut d, p, LayoutMode::Horizontal, (10.0, 10.0), (Sizing::Hug, Sizing::Hug));
@@ -56,17 +56,18 @@ fn hug_parent_treats_fill_children_as_fixed() {
     let b = rect(&mut d, f, 30.0, 40.0);
     sizing(&mut d, b, Sizing::Fill, Sizing::Fill);
     layout_frame(&mut d, f, &NoMeasure);
-    // Nothing to fill: the fill child keeps its size and the frame gets the content size.
-    assert_eq!(size(&d, f), (90.0, 40.0));
-    assert_eq!(pos(&d, b), (60.0, 0.0, 30.0, 40.0));
-    // Vertical, fill on the cross axis.
+    // Nothing to fill along the flow: the fill child keeps its width. Across it the frame keeps
+    // hugging and the child takes the line, the 20 of the sibling.
+    assert_eq!(size(&d, f), (90.0, 20.0));
+    assert_eq!(pos(&d, b), (60.0, 0.0, 30.0, 20.0));
+    // Vertical, fill on the cross axis: the child is as wide as the widest sibling.
     let g = al(&mut d, p, LayoutMode::Vertical, (10.0, 10.0), (Sizing::Hug, Sizing::Hug));
     let c = rect(&mut d, g, 60.0, 20.0);
     sizing(&mut d, c, Sizing::Fill, Sizing::Fixed);
     rect(&mut d, g, 40.0, 30.0);
     layout_frame(&mut d, g, &NoMeasure);
-    assert_eq!(size(&d, g), (60.0, 60.0));
-    assert_eq!(size(&d, c), (60.0, 20.0));
+    assert_eq!(size(&d, g), (40.0, 60.0));
+    assert_eq!(size(&d, c), (40.0, 20.0));
 }
 
 #[test]
