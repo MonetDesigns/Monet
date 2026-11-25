@@ -133,8 +133,8 @@ are made upstream, not here.
       <h3>🎬 Motion, backed by the engine</h3>
       Keyframes, easing and per-property tracks drive the same scene the canvas draws. Fill,
       stroke and stroke weight auto-key from the inspector, presets cover enter/cycle/exit, and
-      the timeline exports <b>MP4 (H.264)</b>, GIF, WebM (AV1) and a PNG sequence off the UI
-      thread.
+      the timeline exports <b>MP4 (H.264)</b>, GIF, WebM (AV1) and a PNG sequence from the
+      same right-panel Export section, off the UI thread.
     </td>
   </tr>
   <tr>
