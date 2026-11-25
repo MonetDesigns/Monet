@@ -50,8 +50,8 @@ impl<'a> Mapper<'a> {
         if mode == "GRID" {
             copy_len(o, v, "gridColumnGap", "gridColumnGap");
             copy_len(o, v, "gridRowGap", "gridRowGap");
-            o.insert("gridColumnCount".into(), json!(tracks(v, "gridColumns").len()));
-            o.insert("gridRowCount".into(), json!(tracks(v, "gridRows").len()));
+            o.insert("gridColumnCount".into(), json!(track_count(v, "gridColumns")));
+            o.insert("gridRowCount".into(), json!(track_count(v, "gridRows")));
             let track_data = [("columnTracks", "gridColumns", "gridColumnsSizing"), ("rowTracks", "gridRows", "gridRowsSizing")]
                 .into_iter()
                 .filter_map(|(out_key, order_key, sizing_key)| {
@@ -122,17 +122,30 @@ impl<'a> Mapper<'a> {
     }
 }
 
-/// The track ids of a grid's columns or rows, in order.
-pub(super) fn tracks(v: &View, key: &str) -> Vec<String> {
-    let mut t: Vec<(&str, String)> = v
-        .get(key)
+/// The track entries of a grid's columns or rows, before they are sorted.
+fn track_entries(v: &View, key: &str) -> Vec<(&str, String)> {
+    v.get(key)
         .and_then(|m| m.get("entries"))
         .map(Kv::list)
         .unwrap_or_default()
         .iter()
         .filter_map(|e| Some((e.get("position").and_then(Kv::str).unwrap_or(""), e.get("id").and_then(guid)?)))
-        .collect();
-    t.sort();
+        .collect()
+}
+
+/// How many tracks a grid's columns or rows hold, without sorting the list. Callers that only
+/// need the count (the layout's column/row counts) must not pay a sort over an unbounded list.
+pub(super) fn track_count(v: &View, key: &str) -> usize {
+    track_entries(v, key).len()
+}
+
+/// The track ids of a grid's columns or rows, in order. A list over the cap keeps its file order:
+/// the size is already bounded, and sorting a hostile list would cost more than the cap allows.
+pub(super) fn tracks(v: &View, key: &str) -> Vec<String> {
+    let mut t = track_entries(v, key);
+    if t.len() <= MAX_GRID_TRACKS {
+        t.sort();
+    }
     t.into_iter().map(|e| e.1).collect()
 }
 
