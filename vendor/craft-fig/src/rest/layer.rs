@@ -735,6 +735,52 @@ impl<'a> Mapper<'a> {
         }
     }
 
+    /// Warn about point settings the import can't honour. Uses only the decoded network and the
+    /// style rows, so it can run before the JSON is built (a cache hit still reports them).
+    fn network_diagnostics(&mut self, o: &Obj, v: &View<'a>, net: &network::Network, styles: &BTreeMap<u64, &'a Kv<'a>>) {
+        let style = |id: u32| styles.get(&u64::from(id)).copied().filter(|_| id != 0);
+        // An absent layer join is the source default.
+        let layer_join = v.str("strokeJoin").unwrap_or("MITER");
+        let point_join = |p: &network::Vertex| style(p.style).and_then(|s| s.get("strokeJoin"));
+        let known = |j: &str| matches!(j, "MITER" | "BEVEL" | "ROUND");
+        let unresolved_style = net.vertices.iter().any(|p| p.style != 0 && style(p.style).is_none());
+        let unknown_join = net.vertices.iter().any(|p| point_join(p).is_some_and(|j| !j.str().is_some_and(known)));
+        let unsupported_join = net.vertices.iter().any(|p| point_join(p).and_then(Kv::str).is_some_and(|j| known(j) && j != layer_join));
+        if unresolved_style {
+            self.warn("some vector points refer to point settings missing from the file; they use the layer's joins and plain corners");
+        }
+        if unknown_join {
+            self.warn("vector points with unknown stroke joins use the layer join");
+        }
+        if unsupported_join && (o.contains_key("strokeDashes") || o.contains_key("strokeWidthProfile")) {
+            self.warn("point stroke joins were preserved; dashed or variable-width strokes render with the layer join");
+        }
+    }
+
+    /// The stroke's start and end caps, from the first and last end point. Independent of the
+    /// built JSON as well.
+    fn network_caps(&mut self, o: &mut Obj, v: &View<'a>, net: &network::Network, styles: &BTreeMap<u64, &'a Kv<'a>>) {
+        let style = |id: u32| styles.get(&u64::from(id)).copied().filter(|_| id != 0);
+        // The stroke starts at the first end point and stops at the last (as the editor draws it).
+        let mut degree = vec![0usize; net.vertices.len()];
+        for s in &net.segments {
+            for i in [s.a, s.b] {
+                if let Some(d) = degree.get_mut(i) {
+                    *d += 1;
+                }
+            }
+        }
+        let ends: Vec<usize> = (0..degree.len()).filter(|i| degree.get(*i) == Some(&1)).collect();
+        let cap =
+            |i: Option<&usize>| i.and_then(|i| net.vertices.get(*i)).and_then(|p| style(p.style)).and_then(|s| s.get("strokeCap")).and_then(Kv::str);
+        let (first, last) = (cap(ends.first()), cap(ends.last()));
+        if first.is_some() || last.is_some() {
+            let node = v.str("strokeCap").unwrap_or("NONE");
+            o.insert("strokeCapStart".into(), json!(cap_name(first.unwrap_or(node))));
+            o.insert("strokeCapEnd".into(), json!(cap_name(last.unwrap_or(node))));
+        }
+    }
+
     /// The editable network of `vectorData` as `vectorNetwork` (the REST importer's extension),
     /// scaled to the layer's size, with per-point corner radii, handle mirroring and end caps.
     /// False when there's none or it's damaged (the outlines stand in).
@@ -781,6 +827,22 @@ impl<'a> Mapper<'a> {
         let (sx, sy) = (scale("x"), scale("y"));
         // A point whose style doesn't set a radius takes the layer's, as the editor draws it.
         let layer_radius = v.len("cornerRadius");
+        // Warnings and caps read the decoded network only, so report them before the JSON is
+        // built: a shared network that hits the cache below still writes them.
+        self.network_diagnostics(o, v, net, &styles);
+        self.network_caps(o, v, net, &styles);
+        // Every instance of a main shows the same network. Check the cache before building the
+        // vertex, segment and region JSON; networks with region-level paints keep the inline
+        // path (their fills are part of the entry).
+        let shareable = net.regions.iter().all(|r| r.style == 0);
+        let key =
+            (blob_id, sx.to_bits(), sy.to_bits(), std::ptr::from_ref(vd) as usize, radius_scale.to_bits(), layer_radius.unwrap_or(0.0).to_bits());
+        if shareable
+            && let Some(id) = self.network_ids.get(&key).copied()
+        {
+            o.insert("vectorNetworkRef".into(), json!(id));
+            return true;
+        }
         let vertices: Vec<Value> = net
             .vertices
             .iter()
@@ -862,41 +924,6 @@ impl<'a> Mapper<'a> {
                 region
             })
             .collect();
-        // An absent layer join is the source default.
-        let layer_join = v.str("strokeJoin").unwrap_or("MITER");
-        let point_join = |p: &network::Vertex| style(p.style).and_then(|s| s.get("strokeJoin"));
-        let known = |j: &str| matches!(j, "MITER" | "BEVEL" | "ROUND");
-        let unresolved_style = net.vertices.iter().any(|p| p.style != 0 && style(p.style).is_none());
-        let unknown_join = net.vertices.iter().any(|p| point_join(p).is_some_and(|j| !j.str().is_some_and(known)));
-        let unsupported_join = net.vertices.iter().any(|p| point_join(p).and_then(Kv::str).is_some_and(|j| known(j) && j != layer_join));
-        if unresolved_style {
-            self.warn("some vector points refer to point settings missing from the file; they use the layer's joins and plain corners");
-        }
-        if unknown_join {
-            self.warn("vector points with unknown stroke joins use the layer join");
-        }
-        if unsupported_join && (o.contains_key("strokeDashes") || o.contains_key("strokeWidthProfile")) {
-            self.warn("point stroke joins were preserved; dashed or variable-width strokes render with the layer join");
-        }
-        // The stroke starts at the first end point and stops at the last (as the editor draws it).
-        let mut degree = vec![0usize; net.vertices.len()];
-        for s in &net.segments {
-            for i in [s.a, s.b] {
-                if let Some(d) = degree.get_mut(i) {
-                    *d += 1;
-                }
-            }
-        }
-        let ends: Vec<usize> = (0..degree.len()).filter(|i| degree.get(*i) == Some(&1)).collect();
-        let cap =
-            |i: Option<&usize>| i.and_then(|i| net.vertices.get(*i)).and_then(|p| style(p.style)).and_then(|s| s.get("strokeCap")).and_then(Kv::str);
-        let (first, last) = (cap(ends.first()), cap(ends.last()));
-        if first.is_some() || last.is_some() {
-            let node = v.str("strokeCap").unwrap_or("NONE");
-            o.insert("strokeCapStart".into(), json!(cap_name(first.unwrap_or(node))));
-            o.insert("strokeCapEnd".into(), json!(cap_name(last.unwrap_or(node))));
-        }
-        // Every instance of a main shows the same network: it is written once and shared.
         let mut entry = json!({});
         entry["vertices"] = Value::Array(vertices);
         entry["segments"] = Value::Array(segments);
@@ -905,9 +932,6 @@ impl<'a> Mapper<'a> {
             o.insert("vectorNetwork".into(), entry);
             return true;
         }
-        // A resized instance and a K-scaled one can have the same box but different radii.
-        let key =
-            (blob_id, sx.to_bits(), sy.to_bits(), std::ptr::from_ref(vd) as usize, radius_scale.to_bits(), layer_radius.unwrap_or(0.0).to_bits());
         let id = match self.network_ids.get(&key) {
             Some(id) => *id,
             None => {
