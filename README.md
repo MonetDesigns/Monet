@@ -159,6 +159,29 @@ are made upstream, not here.
   </tr>
 </table>
 
+### Brushes and materials are files
+
+The brush engine is not a fixed set of built-in tips: it imports `.abr` libraries at runtime, and a
+stroke can stamp any tip along a vector path with spacing, jitter, scatter and its own seed. The
+three gestures below use the bundled `monet-defaults.abr` library.
+
+<p align="center">
+  <img src="docs/images/art-brushes.png" alt="Three brush strokes in crimson, blue and amber, each stamped from a different tip in the imported monet-defaults.abr library with a soft, bristled edge" width="900">
+  <br>
+  <sub><b>Local brushes</b> — ribbon, ink and bristle tips from an external <code>.abr</code> file.</sub>
+</p>
+
+WGSL materials work the same way at the shader level. A layer's binding names a `.wgsl` file and
+keeps its uniform values; the canvas cuts that node out of the CPU tile, runs the shader over the
+pixels behind it, and composites the result back. The weather card below is a glass material
+sampling the coloured backdrop under it.
+
+<p align="center">
+  <img src="docs/images/art-glass-weather.png" alt="A weather card with a translucent glass material: the purple, teal and orange backdrop shows through a frosted, refracted surface while the card's text and icons stay crisp" width="900">
+  <br>
+  <sub><b>External WGSL material</b> — a glass shader over the live canvas tile, with its uniforms exposed in the Effects panel.</sub>
+</p>
+
 ## Get started
 
 Requires a recent stable Rust toolchain (edition 2024, `rust-version = 1.95`). On Windows the MSVC

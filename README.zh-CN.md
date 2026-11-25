@@ -147,6 +147,28 @@ egui 前端作为冻结参照保留在仓库中；引擎改动在上游进行，
   </tr>
 </table>
 
+### 笔刷和材质都是文件
+
+笔刷引擎不是一组固定的内置笔尖：它在运行时导入 `.abr` 笔刷库，笔画可以沿矢量路径盖章任意
+笔尖，并支持间距、抖动、散布和独立随机种子。下面三条笔画使用随仓库附带的
+`monet-defaults.abr` 笔刷库。
+
+<p align="center">
+  <img src="docs/images/art-brushes.png" alt="三条深红、蓝色和琥珀色笔画，分别由 monet-defaults.abr 中不同笔尖盖章绘制，边缘带有柔和鬃毛质感" width="900">
+  <br>
+  <sub><b>本地笔刷</b> —— 来自外部 <code>.abr</code> 文件的 ribbon、ink 和 bristle 笔尖。</sub>
+</p>
+
+WGSL 材质在 shader 层同理：图层绑定记录一个 <code>.wgsl</code> 文件及其 uniform 值；画布把这个
+节点从 CPU 图块里挖空，用背后的像素运行 shader，再把结果合成回来。下面的天气卡片是一个
+玻璃材质，采样它下方的彩色背景。
+
+<p align="center">
+  <img src="docs/images/art-glass-weather.png" alt="一张带半透明玻璃材质的天气卡片：紫、青、橙色背景透过磨砂折射表面，同时卡片文字与图标保持清晰" width="900">
+  <br>
+  <sub><b>外置 WGSL 材质</b> —— 覆盖在实时画布图块上的玻璃 shader，uniform 在效果面板中可调。</sub>
+</p>
+
 ## 开始使用
 
 需要较新的稳定版 Rust 工具链（edition 2024，`rust-version = 1.95`）。Windows 上需 MSVC 工具链。
