@@ -2444,8 +2444,8 @@ pub(crate) fn right_panel(
     // is a placeholder (never used — `keyframe_layer` is `None`), keeping the shared `paints` call
     // shape identical to the Motion inspector's.
     let motion_q = crate::motion::Queue::new(std::rc::Rc::new(|| {}));
-    let fills_sec = right::sections::paints(f, data, true, sel.has_vector, row_w, col, &mut n, window, cx, None, false, &motion_q);
-    let strokes_sec = right::sections::paints(f, data, false, sel.has_vector, row_w, col, &mut n, window, cx, None, false, &motion_q);
+    let fills_sec = right::sections::paints(f, data, true, sel.has_vector, row_w, col, &mut n, window, cx, None, false, 0, &motion_q);
+    let strokes_sec = right::sections::paints(f, data, false, sel.has_vector, row_w, col, &mut n, window, cx, None, false, 0, &motion_q);
     let effects_sec = right::sections::effects(f, data, col, cx, None);
     let sel_colors_sec = right::sections::selection_colors(f, data, row_w, col, &mut n, window, cx);
     let grids_sec = right::sections::grids(f, data, col);

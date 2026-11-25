@@ -1476,6 +1476,7 @@ pub(crate) fn paints(
     // `keyed` is the precomputed keyframe-at-playhead state for that paint's colour property.
     keyframe_layer: Option<NodeId>,
     keyed: bool,
+    motion_time: u32,
     motion_q: &Queue,
 ) -> Section {
     let title = if fills { tr("Fill") } else { tr("Stroke") };
@@ -1540,13 +1541,24 @@ pub(crate) fn paints(
         let index = row.index;
         let hex_slot = slot(n);
         let op_slot = slot(n);
+        // The first solid paint is the one `FillColor` / `StrokeColor` animate. In Motion mode
+        // its hex field runs `motion.autoKey` (with a colour shorthand) so editing the colour at
+        // the playhead updates a key instead of the static paint underneath. Other paint rows,
+        // and the opacity field, stay ordinary `fill.set` / `stroke.set`.
+        let anim_colour = keyframe_layer.is_some() && first_solid == Some(idx);
+        let hex_cmd = if anim_colour { "motion.autoKey" } else { cmd };
+        let hex_params = if anim_colour {
+            json!({ "property": if fills { "Fill" } else { "Stroke" }, "time": motion_time })
+        } else {
+            json!({ "index": index })
+        };
         let hex_ed = f.row_field(
             cx,
             hex_slot,
             &row.text,
             RowEditCtx {
-                cmd,
-                params: json!({ "index": index }),
+                cmd: hex_cmd,
+                params: hex_params,
                 key: "color",
                 scale: 1.0,
                 string_value: true,

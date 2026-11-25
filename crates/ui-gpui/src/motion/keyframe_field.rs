@@ -28,7 +28,7 @@ use crate::widgets::{FIELD_H, SLOT, pt, rgba, tokens};
 
 /// The inspector's fields, in the reference's order. The last three are the reused Design
 /// rows (Fill / Stroke / Effects) that also carry a keyframe diamond.
-pub const FIELDS: [(AnimProperty, usize, &str); 12] = [
+pub const FIELDS: [(AnimProperty, usize, &str); 13] = [
     (AnimProperty::Position, 0, "X"),
     (AnimProperty::Position, 1, "Y"),
     (AnimProperty::Scale, 0, "X"),
@@ -41,6 +41,9 @@ pub const FIELDS: [(AnimProperty, usize, &str); 12] = [
     (AnimProperty::FillColor, 0, tr_noop("Fill")),
     (AnimProperty::StrokeColor, 0, tr_noop("Stroke")),
     (AnimProperty::ShadowBlur, 0, tr_noop("Blur")),
+    // The stroke weight lives in the Stroke section of the Design panel, which has no diamond.
+    // In Motion mode this extra field gives it the same keyframe control as every other scalar.
+    (AnimProperty::StrokeWeight, 0, "SW"),
 ];
 
 /// One field: `Input(lead | edit | trail)` where `trail` is the keyframe diamond.
@@ -75,6 +78,9 @@ impl KeyframeField {
                 e.set_right_pad(8.0);
                 if matches!(property, AnimProperty::Opacity) {
                     e.set_range(Some(0.0), Some(100.0));
+                }
+                if matches!(property, AnimProperty::StrokeWeight) {
+                    e.set_range(Some(0.0), None);
                 }
             }),
         })
