@@ -3006,7 +3006,7 @@ impl CanvasView {
                 // the whole window for the duration of the encode. Defer it out of this borrow and
                 // run it on a worker with a cloned document; the save dialog is still native and
                 // happens before the worker starts.
-                if c.id == "motion.export" {
+                if c.id.starts_with("motion.export") {
                     let params = params.clone();
                     let this = cx.entity().downgrade();
                     cx.defer(move |cx| {

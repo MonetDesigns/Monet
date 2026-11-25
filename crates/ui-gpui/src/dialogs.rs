@@ -654,22 +654,22 @@ pub(crate) fn spec(kind: Kind, data: &Value) -> Spec {
                 .field(Field::Section { title: tr("Animation (selected layer's timeline)") })
                 .field(Field::Action {
                     label: SharedString::from("MP4 (H.264) · 60 fps"),
-                    id: "motion.export",
+                    id: "motion.export.mp4",
                     params: json!({"format": "mp4", "fps": 60, "scale": 2.0}),
                 })
                 .field(Field::Action {
                     label: SharedString::from("GIF · 30 fps"),
-                    id: "motion.export",
+                    id: "motion.export.gif",
                     params: json!({"format": "gif", "fps": 30, "scale": 2.0}),
                 })
                 .field(Field::Action {
                     label: SharedString::from("WebM (AV1) · 60 fps"),
-                    id: "motion.export",
+                    id: "motion.export.webm",
                     params: json!({"format": "webm", "fps": 60, "scale": 2.0}),
                 })
                 .field(Field::Action {
                     label: SharedString::from("PNG sequence · 60 fps"),
-                    id: "motion.export",
+                    id: "motion.export.png",
                     params: json!({"format": "png", "fps": 60, "scale": 2.0}),
                 })
                 .field(Field::Note { text: tr("Animation export renders the selected frame's timeline; choose a frame with keyframes.").to_string() })
@@ -1813,6 +1813,17 @@ mod tests {
             .collect();
         assert!(presets.iter().any(|p| p == "PNG @2x") && presets.iter().any(|p| p == ".fig (experimental)"), "{presets:?}");
         assert!(presets.len() >= 8, "all the original presets are listed");
+        // 每个动画导出行必须是独立命令：共用 `motion.export` 时点击行会拿到错误/默认的
+        // format，MP4 行打开 GIF 保存框。
+        let motion_ids: Vec<&str> = export
+            .fields
+            .iter()
+            .filter_map(|f| match f {
+                Field::Action { id, .. } if id.starts_with("motion.export") => Some(*id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(motion_ids, vec!["motion.export.mp4", "motion.export.gif", "motion.export.webm", "motion.export.png"]);
         let prefs = spec(Kind::Preferences, &json!({}));
         assert!(prefs.buttons.iter().any(|b| matches!(&b.action, Action::SubmitFields { id: "pref.nudge", .. })));
         assert!(prefs.fields.iter().any(|f| matches!(
