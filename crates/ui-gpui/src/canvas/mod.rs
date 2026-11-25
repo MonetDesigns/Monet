@@ -550,6 +550,29 @@ pub(crate) fn presented_image_rect(tl: Pos2, view: &View, zoom: f64, ppp: f32, p
     Rect::from_min_size(min, vec2(w, h))
 }
 
+/// 贴图被吸附到设备像素后，画面相对连续几何坐标的亚像素位移（画布局部逻辑坐标）。
+///
+/// `presented_image_rect` 把贴图原点取整到设备像素，叠加层却按连续的页面坐标算
+/// （`to_screen`），两者最多差半个设备像素。选框要贴着**实际画出来的**物体边缘
+/// （尤其是物体自己的 1px 内描边）就必须补上这份位移；否则平移时选框会相对内容
+/// 抖一个像素，看起来就像「不明原因偏移」。
+///
+/// 拖动补丁（`canvas.live`）与像素预览不吸附，位移恒为零。
+pub(crate) fn content_shift(app: &CanvasApp) -> Vec2 {
+    let Some(v) = app.canvas.tex_view.as_ref() else { return Vec2::ZERO };
+    let Ok(ds) = app.session.ds() else { return Vec2::ZERO };
+    // 台上那张贴图必须就是当前画布显示的文件/页面；否则画面不是它，位移没有意义。
+    if app.canvas.texture.is_none() || app.canvas.live.is_some() || app.canvas.tex_of != Some((ds.uid, ds.page)) {
+        return Vec2::ZERO;
+    }
+    if ds.view.pixel_preview_scale() == Some(v.scale) {
+        return Vec2::ZERO;
+    }
+    let tl = app.to_screen(v.origin.0, v.origin.1);
+    let (x, y) = snap_origin(tl.x, tl.y, app.ppp, false);
+    vec2(x - tl.x, y - tl.y)
+}
+
 /// 纹理边长上限（与 egui 的 `max_texture_side` 保守值一致）。
 /// 贴图单边上限：egui/GPUI 的 wgpu 后端申请的是 `max_texture_dimension_2d: 8192`，
 /// 超过就创不出纹理（旧值 16384 只会在 8K 屏上白白多分配一倍内存）。

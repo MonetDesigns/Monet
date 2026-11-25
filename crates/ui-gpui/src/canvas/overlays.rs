@@ -273,6 +273,24 @@ pub(super) fn overlays(
     // 运动模式播放中：选中边框隐藏（物体在这一帧已不在选中框的位置，留在原地只会造成误导；
     // gizmo / 运动路径也已在播放时藏起，这里保持一致，用户 2026-11-12）。
     if !sel.is_empty() && !editing && ds.vector_edit.is_none() && !app.motion_overlay.playing {
+        if std::env::var_os("FIGCRAFT_DEBUG_OUTLINE").is_some() {
+            let sb = selection_box(&doc, &sel);
+            let sc = sb.map(|b| b.map(|p| app.to_presented(p.x, p.y)));
+            let img = app.canvas.tex_view.as_ref().map(|v| {
+                let tl = app.to_screen(v.origin.0, v.origin.1);
+                let z = app.session.ds().map(|d| d.view.zoom).unwrap_or(1.0);
+                (v.origin, v.scale, v.width, v.height, z, super::presented_image_rect(tl, v, z, app.ppp, false))
+            });
+            eprintln!("[selection] sel={:?} box_page={:?} box_screen={:?} shift={:?} image={:?}", sel, sb, sc, super::content_shift(app), img);
+            let handles = app.session.shape_handles();
+            eprintln!(
+                "[shape] {:?}",
+                handles.iter().map(|(h, [x, y])| (format!("{h:?}"), [*x, *y], app.to_presented(*x, *y))).collect::<Vec<_>>()
+            );
+            for id in &sel {
+                debug_tree(app, &doc, *id, 0);
+            }
+        }
         let slot_sel = sel.iter().any(|i| outline_colour(&doc, *i, accent) == SLOT);
         let comp_sel = sel.iter().any(|i| outline_colour(&doc, *i, accent) == COMPONENT);
         let col = if slot_sel { SLOT } else if comp_sel { COMPONENT } else { accent };
@@ -341,7 +359,7 @@ pub(super) fn overlays(
             size_label = transform_box(
                 app,
                 painter,
-                b.map(|p| app.to_screen(p.x, p.y)),
+                b.map(|p| app.to_presented(p.x, p.y)),
                 col,
                 sel.len() > 1,
                 handles,
@@ -581,6 +599,25 @@ fn arc_overlay(app: &CanvasApp, painter: &mut Painter, col: Color32) {
     }
 }
 
+/// 临时诊断：选中的节点和它的子孙在页面/屏幕上的矩形。
+fn debug_tree(app: &CanvasApp, doc: &Document, id: NodeId, depth: usize) {
+    let n = doc.node(id);
+    let wb = doc.world_bounds(id);
+    let q = node_quad(app, doc, id);
+    eprintln!(
+        "[tree] depth={depth} id={id:?} name={:?} kind={:?} page={:?} screen={:?}",
+        n.map(|n| n.name.as_str()),
+        n.map(|n| &n.kind),
+        wb,
+        q
+    );
+    if depth < 2 && let Some(n) = n {
+        for c in n.children.iter() {
+            debug_tree(app, doc, *c, depth + 1);
+        }
+    }
+}
+
 /// 选中形状的圆角手柄与星形的比例手柄（悬停/拖动中的那个略大），拖动时在旁边显示数值。
 ///
 /// 照搬 `ui-egui/src/canvas/overlays.rs` 的 `shape_overlay`：几何由引擎
@@ -590,12 +627,12 @@ fn shape_overlay(app: &CanvasApp, painter: &mut Painter, col: Color32) {
     let ov = &app.session.tool.overlay;
     for (h, [x, y]) in app.session.shape_handles() {
         let r = if ov.shape_hover == Some(h) { 4.5 } else { 3.5 };
-        let c = app.to_screen(x, y);
+        let c = app.to_presented(x, y);
         painter.circle_filled(c, r, Color32::WHITE);
         painter.circle_stroke(c, r, stroke(col, 1.0));
     }
     if let Some(hint) = &ov.shape {
-        let c = app.to_screen(hint.at[0], hint.at[1]);
+        let c = app.to_presented(hint.at[0], hint.at[1]);
         let text = match hint.handle {
             ShapeHandle::Radius { .. } => format!("{} {}", figcraft_i18n::tr("Radius"), hint.value),
             ShapeHandle::Ratio => format!("{} {}%", figcraft_i18n::tr("Ratio"), hint.value),
@@ -634,9 +671,11 @@ fn transform_box(
     add_variant: bool,
 ) -> Option<Rect> {
     if outline {
-        // 变换框也按设备像素吸附（见 `outline::crisp_rect`）：直接描 1px 路径时四条边
-        // 落点不同，会一条粗一条细。
-        let crisp = super::outline::axis_aligned(q).is_some_and(|r| super::outline::crisp_rect(painter, r, 1.0, app.ppp, col));
+        // 变换框也走同一条闭合路径描边：中心线贴住框边，只占 1 个设备像素。
+        let crisp = super::outline::axis_aligned(q).is_some_and(|r| {
+            // 调用方的 `q` 已经带着贴图吸附位移；这里不能再加一次。
+            super::outline::outline_ring(painter, r, 1.0, app.ppp, Vec2::ZERO, col)
+        });
         if !crisp {
             quad(painter, q, stroke(col, 1.0));
         }
