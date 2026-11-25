@@ -99,11 +99,31 @@ fn variant_section(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut usi
             .iter()
             .map(|v| (v.clone(), "component.setVariantValue", json!({ "id": variant_id.0, "property": name, "value": v })))
             .collect();
-        let dd = pick_dropdown(f, current.clone(), 0.0, rows);
+        // The value itself stays a free-text field (the baseline let users type any value);
+        // the dropdown beside it keeps the existing values as presets, as the egui
+        // TextFieldWithPresets control does.
+        let value_edit = f.row_field(
+            cx,
+            slot(n),
+            current,
+            RowEditCtx {
+                cmd: "component.setVariantValue",
+                params: json!({ "id": variant_id.0, "property": name }),
+                key: "value",
+                scale: 1.0,
+                string_value: true,
+                paint: None,
+                nest: None,
+                nest_key: None,
+                paint_color: None,
+            },
+        );
+        let dd = pick_dropdown(f, "", 20.0, rows);
         sec = sec.child(field_row_full(
-            div().flex().flex_row().items_center().gap(pt(8.0)).w_full()
+            div().flex().flex_row().items_center().gap(pt(6.0)).w_full()
                 .child(div().w(px(84.0)).flex_none().child(name_edit))
-                .child(div().flex_1().min_w(px(0.0)).child(dd)),
+                .child(div().flex_1().min_w(px(0.0)).child(value_edit))
+                .child(div().w(px(20.0)).flex_none().child(dd)),
         ));
     }
     sec
