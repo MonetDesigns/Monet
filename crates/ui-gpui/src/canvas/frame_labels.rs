@@ -139,7 +139,9 @@ pub fn status_slot_owner(app: &CanvasApp, doc: &Document, page: NodeId, pos: Pos
 /// 选中的对象认状态槽 / 变体组「+」；未选中的顶层帧只认状态槽里的「三个点」——点它
 /// 先选中再弹菜单（和悬停在名称文本上出现三个点是同一套交互）。
 pub fn slot_at(app: &CanvasApp, doc: &Document, page: NodeId, sel: &[NodeId], pos: Pos2) -> Option<(SlotHit, Rect)> {
-    for id in super::rulers::boards(doc, page) {
+    // Reverse paint order: a later board's button covers an earlier one, so the click belongs
+    // to the board drawn last (the same order `status_slot_owner` uses).
+    for id in super::rulers::boards(doc, page).into_iter().rev() {
         let Some(n) = doc.node(id) else { continue };
         if !n.kind.is_frame_like() || n.is_board_atom() {
             continue;

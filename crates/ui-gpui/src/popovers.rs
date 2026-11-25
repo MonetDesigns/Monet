@@ -7755,20 +7755,25 @@ fn ring_spectrum(
             let dx = x - RING_R;
             let dy = y - RING_R;
             let r = (dx * dx + dy * dy).sqrt();
-            if (RING_INNER_R - 4.0..=RING_R + 4.0).contains(&r) {
-                drag_down.set(Some(0));
-                let h = hue_at(dx, dy);
-                click_pick(h, keep.0, keep.1, window, cx);
-                return;
-            }
+            // The SV handle sits near the triangle's edge, inside the expanded ring band. Test
+            // the triangle (and a small grab radius around the handle) first, or pressing the
+            // handle would jump to the hue under it and change the colour instead of the SV.
             let tri = ring_triangle(RING_R, RING_R);
+            let sv = ring_point_from_sv(&tri, keep.0, keep.1);
+            let near_handle = (x - sv.0).hypot(y - sv.1) <= 10.0;
             let raw = ring_bary((x, y), &tri);
-            if raw.iter().all(|w| *w >= -0.001) {
+            if near_handle || raw.iter().all(|w| *w >= -0.001) {
                 let weights = raw.map(|w| w.max(0.0));
                 drag_down.set(Some(1));
                 start_hue_down.set(hue);
                 let (s, v) = ring_sv(weights);
                 click_pick(hue, s, v, window, cx);
+                return;
+            }
+            if (RING_INNER_R - 4.0..=RING_R + 4.0).contains(&r) {
+                drag_down.set(Some(0));
+                let h = hue_at(dx, dy);
+                click_pick(h, keep.0, keep.1, window, cx);
             }
         })
 }

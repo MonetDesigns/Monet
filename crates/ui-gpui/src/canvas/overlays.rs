@@ -181,11 +181,10 @@ pub(super) fn overlays(
                 }
             }
         }
-        // 组件实例（被拉出来实际使用的组件）不画名称文字栏：它本体像组件一样直接选中，
-        // 不需要上方那条灰/红文字。画框、section、组件/组件集仍照旧有名称。
+        // Same gate as the egui reference: instances keep their name label too, so a click on
+        // it selects the instance and a double click renames it.
         let labelled = focus.is_none()
             && (n.kind.is_frame_like() || matches!(n.kind, NodeKind::Section { .. }))
-            && !matches!(n.kind, NodeKind::Instance { .. })
             && !n.is_board_atom();
         if labelled && let Some(q) = super::frame_labels::draw(app, painter, t, &doc, *c, sel.contains(c), renaming == Some(*c))
         {
@@ -195,7 +194,10 @@ pub(super) fn overlays(
 
     // ── Hover 轮廓（测量时改为用红色标出被量的框）。
     // 名称行右侧的开发状态按钮也算「悬停在这个框上」：和悬停名称文字得到同一条 hover 轮廓。
-    let hover = ds.hover.or_else(|| app.pointer.and_then(|p| super::frame_labels::status_slot_owner(app, &doc, page, p)));
+    // Focus view draws no frame labels, so its status slots are not hover targets either.
+    let hover = ds
+        .hover
+        .or_else(|| app.pointer.filter(|_| ds.focused().is_none()).and_then(|p| super::frame_labels::status_slot_owner(app, &doc, page, p)));
     if let Some(h) = hover
         && !sel.contains(&h)
         && matches!(app.session.tool.tool, ToolId::Move | ToolId::Scale)

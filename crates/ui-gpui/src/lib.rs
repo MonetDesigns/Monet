@@ -4508,7 +4508,9 @@ impl CanvasView {
             let Ok(ds) = self.app.session.ds() else { return false };
             // 组件变体 / 变体集的「+」画在选中框下方（overlays::transform_box），命中也按同一几何。
             // 变体在 ComponentSet 内部，不走顶层帧标签 slot_at 那条路径。
+            // The button is drawn only when dimensions are shown; the hit test must match it.
             if ds.selection.len() == 1
+                && self.app.session.prefs.show_dimensions
                 && ds.selection.first().is_some_and(|i| {
                     ds.doc.node(*i).is_some_and(|n| {
                         matches!(n.kind, figcraft_doc::NodeKind::ComponentSet { .. })
@@ -4524,6 +4526,10 @@ impl CanvasView {
                     self.run_command("component.addVariant", serde_json::json!({ "id": ds.selection[0].0 }), cx);
                     return true;
                 }
+            }
+            // Focus view draws no labels or status slots: let the click reach the canvas.
+            if ds.focused().is_some() {
+                return false;
             }
             canvas::frame_labels::slot_at(&self.app, &ds.doc, ds.page, &ds.selection, pos)
         };
@@ -5924,6 +5930,11 @@ impl Render for CanvasView {
 
         // egui 在 `FigApp::sync_dev_mode()` 做同一件事（进入时结束文字/矢量编辑、丢掉手势）。
 
+        // Inspect shares the right panel with the Motion inspector, and `render` still shows
+        // Motion while it is open. Close it before switching, as the toolbar Inspect action does.
+        if self.fields.right_tab() == 2 && self.motion {
+            self.set_motion_open(false, cx);
+        }
         self.sync_dev_mode();
 
         // Prototype 标签：画布原型连线只在 Prototype（非演示态）下画/收输入；
