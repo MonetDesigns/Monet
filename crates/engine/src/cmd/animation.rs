@@ -731,7 +731,7 @@ mod tests {
         ex(&mut s, "motion.keyframe", json!({"property": "Fill", "time": 0, "value": red, "ids": [n.0]}));
         let out = ex(&mut s, "motion.autoKey", json!({"property": "Fill", "color": "#00FF00", "time": 500, "ids": [n.0]}));
         assert_eq!(out["animated"], 1);
-        let tr = node(&s, n).motion.track(AnimProperty::Fill).unwrap();
+        let tr = node(&s, n).motion.track(AnimProperty::FillColor).unwrap();
         assert_eq!(tr.key_at(500).unwrap().value, motion::AnimValue::Color(figcraft_color::Color::from_hex("#00FF00").unwrap()));
     }
 
