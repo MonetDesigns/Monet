@@ -2447,6 +2447,9 @@ pub(crate) fn export(f: &RightFields, d: &PanelData, col: f32, _n: &mut usize, c
     ));
 
     // ③ Preview（egui `export_panel::preview`）：折叠行 + 160 pt 预览框。
+    // 动画模式只留格式与唯一一颗动画导出按钮：多出来的 Preview 行会把按钮压到
+    // 面板下沿、被时间轴挡住而点不到，所以动画模式下不画这一行。
+    if !anim_on {
     let open = f.export_preview_open.get();
     let toggle = f.export_preview_open.clone();
     let wake = f.cmds.clone();
@@ -2478,6 +2481,7 @@ pub(crate) fn export(f: &RightFields, d: &PanelData, col: f32, _n: &mut usize, c
         }
         // 左右都 16，和上面的按钮严格同宽。
         sec = sec.child(block_row(div().w_full().flex().pl(pt(crate::widgets::PAD)).pr(pt(crate::widgets::PAD)).pb(pt(8.0)).child(frame)));
+    }
     }
     Section::Full(sec)
 }
