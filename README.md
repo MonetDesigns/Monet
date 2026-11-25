@@ -160,13 +160,15 @@ are made upstream, not here.
     </td>
     <td width="50%" valign="top">
       <h3>📦 Portable files</h3>
-      Documents save as <code>.fig</code>; the same engine exports PNG, SVG, WebM and PDF, and
+      Documents save as <code>.figcraft</code>; the same engine exports PNG, SVG, WebM and PDF, and
       development plugins load from a local <code>figcraft-plugin.json</code> manifest.
     </td>
   </tr>
 </table>
 
-### Brushes and materials are files
+### External brushes and materials
+
+#### Brushes are external `.abr` files
 
 The brush engine is not a fixed set of built-in tips: it imports `.abr` libraries at runtime, and a
 stroke can stamp any tip along a vector path with spacing, jitter, scatter and its own seed. The
@@ -175,8 +177,19 @@ three gestures below use the bundled `monet-defaults.abr` library.
 <p align="center">
   <img src="docs/images/art-brushes.png" alt="Three brush strokes in crimson, blue and amber, each stamped from a different tip in the imported monet-defaults.abr library with a soft, bristled edge" width="900">
   <br>
-  <sub><b>Local brushes</b> — ribbon, ink and bristle tips from an external <code>.abr</code> file.</sub>
+  <sub><b>Local brushes</b> — ribbon, ink and bristle tips from an external <code>.abr</code> file · <a href="docs/images/art-brushes.figcraft">editable source</a></sub>
 </p>
+
+**Where the brush files go**
+
+- The repository and the installer ship a factory library at `assets/brushes/monet-defaults.abr`. On first launch the desktop shell copies it into the user brush folder and never overwrites files the user edited.
+- Windows user library: `%APPDATA%\Monet\brushes`.
+- Linux and macOS user library: `$HOME/.local/share/monet/brushes`.
+- To make Monet read a different folder only, set `MONET_BRUSHES_DIR`; the default user library is then skipped.
+- Use Import in the brush panel, run `brush.import {"path": "...\\xxx.abr"}`, or drop the `.abr` into the user library and run `brush.reload`.
+- A `.figcraft` file stores only the brush preset id on each stroke, never a copy of the `.abr`. When you move the design to another machine, put the same `.abr` in that machine's user library; otherwise the stroke falls back to a plain outline.
+
+#### Materials are external `.wgsl` files
 
 WGSL materials work the same way at the shader level. A layer's binding names a `.wgsl` file and
 keeps its uniform values; the canvas cuts that node out of the CPU tile, runs the shader over the
@@ -188,6 +201,13 @@ sampling the coloured backdrop under it.
   <br>
   <sub><b>External WGSL material</b> — a glass shader over the live canvas tile, with its uniforms exposed in the Effects panel.</sub>
 </p>
+
+**Where the material files go**
+
+- Next to the Monet executable: `<folder containing Monet.exe>/assets/wgsl/`. The installer already ships `glass.wgsl`; this is the simplest location.
+- In the project or working directory: `<current working directory>/assets/wgsl/`. A source checkout looks here first.
+- Any other folder: set `FIGCRAFT_WGSL_DIR` to it and the material dropdown in the Effects panel scans that folder.
+- A layer binding stores the `.wgsl` path string, not the shader source; a `.figcraft` file never embeds the shader. On another machine, put the `.wgsl` at the same `assets/wgsl/` location or pick the file again in the Effects panel.
 
 ### Prototype devices are external files
 

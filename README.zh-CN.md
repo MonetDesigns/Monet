@@ -148,13 +148,15 @@ egui 前端作为冻结参照保留在仓库中；引擎改动在上游进行，
     </td>
     <td width="50%" valign="top">
       <h3>📦 可携带文件</h3>
-      文档保存为 <code>.fig</code>；同一个引擎导出 PNG、SVG、WebM 和 PDF，开发插件从本地
+      文档保存为 <code>.figcraft</code>；同一个引擎导出 PNG、SVG、WebM 和 PDF，开发插件从本地
       <code>figcraft-plugin.json</code> 清单加载。
     </td>
   </tr>
 </table>
 
-### 笔刷和材质都是文件
+### 外置笔刷和材质
+
+#### 笔刷是外置 `.abr` 文件
 
 笔刷引擎不是一组固定的内置笔尖：它在运行时导入 `.abr` 笔刷库，笔画可以沿矢量路径盖章任意
 笔尖，并支持间距、抖动、散布和独立随机种子。下面三条笔画使用随仓库附带的
@@ -163,18 +165,36 @@ egui 前端作为冻结参照保留在仓库中；引擎改动在上游进行，
 <p align="center">
   <img src="docs/images/art-brushes.png" alt="三条深红、蓝色和琥珀色笔画，分别由 monet-defaults.abr 中不同笔尖盖章绘制，边缘带有柔和鬃毛质感" width="900">
   <br>
-  <sub><b>本地笔刷</b> —— 来自外部 <code>.abr</code> 文件的 ribbon、ink 和 bristle 笔尖。</sub>
+  <sub><b>本地笔刷</b> —— 来自外部 <code>.abr</code> 文件的 ribbon、ink 和 bristle 笔尖 · <a href="docs/images/art-brushes.figcraft">可编辑设计底稿</a></sub>
 </p>
 
-WGSL 材质在 shader 层同理：图层绑定记录一个 <code>.wgsl</code> 文件及其 uniform 值；画布把这个
-节点从 CPU 图块里挖空，用背后的像素运行 shader，再把结果合成回来。下面的天气卡片是一个
-玻璃材质，采样它下方的彩色背景。
+**笔刷文件放在哪里**
+
+- 仓库和安装包自带一份出厂库：`assets/brushes/monet-defaults.abr`。桌面壳第一次启动会把它复制到用户笔刷目录，之后不再覆盖用户改过的文件。
+- Windows 用户库：`%APPDATA%\Monet\brushes`。
+- Linux 和 macOS 用户库：`$HOME/.local/share/monet/brushes`。
+- 想让 Monet 只读另一个目录时，设置 `MONET_BRUSHES_DIR`；设置后就不再扫描默认用户库。
+- 在笔刷面板点 Import，或执行 `brush.import {"path": "...\\xxx.abr"}`；也可以把 `.abr` 直接拖进用户库，再执行 `brush.reload`。
+- `.figcraft` 只记录笔画的笔刷 preset id，不复制 `.abr` 文件。把设计文件换到另一台机器时，要同时把同一个 `.abr` 放进那台机器的用户库，否则笔画会回退成普通描边。
+
+#### 材质是外置 `.wgsl` 文件
+
+WGSL 材质在 shader 层同理：图层绑定记录一个 `.wgsl` 文件及其 uniform 值；画布把这个节点从
+CPU 图块里挖空，用背后的像素运行 shader，再把结果合成回来。下面的天气卡片是一个玻璃材质，
+采样它下方的彩色背景。
 
 <p align="center">
   <img src="docs/images/art-glass-weather.png" alt="一张带半透明玻璃材质的天气卡片：紫、青、橙色背景透过磨砂折射表面，同时卡片文字与图标保持清晰" width="900">
   <br>
   <sub><b>外置 WGSL 材质</b> —— 覆盖在实时画布图块上的玻璃 shader，uniform 在效果面板中可调。</sub>
 </p>
+
+**材质文件放在哪里**
+
+- 与 Monet 可执行文件同级：`<Monet.exe 所在目录>/assets/wgsl/`。安装包已经带 `glass.wgsl`，这是最省事的位置。
+- 项目或工作目录下：`<当前工作目录>/assets/wgsl/`。从源码运行时，Monet 会优先找这里。
+- 任意目录：设置 `FIGCRAFT_WGSL_DIR` 指向该目录，效果面板的材质下拉就会扫描它。
+- 图层绑定保存的是 `.wgsl` 的路径字符串，不是 shader 源码；`.figcraft` 不会把 shader 打进文件。换机器时把 `.wgsl` 放到相同的 `assets/wgsl/` 位置，或在效果面板里重新选一次文件。
 
 ### 设备原型也是外置文件
 
