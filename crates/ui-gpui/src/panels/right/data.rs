@@ -89,6 +89,11 @@ pub struct ExportRow {
     pub format: &'static str,
     pub format_label: &'static str,
     pub is_raster: bool,
+    /// GIF / WebM / PNG frames / MP4. These rows are normal export settings: the `+` adds one,
+    /// the `-` removes it, and the same Export button exports every row.
+    pub is_animation: bool,
+    /// Motion only: 0 = Auto (the timeline's FPS).
+    pub fps: u32,
     /// Dots 弹层（`export_panel.rs::advanced_options` / `print_options`）的当前值，
     /// 用来把菜单项做成「开 / 关」切换，而不是无条件写同一个布尔值。
     pub contents_only: bool,
@@ -2040,6 +2045,8 @@ fn export_rows(list: &[figcraft_doc::ExportSetting]) -> Vec<ExportRow> {
             format: e.format.ext(),
             format_label: e.format.label(),
             is_raster: e.format.is_raster(),
+            is_animation: e.format.is_animation(),
+            fps: e.fps,
             contents_only: e.contents_only,
             include_bounding_box: e.include_bounding_box,
             svg_outline_text: e.svg_outline_text,

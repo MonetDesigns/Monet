@@ -1788,8 +1788,7 @@ mod tests {
             .collect();
         assert!(presets.iter().any(|p| p == "PNG @2x") && presets.iter().any(|p| p == ".fig (experimental)"), "{presets:?}");
         assert!(presets.len() >= 8, "all the original presets are listed");
-        // 动画导出统一在右栏 Export 节（同一个按钮改走 motion.export）；旧对话框不再重复列出
-        // 四行动画导出，避免出现两套导出入口。
+        // 动画不再有单独的对话框/按钮：它是右栏 Export 行里的一个普通格式（GIF/WebM/PNG frames/MP4）。
         assert!(!export.fields.iter().any(|f| matches!(
             f,
             Field::Action { id, .. } if id.starts_with("motion.export")

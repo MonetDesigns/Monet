@@ -364,6 +364,12 @@ pub(super) fn export_setting(x: &figcraft_doc::ExportSetting) -> Kv<'static> {
         figcraft_doc::ExportFormat::Jpg => "JPEG",
         // Nor an Android Vector Drawable one: the nearest is the other vector format.
         figcraft_doc::ExportFormat::Svg | figcraft_doc::ExportFormat::VectorDrawable => "SVG",
+        // Figma has no Motion export settings: the nearest still format keeps the row openable
+        // if the file is imported there (Monet's own files keep the real format).
+        figcraft_doc::ExportFormat::Gif
+        | figcraft_doc::ExportFormat::Webm
+        | figcraft_doc::ExportFormat::PngZip
+        | figcraft_doc::ExportFormat::Mp4 => "PNG",
         figcraft_doc::ExportFormat::Pdf => "PDF",
     };
     let (ty, value) = match x.size {

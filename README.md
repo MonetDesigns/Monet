@@ -36,6 +36,7 @@
   <a href="#a-look-around">A look around</a> ·
   <a href="#what-this-is">What this is</a> ·
   <a href="#features">Features</a> ·
+  <a href="#prototype-devices-are-external-files">Device prototypes</a> ·
   <a href="#get-started">Get started</a> ·
   <a href="#contributing">Contributing</a>
 </p>
@@ -85,9 +86,9 @@ All screenshots below are of the running GPUI application (`cargo run -p figcraf
 </table>
 
 <p align="center">
-  <img src="docs/images/screenshots/09-animation-export.png" alt="The full Monet window in Motion mode: Motion Card selected, its Fill, Stroke and Stroke weight keyframes in the timeline, and the right-hand Export section following the selection — an MP4 format picker and an Export Motion Card button, with no separate animation switch" width="900">
+  <img src="docs/images/screenshots/09-animation-export.png" alt="Monet's Export section: four ordinary export rows (GIF, MP4, WebM, PNG frames), each with scale, suffix, format, Dots and delete; FPS and PNG frames' PNG settings live in the row's Dots popup, with one Export button and no separate animation block" width="900">
   <br>
-  <sub><b>One export surface</b> — the right-hand Export section exports whatever layer is selected; in Motion mode the same section offers MP4, GIF, WebM or PNG-sequence timeline export, with no second dialog and no extra animation switch. The save/render path stays off the UI thread.</sub>
+  <sub><b>One export surface</b> — Export follows the selection: each export row keeps its scale, suffix, format, Dots settings and its own delete; the <code>+</code> adds a row and the <code>-</code> removes it. GIF, WebM, <code>PNG frames</code> and MP4 are ordinary formats in that list, so one Export button writes every row the selected layer has. Animation FPS no longer takes a fourth column: it sits in the row's Dots popup, together with the PNG settings on a <code>PNG frames</code> row. Choosing a frame exports its whole subtree; <code>PNG frames</code> is a <code>.zip</code> of numbered PNGs. No second dialog and no extra animation switch.</sub>
 </p>
 
 ## What this is
@@ -133,8 +134,8 @@ are made upstream, not here.
       <h3>🎬 Motion, backed by the engine</h3>
       Keyframes, easing and per-property tracks drive the same scene the canvas draws. Fill,
       stroke and stroke weight auto-key from the inspector, presets cover enter/cycle/exit, and
-      the timeline exports <b>MP4 (H.264)</b>, GIF, WebM (AV1) and a PNG sequence from the
-      same right-panel Export section, off the UI thread.
+      the timeline exports <b>MP4 (H.264)</b>, GIF, WebM (AV1) and a PNG-frames <code>.zip</code>
+      from the same right-panel Export section, off the UI thread.
     </td>
   </tr>
   <tr>
@@ -188,6 +189,33 @@ sampling the coloured backdrop under it.
   <sub><b>External WGSL material</b> — a glass shader over the live canvas tile, with its uniforms exposed in the Effects panel.</sub>
 </p>
 
+### Prototype devices are external files
+
+Monet does not compile a device list into the binary. The Prototype section reads `devices.json` and
+every bezel PNG from a folder the user owns:
+
+- `MONET_DEVICES_DIR` when set;
+- otherwise `%APPDATA%\Monet\devices` on Windows;
+- otherwise `$HOME/.local/share/monet/devices` on Linux and macOS.
+
+On first launch the desktop shell copies the factory catalogue from `assets/devices` into that
+folder, and refreshes any file that differs on later launches. From then on the engine reads every
+family, variant, colour and bezel PNG from that directory; `MONET_DEVICES_DIR` names a different
+one. The bundled set has 13 families, 25 variants, 90 variant/colour choices and 155 bezel PNGs
+(about 106 MB), covering iPhone 16/17/18 and iPhone Duo, iPad, iPad mini/Air/Pro, MacBook
+Air/Neo/Pro/Pro XDR and iMac.
+
+`devices.json` is version 2. A family has an `id` and a display `name`; its variants carry a
+`frame` map of orientation → colour → PNG path (relative to the devices folder), the logical
+screen `width` and `height`, `rotates`, `kind`, the available `colors`, and the
+`screenRects`, `screenRadius` and `outerRadius` measured in PNG pixels. That is all the engine
+needs to seat a prototype's screen inside a new body: the geometry is data, not code.
+In the Prototype settings panel the family dropdown chooses the body and the variant flyout
+chooses the model; colour and Portrait/Landscape follow, and rotation appears only for devices
+whose `rotates` is true. The manifest and loader live in
+[`assets/devices/devices.json`](assets/devices/devices.json) and
+[`crates/devices/src/lib.rs`](crates/devices/src/lib.rs).
+
 ## Get started
 
 Requires a recent stable Rust toolchain (edition 2024, `rust-version = 1.95`). On Windows the MSVC
@@ -195,6 +223,15 @@ toolchain is expected.
 
 ```sh
 cargo run -p figcraft-ui-gpui --example run
+```
+
+GPU is on by default. External WGSL materials run on the canvas and are also baked into PNG, JPG and
+WebP exports at the export scale — a glass card exports as glass, not as its flat fill. A CPU-only
+build (no shader execution) is explicit:
+
+```sh
+cargo run -p figcraft-ui-gpui --example run                 # GPU, default
+cargo run -p figcraft-ui-gpui --example run --no-default-features  # CPU only
 ```
 
 Tests:

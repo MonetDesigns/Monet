@@ -10,11 +10,11 @@ members = ["crates/*", "apps/*", "xtask"]
 exclude = ["plugins", "crates/ui-egui", "apps/figcraft", "apps/figcraft-web"]
 
 [workspace.package]
-version = "0.15.0"
+version = "2648.15.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.95"
-repository = "https://github.com/yelintong/Monet"
+repository = "https://github.com/MonetDesigns/Monet"
 
 [workspace.dependencies]
 # internal

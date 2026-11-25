@@ -123,6 +123,17 @@ impl Animation {
     pub fn size(&self) -> (u32, u32) {
         self.size
     }
+    /// H.264 (MP4) and AV1 (WebM) encode 4:2:0 and reject odd picture sizes. Add at most one
+    /// transparent row/column instead of failing an otherwise valid animation whose union bounds
+    /// landed on an odd pixel (a 110×116 layer can produce 111×116 after sub-pixel movement).
+    fn pad_even(mut self) -> Self {
+        let w = self.view.width + self.view.width % 2;
+        let h = self.view.height + self.view.height % 2;
+        self.view.width = w;
+        self.view.height = h;
+        self.size = (w, h);
+        self
+    }
     /// Whether anything on the page is animated.
     pub fn is_animated(&self) -> bool {
         figcraft_doc::anim::motion::animated_nodes(&self.base, self.page)
@@ -162,20 +173,42 @@ pub fn frame_times(timeline: &TimelineSettings, fps: u32) -> Vec<f64> {
     out
 }
 
-/// The `motion.export` command: no document write, no undo — it only reads and encodes.
-pub fn run(s: &mut Session, p: &Value) -> Result<Value> {
+/// The encoded bytes of one Motion export and the metadata a save dialog / test needs.
+pub struct AnimationOutput {
+    pub bytes: Vec<u8>,
+    pub ext: &'static str,
+    pub frames: usize,
+    pub fps: u32,
+    pub width: u32,
+    pub height: u32,
+    pub looping: bool,
+}
+
+/// The scale that gives a node's animation `size` (`2x` / `512w` / `512h`). The animation's
+/// fixed union bounds are the reference size, exactly like the still export's own bounds.
+pub fn scale_for(doc: &Document, node: NodeId, size: figcraft_doc::ExportSize) -> f64 {
+    match Animation::new(doc, node, 1.0) {
+        Some(a) => size.scale_for(a.size().0 as f64, a.size().1 as f64),
+        None => 1.0,
+    }
+}
+
+/// Encode one Motion export from a plain document. This is the single encoder used by
+/// `motion.export` and by a normal Export row whose format is GIF / WebM / PNG frames / MP4.
+pub fn encode_animation(
+    doc: &Document,
+    node: NodeId,
+    format: AnimFormat,
+    scale: f64,
+    fps: u32,
+    quality: u8,
+    speed: u8,
+) -> Result<AnimationOutput> {
     let cmd = "motion.export";
-    let ids = req_targets(cmd, s, p)?;
-    let node = ids[0];
-    let format = match string(p, "format").as_deref() {
-        None | Some("gif") => AnimFormat::Gif,
-        Some(f) => AnimFormat::parse(f).ok_or_else(|| bad(cmd, "format: gif|webm|png|zip|png-zip"))?,
-    };
-    let scale = num(p, "scale").unwrap_or(1.0);
-    let fps = num(p, "fps").unwrap_or(0.0) as u32;
-    let quality = num(p, "quality").unwrap_or(85.0) as u8;
-    let speed = num(p, "speed").unwrap_or(9.0) as u8;
-    let anim = Animation::new(s.doc()?, node, scale).ok_or_else(|| bad(cmd, "nothing to export (no node, no bounds, or too large)"))?;
+    let anim = Animation::new(doc, node, scale).ok_or_else(|| bad(cmd, "nothing to export (no node, no bounds, or too large)"))?;
+    // MP4/H.264 and WebM/AV1 encode 4:2:0 and require even picture sizes. GIF and PNG frames keep
+    // their exact bounds; video formats get a single transparent edge pixel when needed.
+    let anim = if matches!(format, AnimFormat::Mp4 | AnimFormat::Webm) { anim.pad_even() } else { anim };
     if !anim.is_animated() {
         return Err(bad(cmd, "the layer has no Motion animation to export"));
     }
@@ -229,22 +262,39 @@ pub fn run(s: &mut Session, p: &Value) -> Result<Value> {
                     (figcraft_motion_codec::encode_gif(&frames, &vec![step; frames.len()], anim.timeline().looping).map_err(|e| bad(cmd, e))?, "gif")
                 }
                 AnimFormat::PngZip => {
-                    let name = s.doc()?.node(node).map(|n| n.name.clone()).unwrap_or_else(|| "animation".into());
+                    let name = doc.node(node).map(|n| n.name.clone()).unwrap_or_else(|| "animation".into());
                     (figcraft_motion_codec::write_png_zip(&frames, &name).map_err(|e| bad(cmd, e))?, "zip")
                 }
                 AnimFormat::Webm | AnimFormat::Mp4 => return Err(bad(cmd, "handled above")),
             }
         }
     };
+    Ok(AnimationOutput { bytes, ext, frames: times.len(), fps, width: size.0, height: size.1, looping: anim.timeline().looping })
+}
+
+/// The `motion.export` command: no document write, no undo — it only reads and encodes.
+pub fn run(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "motion.export";
+    let ids = req_targets(cmd, s, p)?;
+    let node = ids[0];
+    let format = match string(p, "format").as_deref() {
+        None | Some("gif") => AnimFormat::Gif,
+        Some(f) => AnimFormat::parse(f).ok_or_else(|| bad(cmd, "format: gif|webm|png|zip|png-zip"))?,
+    };
+    let scale = num(p, "scale").unwrap_or(1.0);
+    let fps = num(p, "fps").unwrap_or(0.0) as u32;
+    let quality = num(p, "quality").unwrap_or(85.0) as u8;
+    let speed = num(p, "speed").unwrap_or(9.0) as u8;
+    let out = encode_animation(s.doc()?, node, format, scale, fps, quality, speed)?;
     Ok(json!({
-        "format": ext,
+        "format": out.ext,
         "label": format.label(),
-        "data": base64::engine::general_purpose::STANDARD.encode(&bytes),
-        "frames": times.len(),
-        "fps": fps,
-        "width": size.0,
-        "height": size.1,
-        "loop": anim.timeline().looping,
+        "data": base64::engine::general_purpose::STANDARD.encode(&out.bytes),
+        "frames": out.frames,
+        "fps": out.fps,
+        "width": out.width,
+        "height": out.height,
+        "loop": out.looping,
     }))
 }
 

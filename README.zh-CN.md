@@ -35,6 +35,7 @@
   <a href="#a-look-around">界面一览</a> ·
   <a href="#what-this-is">这是什么</a> ·
   <a href="#features">特性</a> ·
+  <a href="#设备原型也是外置文件">设备原型</a> ·
   <a href="#get-started">开始使用</a> ·
   <a href="#contributing">参与贡献</a>
 </p>
@@ -84,9 +85,9 @@
 </table>
 
 <p align="center">
-  <img src="docs/images/screenshots/09-animation-export.png" alt="Monet 完整窗口的 Motion 模式：选中 Motion Card，时间轴上显示 Fill、Stroke 和 Stroke weight 关键帧；右侧 Export 节跟随当前选择，显示 MP4 格式选择器和 Export Motion Card 按钮，没有额外的动画开关" width="900">
+  <img src="docs/images/screenshots/09-animation-export.png" alt="Monet 右侧 Export 节：选中 H·item 2，四行普通导出项（GIF、MP4、WebM、PNG frames），各自带尺寸、后缀、格式、Dots 和删除；FPS 与 PNG frames 的 PNG 设置都在行尾 Dots 弹窗，同一个 Export 按钮；没有独立动画区块" width="900">
   <br>
-  <sub><b>唯一的导出面</b> —— 右侧 Export 节导出当前选中的图层；在 Motion 模式下同一个节提供 MP4、GIF、WebM、PNG 序列时间轴导出，没有第二个对话框，也没有额外的动画开关。保存/渲染都不占 UI 线程。</sub>
+  <sub><b>唯一的导出面</b> —— 导出跟着选择走：每个导出项保留自己的尺寸、后缀、格式、Dots 设置和删除；<code>+</code> 加一项，<code>-</code> 删一项。GIF、WebM、<code>PNG frames</code>、MP4 就是列表里的普通格式，一颗 Export 按钮会导出选中层的所有项。动画 FPS 不再占行内第四列，而是和 PNG frames 的 PNG 设置一起收在行尾 Dots 弹窗里。选中画框会导出整个画框子树；<code>PNG frames</code> 是逐帧 PNG 打成的 <code>.zip</code>。没有第二个对话框，也没有额外的动画开关。</sub>
 </p>
 
 ## 这是什么
@@ -125,7 +126,7 @@ egui 前端作为冻结参照保留在仓库中；引擎改动在上游进行，
       <h3>🎬 引擎驱动的动画</h3>
       关键帧、缓动和按属性分轨驱动画布上的同一个场景。填充、描边和描边线宽可在检查器里自动
       打关键帧，预设覆盖入场、循环和出场，时间轴从右侧同一个 Export 节在后台导出
-      <b>MP4（H.264）</b>、GIF、WebM（AV1）和 PNG 序列。
+      <b>MP4（H.264）</b>、GIF、WebM（AV1）和逐帧 PNG 的 <code>.zip</code>。
     </td>
   </tr>
   <tr>
@@ -175,12 +176,43 @@ WGSL 材质在 shader 层同理：图层绑定记录一个 <code>.wgsl</code> �
   <sub><b>外置 WGSL 材质</b> —— 覆盖在实时画布图块上的玻璃 shader，uniform 在效果面板中可调。</sub>
 </p>
 
+### 设备原型也是外置文件
+
+Monet 不把设备清单编译进二进制。原型（Prototype）面板读取用户目录里的 `devices.json` 和
+每一张机身 PNG：
+
+- 设置了 `MONET_DEVICES_DIR` 时用它；
+- Windows 默认 `%APPDATA%\Monet\devices`；
+- Linux 和 macOS 默认 `$HOME/.local/share/monet/devices`。
+
+桌面壳首次启动会把 `assets/devices` 里的出厂目录复制进去，之后每次启动只刷新有变化的文件。
+此后引擎的每个系列、型号、颜色和机身 PNG 都从该目录读取；`MONET_DEVICES_DIR` 可指向另一个
+目录。随仓库附带的目录有 13 个系列、25 个型号、90 种型号/颜色组合、155 张机身 PNG
+（约 106 MB），覆盖 iPhone 16/17/18、iPhone Duo，iPad、iPad mini/Air/Pro，
+MacBook Air/Neo/Pro/Pro XDR 和 iMac。
+
+`devices.json` 当前是 version 2。一个 family 有 `id` 和显示名 `name`；它的 variants 带一张
+`frame` 映射（方向 → 颜色 → 相对设备目录的 PNG 路径）、逻辑屏幕的 `width` 和 `height`、
+`rotates`、`kind`、可选 `colors`，以及按 PNG 像素测量的 `screenRects`、`screenRadius` 和
+`outerRadius`。引擎靠这些字段把原型画面嵌进新机身：几何是数据，不是代码。
+原型设置面板先选 family 下拉，再在型号 flyout 里选具体机型，然后选颜色和竖屏/横屏；
+只有 `rotates` 为 true 的设备才显示旋转。清单和加载逻辑分别在
+[`assets/devices/devices.json`](assets/devices/devices.json) 和
+[`crates/devices/src/lib.rs`](crates/devices/src/lib.rs)。
+
 ## 开始使用
 
 需要较新的稳定版 Rust 工具链（edition 2024，`rust-version = 1.95`）。Windows 上需 MSVC 工具链。
 
 ```sh
 cargo run -p figcraft-ui-gpui --example run
+```
+
+GPU 现在默认开启。外置 WGSL 材质既在画布上执行，也会按导出倍率烘进 PNG、JPG、WebP——玻璃卡片导出的就是玻璃，不再是它的平涂底色。只有显式关掉默认 feature 才是纯 CPU 构建（不执行 shader）：
+
+```sh
+cargo run -p figcraft-ui-gpui --example run                        # 默认 GPU
+cargo run -p figcraft-ui-gpui --example run --no-default-features  # 纯 CPU
 ```
 
 测试：

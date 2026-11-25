@@ -170,43 +170,6 @@ pub(crate) fn pick_dropdown(f: &RightFields, label: impl Into<SharedString>, wid
     pick_dropdown_lead(f, label, width, rows, None)
 }
 
-/// A dropdown that only changes a local UI slot (no engine command). Used by the Export
-/// section's animation format picker: the format is a window preference, not a persisted
-/// `ExportSetting`, until the user presses the single Export button.
-fn local_pick_dropdown(
-    f: &RightFields,
-    label: impl Into<SharedString>,
-    width: f32,
-    options: &'static [&'static str],
-    slot: Rc<RefCell<usize>>,
-) -> Dropdown {
-    let idx = *slot.borrow();
-    let label = label.into();
-    let current = options.get(idx).copied().unwrap_or(options[0]);
-    let menu: Vec<MenuRow> = options.iter().map(|o| MenuRow::row((*o).to_string())).collect();
-    let mut d = Dropdown::new(current, width, None).fill();
-    if let Some(root) = f.root.clone() {
-        let cmds = f.cmds.clone();
-        let slot = slot.clone();
-        let options = options;
-        d = d.on_click(move |anchor, _window, cx: &mut App| {
-            let menu = menu.clone();
-            let slot = slot.clone();
-            let cmds = cmds.clone();
-            let on_pick = Rc::new(move |label: &str, _w: &mut Window, _cx: &mut App| {
-                if let Some(i) = options.iter().position(|o| *o == label) {
-                    *slot.borrow_mut() = i;
-                    cmds.wake();
-                }
-            });
-            root.update(cx, move |cv, cx| {
-                cv.open_menu(anchor, Some(width.max(120.0)), menu, on_pick, cx);
-            });
-        });
-    }
-    d
-}
-
 /// Like [`pick_dropdown`], but each row shows a trailing detail (e.g. a device's `W × H`).
 /// The rows are `(label, trailing, command, params)`; an empty trailing shows nothing.
 #[track_caller]
@@ -2311,7 +2274,7 @@ pub(crate) fn grids(f: &RightFields, d: &PanelData, col: f32) -> Section {
 // Export —— `export_panel.rs::section` / `setting_row`
 // ───────────────────────────────────────────────────────────────────────────────────────────────
 
-pub(crate) fn export(f: &RightFields, d: &PanelData, col: f32, _n: &mut usize, cx: &mut App, motion: bool) -> Section {
+pub(crate) fn export(f: &RightFields, d: &PanelData, col: f32, n: &mut usize, cx: &mut App, _motion: bool) -> Section {
     // egui `export_panel.rs::section`: `mixed = shared.is_none() && sel.len() > 1`。
     // mixed 时 `+` 是「整体替换成一条默认设置」（set_props exports），不是 export.add。
     // 空选区 = Page 页：设置存在页面节点上，导出按钮把页面子层合成一张图。
@@ -2333,47 +2296,69 @@ pub(crate) fn export(f: &RightFields, d: &PanelData, col: f32, _n: &mut usize, c
     // page has no setting yet (the button falls back to PNG); only a non-page empty selection
     // collapses to an empty section.
     let rows = d.exports.clone().filter(|v| !v.is_empty()).unwrap_or_default();
-    // The selection is the export target. In Motion mode a single selected layer exports its
-    // timeline directly: no extra switch, no second Export dialog.
-    let anim_on = motion && !page_mode && target.len() == 1;
-    if rows.is_empty() && !page_mode && !anim_on {
+    let has_rows = !rows.is_empty();
+    if !has_rows && !page_mode {
         return Section::empty(tr("Export"), plus);
     }
     let mut sec = PanelSection::new(tr("Export")).header_trail(plus);
     // 预览框是整行宽（两列 + 间隙），图片再让出左右内边距与 8 pt 呼吸位。
     let full_w = col * 2.0 + crate::widgets::GRID_GAP;
-    if anim_on {
-        const FORMATS: [&str; 4] = ["MP4", "GIF", "WebM", "PNG sequence"];
-        sec = sec.child(field_row(
-            vec![
-                local_pick_dropdown(f, FORMATS[*f.export_animation_format.borrow()], col, &FORMATS, f.export_animation_format.clone())
-                    .into_any_element(),
-            ],
-            Vec::<gpui::AnyElement>::new(),
-        ));
-    } else {
+    if has_rows {
         for row in rows.iter() {
             let index = row.index;
-            // ① 第一行（统一网格）：Size（仅位图）+ 格式，行尾 Dots 设置小窗与删除。
-            let formats: Vec<(String, &'static str, Value)> =
-                [("PNG", "png"), ("JPG", "jpg"), ("SVG", "svg"), ("PDF", "pdf"), ("WebP", "webp"), ("XML", "xml")]
-                    .into_iter()
-                    .map(|(l, ext)| (l.to_string(), "export.update", with_ids(json!({ "index": index, "format": ext }))))
-                    .collect();
-            let mut fields: Vec<gpui::AnyElement> = Vec::new();
-            if row.is_raster {
-                let mut sizes: Vec<(String, &'static str, Value)> = Vec::new();
-                for v in figcraft_doc::ExportSize::SCALES {
-                    let label = figcraft_doc::ExportSize::Scale { value: v }.label();
-                    sizes.push((label.clone(), "export.update", with_ids(json!({ "index": index, "size": label }))));
-                }
+            // ① desigma `setting_row`: scale | suffix | format | trailing settings/remove.
+            // Every selected layer edits the same row index in one `export.update`, so the row
+            // matches the stored ExportSetting on every node instead of one synthetic control.
+            //
+            // Animation is not a second panel: GIF / WebM / PNG frames / MP4 are normal formats
+            // in this row. `+` adds another row and `-` removes it, exactly like PNG or SVG.
+            let formats: Vec<(String, &'static str, Value)> = figcraft_doc::ExportFormat::WITH_ANIMATION
+                .into_iter()
+                .map(|f| (f.label().to_string(), "export.update", with_ids(json!({ "index": index, "format": f.ext() }))))
+                .collect();
+            let mut sizes: Vec<(String, &'static str, Value)> = Vec::new();
+            // Motion formats take a scale (their bounds are the animation's union bounds), not a
+            // pixel width: a 512w row would make the encoder resize against a still frame.
+            let scale_values: Vec<f64> = if row.is_animation && row.format != "zip" {
+                vec![0.5, 1.0, 1.5, 2.0, 3.0]
+            } else {
+                figcraft_doc::ExportSize::SCALES.to_vec()
+            };
+            for v in &scale_values {
+                let label = figcraft_doc::ExportSize::Scale { value: *v }.label();
+                sizes.push((label.clone(), "export.update", with_ids(json!({ "index": index, "size": label }))));
+            }
+            if !row.is_animation || row.format == "zip" {
                 for s in ["512w", "512h"] {
                     sizes.push((s.to_string(), "export.update", with_ids(json!({ "index": index, "size": s }))));
                 }
-                fields.push(pick_dropdown(f, row.size.clone(), col, sizes).into_any_element());
             }
+            let suffix_slot = slot(n);
+            let suffix = f.row_field(
+                cx,
+                suffix_slot,
+                &row.suffix,
+                RowEditCtx {
+                    cmd: "export.update",
+                    params: with_ids(json!({ "index": index })),
+                    key: "suffix",
+                    scale: 1.0,
+                    string_value: true,
+                    paint: None,
+                    nest: None,
+                    nest_key: None,
+                    paint_color: None,
+                },
+            );
+            // Empty means the automatic `@2x`-style suffix, like desigma's grey "Suffix" hint.
+            suffix.update(cx, |te, _| te.set_placeholder(tr("Suffix")));
+            let mut fields: Vec<gpui::AnyElement> = Vec::new();
+            fields.push(pick_dropdown(f, row.size.clone(), col, sizes).into_any_element());
+            fields.push(div().flex_1().min_w(px(0.0)).h_full().child(suffix).into_any_element());
             fields.push(pick_dropdown(f, row.format_label, col, formats).into_any_element());
-            // Dots 设置小窗（用户要求：单选器放弹窗，不放下拉）。
+            // Frame rate lives in the row's Dots popup (with the format's other settings),
+            // not as a fourth column: the row stays the normal scale | suffix | format layout.
+            let minus = icon_cmd(Icon::Minus, "export.remove", with_ids(json!({ "index": index })), f, false).into_any_element();
             let trigger = format!("export-options-{index}");
             let popups = f.popups();
             let queue = f.queue();
@@ -2385,93 +2370,93 @@ pub(crate) fn export(f: &RightFields, d: &PanelData, col: f32, _n: &mut usize, c
                     crate::popovers::WindowState::export_options(queue.clone(), tr("Export settings"), anchor, export_rows.clone())
                 });
             });
-            let minus = icon_cmd(Icon::Minus, "export.remove", with_ids(json!({ "index": index })), f, false).into_any_element();
             sec = sec.child(field_row(fields, vec![dots, minus]));
         }
     }
 
-    // ② 导出按钮（egui `wide_button`）：放在预览**上面**，紧贴设置行；左右 16pt，与预览框同宽。
-    //    suffix 输入框那一整行已删除（空值时不可见却占 32pt，把按钮和设置行撑开）。
-    let name = d.header.as_ref().map(|h| h.layer_name.clone()).unwrap_or_default();
-    let (cmd, params, label): (&'static str, Value, SharedString) = if anim_on {
-        const EXTS: [&str; 4] = ["mp4", "gif", "webm", "png"];
-        const CMDS: [&'static str; 4] = ["motion.export.mp4", "motion.export.gif", "motion.export.webm", "motion.export.png"];
-        const FPS: [u32; 4] = [60, 30, 60, 60];
-        let i = (*f.export_animation_format.borrow()).min(3);
-        let scale = rows.first().and_then(|r| r.size.trim().trim_start_matches('@').trim_end_matches('x').parse::<f64>().ok()).unwrap_or(1.0);
-        let cmd = CMDS[i];
-        let params = json!({ "ids": &target, "format": EXTS[i], "fps": FPS[i], "scale": scale });
-        let label = if name.is_empty() { tr("Export").into() } else { trf("Export {name}", &[("name", &name)]).into() };
-        (cmd, params, label)
-    } else if page_mode {
-        let fmt = rows.first().map(|r| r.format).unwrap_or("png");
-        let page_ids = d.page.as_ref().map(|p| p.export_ids.clone()).unwrap_or_default();
-        // The preview uses the page's first ExportSetting; the actual export must match it.
-        // Carry the stored scale, colour profile and the advanced flags into file.export instead
-        // of exporting at 1x / default profile while the preview shows the configured setting.
-        let mut params = json!({ "ids": page_ids, "format": fmt });
-        if let Some(row) = rows.first() {
-            // `size` is the ExportSize label ("2x" / "512w" / "512h"); the engine parses it with
-            // the same rule the size dropdown uses, so scale and pixel sizes both round-trip.
-            params["size"] = json!(row.size);
-            params["colorProfile"] = json!(row.color_profile);
-            params["contentsOnly"] = json!(row.contents_only);
-            params["includeBoundingBox"] = json!(row.include_bounding_box);
-        }
-        ("file.export", params, tr("Export page").into())
-    } else if target.len() == 1 && !name.is_empty() {
-        ("file.exportLayers", json!({ "ids": &target }), trf("Export {name}", &[("name", &name)]).into())
-    } else {
-        ("file.exportLayers", json!({ "ids": &target }), trn("Export {n} layers", target.len(), &[]).into())
-    };
-    sec = sec.child(block_row(
-        div()
+    // ② Preview（egui `export_panel::preview`）：折叠行 + 120 pt 预览框。
+    if has_rows {
+        let open = f.export_preview_open.get();
+        let toggle = f.export_preview_open.clone();
+        let wake = f.cmds.clone();
+        let head = div()
             .w_full()
-            .h(pt(crate::widgets::ROW_H))
+            .h_full()
             .flex()
             .items_center()
-            .pl(pt(crate::widgets::PAD))
-            .pr(pt(crate::widgets::PAD))
-            .child(wide_button(f, label, cmd, params).flex_1()),
-    ));
-
-    // ③ Preview（egui `export_panel::preview`）：折叠行 + 160 pt 预览框。
-    // 动画模式只留格式与唯一一颗动画导出按钮：多出来的 Preview 行会把按钮压到
-    // 面板下沿、被时间轴挡住而点不到，所以动画模式下不画这一行。
-    if !anim_on {
-    let open = f.export_preview_open.get();
-    let toggle = f.export_preview_open.clone();
-    let wake = f.cmds.clone();
-    let head = div()
-        .w_full()
-        .h_full()
-        .flex()
-        .items_center()
-        .gap(pt(6.0))
-        .cursor_pointer()
-        .child(crate::widgets::icon::paint(if open { Icon::ChevronDown } else { Icon::ChevronRight }, rgba(tokens().text_secondary), 12.0))
-        .child(div().text_size(pt(11.0)).text_color(rgba(tokens().text)).child(tr("Preview")))
-        .on_mouse_down(MouseButton::Left, move |_e, _w, _cx| {
-            toggle.set(!toggle.get());
-            wake.wake();
-        });
-    sec = sec.child(field_row_full(head));
-    if open {
-        let t = tokens();
-        // flex_1（不是 w_full）：父层带 16pt 内边距，w_full 会按整栏宽算、右边顶到面板边缘。
-        let mut frame =
-            div().flex_1().h(px(160.0)).rounded(px(crate::widgets::RADIUS)).border_1().border_color(rgba(t.border)).overflow_hidden().relative();
-        frame = frame.child(canvas(|b, _w, _cx| b.size, |b, _, window, _cx| crate::widgets::checker(window, b, 8.0)).absolute().inset_0());
-        if let Some((w, h, buf)) = &d.export_preview {
-            let img = img(ImageSource::Render(crate::canvas::render_worker::wrap_bgra(*w, *h, buf.clone())))
-                .max_w(px(d.export_preview_max_w.max(32.0)))
-                .max_h(px(144.0));
-            frame = frame.child(div().absolute().inset_0().flex().items_center().justify_center().child(img));
+            .gap(pt(6.0))
+            .cursor_pointer()
+            .child(crate::widgets::icon::paint(if open { Icon::ChevronDown } else { Icon::ChevronRight }, rgba(tokens().text_secondary), 12.0))
+            .child(div().text_size(pt(11.0)).text_color(rgba(tokens().text)).child(tr("Preview")))
+            .on_mouse_down(MouseButton::Left, move |_e, _w, _cx| {
+                toggle.set(!toggle.get());
+                wake.wake();
+            });
+        sec = sec.child(field_row_full(head));
+        if open {
+            let t = tokens();
+            // flex_1（不是 w_full）：父层带 16pt 内边距，w_full 会按整栏宽算、右边顶到面板边缘。
+            let mut frame =
+                div().flex_1().h(px(120.0)).rounded(px(crate::widgets::RADIUS)).border_1().border_color(rgba(t.border)).overflow_hidden().relative();
+            frame = frame.child(canvas(|b, _w, _cx| b.size, |b, _, window, _cx| crate::widgets::checker(window, b, 8.0)).absolute().inset_0());
+            if let Some((w, h, buf)) = &d.export_preview {
+                let img = img(ImageSource::Render(crate::canvas::render_worker::wrap_bgra(*w, *h, buf.clone())))
+                    .max_w(px(d.export_preview_max_w.max(32.0)))
+                    .max_h(px(108.0));
+                frame = frame.child(div().absolute().inset_0().flex().items_center().justify_center().child(img));
+            }
+            sec = sec.child(block_row(div().w_full().flex().pl(pt(crate::widgets::PAD)).pr(pt(crate::widgets::PAD)).pb(pt(8.0)).child(frame)));
         }
-        // 左右都 16，和上面的按钮严格同宽。
-        sec = sec.child(block_row(div().w_full().flex().pl(pt(crate::widgets::PAD)).pr(pt(crate::widgets::PAD)).pb(pt(8.0)).child(frame)));
     }
+
+    // ③ 唯一的导出按钮（egui `wide_button`）。它写每个选中层的 ExportSetting；
+    //    GIF/WebM/PNG frames/MP4 只是行里的格式，不再有独立动画按钮。
+    let name = d.header.as_ref().map(|h| h.layer_name.clone()).unwrap_or_default();
+    if has_rows || page_mode {
+        let (cmd, params, label): (&'static str, Value, SharedString) = if page_mode {
+            let fmt = rows.first().map(|r| r.format).unwrap_or("png");
+            // A still page export composes its children; a Motion format exports the page's own
+            // timeline, so target the page node instead of its children.
+            let page_ids = if rows.first().is_some_and(|r| r.is_animation) {
+                d.page_node.into_iter().collect()
+            } else {
+                d.page.as_ref().map(|p| p.export_ids.clone()).unwrap_or_default()
+            };
+            // The preview uses the page's first ExportSetting; the actual export must match it.
+            // Carry the stored scale, colour profile and the advanced flags into file.export instead
+            // of exporting at 1x / default profile while the preview shows the configured setting.
+            let mut params = json!({ "ids": page_ids, "format": fmt });
+            if let Some(row) = rows.first() {
+                // `size` is the ExportSize label ("2x" / "512w" / "512h"); the engine parses it with
+                // the same rule the size dropdown uses, so scale and pixel sizes both round-trip.
+                params["size"] = json!(row.size);
+                params["colorProfile"] = json!(row.color_profile);
+                params["contentsOnly"] = json!(row.contents_only);
+                params["includeBoundingBox"] = json!(row.include_bounding_box);
+                if row.is_animation {
+                    params["fps"] = json!(row.fps);
+                }
+            }
+            ("file.export", params, tr("Export page").into())
+        } else if target.len() == 1 && !name.is_empty() {
+            ("file.exportLayers", json!({ "ids": &target }), trf("Export {name}", &[("name", &name)]).into())
+        } else {
+            ("file.exportLayers", json!({ "ids": &target }), trn("Export {n} layers", target.len(), &[]).into())
+        };
+        sec = sec.child(block_row(
+            div()
+                .w_full()
+                .h(pt(crate::widgets::ROW_H))
+                .flex()
+                .items_center()
+                .pl(pt(crate::widgets::PAD))
+                .pr(pt(crate::widgets::PAD))
+                .child(wide_button(f, label, cmd, params).flex_1()),
+        ));
     }
+
+    // No separate Animation block: an animation is one more normal Export row (GIF / WebM /
+    // PNG frames / MP4), added with `+` and removed with `-`, exported by the same button above.
     Section::Full(sec)
 }
 
@@ -2504,25 +2489,35 @@ fn export_setting_rows(
         v
     };
     let mut out: Vec<Setting> = Vec::new();
-    // Per-setting Suffix editor (egui `setting_row`). It always shows with its "Suffix" label
-    // even when empty, and edits go through `export.update` with this row's ids/index/suffix.
-    {
-        let field = crate::widgets::input::field::text_field(cx, 176.0, &row.suffix, "", crate::widgets::Slot::None, crate::widgets::Slot::None);
+    // Frame rate is a Motion-only row setting, but it belongs in the Dots popup with the other
+    // advanced options instead of taking a fourth column away from scale/suffix/format.
+    if row.is_animation {
         let queue = cmds.clone();
         let ids = target.to_vec();
+        let index = row.index;
+        let initial = if row.fps == 0 { "Auto".to_string() } else { row.fps.to_string() };
+        let field = crate::widgets::input::field::text_field(cx, 176.0, &initial, "", crate::widgets::Slot::None, crate::widgets::Slot::None);
         field.update(cx, move |tf, _| {
-            let queue = queue.clone();
-            let ids = ids.clone();
             tf.set_on_commit(move |typed, _, _| {
-                let mut params = json!({ "index": index, "suffix": typed.to_string() });
+                let typed = typed.trim();
+                let fps = if typed.is_empty() || typed.eq_ignore_ascii_case("auto") {
+                    0
+                } else {
+                    match typed.parse::<u32>() {
+                        Ok(v) if v <= 120 => v,
+                        _ => return,
+                    }
+                };
+                let mut params = json!({ "index": index, "fps": fps });
                 if let Some(o) = params.as_object_mut() {
                     o.insert("ids".into(), json!(&ids));
                 }
                 queue.push(crate::panels::Cmd { id: "export.update", params: Some(params) });
             });
         });
-        out.push(Setting::Field { tab: 0, label: tr("Suffix").into(), field });
+        out.push(Setting::Field { tab: 0, label: tr("Frame rate").into(), field });
     }
+    // Suffix 在行内（desigma `setting_row` 的 scale | suffix | format），不在 Dots 弹窗里重复。
     let toggle = |label: String, on: bool, key: &'static str| Setting::Toggle {
         tab: 0,
         label: label.into(),
@@ -2566,7 +2561,9 @@ fn export_setting_rows(
         out.push(toggle(tr("Bleed marks").to_string(), row.bleed_marks, "bleedMarks"));
         out.push(toggle("CMYK".to_string(), row.cmyk, "cmyk"));
     }
-    if row.is_raster {
+    // PNG frames (`zip`) is a package of single PNGs: keep the PNG color-profile choices in its
+    // popup. GIF/WebM/MP4 have their own color pipeline, so they only get the frame-rate field.
+    if row.is_raster || row.format == "zip" {
         out.push(Setting::SubLabel { tab: 0, text: tr("Color profile").into() });
         for p in figcraft_doc::ExportColorProfile::ALL {
             let label = match p {

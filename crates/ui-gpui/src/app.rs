@@ -101,6 +101,10 @@ impl CanvasApp {
         {
             app.session.set_selection(vec![id]);
         }
+        // Raster exports use the same external-material shader registry as the canvas. Installing
+        // is idempotent, so the tests/control harnesses that build a CanvasApp get it too.
+        #[cfg(feature = "gpu")]
+        crate::export_gpu::install();
         app
     }
 

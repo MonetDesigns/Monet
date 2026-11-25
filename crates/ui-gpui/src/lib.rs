@@ -95,6 +95,11 @@ pub mod wgsl_runner;
 #[cfg(feature = "gpu")]
 mod shade_gpu;
 
+/// 栅格导出用的 GPU 材质通道（`--features gpu`）：PNG/JPG/WebP 导出与画布共用同一份
+/// `ShadeBoard` + shader registry，玻璃不会在导出时退回灰块。
+#[cfg(feature = "gpu")]
+mod export_gpu;
+
 mod main_menu;
 
 /// 点锚定的菜单卡片：右键菜单与工具栏飞出菜单共用的一套行模型。
@@ -2199,14 +2204,41 @@ impl CanvasView {
     /// A19：打开一个通用对话框。菜单命令与引擎 `ui_requests` 都走这一个入口，
     /// 所有对话框共用 `DialogState` 的壳 / 网格 / 控件 / 命令队列 / 关闭行为。
     fn open_dialog(&mut self, kind: dialogs::Kind, data: &serde_json::Value, cx: &mut Context<Self>) {
-        // A19 SaveAs: a native "Save as…" picker (like egui's `pick_file`), not a fake path field.
+        // A19 SaveAs: a native "Save as…" picker. It must be asynchronous: `rfd::FileDialog`
+        // pumps a nested Win32 message loop, and from a GPUI effect that re-enters the borrowed
+        // view (`RefCell already borrowed`) and can abort the process. This is the same rule the
+        // export download path already follows.
         if kind == dialogs::Kind::SaveAs {
-            if let Some(path) = rfd::FileDialog::new().set_file_name("Untitled.figcraft").add_filter(tr("Monet"), &["figcraft"]).save_file() {
-                let _ = self.app.session.execute("file.saveAs", &serde_json::json!({ "path": path.to_string_lossy() }));
-            }
-            if matches!(self.popup, Some(Popup::MainMenu(_))) {
-                self.close_popup(cx);
-            }
+            self.close_popup(cx);
+            let suggested = self
+                .app
+                .session
+                .ds()
+                .ok()
+                .map(|d| {
+                    let name = d.doc.name.replace('/', "-").replace('\\', "-").replace(':', "-");
+                    if name.to_ascii_lowercase().ends_with(".figcraft") { name } else { format!("{name}.figcraft") }
+                })
+                .unwrap_or_else(|| "Untitled.figcraft".into());
+            let this = cx.entity().downgrade();
+            cx.spawn(async move |this, cx| {
+                let Some(file) = rfd::AsyncFileDialog::new()
+                    .set_file_name(&suggested)
+                    .add_filter(tr("Monet"), &["figcraft"])
+                    .save_file()
+                    .await
+                else {
+                    return;
+                };
+                let path = file.path().to_string_lossy().to_string();
+                let _ = this.update(cx, |view, cx| {
+                    if let Err(e) = view.app.session.execute("file.saveAs", &serde_json::json!({ "path": path })) {
+                        view.toast(e.to_string(), cx);
+                    }
+                    cx.notify();
+                });
+            })
+            .detach();
             cx.notify();
             return;
         }
@@ -3002,19 +3034,6 @@ impl CanvasView {
 
                 let params = panels::cmd_params(&ids, c.params);
 
-                // Motion export renders and encodes every frame. Running it on the UI thread froze
-                // the whole window for the duration of the encode. Defer it out of this borrow and
-                // run it on a worker with a cloned document; the save dialog is still native and
-                // happens before the worker starts.
-                if c.id.starts_with("motion.export") {
-                    let params = params.clone();
-                    let this = cx.entity().downgrade();
-                    cx.defer(move |cx| {
-                        let _ = this.update(cx, |view, cx| view.start_motion_export(params, cx));
-                    });
-                    continue;
-                }
-
                 // 命令前的 uid 快照：成功后用 uid-diff 把新文档登记到发起窗口（见 adopt_opened_doc）。
                 let docs_before: Vec<u64> = self.app.session.docs.iter().map(|d| d.uid).collect();
 
@@ -3042,6 +3061,10 @@ impl CanvasView {
 
                         if std::env::var_os("FC_DEBUG_CMDS").is_some() {
                             eprintln!("[panel cmd] {} {} -> {}", c.id, params, e);
+                        }
+                        // 导出按钮失败要让用户看见原因（例如给静态层加了 GIF 行），而不是像死按钮。
+                        if c.id.starts_with("file.export") || c.id == "motion.export" {
+                            self.toast(e.to_string(), cx);
                         }
                     }
                 }
@@ -3948,73 +3971,6 @@ impl CanvasView {
             self.stamp_ui_requests();
             cx.notify();
         }
-    }
-
-    /// Animated exports are potentially long (hundreds of frames + H.264/AV1). The save picker
-    /// and the encoder both stay off the UI thread: a synchronous native dialog pumps its own
-    /// message loop and freezes GPUI (and can re-enter the borrowed entity). Hand a cloned
-    /// document to a worker that calls the same `motion.export` engine command the CLI / control
-    /// channel use, so there is one encoder path.
-    fn start_motion_export(&mut self, params: serde_json::Value, cx: &mut Context<Self>) {
-        use base64::Engine as _;
-
-        let ext = params.get("format").and_then(serde_json::Value::as_str).unwrap_or("mp4").to_string();
-        let doc_name = self.app.session.ds().ok().map(|d| d.doc.name.clone()).unwrap_or_else(|| "animation".into());
-        let default_name = format!("{doc_name}.{ext}");
-        let this = cx.entity().downgrade();
-        cx.spawn(async move |this, cx| {
-            let Some(file) = rfd::AsyncFileDialog::new()
-                .set_title(tr("Export animation"))
-                .set_file_name(&default_name)
-                .add_filter(ext.to_uppercase(), &[ext.as_str()])
-                .save_file()
-                .await
-            else {
-                return;
-            };
-            let path = file.path().to_path_buf();
-            let _ = this.update(cx, |view, cx| view.toast(tr("Exporting animation…"), cx));
-            // Re-read the document after the picker returns so the export reflects edits made
-            // while the dialog was open.
-            let doc = match this.update(cx, |view, _| view.app.session.doc().ok().cloned()) {
-                Ok(Some(doc)) => doc,
-                Ok(None) => return,
-                Err(_) => return,
-            };
-            let (tx, rx) = smol::channel::bounded::<std::result::Result<serde_json::Value, String>>(1);
-            let thread_params = params.clone();
-            let spawned = std::thread::Builder::new().name("figcraft-motion-export".into()).spawn(move || {
-                let mut session = figcraft_engine::Session::with_document(doc);
-                let result = session.execute("motion.export", &thread_params).map_err(|e| e.to_string());
-                let _ = tx.send_blocking(result);
-            });
-            if spawned.is_err() {
-                let _ = this.update(cx, |view, cx| view.toast(tr("Could not start the animation export"), cx));
-                return;
-            }
-            let Ok(result) = rx.recv().await else { return };
-            let _ = this.update(cx, |view, cx| {
-                let result = match result {
-                    Ok(v) => v,
-                    Err(e) => {
-                        view.toast(e, cx);
-                        return;
-                    }
-                };
-                let Some(data) = result.get("data").and_then(serde_json::Value::as_str) else {
-                    view.toast(tr("The animation export returned no data"), cx);
-                    return;
-                };
-                let Some(bytes) = base64::engine::general_purpose::STANDARD.decode(data).ok() else {
-                    view.toast(tr("The animation export returned invalid data"), cx);
-                    return;
-                };
-                if let Err(e) = std::fs::write(&path, bytes) {
-                    view.toast(e.to_string(), cx);
-                }
-            });
-        })
-        .detach();
     }
 
     /// A23：导出结果落盘。引擎在没有 `path` 时把内容以 base64 `data` 返回（egui 侧交给
@@ -9407,7 +9363,24 @@ pub fn run() {
     app.run(move |cx: &mut App| {
         a11y::init(cx);
 
-        let bounds = Bounds::centered(None, size(px(1280.0), px(860.0)), cx);
+        // Fit the nominal 1280×860 window inside the display bounds. GPUI 0.2's
+        // `Bounds::centered` does not clamp, so on a 150% display a fixed 860 pt logical height
+        // becomes 1290 physical pixels and the bottom of the window is off-screen; and forcing
+        // DPI-unaware to fit it only makes the whole UI blurry. The extra margins keep the OS
+        // resize border and taskbar from clipping the window.
+        let desired = size(px(1280.0), px(860.0));
+        let bounds = cx
+            .primary_display()
+            .map(|display| {
+                // GPUI 0.2 exposes `bounds()` (not `visible_bounds()`).
+                let screen = display.bounds();
+                let cap = size(
+                    (screen.size.width - px(24.0)).max(px(800.0)),
+                    (screen.size.height - px(64.0)).max(px(480.0)),
+                );
+                Bounds::centered_at(screen.center(), desired.min(&cap))
+            })
+            .unwrap_or_else(|| Bounds::centered(None, desired, cx));
 
         // kit `TitleBar::window_options()` 的等价物：声明窗口标题栏区域
         // （appears_transparent = true → Windows hide_title_bar = true，系统不画默认标题栏）。

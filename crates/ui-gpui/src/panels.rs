@@ -672,8 +672,6 @@ pub(crate) struct RightFields {
     /// Export 节「Preview」折叠行是否展开（egui `app.ui.export_thumb`）。纯 UI 状态，按窗口隔离；
     /// 只有展开时才让 `panel_data` 去光栅化预览图，避免每份文档白白渲染一张缩略图。
     export_preview_open: std::rc::Rc<std::cell::Cell<bool>>,
-    /// Animation 格式下标（0 MP4 / 1 GIF / 2 WebM / 3 PNG sequence），只影响当前窗口。
-    export_animation_format: std::rc::Rc<std::cell::RefCell<usize>>,
     /// 该节头部是否悬停（lizard 只在悬停时画 chevron、把标题提亮）。
     /// 该节头部是否悬停（参考实现 只在悬停时画 chevron、把标题提亮）。
     selection_colors_hover: std::rc::Rc<std::cell::RefCell<bool>>,
@@ -1328,7 +1326,6 @@ impl RightFields {
             selection_colors_open: std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new())),
             selection_colors_hover: std::rc::Rc::new(std::cell::RefCell::new(false)),
             export_preview_open: std::rc::Rc::new(std::cell::Cell::new(false)),
-            export_animation_format: std::rc::Rc::new(std::cell::RefCell::new(0usize)),
             right_tab: std::rc::Rc::new(std::cell::RefCell::new(0u8)),
             local_style_renaming: local_style_renaming.clone(),
             local_style_rename_style: local_style_rename_style.clone(),
@@ -1518,7 +1515,6 @@ impl RightFields {
         f.selection_colors_open = Default::default();
         f.selection_colors_hover = Default::default();
         f.export_preview_open = Default::default();
-        f.export_animation_format = Default::default();
         f.right_tab = Default::default();
         f.local_style_renaming = Default::default();
         f.local_style_rename_style = Default::default();

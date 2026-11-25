@@ -36,6 +36,26 @@ use figcraft_color::{Color, ColorProfile};
 use figcraft_doc::{Document, ExportFormat, NodeId, NodeKind};
 use figcraft_geom::{Affine, BezPath, Rect, Shape};
 
+/// The interface's GPU material renderer, installed once at startup when the build has the `gpu`
+/// backend. Raster exports go through it so an external `.wgsl` material is part of the file, not
+/// only of the canvas: [`render_area_for_export`] asks it first and falls back to the CPU raster.
+///
+/// It stays a hook in this crate because `figcraft-render` is also the web/CLI renderer and must not
+/// grow a wgpu dependency; the desktop UI owns the device and the shader registry.
+pub type ExportMaterialHook = dyn Fn(&Document, &[NodeId], Rect, f64) -> Option<Pixmap> + Send + Sync;
+
+static EXPORT_MATERIAL_HOOK: std::sync::OnceLock<std::sync::Arc<ExportMaterialHook>> = std::sync::OnceLock::new();
+
+/// Install the GPU material renderer used by raster exports (once; later calls are ignored).
+pub fn set_export_material_hook(hook: std::sync::Arc<ExportMaterialHook>) {
+    let _ = EXPORT_MATERIAL_HOOK.set(hook);
+}
+
+/// Whether a GPU material renderer is installed (the desktop app does; tests and the CLI do not).
+pub fn has_export_material_hook() -> bool {
+    EXPORT_MATERIAL_HOOK.get().is_some()
+}
+
 /// Which part of a page to draw, and how big.
 #[derive(Clone, Debug)]
 pub struct View {
@@ -465,11 +485,19 @@ fn render_one(doc: &Document, page: NodeId, view: &View, opts: &Options) -> Opti
 
 /// Render several nodes (in z-order) into an existing pixmap through `view`.
 pub fn render_nodes_into(doc: &Document, ids: &[NodeId], view: &View, pix: &mut Pixmap) {
-    nodes_into(doc, ids, view, pix, 0.0, None);
+    nodes_into(doc, ids, view, pix, 0.0, None, None);
 }
 
 /// [`render_nodes_into`] `time` seconds into animated GIFs.
-fn nodes_into(doc: &Document, ids: &[NodeId], view: &View, pix: &mut Pixmap, time: f64, under: Option<&backdrop::Under>) {
+fn nodes_into(
+    doc: &Document,
+    ids: &[NodeId],
+    view: &View,
+    pix: &mut Pixmap,
+    time: f64,
+    under: Option<&backdrop::Under>,
+    shade: Option<&crate::shade::ShadeBoard>,
+) {
     let bounds = draw::Bounds::default();
     let ctx = draw::Ctx {
         doc,
@@ -486,7 +514,7 @@ fn nodes_into(doc: &Document, ids: &[NodeId], view: &View, pix: &mut Pixmap, tim
         time,
         bounds: &bounds,
         bands: &[],
-        shade: None,
+        shade,
         rows: None,
         page_xf: view.transform(),
     };
@@ -557,13 +585,33 @@ pub fn render_node(doc: &Document, id: NodeId, scale: f64) -> Option<Pixmap> {
 
 /// [`render_node`] `time` seconds into animated GIFs (the presenter plays them).
 pub fn render_node_at(doc: &Document, id: NodeId, scale: f64, time: f64) -> Option<Pixmap> {
-    area_at(doc, &[id], None, export_bounds(doc, id)?, scale, time)
+    area_at(doc, &[id], None, export_bounds(doc, id)?, scale, time, None)
 }
 
 /// Rasterise `ids` (bottom to top) over page area `b` at `scale` (export): the image starts at the
 /// area's top-left and its sides round up to whole pixels. `None` past 16384 pixels a side.
 pub fn render_area(doc: &Document, ids: &[NodeId], b: Rect, scale: f64) -> Option<Pixmap> {
-    area_at(doc, ids, None, b, scale, 0.0)
+    area_at(doc, ids, None, b, scale, 0.0, None)
+}
+
+/// [`render_area`] for a raster export: when the desktop UI installed its GPU material renderer,
+/// the external `.wgsl` layers are shaded at the export scale (a material reads the same backdrop it
+/// does on the canvas, so a glass card exports as glass instead of its flat fill). Without a hook,
+/// or when the GPU path declines, this is exactly [`render_area`] on the CPU.
+pub fn render_area_for_export(doc: &Document, ids: &[NodeId], b: Rect, scale: f64) -> Option<Pixmap> {
+    if let Some(hook) = EXPORT_MATERIAL_HOOK.get()
+        && let Some(pix) = hook(doc, ids, b, scale)
+    {
+        return Some(pix);
+    }
+    render_area(doc, ids, b, scale)
+}
+
+/// [`render_area`] with a [`shade::ShadeBoard`] the caller feeds: a miss renders the layer's backdrop
+/// without the material and records a request, so the caller can run the GPU shader and render again
+/// (see `render_area_for_export`). Exposed for the UI's export pump and its pixel tests.
+pub fn render_area_shaded(doc: &Document, ids: &[NodeId], b: Rect, scale: f64, shade: &shade::ShadeBoard) -> Option<Pixmap> {
+    area_at(doc, ids, None, b, scale, 0.0, Some(shade))
 }
 
 /// A `px`×`px` preview of a path that isn't a layer: its own bounds fitted into the square, with a
@@ -595,10 +643,18 @@ pub fn render_path(path: &BezPath, px: u32, color: Color) -> Option<Pixmap> {
 /// them on that page, clipped to the area (#2213). Only `ids` are drawn; the layers above stay
 /// out. Without such an effect it is [`render_area`].
 pub fn render_area_over(doc: &Document, ids: &[NodeId], page_layers: &[NodeId], b: Rect, scale: f64) -> Option<Pixmap> {
-    area_at(doc, ids, Some(page_layers), b, scale, 0.0)
+    area_at(doc, ids, Some(page_layers), b, scale, 0.0, None)
 }
 
-fn area_at(doc: &Document, ids: &[NodeId], page_layers: Option<&[NodeId]>, b: Rect, scale: f64, time: f64) -> Option<Pixmap> {
+fn area_at(
+    doc: &Document,
+    ids: &[NodeId],
+    page_layers: Option<&[NodeId]>,
+    b: Rect,
+    scale: f64,
+    time: f64,
+    shade: Option<&crate::shade::ShadeBoard>,
+) -> Option<Pixmap> {
     let scale = if scale.is_finite() && scale > 0.0 { scale.min(64.0) } else { 1.0 };
     let w = (b.width() * scale - 1e-6).ceil().max(1.0);
     let h = (b.height() * scale - 1e-6).ceil().max(1.0);
@@ -631,7 +687,7 @@ fn area_at(doc: &Document, ids: &[NodeId], page_layers: Option<&[NodeId]>, b: Re
         _ => None,
     };
     let under = beneath.as_ref().map(|(back, m)| backdrop::Under::new(back, (*m, *m), None));
-    nodes_into(doc, ids, &view, &mut pix, time, under.as_ref());
+    nodes_into(doc, ids, &view, &mut pix, time, under.as_ref(), shade);
     Some(pix)
 }
 /// Un-premultiply into straight RGBA8 bytes.
@@ -741,6 +797,9 @@ pub fn encode_export_with(p: &Pixmap, format: ExportFormat, profile: ColorProfil
         ExportFormat::Jpg => jpeg_with(p, Color::WHITE, quality, Some(profile.icc())),
         ExportFormat::Webp => webp_with(p, icc),
         ExportFormat::Svg | ExportFormat::Pdf | ExportFormat::VectorDrawable => Err(format!("{} is not a pixel format", format.label())),
+        ExportFormat::Gif | ExportFormat::Webm | ExportFormat::PngZip | ExportFormat::Mp4 => {
+            Err(format!("{} is a Motion format; export it with motion.export", format.label()))
+        }
     }
 }
 
