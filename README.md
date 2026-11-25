@@ -43,9 +43,9 @@
 <br>
 
 <p align="center">
-  <a href="docs/images/motion-hero.mp4"><img src="docs/images/motion-hero.gif" alt="A 2.4 second looping Motion scene: a dark card whose fill shifts from slate to indigo to cyan, its stroke cycles indigo, pink and cyan while the stroke weight grows and shrinks, surrounded by a pulsing orb and floating chips" width="960"></a>
+  <a href="docs/images/motion-hero.mp4"><img src="docs/images/motion-hero.gif" alt="A 2.4 second screen recording of Monet's Motion editor: the selected card's fill shifts from slate to indigo to cyan, its stroke cycles indigo, pink and cyan, the stroke weight grows and shrinks, and the timeline playhead moves across the keyed rows while the rest of the editor stays visible" width="960"></a>
 </p>
-<p align="center"><sub><b>A 2.4 s Motion loop</b> — fill, stroke and stroke weight are keyed in the same timeline as the preset clips. <a href="docs/images/motion-hero.mp4">Watch the MP4</a> or <a href="docs/images/screenshots/08-motion-fill-stroke-weight.png">open the editor state</a>.</sub></p>
+<p align="center"><sub><b>A 2.4 s Motion loop, captured in the running GPUI editor</b> — fill, stroke and stroke weight are keyed in the same timeline as the preset clips. <a href="docs/images/motion-hero.mp4">Engine-rendered MP4</a> or <a href="docs/images/screenshots/08-motion-fill-stroke-weight.png">the editor at 0.8 s</a>.</sub></p>
 
 ## A look around
 
@@ -83,6 +83,12 @@ All screenshots below are of the running GPUI application (`cargo run -p figcraf
 </td>
 </tr>
 </table>
+
+<p align="center">
+  <img src="docs/images/screenshots/09-animation-export.png" alt="The full Monet editor with the Export dialog open over the canvas: the dialog separates Export layers from Animation (selected layer's timeline) and lists MP4 (H.264) 60 fps, GIF 30 fps, WebM (AV1) 60 fps and PNG sequence 60 fps, followed by the whole-file .fig option" width="900">
+  <br>
+  <sub><b>The animation export entry</b> — MP4, GIF, WebM and PNG sequence in the same dialog as layer export; picking a path takes the engine render off the UI thread.</sub>
+</p>
 
 ## What this is
 

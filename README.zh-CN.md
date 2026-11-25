@@ -42,9 +42,9 @@
 <br>
 
 <p align="center">
-  <a href="docs/images/motion-hero.mp4"><img src="docs/images/motion-hero.gif" alt="2.4 秒循环的动画场景：深色卡片填充色在石板灰、靛蓝和青色之间切换，描边在靛蓝、粉色和青色之间循环，线宽同步收放；周围有脉动的球体和漂浮的色块" width="960"></a>
+  <a href="docs/images/motion-hero.mp4"><img src="docs/images/motion-hero.gif" alt="2.4 秒的 Monet 动画模式实机录屏：选中的卡片填充色在石板灰、靛蓝和青色之间切换，描边在靛蓝、粉色和青色之间循环，线宽同步收放；时间轴播放头沿关键帧轨道移动，编辑器其余面板保持可见" width="960"></a>
 </p>
-<p align="center"><sub><b>2.4 秒动画循环</b> —— 填充、描边和描边线宽与预设片段写在同一条时间轴上。<a href="docs/images/motion-hero.mp4">查看 MP4</a>，或<a href="docs/images/screenshots/08-motion-fill-stroke-weight.png">查看编辑器状态</a>。</sub></p>
+<p align="center"><sub><b>2.4 秒动画循环，录自正在运行的 GPUI 编辑器</b> —— 填充、描边和描边线宽与预设片段写在同一条时间轴上。<a href="docs/images/motion-hero.mp4">引擎渲染的 MP4</a>，或<a href="docs/images/screenshots/08-motion-fill-stroke-weight.png">0.8 秒处的编辑器状态</a>。</sub></p>
 
 ## 界面一览
 
@@ -82,6 +82,12 @@
 </td>
 </tr>
 </table>
+
+<p align="center">
+  <img src="docs/images/screenshots/09-animation-export.png" alt="Monet 完整编辑器上打开 Export 对话框：图层导出与「Animation（选中图层的时间轴）」分区并列，后者列出 MP4（H.264）60 fps、GIF 30 fps、WebM（AV1）60 fps 和 PNG 序列 60 fps，最后是整个文件的 .fig 选项" width="900">
+  <br>
+  <sub><b>动画导出入口</b> —— MP4、GIF、WebM 和 PNG 序列与图层导出在同一个对话框；选定路径后引擎渲染在 UI 线程之外执行。</sub>
+</p>
 
 ## 这是什么
 
