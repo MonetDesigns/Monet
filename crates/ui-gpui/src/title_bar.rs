@@ -36,6 +36,8 @@ pub const LEFT_PAD: f32 = 8.0;
 pub const CONTROL_W: f32 = 46.0;
 /// 三个窗口控制按钮的总宽度。
 pub const CONTROLS_W: f32 = CONTROL_W * 3.0;
+/// 窗口控制按钮组左侧的 Quick Open 按钮宽度（点它打开最近文件弹层）。
+pub const QUICK_OPEN_W: f32 = 32.0;
 
 /// kit `TitleBar::title_bar_options()`：声明窗口标题、隐藏默认系统标题栏，
 /// macOS 红绿灯留在 (9,9)。放进 `WindowOptions.titlebar`。
@@ -57,7 +59,7 @@ fn bar_gray() -> crate::canvas::geom::Color32 {
 
 /// 标题栏里留给 TabBar 内容的宽度：窗口宽 − 左留白 − 三个窗口控制按钮。
 pub fn content_width(viewport_w: f32) -> f32 {
-    (viewport_w - LEFT_PAD - CONTROLS_W).max(0.0)
+    (viewport_w - LEFT_PAD - CONTROLS_W - QUICK_OPEN_W).max(0.0)
 }
 
 /// 最大化按钮图标：已最大化时画还原，未最大化时用产品的纯线框方框（Icon::Rectangle）。
@@ -100,7 +102,12 @@ fn control_button(id: &'static str, icon: Icon, close: bool, area: WindowControl
 
 /// kit `TitleBar::new().child(content)`：整条注册成系统标题栏拖拽区，
 /// 左留白与内容空白区也标 Drag（覆盖子 hitbox 的空隙），右侧三个按钮各归系统。
-pub fn title_bar(content: impl IntoElement, maximized: bool) -> Div {
+pub fn title_bar(
+    content: impl IntoElement,
+    maximized: bool,
+    on_quick_open: Option<std::rc::Rc<dyn Fn(&mut gpui::Window, &mut gpui::App)>>,
+) -> Div {
+    let t = tokens();
     let min = control_button("title-min", Icon::WinMinimize, false, WindowControlArea::Min);
     let max = control_button("title-max", maximize_icon(maximized), false, WindowControlArea::Max);
     let close = control_button("title-close", Icon::WinClose, true, WindowControlArea::Close);
@@ -119,6 +126,23 @@ pub fn title_bar(content: impl IntoElement, maximized: bool) -> Div {
         .child(div().flex_none().w(pt(LEFT_PAD)).h_full().window_control_area(WindowControlArea::Drag))
         .child(div().flex_1().min_w(pt(0.0)).h_full().flex().items_center().child(content))
         .child(div().flex_none().w(pt(8.0)).h_full().window_control_area(WindowControlArea::Drag))
+        .when_some(on_quick_open, |bar, on_qo| {
+            let on_qo = on_qo.clone();
+            bar.child(
+                div()
+                    .id("title-quick-open")
+                    .flex_none()
+                    .w(pt(QUICK_OPEN_W))
+                    .h(pt(TITLE_H))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(rgba(t.hover)))
+                    .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| on_qo(window, cx))
+                    .child(icon::paint(Icon::Search, rgba(t.icon), 16.0)),
+            )
+        })
         .child(min)
         .child(max)
         .child(close)
@@ -130,7 +154,7 @@ mod tests {
 
     #[test]
     fn content_width_reserves_the_shell_padding_and_three_controls() {
-        assert_eq!(content_width(1280.0), 1280.0 - LEFT_PAD - CONTROLS_W);
+        assert_eq!(content_width(1280.0), 1280.0 - LEFT_PAD - CONTROLS_W - QUICK_OPEN_W);
         assert_eq!(CONTROLS_W, 3.0 * CONTROL_W);
         assert_eq!(content_width(0.0), 0.0);
     }

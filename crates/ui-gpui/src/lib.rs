@@ -7464,6 +7464,18 @@ impl Render for CanvasView {
                 &tabs_me,
             ),
             window.is_maximized(),
+            {
+                let me = cx.entity();
+                Some(std::rc::Rc::new(move |_: &mut Window, cx: &mut App| {
+                    me.update(cx, |cv, cx| {
+                        cv.popup = Some(Popup::QuickOpen);
+                        cv.quick_open_field.update(cx, |f, cx| {
+                            f.edit().update(cx, |e, _cx| e.set_value(""));
+                        });
+                        cx.notify();
+                    });
+                }) as std::rc::Rc<dyn Fn(&mut Window, &mut App)>)
+            },
         );
 
         // 新标签的 0.18s 入场动画期间要连续重绘，直到 opening 队列清空。
