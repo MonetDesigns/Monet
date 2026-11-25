@@ -2681,6 +2681,17 @@ impl CanvasView {
 
         let action = present::ACTION.with(|a| a.replace(0));
 
+        // 评论草稿提交（Enter）：按草稿的页坐标写入 `comment.add`，再收起输入条。
+        if let Some(text) = present::take_comment_text()
+            && let Some((x, y)) = self.present.as_ref().and_then(|st| st.comment_draft)
+        {
+            let _ = self.app.session.execute("comment.add", &serde_json::json!({ "x": x, "y": y, "text": text }));
+            if let Some(st) = self.present.as_mut() {
+                st.comment_draft = None;
+            }
+            present::clear_comment_field();
+        }
+
         // 导航栏下拉：设备 / 缩放（eGUI `navigation_bar` 的两个 ComboBox）。
         if let Some(variant) = present::take_variant_choice() {
             let _ = self.app.session.execute("proto.settings", &serde_json::json!({ "variant": variant }));
@@ -2741,6 +2752,27 @@ impl CanvasView {
                 5 => st.comments = !st.comments,
                 6 => st.inspect = !st.inspect,
                 7 => st.hide_ui = !st.hide_ui,
+                20 => {
+                    // 外链确认条：Open link（记住「不再提示」）。
+                    if let Some(n) = st.link_notice.take() {
+                        if n.skip == Some(true) {
+                            let _ = self.app.session.execute("proto.linkNotice", &serde_json::json!({ "show": false }));
+                        }
+                        st.open_now = Some(n.url);
+                    }
+                }
+                21 => st.link_notice = None,
+                22 => {
+                    if let Some(n) = st.link_notice.as_mut() {
+                        n.skip = Some(n.skip != Some(true));
+                    }
+                }
+                23 => st.commenting = !st.commenting,
+                24 => {
+                    // 放弃评论草稿（Esc）：收起输入条。
+                    st.comment_draft = None;
+                    present::clear_comment_field();
+                }
                 12 => st.preview = false,
                 10 => {
                     st.device_open = !st.device_open;
@@ -8408,6 +8440,11 @@ impl Render for CanvasView {
 
         // 首页 / 空白创建页是整窗面板：这两者在前时不能把播放器层铺上去，否则「点首页」
         // 画面不变、看起来像没反应（用户 2026-11-17）。
+        // 评论草稿：首次出现时创建并聚焦输入框（通用控件 `widgets::text_field`）。
+        if self.present.as_ref().is_some_and(|st| st.comment_draft.is_some()) && present::comment_field().is_none() {
+            present::create_comment_field(cx, window);
+        }
+
         let present_el: Vec<AnyElement> = self
             .present
             .as_ref()
@@ -8419,13 +8456,28 @@ impl Render for CanvasView {
                 let vw = f32::from(vp.width);
                 let vh = f32::from(vp.height);
                 let canvas = (dock.center_x(), dock.titlebar_h, dock.center_w(vw), (vh - dock.titlebar_h - dock.bottom_h).max(1.0));
-                present::render(&self.app, st, (vw, vh), canvas).into_any_element()
+                present::render(&self.app, st, (vw, vh), canvas, window).into_any_element()
             })
             .into_iter()
             .collect();
 
-        // 演示里点了「打开链接」：取走待办 URL 交给系统浏览器（与 devmode 同一道闸）。
-        if let Some(url) = self.present.as_mut().and_then(|st| st.pending_url.take())
+        // 演示里点了「打开链接」：先出确认条（eGUI `link_notice`）；偏好里勾过「不再提示」就直接开。
+        let link_notice_skipped = self.app.session.prefs.link_notice_skipped;
+        if let Some(st) = self.present.as_mut()
+            && let Some(url) = st.pending_link.take()
+            && figcraft_engine::doc_urls::openable(&url)
+        {
+            if link_notice_skipped || st.link_notice.is_some() {
+                // 已有提示在显示时后续链接直接丢弃（eGUI 同样只看第一条）。
+                if st.link_notice.is_none() {
+                    cx.open_url(&url);
+                }
+            } else {
+                st.link_notice = Some(present::LinkNotice { url, skip: Some(false) });
+            }
+        }
+        // 确认条里点了「Open link」：直接交给系统浏览器。
+        if let Some(url) = self.present.as_mut().and_then(|st| st.open_now.take())
             && figcraft_engine::doc_urls::openable(&url)
         {
             cx.open_url(&url);
@@ -8631,7 +8683,9 @@ impl Render for CanvasView {
                     let mods = figcraft_doc::proto::KeyMods { ctrl: m.control, alt: m.alt, shift: m.shift, cmd: m.platform };
                     let pane = st.preview;
                     let root = st.overlays.last().map_or(st.current, |o| o.id);
-                    let uses = st.display().or(st.doc.as_deref()).is_some_and(|d| present::wants_key(d, root, &key, mods, pane));
+                    let uses = st.display().or(st.doc.as_deref()).is_some_and(|d| {
+                        present::wants_key(d, root, &key, mods, pane, st.link_notice.is_some(), st.comment_draft.is_some())
+                    });
                     if uses {
                         present::push_key(key, mods);
                         cx.stop_propagation();

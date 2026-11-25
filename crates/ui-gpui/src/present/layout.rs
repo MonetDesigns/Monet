@@ -225,7 +225,7 @@ pub fn compute(st: &PresentState, disp: &Document, area: RectPx, pane: bool, ppp
         let ob = disp.world_bounds(o.id)?;
         let size = ((ob.width() * scale) as f32, (ob.height() * scale) as f32);
         let offset = o.offset.map(|[x, y]| ((x * scale) as f32, (y * scale) as f32));
-        let anchor = o.anchor;
+        let anchor = o.anchor.map(|a| place.rect(a));
         let r = anchored_overlay_rect(o.position, o.anchor_to, screen, size, anchor, offset);
         Some((o.id, Place { page_min: (ob.x0, ob.y0), origin: (f64::from(r.x), f64::from(r.y)), scale }, r))
     };
