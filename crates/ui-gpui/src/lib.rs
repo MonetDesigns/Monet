@@ -109,6 +109,8 @@ mod menu_metrics;
 /// B2: the Actions palette's data (tabs, Recents, grouped commands, ranking). No widgets here.
 mod palette;
 
+mod quick_open;
+
 mod widget_bar;
 
 mod home;
@@ -429,6 +431,12 @@ enum Popup {
     /// render 时按当前画布宽度重算，窗口缩放时跟着动。
     Palette { at: Point<Pixels> },
 
+    /// Quick Open（右上角搜索面板）：最近关闭的文件、最近文件与当前文档的页面。
+
+    /// 控件位置照参考实现：距顶 18pt、距右 70pt、宽 253pt。
+
+    QuickOpen,
+
     /// Share 弹层（右栏顶栏的 Share 按钮）：锚在按钮上，内容每帧按 live 状态重建
 
     /// （egui `live::share_popover`）。
@@ -603,6 +611,10 @@ pub struct PaneState {
     palette_sel: Option<usize>,
 
     palette_field: Entity<widgets::TextField>,
+
+    /// Quick Open（Cmd+K）搜索框：与 palette 一样是持久实体，Escape 清空后关闭。
+
+    quick_open_field: Entity<widgets::TextField>,
 
     /// 四块整面板的浮层（由引擎 `ui_requests` 打开）与其跨帧状态。
     extra: Option<panels::extra::ExtraKind>,
@@ -1131,6 +1143,8 @@ impl CanvasView {
 
         let palette_field = widgets::search_field(cx, 288.0, "", "Search actions");
 
+        let quick_open_field = widgets::search_field(cx, 237.0, "", tr("Search files and sections"));
+
         // R4/R5: 三处重命名共用的无边框输入框（Pages / Layers / 画布标签）。
         // 真正打开时 begin_inline_rename 会再建一个带提交回调的实例。
         let inline_rename_field = inline_input::InlineInput::build(cx, inline_input::ROW_H, 0.0, String::new(), |_text, _w, _cx| {});
@@ -1240,6 +1254,7 @@ impl CanvasView {
             palette_sel: Some(0),
 
             palette_field,
+            quick_open_field,
 
             extra: None,
 
@@ -1412,7 +1427,22 @@ impl CanvasView {
                 view.popup = view.flyout_at("shape");
             } else if kind == "palette" {
                 view.popup = Some(view.palette_at_pointer(Point { x: px(600.0), y: px(600.0) }));
+            } else if kind == "quickopen" {
+                view.popup = Some(Popup::QuickOpen);
             }
+        }
+
+        // Quick Open: 边打边过滤（列表在 render 时从字段读 query，这里只需唤醒重绘）。
+        {
+            let me = cx.entity();
+            view.quick_open_field.update(cx, |tf, _| {
+                tf.set_on_change({
+                    let me = me.clone();
+                    move |_text, _w, cx| {
+                        me.update(cx, |_, cx| cx.notify());
+                    }
+                });
+            });
         }
 
         // Actions 面板：边打边过滤（egui palette 每敲一个字就重排），Enter 执行高亮行。
@@ -4521,6 +4551,19 @@ impl CanvasView {
         cx.notify();
     }
 
+    /// Quick Open 行：page → 切到该页面；file → 打开该文件（最近关闭的也走这里恢复）。
+    fn pick_quick_open(&mut self, key: &str, cx: &mut Context<Self>) {
+        self.popup = None;
+        if let Some(id) = key.strip_prefix("page:") {
+            if let Ok(id) = id.parse::<u64>() {
+                self.run_command("page.select", serde_json::json!({ "id": id }), cx);
+            }
+        } else if let Some(path) = key.strip_prefix("file:") {
+            self.run_command("file.open", serde_json::json!({ "path": path }), cx);
+        }
+        cx.notify();
+    }
+
     /// 左侧竖栏第 1 项（`Icon::Menu`）点开的主菜单。
 
     ///
@@ -6783,6 +6826,30 @@ impl Render for CanvasView {
                     }
                 }
 
+                // Cmd/Ctrl+K: Quick Open (search files, recently closed and sections).
+
+                // The panel sits in the top-right corner; opening it focuses its search field.
+
+                {
+                    let m = e.keystroke.modifiers;
+                    if (m.platform || m.control) && !m.alt && e.keystroke.key.as_str() == "p" {
+                        this.popup = Some(Popup::QuickOpen);
+                        this.quick_open_field.update(cx, |f, cx| {
+                            f.edit().update(cx, |e, _cx| e.set_value(""));
+                        });
+                        cx.stop_propagation();
+                        cx.notify();
+                        return;
+                    }
+                }
+
+                if matches!(&this.popup, Some(Popup::QuickOpen)) && e.keystroke.key.as_str() == "escape" {
+                    this.popup = None;
+                    cx.stop_propagation();
+                    cx.notify();
+                    return;
+                }
+
                 // B2: the Actions palette's Up/Down move the highlighted row; Enter (the search
                 // field's commit) runs it.
                 if matches!(&this.popup, Some(Popup::Palette { .. })) {
@@ -8084,6 +8151,65 @@ impl Render for CanvasView {
                             .into_any_element(),
                     );
                 }
+
+                Popup::QuickOpen => {
+                    // Quick Open（右上角）：位置照参考实现——距顶 18pt、距右 70pt、宽 253pt。
+                    let w = 253.0f32;
+                    let x = (vw - 70.0 - w).max(m);
+                    let y = 18.0f32;
+                    let t = widgets::tokens();
+
+                    let q = {
+                        self.quick_open_field.read(cx).edit().read(cx).value().to_string()
+                    };
+                    let secs = quick_open::sections(&self.app.session, &q);
+
+                    let pick = {
+                        let me = me.clone();
+                        std::rc::Rc::new(move |key: &str, _w: &mut Window, cx: &mut App| {
+                            me.update(cx, |cv, cx| cv.pick_quick_open(key, cx));
+                        })
+                    };
+
+                    let mut list = div().flex().flex_col().w_full();
+                    for sec in secs {
+                        if sec.rows.is_empty() { continue; }
+                        list = list.child(
+                            div().px(widgets::pt(8.0)).pt(widgets::pt(6.0)).pb(widgets::pt(2.0))
+                                .text_size(widgets::pt(10.0)).text_color(widgets::rgba(t.text_secondary))
+                                .child(gpui::SharedString::from(sec.name)),
+                        );
+                        for row in sec.rows {
+                            let key = row.key.clone();
+                            let cb = pick.clone();
+                            list = list.child(
+                                div().h(px(24.0)).w_full().flex().flex_row().items_center()
+                                    .gap(widgets::pt(6.0)).px(widgets::pt(8.0)).cursor_pointer()
+                                    .hover(|s| s.bg(widgets::rgba(t.hover)))
+                                    .on_mouse_down(gpui::MouseButton::Left, move |_, _w, cx| {
+                                        cb(&key, _w, cx);
+                                    })
+                                    .child(div().flex_1().text_size(widgets::pt(11.0)).child(gpui::SharedString::from(row.label)))
+                                    .child(div().text_size(widgets::pt(10.0)).text_color(widgets::rgba(t.text_secondary)).child(gpui::SharedString::from(row.hint.unwrap_or_default()))),
+                            );
+                        }
+                    }
+
+                    let card = div()
+                        .w(px(w)).max_h(px(320.0)).overflow_hidden()
+                        .bg(widgets::rgba(t.menu)).border_1().border_color(widgets::rgba(t.border)).rounded(px(8.0))
+                        .shadow(vec![gpui::BoxShadow {
+                            offset: gpui::point(px(0.0), px(4.0)),
+                            blur_radius: px(16.0), spread_radius: px(0.0),
+                            color: gpui::hsla(0.0, 0.0, 0.0, 0.18),
+                        }])
+                        .p(widgets::pt(8.0))
+                        .child(self.quick_open_field.clone())
+                        .child(list);
+
+                    els.push(div().absolute().left(px(x)).top(px(y)).child(card).into_any_element());
+                }
+
             }
 
             popup_el.push(backdrop);

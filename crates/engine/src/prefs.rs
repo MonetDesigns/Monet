@@ -125,6 +125,11 @@ pub struct Prefs {
     /// Recently opened or saved files, newest first (File ▸ Open recent; at most
     /// [`cmd::file::MAX_RECENT`]).
     pub recent_files: Vec<String>,
+    /// Recently closed files, newest first (Quick Open ▸ Recently closed; at most
+    /// [`cmd::file::MAX_RECENT`]). Unlike `recent_files` this also keeps files that were closed
+    /// without saving, so a closed tab can be reopened after a restart.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recently_closed: Vec<String>,
     /// The files you put on a server without its key, with their owner tokens (passwords: see
     /// [`online`]), most recently opened first, at most [`online::MAX_ONLINE_FILES`].
     #[serde(skip_serializing_if = "Vec::is_empty", deserialize_with = "online::read")]
@@ -199,6 +204,7 @@ impl Default for Prefs {
             plugin_directory: None,
             publish_server: live::DEFAULT_SERVER.into(),
             recent_files: Vec::new(),
+            recently_closed: Vec::new(),
             online_files: Vec::new(),
             getting_started_dismissed: false,
             link_notice_skipped: false,

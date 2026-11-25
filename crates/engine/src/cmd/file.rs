@@ -457,6 +457,14 @@ fn close(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(EngineError::Disabled("file.close".into(), "the document has unsaved changes (pass force: true to discard)".into()));
     }
     let uid = ds.uid;
+    // Remember the closed file for Quick Open ▸ Recently closed (persisted in prefs, so a closed
+    // tab can be restored after a restart). Branch tabs share their main file's path.
+    if let Some(path) = ds.path.clone() {
+        let r = &mut s.prefs.recently_closed;
+        r.retain(|p| p != &path);
+        r.insert(0, path);
+        r.truncate(super::file::open::MAX_RECENT);
+    }
     let active_uid = s.docs.get(s.active).map(|d| d.uid);
     s.remove_tabs(|d| d.uid == uid);
     // Removing a tab before the active one shifts its index; keep the same document selected.
