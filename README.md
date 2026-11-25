@@ -177,7 +177,7 @@ three gestures below use the bundled `monet-defaults.abr` library.
 <p align="center">
   <img src="docs/images/art-brushes.png" alt="Three brush strokes in crimson, blue and amber, each stamped from a different tip in the imported monet-defaults.abr library with a soft, bristled edge" width="900">
   <br>
-  <sub><b>Local brushes</b> — ribbon, ink and bristle tips from an external <code>.abr</code> file · <a href="docs/images/art-brushes.figcraft">editable source</a></sub>
+  <sub><b>Local brushes</b> — ribbon, ink and bristle tips from an external <code>.abr</code> file.</sub>
 </p>
 
 **Where the brush files go**

@@ -165,7 +165,7 @@ egui 前端作为冻结参照保留在仓库中；引擎改动在上游进行，
 <p align="center">
   <img src="docs/images/art-brushes.png" alt="三条深红、蓝色和琥珀色笔画，分别由 monet-defaults.abr 中不同笔尖盖章绘制，边缘带有柔和鬃毛质感" width="900">
   <br>
-  <sub><b>本地笔刷</b> —— 来自外部 <code>.abr</code> 文件的 ribbon、ink 和 bristle 笔尖 · <a href="docs/images/art-brushes.figcraft">可编辑设计底稿</a></sub>
+  <sub><b>本地笔刷</b> —— 来自外部 <code>.abr</code> 文件的 ribbon、ink 和 bristle 笔尖。</sub>
 </p>
 
 **笔刷文件放在哪里**
