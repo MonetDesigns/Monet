@@ -176,10 +176,12 @@ pub(super) fn crisp_rect(painter: &mut Painter, r: Rect, width: f32, ppp: f32, c
     }
     // 整数个设备像素（至少 1），再换回逻辑像素。
     let t = (width * ppp).round().clamp(1.0, 64.0) / ppp;
-    let half = t / 2.0;
     let snap = |v: f32| (v * ppp).round() / ppp;
-    let (x0, y0) = (snap(r.min.x - half), snap(r.min.y - half));
-    let (x1, y1) = (snap(r.max.x + half), snap(r.max.y + half));
+    // 内侧边必须落在物体的可见边（位图用 snap(p) 定位）上：线宽整条向外扩，
+    // 而不是居中跨在几何边上。后者让内侧边 = snap(p - t/2) + t，与位图的 snap(p)
+    // 差整 1 设备像素，表现为选中框在部分分辨率/位置贴不上物体。
+    let (x0, y0) = (snap(r.min.x) - t, snap(r.min.y) - t);
+    let (x1, y1) = (snap(r.max.x) + t, snap(r.max.y) + t);
     if x1 - x0 < t || y1 - y0 < t {
         return false;
     }
@@ -256,6 +258,33 @@ mod crisp_tests {
         }
     }
 
+    /// 选中框的内侧边必须贴住位图的可见边（位图定位是 snap(p)）。
+    /// 居中描边会让内侧边落在 snap(p - t/2)+t，差整 1 设备像素。
+    #[test]
+    fn outline_inner_edge_matches_bitmap_edge() {
+        let ppp = 2.0f32;
+        let snap = |v: f32| (v * ppp).round() / ppp;
+        let mut p = Painter::new(Rect::from_min_max(pos2(0.0, 0.0), pos2(200.0, 200.0)));
+        // 物体几何边落在不同相位上
+        for p0 in [10.0f32, 10.24, 10.25, 10.4, 10.75, 11.0] {
+            let r = Rect::from_min_max(pos2(p0, p0), pos2(80.37, 60.61));
+            let q0 = rects(&p).len();
+            assert!(crisp_rect(&mut p, r, 1.0, ppp, Color32::WHITE));
+            let q = rects(&p);
+            // 添加顺序：上、下、左、右。左带 q[q0+2] 的内侧边 max.x
+            let left_inner = q[q0 + 2].max.x;
+            let bitmap_left = snap(r.min.x);
+            assert!((left_inner - bitmap_left).abs() < 1e-4,
+                "p={p0}: outline inner {left_inner} != bitmap edge {bitmap_left}");
+            // 右带 q[q0+3] 的内侧边 min.x
+            let right_inner = q[q0 + 3].min.x;
+            let bitmap_right = snap(r.max.x);
+            assert!((right_inner - bitmap_right).abs() < 1e-4,
+                "p={p0}: outline inner {right_inner} != bitmap edge {bitmap_right}");
+            p = Painter::new(Rect::from_min_max(pos2(0.0, 0.0), pos2(200.0, 200.0)));
+        }
+    }
+
     fn band_height(r: &Rect) -> f32 {
         r.max.y - r.min.y
     }
@@ -303,3 +332,4 @@ mod crisp_tests {
         }
     }
 }
+
