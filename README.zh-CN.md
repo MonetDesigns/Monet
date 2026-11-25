@@ -84,9 +84,9 @@
 </table>
 
 <p align="center">
-  <img src="docs/images/screenshots/09-animation-export.png" alt="Monet 完整编辑器上打开 Export 对话框：图层导出与「Animation（选中图层的时间轴）」分区并列，后者列出 MP4（H.264）60 fps、GIF 30 fps、WebM（AV1）60 fps 和 PNG 序列 60 fps，最后是整个文件的 .fig 选项" width="900">
+  <img src="docs/images/screenshots/09-animation-export.png" alt="Monet 完整窗口的 Motion 模式：选中 Motion Card，时间轴上显示 Fill、Stroke 和 Stroke weight 关键帧；右侧只有一个 Export 节，打开 Animate timeline 后出现 MP4 格式选择器和唯一的 Export Motion Card animation 按钮" width="900">
   <br>
-  <sub><b>动画导出入口</b> —— MP4、GIF、WebM 和 PNG 序列与图层导出在同一个对话框；选定路径后引擎渲染在 UI 线程之外执行。</sub>
+  <sub><b>唯一的导出面</b> —— 右侧 Export 节在静态图片导出和 MP4、GIF、WebM、PNG 序列时间轴导出之间切换；不再有第二个导出对话框，保存/渲染都不占 UI 线程。</sub>
 </p>
 
 ## 这是什么

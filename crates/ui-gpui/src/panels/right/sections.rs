@@ -8,8 +8,6 @@
 //! 所有写回都通过 `Cmd` 通道（`sync_panel` 统一 `execute`），与 egui 的 `app.run/set_props` 同构。
 //! 动态列表的输入框由父模块的**编辑器池**提供（retained tree 不能每帧新建 `Entity`）。
 
-use figcraft_i18n::tr_noop;
-use figcraft_i18n::{tr, trf, trn};
 use super::data::{EffectRow, ExportRow, LocalStyleRow, PaintRow, PanelData, ViewData};
 use crate::canvas::geom::Color32;
 use crate::motion::{Act, Queue};
@@ -22,6 +20,8 @@ use crate::widgets::{
 use figcraft_color::PaintKind;
 use figcraft_doc::NodeId;
 use figcraft_doc::anim::motion::AnimProperty;
+use figcraft_i18n::tr_noop;
+use figcraft_i18n::{tr, trf, trn};
 use gpui::{
     App, Bounds, Div, Hsla, ImageSource, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, SharedString, Window, canvas, div,
     img, prelude::*, px, size, svg,
@@ -41,11 +41,7 @@ fn push(f: &RightFields, id: &'static str, params: Value) {
 
 /// 24 pt 切换按钮：直接用通用 `IconButton`（同一套外观与字形入口）。
 pub(crate) fn named_icon_toggle(icon: Icon, active: bool, on_click: impl Fn() + 'static) -> gpui::AnyElement {
-    crate::widgets::icon_button::IconButton::new(icon)
-        .size(24.0)
-        .active(active)
-        .on_click(move |_e, _w, _cx| on_click())
-        .into_any_element()
+    crate::widgets::icon_button::IconButton::new(icon).size(24.0).active(active).on_click(move |_e, _w, _cx| on_click()).into_any_element()
 }
 
 /// 右键菜单入口：与 `pick_dropdown` 共用 `MenuRow` + 根视图 `open_menu` 这套通用控件，
@@ -66,12 +62,7 @@ fn context_menu_at(f: &RightFields, at: Point<Pixels>, width: f32, entries: Vec<
 
 /// The header's trailing icon row, with the same right-click menu as egui's section header.
 /// Returns a fresh element so callers with two rendering branches do not need a clonable `Div`.
-fn context_header_row(
-    f: &RightFields,
-    icons: Vec<gpui::AnyElement>,
-    width: f32,
-    entries: Vec<(String, &'static str, Value)>,
-) -> gpui::Div {
+fn context_header_row(f: &RightFields, icons: Vec<gpui::AnyElement>, width: f32, entries: Vec<(String, &'static str, Value)>) -> gpui::Div {
     let f = f.clone();
     let menu_entries = entries.clone();
     icon_row(icons).on_mouse_down(MouseButton::Right, move |e, _, cx: &mut App| {
@@ -179,6 +170,43 @@ pub(crate) fn pick_dropdown(f: &RightFields, label: impl Into<SharedString>, wid
     pick_dropdown_lead(f, label, width, rows, None)
 }
 
+/// A dropdown that only changes a local UI slot (no engine command). Used by the Export
+/// section's animation format picker: the format is a window preference, not a persisted
+/// `ExportSetting`, until the user presses the single Export button.
+fn local_pick_dropdown(
+    f: &RightFields,
+    label: impl Into<SharedString>,
+    width: f32,
+    options: &'static [&'static str],
+    slot: Rc<RefCell<usize>>,
+) -> Dropdown {
+    let idx = *slot.borrow();
+    let label = label.into();
+    let current = options.get(idx).copied().unwrap_or(options[0]);
+    let menu: Vec<MenuRow> = options.iter().map(|o| MenuRow::row((*o).to_string())).collect();
+    let mut d = Dropdown::new(current, width, None).fill();
+    if let Some(root) = f.root.clone() {
+        let cmds = f.cmds.clone();
+        let slot = slot.clone();
+        let options = options;
+        d = d.on_click(move |anchor, _window, cx: &mut App| {
+            let menu = menu.clone();
+            let slot = slot.clone();
+            let cmds = cmds.clone();
+            let on_pick = Rc::new(move |label: &str, _w: &mut Window, _cx: &mut App| {
+                if let Some(i) = options.iter().position(|o| *o == label) {
+                    *slot.borrow_mut() = i;
+                    cmds.wake();
+                }
+            });
+            root.update(cx, move |cv, cx| {
+                cv.open_menu(anchor, Some(width.max(120.0)), menu, on_pick, cx);
+            });
+        });
+    }
+    d
+}
+
 /// Like [`pick_dropdown`], but each row shows a trailing detail (e.g. a device's `W × H`).
 /// The rows are `(label, trailing, command, params)`; an empty trailing shows nothing.
 #[track_caller]
@@ -189,11 +217,17 @@ pub(crate) fn pick_dropdown_sized(
     rows: Vec<(String, String, &'static str, Value)>,
 ) -> Dropdown {
     let label = label.into();
-    let menu: Vec<MenuRow> = rows.iter().enumerate().map(|(i, (l, tail, _, _))| {
-        let mut r = MenuRow::row(l.clone()).key(i.to_string());
-        if !tail.is_empty() { r = r.trail(tail.clone()); }
-        r
-    }).collect();
+    let menu: Vec<MenuRow> = rows
+        .iter()
+        .enumerate()
+        .map(|(i, (l, tail, _, _))| {
+            let mut r = MenuRow::row(l.clone()).key(i.to_string());
+            if !tail.is_empty() {
+                r = r.trail(tail.clone());
+            }
+            r
+        })
+        .collect();
     let loc = std::panic::Location::caller();
     let key = format!("pick:{}:{}:{}", loc.file(), loc.line(), label);
     let anchor_handle = crate::widgets::dropdown::menu_anchor(&key);
@@ -226,19 +260,8 @@ fn constraint_rect(window: &mut Window, x: f32, y: f32, w: f32, h: f32, color: g
     if w <= 0.0 || h <= 0.0 {
         return;
     }
-    let corners = gpui::Corners {
-        top_left: px(radius),
-        top_right: px(radius),
-        bottom_right: px(radius),
-        bottom_left: px(radius),
-    };
-    window.paint_quad(
-        gpui::fill(
-            gpui::Bounds { origin: gpui::point(px(x), px(y)), size: gpui::size(px(w), px(h)) },
-            color,
-        )
-        .corner_radii(corners),
-    );
+    let corners = gpui::Corners { top_left: px(radius), top_right: px(radius), bottom_right: px(radius), bottom_left: px(radius) };
+    window.paint_quad(gpui::fill(gpui::Bounds { origin: gpui::point(px(x), px(y)), size: gpui::size(px(w), px(h)) }, color).corner_radii(corners));
 }
 
 /// 约束图里的一根 pin / 居中标记：横竖都按整设备像素落位、取整厚度，
@@ -309,23 +332,19 @@ pub(crate) fn constraint_graphic(f: &RightFields, d: &PanelData) -> gpui::AnyEle
         let cmds = f.cmds.clone();
         let key = if horizontal { "horizontal" } else { "vertical" };
         let fallback = if horizontal { "left" } else { "top" };
-        div()
-            .w(px(22.0))
-            .h(px(22.0))
-            .cursor_pointer()
-            .on_mouse_down(MouseButton::Left, move |e: &MouseDownEvent, _w, _cx| {
-                // Shift 把同轴两端做成可反复切换的组合态：不在组合里就加进来（leftRight /
-                // topBottom），已在组合里再 Shift 点同一端就把它摘掉、只留对端。
-                // 普通点仍是单端；点已生效的单端则回到该轴默认值，避免选上去解不掉。
-                let value = if e.modifiers.shift {
-                    if current == Some(pair) { other } else { pair }
-                } else if current == Some(label) {
-                    fallback
-                } else {
-                    label
-                };
-                cmds.push(Cmd { id: "node.set", params: Some(json!({ "props": { "constraints": { key: value } } })) });
-            })
+        div().w(px(22.0)).h(px(22.0)).cursor_pointer().on_mouse_down(MouseButton::Left, move |e: &MouseDownEvent, _w, _cx| {
+            // Shift 把同轴两端做成可反复切换的组合态：不在组合里就加进来（leftRight /
+            // topBottom），已在组合里再 Shift 点同一端就把它摘掉、只留对端。
+            // 普通点仍是单端；点已生效的单端则回到该轴默认值，避免选上去解不掉。
+            let value = if e.modifiers.shift {
+                if current == Some(pair) { other } else { pair }
+            } else if current == Some(label) {
+                fallback
+            } else {
+                label
+            };
+            cmds.push(Cmd { id: "node.set", params: Some(json!({ "props": { "constraints": { key: value } } })) });
+        })
     };
     // 上下 pin 仍是一个 22×22 命中盒；Shift 在 topBottom 与单端间切换。
     let middle_hit = |y: f32, current: Option<&'static str>| {
@@ -333,14 +352,9 @@ pub(crate) fn constraint_graphic(f: &RightFields, d: &PanelData) -> gpui::AnyEle
         let label = y_to_constraint(y);
         let fallback = "top";
         let other = if label == "top" { "bottom" } else { "top" };
-        div()
-            .absolute()
-            .left(px(0.0))
-            .top(px(y - 11.0))
-            .w(px(22.0))
-            .h(px(22.0))
-            .cursor_pointer()
-            .on_mouse_down(MouseButton::Left, move |e: &MouseDownEvent, _w, _cx| {
+        div().absolute().left(px(0.0)).top(px(y - 11.0)).w(px(22.0)).h(px(22.0)).cursor_pointer().on_mouse_down(
+            MouseButton::Left,
+            move |e: &MouseDownEvent, _w, _cx| {
                 let value = if e.modifiers.shift {
                     if current == Some("topBottom") { other } else { "topBottom" }
                 } else if current == Some(label) {
@@ -349,26 +363,23 @@ pub(crate) fn constraint_graphic(f: &RightFields, d: &PanelData) -> gpui::AnyEle
                     label
                 };
                 cmds.push(Cmd { id: "node.set", params: Some(json!({ "props": { "constraints": { "vertical": value } } })) });
-            })
+            },
+        )
     };
     // 中间十字拆成两条独立命中区：横条只设 horizontal=center，竖条只设 vertical=center。
     // 两者各占 14×4 / 4×14，在正中有 4×4 重叠——后绘制的竖条拿到中心点，横条仍可在两端点到。
     let center_hit = |f: &RightFields, horizontal: bool| {
         let cmds = f.cmds.clone();
         let (w, hh, top, left) = if horizontal { (14.0, 4.0, -2.0, 4.0) } else { (4.0, 14.0, -7.0, 9.0) };
-        div()
-            .absolute()
-            .left(px(left))
-            .top(px(height / 2.0 + top))
-            .w(px(w))
-            .h(px(hh))
-            .cursor_pointer()
-            .on_mouse_down(MouseButton::Left, move |_e: &MouseDownEvent, _w, _cx| {
+        div().absolute().left(px(left)).top(px(height / 2.0 + top)).w(px(w)).h(px(hh)).cursor_pointer().on_mouse_down(
+            MouseButton::Left,
+            move |_e: &MouseDownEvent, _w, _cx| {
                 let key = if horizontal { "horizontal" } else { "vertical" };
                 let current = if horizontal { h } else { v };
                 let value = if current == Some("center") { if horizontal { "left" } else { "top" } } else { "center" };
                 cmds.push(Cmd { id: "node.set", params: Some(json!({ "props": { "constraints": { key: value } } })) });
-            })
+            },
+        )
     };
     let middle = div()
         .relative()
@@ -1025,10 +1036,11 @@ fn checked_menu_icon(
 
 /// 整行描边按钮（egui `wide_button`）：Design 区底部导出与页面导出共用。
 /// 用户 2026-11-19 明确允许这一颗按钮与预览自己写，其余控件必须复用通用组件。
-fn wide_button(f: &RightFields, label: SharedString, cmd: &'static str, params: Value) -> Div {
+fn wide_button(f: &RightFields, label: SharedString, cmd: &'static str, params: Value) -> gpui::Stateful<Div> {
     let t = tokens();
     let cmds = f.cmds.clone();
     div()
+        .id(gpui::ElementId::Name(format!("wide-button-{cmd}").into()))
         .w_full()
         .h(px(crate::widgets::FIELD_H))
         .rounded(px(crate::widgets::RADIUS))
@@ -1041,6 +1053,7 @@ fn wide_button(f: &RightFields, label: SharedString, cmd: &'static str, params: 
         .text_size(pt(11.0))
         .text_color(rgba(t.text))
         .hover(|s| s.bg(rgba(t.hover)))
+        .occlude()
         .child(label)
         .on_mouse_down(MouseButton::Left, move |_e, _w, _cx| {
             cmds.push(Cmd { id: cmd, params: Some(params.clone()) });
@@ -1058,12 +1071,7 @@ fn wide_button(f: &RightFields, label: SharedString, cmd: &'static str, params: 
 /// 3. **按下即对位**：`anchored_top(trigger)` 读同一个 cell 把卡片顶部对到按钮顶部。
 ///
 /// 所有右栏开窗按钮都走这里 —— 与 eGUI 一样，定位能力全项目只有这一份。
-pub(crate) fn window_open_button(
-    trigger: &str,
-    icon: Icon,
-    active: bool,
-    on_click: impl Fn(&mut Window, &mut App) + 'static,
-) -> gpui::AnyElement {
+pub(crate) fn window_open_button(trigger: &str, icon: Icon, active: bool, on_click: impl Fn(&mut Window, &mut App) + 'static) -> gpui::AnyElement {
     crate::popovers::with_window_trigger(
         IconButton::new(icon)
             .id(SharedString::from(format!("window-open-{trigger}")))
@@ -1508,11 +1516,7 @@ pub(crate) fn paints(
     let paste_cmd: &'static str = if fills { "fill.paste" } else { "stroke.paste" };
     let can_paste_header = if fills { d.can_paste_fill } else { d.can_paste_stroke };
     let header_entries: Vec<(String, &'static str, Value)> = if can_paste_header {
-        vec![(
-            if fills { tr("Paste fill") } else { tr("Paste stroke") }.to_string(),
-            paste_cmd,
-            json!({}),
-        )]
+        vec![(if fills { tr("Paste fill") } else { tr("Paste stroke") }.to_string(), paste_cmd, json!({}))]
     } else {
         Vec::new()
     };
@@ -1547,11 +1551,8 @@ pub(crate) fn paints(
         // and the opacity field, stay ordinary `fill.set` / `stroke.set`.
         let anim_colour = keyframe_layer.is_some() && first_solid == Some(idx);
         let hex_cmd = if anim_colour { "motion.autoKey" } else { cmd };
-        let hex_params = if anim_colour {
-            json!({ "property": if fills { "Fill" } else { "Stroke" }, "time": motion_time })
-        } else {
-            json!({ "index": index })
-        };
+        let hex_params =
+            if anim_colour { json!({ "property": if fills { "Fill" } else { "Stroke" }, "time": motion_time }) } else { json!({ "index": index }) };
         let hex_ed = f.row_field(
             cx,
             hex_slot,
@@ -1665,7 +1666,9 @@ pub(crate) fn paints(
             let sides_mode = stroke_sides_mode(d.stroke_sides);
             let row = |key: &'static str, label: SharedString, icon: Icon, sel: bool, sep: bool| {
                 let mut r = MenuRow::row(label).key(key).icon(icon).checked(Some(sel));
-                if sep { r = r.separator(); }
+                if sep {
+                    r = r.separator();
+                }
                 r
             };
             let menu = vec![
@@ -1891,11 +1894,8 @@ pub(crate) fn effects(
     let make_icons = || vec![style_menu(f, d, "effect", None, Icon::StyleSettings), add_effect_menu(f).into_any_element()];
     // EGUI `effects.rs`: the Effects header's context menu pastes a copied effect.
     let can_paste_effect_header = d.can_paste_effect;
-    let header_entries: Vec<(String, &'static str, Value)> = if can_paste_effect_header {
-        vec![(tr("Paste effect").to_string(), "effect.paste", json!({}))]
-    } else {
-        Vec::new()
-    };
+    let header_entries: Vec<(String, &'static str, Value)> =
+        if can_paste_effect_header { vec![(tr("Paste effect").to_string(), "effect.paste", json!({}))] } else { Vec::new() };
 
     // WGSL 材质：只在「已绑定」时于下方就地展开参数输入框（选中文件由上面的 `+` 菜单写入）。
     // 空态（0 效果、未绑定）连参数行都不画，Effects 节就是一行置灰头部 + 可点的 `+`。
@@ -2311,13 +2311,12 @@ pub(crate) fn grids(f: &RightFields, d: &PanelData, col: f32) -> Section {
 // Export —— `export_panel.rs::section` / `setting_row`
 // ───────────────────────────────────────────────────────────────────────────────────────────────
 
-pub(crate) fn export(f: &RightFields, d: &PanelData, col: f32, _n: &mut usize, cx: &mut App) -> Section {
+pub(crate) fn export(f: &RightFields, d: &PanelData, col: f32, _n: &mut usize, cx: &mut App, motion: bool) -> Section {
     // egui `export_panel.rs::section`: `mixed = shared.is_none() && sel.len() > 1`。
     // mixed 时 `+` 是「整体替换成一条默认设置」（set_props exports），不是 export.add。
     // 空选区 = Page 页：设置存在页面节点上，导出按钮把页面子层合成一张图。
     let page_mode = d.ids.is_empty() && d.page_node.is_some();
-    let target: Vec<figcraft_doc::NodeId> =
-        if page_mode { vec![d.page_node.expect("page mode has a page node")] } else { d.ids.clone() };
+    let target: Vec<figcraft_doc::NodeId> = if page_mode { vec![d.page_node.expect("page mode has a page node")] } else { d.ids.clone() };
     // `export.*` 的 `ids` 显式带上，空选区时才不会被当成「没有目标」。
     let with_ids = |mut v: Value| {
         if let Some(o) = v.as_object_mut() {
@@ -2327,63 +2326,95 @@ pub(crate) fn export(f: &RightFields, d: &PanelData, col: f32, _n: &mut usize, c
     };
     let mixed = d.exports.is_none();
     let replace = with_ids(json!({ "props": { "exports": [figcraft_doc::ExportSetting::default()] } }));
-    let plus = if mixed {
-        icon_cmd(Icon::Plus, "node.set", replace, f, false)
-    } else {
-        icon_cmd(Icon::Plus, "export.add", with_ids(json!({})), f, false)
-    };
+    let plus =
+        if mixed { icon_cmd(Icon::Plus, "node.set", replace, f, false) } else { icon_cmd(Icon::Plus, "export.add", with_ids(json!({})), f, false) };
     // A display-only default row is never fabricated: export.update/remove work by index on
     // stored settings. In page mode the Export button and preview must still show even when the
     // page has no setting yet (the button falls back to PNG); only a non-page empty selection
     // collapses to an empty section.
     let rows = d.exports.clone().filter(|v| !v.is_empty()).unwrap_or_default();
-    if rows.is_empty() && !page_mode {
+    // The Export section is the one export surface. In Motion mode a single selected layer also
+    // gets an animation switch here, so the timeline never needs a second Export dialog.
+    let animatable = motion && !page_mode && target.len() == 1;
+    let anim_on = animatable && f.export_animation.get();
+    if rows.is_empty() && !page_mode && !animatable {
         return Section::empty(tr("Export"), plus);
     }
     let mut sec = PanelSection::new(tr("Export")).header_trail(plus);
+    if animatable {
+        let state = f.export_animation.clone();
+        let wake = f.cmds.clone();
+        sec = sec.child(field_row_full(Checkbox::new("export-animation").label(tr("Animate timeline")).checked(anim_on).on_change(
+            move |on, _w, _cx| {
+                state.set(*on);
+                wake.wake();
+            },
+        )));
+    }
     // 预览框是整行宽（两列 + 间隙），图片再让出左右内边距与 8 pt 呼吸位。
     let full_w = col * 2.0 + crate::widgets::GRID_GAP;
-    for row in rows.iter() {
-        let index = row.index;
-        // ① 第一行（统一网格）：Size（仅位图）+ 格式，行尾 Dots 设置小窗与删除。
-        let formats: Vec<(String, &'static str, Value)> =
-            [("PNG", "png"), ("JPG", "jpg"), ("SVG", "svg"), ("PDF", "pdf"), ("WebP", "webp"), ("XML", "xml")]
-                .into_iter()
-                .map(|(l, ext)| (l.to_string(), "export.update", with_ids(json!({ "index": index, "format": ext }))))
-                .collect();
-        let mut fields: Vec<gpui::AnyElement> = Vec::new();
-        if row.is_raster {
-            let mut sizes: Vec<(String, &'static str, Value)> = Vec::new();
-            for v in figcraft_doc::ExportSize::SCALES {
-                let label = figcraft_doc::ExportSize::Scale { value: v }.label();
-                sizes.push((label.clone(), "export.update", with_ids(json!({ "index": index, "size": label }))));
+    if anim_on {
+        const FORMATS: [&str; 4] = ["MP4", "GIF", "WebM", "PNG sequence"];
+        sec = sec.child(field_row(
+            vec![
+                local_pick_dropdown(f, FORMATS[*f.export_animation_format.borrow()], col, &FORMATS, f.export_animation_format.clone())
+                    .into_any_element(),
+            ],
+            Vec::<gpui::AnyElement>::new(),
+        ));
+    } else {
+        for row in rows.iter() {
+            let index = row.index;
+            // ① 第一行（统一网格）：Size（仅位图）+ 格式，行尾 Dots 设置小窗与删除。
+            let formats: Vec<(String, &'static str, Value)> =
+                [("PNG", "png"), ("JPG", "jpg"), ("SVG", "svg"), ("PDF", "pdf"), ("WebP", "webp"), ("XML", "xml")]
+                    .into_iter()
+                    .map(|(l, ext)| (l.to_string(), "export.update", with_ids(json!({ "index": index, "format": ext }))))
+                    .collect();
+            let mut fields: Vec<gpui::AnyElement> = Vec::new();
+            if row.is_raster {
+                let mut sizes: Vec<(String, &'static str, Value)> = Vec::new();
+                for v in figcraft_doc::ExportSize::SCALES {
+                    let label = figcraft_doc::ExportSize::Scale { value: v }.label();
+                    sizes.push((label.clone(), "export.update", with_ids(json!({ "index": index, "size": label }))));
+                }
+                for s in ["512w", "512h"] {
+                    sizes.push((s.to_string(), "export.update", with_ids(json!({ "index": index, "size": s }))));
+                }
+                fields.push(pick_dropdown(f, row.size.clone(), col, sizes).into_any_element());
             }
-            for s in ["512w", "512h"] {
-                sizes.push((s.to_string(), "export.update", with_ids(json!({ "index": index, "size": s }))));
-            }
-            fields.push(pick_dropdown(f, row.size.clone(), col, sizes).into_any_element());
-        }
-        fields.push(pick_dropdown(f, row.format_label, col, formats).into_any_element());
-        // Dots 设置小窗（用户要求：单选器放弹窗，不放下拉）。
-        let trigger = format!("export-options-{index}");
-        let popups = f.popups();
-        let queue = f.queue();
-        let export_rows = export_setting_rows(row, &d.doc_profile, &target, &queue, cx);
-        let btn_key = trigger.clone();
-        let dots = window_open_button(&btn_key, Icon::Menu, popups.is_open(&trigger), move |window, cx| {
-            let top = crate::popovers::anchored_top(&trigger, window);
-            open_detached_with(popups.clone(), trigger.clone(), Some(top), cx, |anchor, _cx| {
-                crate::popovers::WindowState::export_options(queue.clone(), tr("Export settings"), anchor, export_rows.clone())
+            fields.push(pick_dropdown(f, row.format_label, col, formats).into_any_element());
+            // Dots 设置小窗（用户要求：单选器放弹窗，不放下拉）。
+            let trigger = format!("export-options-{index}");
+            let popups = f.popups();
+            let queue = f.queue();
+            let export_rows = export_setting_rows(row, &d.doc_profile, &target, &queue, cx);
+            let btn_key = trigger.clone();
+            let dots = window_open_button(&btn_key, Icon::Menu, popups.is_open(&trigger), move |window, cx| {
+                let top = crate::popovers::anchored_top(&trigger, window);
+                open_detached_with(popups.clone(), trigger.clone(), Some(top), cx, |anchor, _cx| {
+                    crate::popovers::WindowState::export_options(queue.clone(), tr("Export settings"), anchor, export_rows.clone())
+                });
             });
-        });
-        let minus = icon_cmd(Icon::Minus, "export.remove", with_ids(json!({ "index": index })), f, false).into_any_element();
-        sec = sec.child(field_row(fields, vec![dots, minus]));
+            let minus = icon_cmd(Icon::Minus, "export.remove", with_ids(json!({ "index": index })), f, false).into_any_element();
+            sec = sec.child(field_row(fields, vec![dots, minus]));
+        }
     }
 
     // ② 导出按钮（egui `wide_button`）：放在预览**上面**，紧贴设置行；左右 16pt，与预览框同宽。
     //    suffix 输入框那一整行已删除（空值时不可见却占 32pt，把按钮和设置行撑开）。
     let name = d.header.as_ref().map(|h| h.layer_name.clone()).unwrap_or_default();
-    let (cmd, params, label): (&'static str, Value, SharedString) = if page_mode {
+    let (cmd, params, label): (&'static str, Value, SharedString) = if anim_on {
+        const EXTS: [&str; 4] = ["mp4", "gif", "webm", "png"];
+        const CMDS: [&'static str; 4] = ["motion.export.mp4", "motion.export.gif", "motion.export.webm", "motion.export.png"];
+        const FPS: [u32; 4] = [60, 30, 60, 60];
+        let i = (*f.export_animation_format.borrow()).min(3);
+        let scale = rows.first().and_then(|r| r.size.trim().trim_start_matches('@').trim_end_matches('x').parse::<f64>().ok()).unwrap_or(1.0);
+        let cmd = CMDS[i];
+        let params = json!({ "ids": &target, "format": EXTS[i], "fps": FPS[i], "scale": scale });
+        let label = if name.is_empty() { tr("Export animation").into() } else { trf("Export {name} animation", &[("name", &name)]).into() };
+        (cmd, params, label)
+    } else if page_mode {
         let fmt = rows.first().map(|r| r.format).unwrap_or("png");
         let page_ids = d.page.as_ref().map(|p| p.export_ids.clone()).unwrap_or_default();
         // The preview uses the page's first ExportSetting; the actual export must match it.
@@ -2436,17 +2467,9 @@ pub(crate) fn export(f: &RightFields, d: &PanelData, col: f32, _n: &mut usize, c
     if open {
         let t = tokens();
         // flex_1（不是 w_full）：父层带 16pt 内边距，w_full 会按整栏宽算、右边顶到面板边缘。
-        let mut frame = div()
-            .flex_1()
-            .h(px(160.0))
-            .rounded(px(crate::widgets::RADIUS))
-            .border_1()
-            .border_color(rgba(t.border))
-            .overflow_hidden()
-            .relative();
-        frame = frame.child(
-            canvas(|b, _w, _cx| b.size, |b, _, window, _cx| crate::widgets::checker(window, b, 8.0)).absolute().inset_0(),
-        );
+        let mut frame =
+            div().flex_1().h(px(160.0)).rounded(px(crate::widgets::RADIUS)).border_1().border_color(rgba(t.border)).overflow_hidden().relative();
+        frame = frame.child(canvas(|b, _w, _cx| b.size, |b, _, window, _cx| crate::widgets::checker(window, b, 8.0)).absolute().inset_0());
         if let Some((w, h, buf)) = &d.export_preview {
             let img = img(ImageSource::Render(crate::canvas::render_worker::wrap_bgra(*w, *h, buf.clone())))
                 .max_w(px(d.export_preview_max_w.max(32.0)))
@@ -2454,15 +2477,7 @@ pub(crate) fn export(f: &RightFields, d: &PanelData, col: f32, _n: &mut usize, c
             frame = frame.child(div().absolute().inset_0().flex().items_center().justify_center().child(img));
         }
         // 左右都 16，和上面的按钮严格同宽。
-        sec = sec.child(block_row(
-            div()
-                .w_full()
-                .flex()
-                .pl(pt(crate::widgets::PAD))
-                .pr(pt(crate::widgets::PAD))
-                .pb(pt(8.0))
-                .child(frame),
-        ));
+        sec = sec.child(block_row(div().w_full().flex().pl(pt(crate::widgets::PAD)).pr(pt(crate::widgets::PAD)).pb(pt(8.0)).child(frame)));
     }
     Section::Full(sec)
 }
@@ -2534,11 +2549,9 @@ fn export_setting_rows(
     if row.format == "xml" {
         out.push(toggle(tr("Include id attribute").to_string(), row.svg_id_attribute, "svgIdAttribute"));
         out.push(Setting::SubLabel { tab: 0, text: tr("Compatibility").into() });
-        for (label, key) in [
-            (tr("Best effort").to_string(), "bestEffort"),
-            (tr("Exact only").to_string(), "exact"),
-            (tr("Ignore unsupported").to_string(), "ignore"),
-        ] {
+        for (label, key) in
+            [(tr("Best effort").to_string(), "bestEffort"), (tr("Exact only").to_string(), "exact"), (tr("Ignore unsupported").to_string(), "ignore")]
+        {
             out.push(Setting::Radio {
                 tab: 0,
                 label: label.into(),
@@ -2581,9 +2594,7 @@ fn export_setting_rows(
 
 fn export_options(row: &ExportRow, doc_profile: &str) -> Vec<(String, Option<bool>, &'static str, Value, bool)> {
     let index = row.index;
-    let toggle = |label: String, on: bool, key: &str| {
-        (label, Some(on), "export.update", json!({ "index": index, key: !on }), false)
-    };
+    let toggle = |label: String, on: bool, key: &str| (label, Some(on), "export.update", json!({ "index": index, key: !on }), false);
     let mut opts: Vec<(String, Option<bool>, &'static str, Value, bool)> = Vec::new();
     opts.push(toggle(tr("Ignore overlapping layers").to_string(), row.contents_only, "contentsOnly"));
     opts.push(toggle(tr("Include bounding box").to_string(), row.include_bounding_box, "includeBoundingBox"));
@@ -2710,11 +2721,7 @@ fn visibility_bind_button(f: &RightFields, b: &super::data::BindingData) -> gpui
             let anchor = gpui::Bounds { origin: p, size: gpui::size(px(0.0), px(0.0)) };
             let mut rows: Vec<crate::widgets::menu::MenuRow> = bool_props
                 .iter()
-                .map(|name| {
-                    crate::widgets::menu::MenuRow::row(SharedString::from(name.clone()))
-                        .key(format!("bind:{}", name))
-                        .icon(Icon::Boolean)
-                })
+                .map(|name| crate::widgets::menu::MenuRow::row(SharedString::from(name.clone())).key(format!("bind:{}", name)).icon(Icon::Boolean))
                 .collect();
             rows.push(crate::widgets::menu::MenuRow::row(tr("Create boolean property")).key("create").icon(Icon::Plus));
             if is_bound {
@@ -2818,13 +2825,8 @@ pub(crate) fn appearance(
     } else {
         sec = sec.child(sublabel_row(tr("Opacity")));
     }
-    let mut fields: Vec<gpui::AnyElement> = vec![bindable(
-        f,
-        "opacity",
-        d.bound.get("opacity").map(String::as_str),
-        &d.number_variables,
-        opacity.clone().into_any_element(),
-    )];
+    let mut fields: Vec<gpui::AnyElement> =
+        vec![bindable(f, "opacity", d.bound.get("opacity").map(String::as_str), &d.number_variables, opacity.clone().into_any_element())];
     if d.corner_radius_ok {
         fields.push(bindable(
             f,
@@ -3173,7 +3175,9 @@ pub(crate) fn frame_presets(f: &RightFields, _d: &PanelData) -> PanelSection {
     let mut sec = PanelSection::new(tr("Frame"));
     let mut cats: Vec<String> = Vec::new();
     for (c, ..) in &rows {
-        if !cats.contains(c) { cats.push(c.clone()); }
+        if !cats.contains(c) {
+            cats.push(c.clone());
+        }
     }
     let fmt = |v: f64| if v.fract() == 0.0 { format!("{}", v as i64) } else { format!("{v}") };
     for cat in &cats {
@@ -3185,7 +3189,13 @@ pub(crate) fn frame_presets(f: &RightFields, _d: &PanelData) -> PanelSection {
         let map = f.preset_open.clone();
         let cat_key = cat.clone();
         let head = div()
-            .flex().flex_row().items_center().w_full().h_full().gap(pt(6.0)).cursor_pointer()
+            .flex()
+            .flex_row()
+            .items_center()
+            .w_full()
+            .h_full()
+            .gap(pt(6.0))
+            .cursor_pointer()
             .on_mouse_down(MouseButton::Left, move |_e, _w, _cx| {
                 {
                     let mut m = map.borrow_mut();
@@ -3199,7 +3209,9 @@ pub(crate) fn frame_presets(f: &RightFields, _d: &PanelData) -> PanelSection {
             .child(IconButton::new(if open { Icon::ChevronDown } else { Icon::ChevronRight }).size(16.0))
             .child(div().text_size(pt(11.0)).child(SharedString::from(cat.clone())));
         sec = sec.child(field_row_full(head));
-        if !open { continue; }
+        if !open {
+            continue;
+        }
         for (_, name, pw, ph, preset) in rows.iter().filter(|(c, ..)| c == cat) {
             let cmds = f.cmds.clone();
             let label = SharedString::from(name.clone());
@@ -3207,7 +3219,14 @@ pub(crate) fn frame_presets(f: &RightFields, _d: &PanelData) -> PanelSection {
             let preset = preset.clone();
             let (w, h) = (*pw, *ph);
             let line = div()
-                .flex().flex_row().items_center().w_full().h_full().gap(pt(6.0)).pl(pt(16.0)).cursor_pointer()
+                .flex()
+                .flex_row()
+                .items_center()
+                .w_full()
+                .h_full()
+                .gap(pt(6.0))
+                .pl(pt(16.0))
+                .cursor_pointer()
                 .on_mouse_down(MouseButton::Left, move |_e, _w, _cx| {
                     let params = match &preset {
                         Some(p) => json!({ "preset": p }),
@@ -5029,10 +5048,12 @@ pub(crate) fn page(f: &RightFields, d: &PanelData, row_w: f32, n: &mut usize, wi
     // 本地样式之后就是「把整页导出为一个 PNG」；按钮与 Design 区的底部导出共用 `wide_button`。
     // ids 传页面子层：`file.export` 收到显式 ids 就按这些层合成一张图，缺省（空页面）引擎同样
     // 会退回到页面子层，所以这里不需要特判。
-    out.push(
-        PanelSection::new(tr("Export"))
-            .child(field_row_full(wide_button(f, tr("Export page as PNG").into(), "file.export", json!({ "ids": p.export_ids, "format": "png" })))),
-    );
+    out.push(PanelSection::new(tr("Export")).child(field_row_full(wide_button(
+        f,
+        tr("Export page as PNG").into(),
+        "file.export",
+        json!({ "ids": p.export_ids, "format": "png" }),
+    ))));
     out
 }
 

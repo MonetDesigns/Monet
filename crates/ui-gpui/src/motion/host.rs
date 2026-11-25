@@ -30,7 +30,11 @@ impl CanvasView {
             self.motion_ui.playing = false;
         }
         if export {
-            self.open_dialog(crate::dialogs::Kind::Export, &serde_json::json!({}), cx);
+            // Export is a single surface now: the Motion inspector's right-hand Export section.
+            // The timeline arrow no longer opens a second export dialog; it brings Motion back up
+            // and points the user at the one place where both still and animation export live.
+            self.set_motion_open(true, cx);
+            self.toast(figcraft_i18n::tr("Export is in the right panel: use the Export section"), cx);
         }
         let selection = self.app.session.selection();
         let settings =
@@ -172,7 +176,7 @@ impl CanvasView {
         if sel.all_frame {
             after.push(crate::panels::right::sections::grids(&self.fields, &data, 0.0).into_element().into_any_element());
         }
-        after.push(crate::panels::right::sections::export(&self.fields, &data, 0.0, &mut n, cx).into_element().into_any_element());
+        after.push(crate::panels::right::sections::export(&self.fields, &data, 0.0, &mut n, cx, true).into_element().into_any_element());
         let mut design_sections = before;
         design_sections.extend([fills, strokes, effects]);
         design_sections.extend(after);

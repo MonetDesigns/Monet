@@ -85,9 +85,9 @@ All screenshots below are of the running GPUI application (`cargo run -p figcraf
 </table>
 
 <p align="center">
-  <img src="docs/images/screenshots/09-animation-export.png" alt="The full Monet editor with the Export dialog open over the canvas: the dialog separates Export layers from Animation (selected layer's timeline) and lists MP4 (H.264) 60 fps, GIF 30 fps, WebM (AV1) 60 fps and PNG sequence 60 fps, followed by the whole-file .fig option" width="900">
+  <img src="docs/images/screenshots/09-animation-export.png" alt="The full Monet window in Motion mode: Motion Card selected, its Fill, Stroke and Stroke weight keyframes in the timeline, and the one right-hand Export section with Animate timeline enabled, an MP4 format picker and a single Export Motion Card animation button" width="900">
   <br>
-  <sub><b>The animation export entry</b> — MP4, GIF, WebM and PNG sequence in the same dialog as layer export; picking a path takes the engine render off the UI thread.</sub>
+  <sub><b>One export surface</b> — the right-hand Export section switches between still-image export and MP4, GIF, WebM or PNG-sequence timeline export; there is no second export dialog, and the save/render path stays off the UI thread.</sub>
 </p>
 
 ## What this is

@@ -10,8 +10,8 @@ use crate::canvas::geom::Color32;
 use crate::inline_input::InlineInput;
 use crate::widgets::menu::MenuRow;
 use crate::widgets::{
-    Icon, IconButton, PanelSection, SectionHeader, SectionHeaderVariant, Segmented, Slot, TextEdit, TextField, field_row, field_row_full, field_row_h,
-    pt, rgba, sublabel_row, sublabel_row2, tokens,
+    Icon, IconButton, PanelSection, SectionHeader, SectionHeaderVariant, Segmented, Slot, TextEdit, TextField, field_row, field_row_full,
+    field_row_h, pt, rgba, sublabel_row, sublabel_row2, tokens,
 };
 use figcraft_color::BlendMode;
 use figcraft_i18n::tr;
@@ -672,6 +672,11 @@ pub(crate) struct RightFields {
     /// Export 节「Preview」折叠行是否展开（egui `app.ui.export_thumb`）。纯 UI 状态，按窗口隔离；
     /// 只有展开时才让 `panel_data` 去光栅化预览图，避免每份文档白白渲染一张缩略图。
     export_preview_open: std::rc::Rc<std::cell::Cell<bool>>,
+    /// Export 节里「Animation」开关：打开后同一个 Export 按钮改走 `motion.export`，
+    /// 不再另开一个导出弹窗。纯 UI 状态，不进文档。
+    export_animation: std::rc::Rc<std::cell::Cell<bool>>,
+    /// Animation 格式下标（0 MP4 / 1 GIF / 2 WebM / 3 PNG sequence），只影响当前窗口。
+    export_animation_format: std::rc::Rc<std::cell::RefCell<usize>>,
     /// 该节头部是否悬停（lizard 只在悬停时画 chevron、把标题提亮）。
     /// 该节头部是否悬停（参考实现 只在悬停时画 chevron、把标题提亮）。
     selection_colors_hover: std::rc::Rc<std::cell::RefCell<bool>>,
@@ -943,12 +948,7 @@ fn point_axis_value(text: &str) -> Option<serde_json::Value> {
 /// A vector point coordinate field: a plain number sets every selected point's own coordinate,
 /// while `+10`, `*2`, `/4` and `50%` apply a relative edit to each point separately. The engine's
 /// `vector.edit.position` owns both forms, so the panel only has to translate what was typed.
-fn nf_point_axis(
-    cx: &mut App,
-    lead: &'static str,
-    key: &'static str,
-    cmds: &Cmds,
-) -> Entity<TextField> {
+fn nf_point_axis(cx: &mut App, lead: &'static str, key: &'static str, cmds: &Cmds) -> Entity<TextField> {
     let cmds = cmds.clone();
     TextField::build(cx, DEFAULT_COL, move |tf, _| {
         tf.set_lead(Slot::Text(SharedString::from(lead)));
@@ -1331,6 +1331,8 @@ impl RightFields {
             selection_colors_open: std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new())),
             selection_colors_hover: std::rc::Rc::new(std::cell::RefCell::new(false)),
             export_preview_open: std::rc::Rc::new(std::cell::Cell::new(false)),
+            export_animation: std::rc::Rc::new(std::cell::Cell::new(false)),
+            export_animation_format: std::rc::Rc::new(std::cell::RefCell::new(0usize)),
             right_tab: std::rc::Rc::new(std::cell::RefCell::new(0u8)),
             local_style_renaming: local_style_renaming.clone(),
             local_style_rename_style: local_style_rename_style.clone(),
@@ -1520,6 +1522,8 @@ impl RightFields {
         f.selection_colors_open = Default::default();
         f.selection_colors_hover = Default::default();
         f.export_preview_open = Default::default();
+        f.export_animation = Default::default();
+        f.export_animation_format = Default::default();
         f.right_tab = Default::default();
         f.local_style_renaming = Default::default();
         f.local_style_rename_style = Default::default();
@@ -2449,7 +2453,7 @@ pub(crate) fn right_panel(
     let effects_sec = right::sections::effects(f, data, col, cx, None);
     let sel_colors_sec = right::sections::selection_colors(f, data, row_w, col, &mut n, window, cx);
     let grids_sec = right::sections::grids(f, data, col);
-    let export_sec = right::sections::export(f, data, col, &mut n, cx);
+    let export_sec = right::sections::export(f, data, col, &mut n, cx, motion);
 
     // ⛔ 分隔线的规则：**一条线属于「它上面那一节」的结尾**，且只有那一节真的存在时才加。
     //  - `view_bar` 自己有 `border_b_1`，所以 body 开头**不再补线**（否则顶部两条）。
@@ -2550,14 +2554,11 @@ pub(crate) fn right_panel(
             let constraints_toggle = {
                 let flag = f.constraints_open.clone();
                 let wake = f.cmds.clone();
-                IconButton::new(Icon::LayoutGrid)
-                    .size(24.0)
-                    .active(constraints_open)
-                    .on_click(move |_e, _w, _cx| {
-                        let next = !*flag.borrow();
-                        *flag.borrow_mut() = next;
-                        wake.wake();
-                    })
+                IconButton::new(Icon::LayoutGrid).size(24.0).active(constraints_open).on_click(move |_e, _w, _cx| {
+                    let next = !*flag.borrow();
+                    *flag.borrow_mut() = next;
+                    wake.wake();
+                })
             };
             let mut pos_sec = PanelSection::new(tr("Position"));
             if has_pos_trail {
@@ -2571,15 +2572,13 @@ pub(crate) fn right_panel(
                     .child(sublabel_row(tr("Alignment")))
                     .child(field_row(vec![h.into_any_element(), v.into_any_element()], Vec::<IconButton>::new()));
             }
-            pos_sec = pos_sec
-                .child(sublabel_row(tr("Position")))
-                .child(field_row(
-                    vec![f.x.clone().into_any_element(), f.y.clone().into_any_element()],
-                    // 约束只在 frame 子层（父级无 auto layout 或自身 absolute）时出现：
-                    // 展开按钮与下面的约束节共用同一个 in_frame 门槛（参考实现
-                    // `right.rs::position_fields` 的 `if in_frame { … }`），两者不能分家。
-                    if data.in_frame { vec![constraints_toggle] } else { Vec::<IconButton>::new() },
-                ));
+            pos_sec = pos_sec.child(sublabel_row(tr("Position"))).child(field_row(
+                vec![f.x.clone().into_any_element(), f.y.clone().into_any_element()],
+                // 约束只在 frame 子层（父级无 auto layout 或自身 absolute）时出现：
+                // 展开按钮与下面的约束节共用同一个 in_frame 门槛（参考实现
+                // `right.rs::position_fields` 的 `if in_frame { … }`），两者不能分家。
+                if data.in_frame { vec![constraints_toggle] } else { Vec::<IconButton>::new() },
+            ));
 
             // ── Constraints（egui `right.rs::position_fields`：仅 frame 子层、自身无自动布局或为
             // absolute 时才显示；`in_frame` 的逻辑与 egui `common` 后的 `all(...)` 完全一致）。──
@@ -2624,20 +2623,8 @@ pub(crate) fn right_panel(
                             .flex_col()
                             .h_full()
                             .gap(pt(8.0))
-                            .child(right::sections::pick_dropdown_lead(
-                                f,
-                                pretty_h(data.constraints_h),
-                                col,
-                                h_opts,
-                                Some(Icon::DistributeH),
-                            ))
-                            .child(right::sections::pick_dropdown_lead(
-                                f,
-                                pretty_v(data.constraints_v),
-                                col,
-                                v_opts,
-                                Some(Icon::AlignTop),
-                            ))
+                            .child(right::sections::pick_dropdown_lead(f, pretty_h(data.constraints_h), col, h_opts, Some(Icon::DistributeH)))
+                            .child(right::sections::pick_dropdown_lead(f, pretty_v(data.constraints_v), col, v_opts, Some(Icon::AlignTop)))
                             .into_any_element(),
                         right::sections::constraint_graphic(f, data),
                     ],
