@@ -179,6 +179,46 @@ pub(crate) fn pick_dropdown(f: &RightFields, label: impl Into<SharedString>, wid
     pick_dropdown_lead(f, label, width, rows, None)
 }
 
+/// Like [`pick_dropdown`], but each row shows a trailing detail (e.g. a device's `W × H`).
+/// The rows are `(label, trailing, command, params)`; an empty trailing shows nothing.
+#[track_caller]
+pub(crate) fn pick_dropdown_sized(
+    f: &RightFields,
+    label: impl Into<SharedString>,
+    width: f32,
+    rows: Vec<(String, String, &'static str, Value)>,
+) -> Dropdown {
+    let label = label.into();
+    let menu: Vec<MenuRow> = rows.iter().enumerate().map(|(i, (l, tail, _, _))| {
+        let mut r = MenuRow::row(l.clone()).key(i.to_string());
+        if !tail.is_empty() { r = r.trail(tail.clone()); }
+        r
+    }).collect();
+    let loc = std::panic::Location::caller();
+    let key = format!("pick:{}:{}:{}", loc.file(), loc.line(), label);
+    let anchor_handle = crate::widgets::dropdown::menu_anchor(&key);
+    let mut d = Dropdown::new(label, width, None).fill().menu(key);
+    if let Some(root) = f.root.clone() {
+        let cmds = f.cmds.clone();
+        let anchor_handle = anchor_handle.clone();
+        d = d.on_click(move |anchor, _window, cx: &mut App| {
+            let rows = rows.clone();
+            let cmds = cmds.clone();
+            let on_pick = Rc::new(move |key: &str, _w: &mut Window, _cx: &mut App| {
+                if let Some((_, _, cmd, params)) = key.parse::<usize>().ok().and_then(|i| rows.get(i)) {
+                    cmds.push(Cmd { id: cmd, params: Some(params.clone()) });
+                }
+            });
+            let anchor_handle = anchor_handle.clone();
+            let menu = menu.clone();
+            root.update(cx, move |cv, cx| {
+                cv.open_dropdown_menu(Some(anchor_handle), anchor, Some(width.max(120.0)), menu, on_pick, cx);
+            });
+        });
+    }
+    d
+}
+
 /// Same dropdown, with a leading glyph in the field's lead slot.
 
 /// 约束图形选择器：外框里的子层与四条边的 pin，中间十字设居中。
@@ -3108,62 +3148,60 @@ pub(crate) fn vector_points(f: &RightFields, d: &PanelData, cx: &mut App, n: &mu
 /// 按 `FRAME_PRESETS` 的分类折叠列表：点分类折展、点预设推 `frame.create` + 切回 Move +
 /// 缩放到新选区。展开状态存在 `RightFields`（egui 存在 `ui.data` 临时值里），默认只开 Phone。
 pub(crate) fn frame_presets(f: &RightFields, _d: &PanelData) -> PanelSection {
-    use figcraft_engine::cmd::create::FRAME_PRESETS;
-    let mut sec = PanelSection::new(tr("Frame"));
-    let mut cats: Vec<&'static str> = Vec::new();
-    for (c, ..) in FRAME_PRESETS {
-        if !cats.contains(c) {
-            cats.push(c);
+    // 设备类预设来自外置设备目录（与原型设备选择器同一份数据）；其余（幻灯片/纸张/社交）
+    // 仍用引擎内置的 FRAME_PRESETS。每项：(category, name, width, height, preset_or_none)。
+    let device_presets: Vec<(String, String, f64, f64, Option<String>)> =
+        figcraft_engine::devices::frame_presets().into_iter().map(|(c, n, w, h)| (c, n, w, h, None)).collect();
+    let mut rows: Vec<(String, String, f64, f64, Option<String>)> = device_presets;
+    for (c, n, w, h) in figcraft_engine::cmd::create::FRAME_PRESETS {
+        if !matches!(*c, "Phone" | "Tablet" | "Desktop") {
+            rows.push((tr(c).to_string(), tr(n).to_string(), *w, *h, Some((*n).to_string())));
         }
     }
+    let mut sec = PanelSection::new(tr("Frame"));
+    let mut cats: Vec<String> = Vec::new();
+    for (c, ..) in &rows {
+        if !cats.contains(c) { cats.push(c.clone()); }
+    }
     let fmt = |v: f64| if v.fract() == 0.0 { format!("{}", v as i64) } else { format!("{v}") };
-    for cat in cats {
+    for cat in &cats {
         let open = {
             let map = f.preset_open.borrow();
-            map.iter().find(|(c, _)| *c == cat).map(|(_, o)| *o).unwrap_or(cat == tr("Phone"))
+            map.iter().find(|(c, _)| c == cat).map(|(_, o)| *o).unwrap_or(cat == tr("Phone"))
         };
         let toggle_cmds = f.cmds.clone();
         let map = f.preset_open.clone();
+        let cat_key = cat.clone();
         let head = div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .w_full()
-            .h_full()
-            .gap(pt(6.0))
-            .cursor_pointer()
+            .flex().flex_row().items_center().w_full().h_full().gap(pt(6.0)).cursor_pointer()
             .on_mouse_down(MouseButton::Left, move |_e, _w, _cx| {
                 {
                     let mut m = map.borrow_mut();
-                    match m.iter_mut().find(|(c, _)| *c == cat) {
+                    match m.iter_mut().find(|(c, _)| *c == cat_key) {
                         Some(e) => e.1 = !e.1,
-                        None => m.push((cat, true)),
+                        None => m.push((cat_key.clone(), true)),
                     }
                 }
                 toggle_cmds.wake();
             })
             .child(IconButton::new(if open { Icon::ChevronDown } else { Icon::ChevronRight }).size(16.0))
-            .child(div().text_size(pt(11.0)).child(SharedString::from(cat)));
+            .child(div().text_size(pt(11.0)).child(SharedString::from(cat.clone())));
         sec = sec.child(field_row_full(head));
-        if !open {
-            continue;
-        }
-        for (_, name, pw, ph) in FRAME_PRESETS.iter().filter(|(c, ..)| *c == cat) {
+        if !open { continue; }
+        for (_, name, pw, ph, preset) in rows.iter().filter(|(c, ..)| c == cat) {
             let cmds = f.cmds.clone();
-            let label = SharedString::from(*name);
+            let label = SharedString::from(name.clone());
             let size = SharedString::from(format!("{}×{}", fmt(*pw), fmt(*ph)));
-            let preset = SharedString::from(*name);
+            let preset = preset.clone();
+            let (w, h) = (*pw, *ph);
             let line = div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .w_full()
-                .h_full()
-                .gap(pt(6.0))
-                .pl(pt(16.0))
-                .cursor_pointer()
+                .flex().flex_row().items_center().w_full().h_full().gap(pt(6.0)).pl(pt(16.0)).cursor_pointer()
                 .on_mouse_down(MouseButton::Left, move |_e, _w, _cx| {
-                    cmds.push(Cmd { id: "frame.create", params: Some(json!({ "preset": preset.clone() })) });
+                    let params = match &preset {
+                        Some(p) => json!({ "preset": p }),
+                        None => json!({ "width": w, "height": h }),
+                    };
+                    cmds.push(Cmd { id: "frame.create", params: Some(params) });
                     cmds.push(Cmd { id: "tool.set", params: Some(json!({ "tool": "move" })) });
                     cmds.push(Cmd { id: "view.zoomSelection", params: Some(json!({})) });
                 })

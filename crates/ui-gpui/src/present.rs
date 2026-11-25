@@ -25,7 +25,7 @@ use figcraft_doc::proto::{Action, AnimationOp, Easing, OverlayAnchor, OverlayPos
 use figcraft_doc::{Document, NodeId};
 use figcraft_geom::Rect;
 use figcraft_i18n::tr;
-use gpui::{Div, ImageSource, MouseButton, SharedString, Stateful, div, img, prelude::*, px, svg};
+use gpui::{Div, ImageSource, MouseButton, SharedString, Stateful, div, img, prelude::*, px};
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Instant;
@@ -1117,6 +1117,7 @@ fn frame_at(
     ppp: f32,
     alpha: f32,
     offset: (f32, f32),
+    clip_radius: f32,
 ) -> Option<gpui::AnyElement> {
     let tex = frame_tex(state, doc, id, place.scale * f64::from(ppp.max(0.25)))?;
     let r = place.rect(tex.bounds);
@@ -1124,14 +1125,16 @@ fn frame_at(
     let ppp64 = f64::from(ppp.max(0.25));
     let w = ((tex.bounds.width() * place.scale * ppp64).round().max(1.0) / ppp64) as f32;
     let h = ((tex.bounds.height() * place.scale * ppp64).round().max(1.0) / ppp64) as f32;
-    let snap = |v: f32| (v * ppp).round() / ppp;
+    // 父层（layer）已 snap 到设备像素，这里不再二次取整：多处 snap 基准不同会累积出
+    // 0.5~1px 抖动，在机身窗口边界露出背景细线。纹理尺寸仍按像素取整（位图必须整数）。
     Some(
         img(ImageSource::Render(tex.img))
             .absolute()
-            .left(px(snap(r.x - origin.x + offset.0)))
-            .top(px(snap(r.y - origin.y + offset.1)))
+            .left(px(r.x - origin.x + offset.0))
+            .top(px(r.y - origin.y + offset.1))
             .w(px(w))
             .h(px(h))
+            .rounded(px(clip_radius))
             .opacity(alpha)
             .into_any_element(),
     )
@@ -1152,7 +1155,33 @@ fn dev_rect(r: RectPx, area: RectPx, radius: f32, color: gpui::Rgba) -> Div {
 }
 
 /// 机身：eGUI `device::device_body`。颜色带 + 黑色玻璃，Mac / Desktop 另加底座。
-fn device_body(stage: Div, g: &Geom, area: RectPx) -> Div {
+fn device_body(stage: Div, g: &Geom, area: RectPx, ppp: f32) -> Div {
+    // 真实外框 PNG：整张图铺在设备区域，透明屏幕窗口正好露出下面的画布层。
+    if let Some(fi) = g.frame.as_ref() {
+        let (dx, dy, png_w, png_h) = fi.placed.map(|p| (p[0], p[1], p[2], p[3])).unwrap_or_else(|| {
+            let k = g.screen.w / fi.screen_rect[2].max(1.0) as f32;
+            (
+                fi.screen_rect[0] as f32 * k,
+                fi.screen_rect[1] as f32 * k,
+                fi.png_size[0] as f32 * k,
+                fi.png_size[1] as f32 * k,
+            )
+        });
+        let x = g.screen.x - dx;
+        let y = g.screen.y - dy;
+        // 内容图（frame_at）按设备像素 snap 定位；机身 PNG 必须同一套 snap，否则两者
+        // 边缘差半像素，位图采样就会在窗口边界露出一条背景色的细线。
+        let ppp = ppp.max(0.25);
+        let snap = |v: f32| (v * ppp).round() / ppp;
+        return stage.child(
+            img(gpui::ImageSource::from(fi.image.clone()))
+                .absolute()
+                .left(px(snap(x - area.x)))
+                .top(px(snap(y - area.y)))
+                .w(px(png_w))
+                .h(px(png_h)),
+        );
+    }
     let Some(d) = g.device.as_ref() else { return stage };
     let w = layout::upright_w(g.screen.w, g.screen.h, g.landscape);
     let (b, screen_r) = layout::bezel(&d.name, w);
@@ -1201,31 +1230,18 @@ fn device_body(stage: Div, g: &Geom, area: RectPx) -> Div {
             // 外置设备框：机身形状来自 devices/<family>/<variant>.svg（外置文件，
             // 和笔刷 / WGSL 一样不在二进制里），颜色由 text_color 注入；没有外置框时
             // 回退到几何绘制。按钮 / 玻璃带仍是固定逻辑。
-            if let Some(frame) = g.frame.as_ref() {
-                out = out.child(
-                    svg()
-                        .path(SharedString::from(format!("device:{frame}")))
-                        .absolute()
-                        .left(px(slab.x - area.x))
-                        .top(px(slab.y - area.y))
-                        .w(px(slab.w))
-                        .h(px(slab.h))
-                        .text_color(body),
-                );
-            } else {
-                out = out.child(dev_rect(slab, area, screen_r + b, body));
-                out = out.child(
-                    div()
-                        .absolute()
-                        .left(px(slab.x - area.x))
-                        .top(px(slab.y - area.y))
-                        .w(px(slab.w))
-                        .h(px(slab.h))
-                        .rounded(px(screen_r + b))
-                        .border_1()
-                        .border_color(edge),
-                );
-            }
+            out = out.child(dev_rect(slab, area, screen_r + b, body));
+            out = out.child(
+                div()
+                    .absolute()
+                    .left(px(slab.x - area.x))
+                    .top(px(slab.y - area.y))
+                    .w(px(slab.w))
+                    .h(px(slab.h))
+                    .rounded(px(screen_r + b))
+                    .border_1()
+                    .border_color(edge),
+            );
             let glass_band = b - band;
             let inset = RectPx { x: slab.x + band, y: slab.y + band, w: slab.w - 2.0 * band, h: slab.h - 2.0 * band };
             out = out.child(dev_rect(inset, area, (screen_r + glass_band).min(glass_band * 3.4).max(0.0), glass));
@@ -1336,16 +1352,27 @@ pub fn render(
             q.push((crate::windows::current(), g.clone()));
         });
     }
-    // 舞台内一律用 area 局部坐标。
-    let lx = |x: f32| x - area.x;
-    let ly = |y: f32| y - area.y;
-    let ppp = app.ppp;
+    // 舞台内一律用 area 局部坐标，并 snap 到设备像素：内容层、机身 PNG、hotspot 必须
+    // 落在同一套像素网格上，否则边界差半像素就会露出背景细线。
+    let ppp = app.ppp.max(0.25);
+    let snap = |v: f32| (v * ppp).round() / ppp;
+    let lx = |x: f32| snap(x - area.x);
+    let ly = |y: f32| snap(y - area.y);
 
     let mut stage = div().relative().flex_1().min_h(px(0.0)).w_full().overflow_hidden();
     if let Some(g) = g.as_ref() {
-        let screen_r = g.device.as_ref().map_or(0.0, |d| layout::bezel(&d.name, layout::upright_w(g.screen.w, g.screen.h, g.landscape)).1);
-        // 1) 设备机身（屏幕外侧的颜色带 + 黑色玻璃）。
-        stage = device_body(stage, g, area);
+        // 屏幕圆角：有真实外框 PNG 时用它的屏幕矩形比例，否则按名字的几何带估算。
+        let screen_r = if let Some(fi) = g.frame.as_ref() {
+            // 屏幕圆角 ≈ 屏幕短边的 8%（Apple 素材的实际比例），用**窗口像素**（与 g.screen 同单位）。
+            let _ = fi;
+            (g.screen.w.min(g.screen.h) * 0.08).max(0.0)
+        } else {
+            g.device.as_ref().map_or(0.0, |d| layout::bezel(&d.name, layout::upright_w(g.screen.w, g.screen.h, g.landscape)).1)
+        };
+        // 没有真实外框时才在内容**之下**先铺几何机身；有 PNG 时改在内容之后盖上去（见第 7 步）。
+        if g.frame.is_none() {
+            stage = device_body(stage, g, area, ppp);
+        }
         // 2) 屏幕层：剪到屏幕矩形；圆角由第 8 步的 `device_glass` 遮罩补齐。
         let mut layer = div()
             .absolute()
@@ -1371,7 +1398,7 @@ pub fn render(
                 scale: g.scale,
             });
             let from_el = from_place.and_then(|pl| {
-                frame_at(state, doc, from, &pl, g.screen, ppp, poses.from.alpha as f32, (poses.from.offset.x as f32, poses.from.offset.y as f32))
+                frame_at(state, doc, from, &pl, g.screen, ppp, poses.from.alpha as f32, (poses.from.offset.x as f32, poses.from.offset.y as f32), 0.0)
             });
             let to_el = frame_at(
                 state,
@@ -1382,13 +1409,14 @@ pub fn render(
                 ppp,
                 poses.to.alpha as f32,
                 (poses.to.offset.x as f32, poses.to.offset.y as f32),
+                0.0,
             );
             if poses.to_on_top {
                 layer = layer.children(from_el).children(to_el);
             } else {
                 layer = layer.children(to_el).children(from_el);
             }
-        } else if let Some(el) = frame_at(state, doc, state.current, &g.place, g.screen, ppp, 1.0, (0.0, 0.0)) {
+        } else if let Some(el) = frame_at(state, doc, state.current, &g.place, g.screen, ppp, 1.0, (0.0, 0.0), screen_r) {
             layer = layer.child(el);
         }
         // 4) 覆盖层 / 关闭中的覆盖层。
@@ -1416,6 +1444,7 @@ pub fn render(
                 ppp,
                 poses.to.alpha.clamp(0.0, 1.0) as f32,
                 (poses.to.offset.x as f32, poses.to.offset.y as f32),
+                0.0,
             ) {
                 Some(el) => layer.child(el),
                 None => layer,
@@ -1433,8 +1462,9 @@ pub fn render(
                 layer = draw_overlay(layer, o, pl, raw);
             }
         }
-        // 5) 手机镜头药丸（eGUI `device_glass`）。
-        if let Some(d) = g.device.as_ref()
+        // 5) 手机镜头药丸：只在几何绘制（无外框 PNG）时补，真实 PNG 自带。
+        if g.frame.is_none()
+            && let Some(d) = g.device.as_ref()
             && d.name.starts_with("iPhone")
         {
             let uw = layout::upright_w(g.screen.w, g.screen.h, g.landscape);
@@ -1462,8 +1492,14 @@ pub fn render(
             );
         }
         stage = stage.child(layer);
-        // 7) 设备玻璃圆角遮罩：在画面之上盖住方角溢出部分（eGUI `device_glass`）。
-        stage = device_glass(stage, g, area);
+        if g.frame.is_some() {
+            // 7a) 机身 PNG 盖在画面之上：透明窗口露出内容，圆角裁切已由 frame_at 的
+            //     img().rounded() 完成，机身与内容对齐不留缝。
+            stage = device_body(stage, g, area, ppp);
+        } else {
+            // 7b) 几何绘制：在画面之上补四角玻璃遮罩，盖住方角溢出（GPUI 不裁圆角）。
+            stage = device_glass(stage, g, area);
+        }
         // 8) hotspot 提示（eGUI `draw` 的最后一步）：点击空白后从整不透明淡出到 0
         //    （`(flash_until-now)/FLASH_SECS`）。和 eGUI 一样画在设备玻璃之上、舞台坐标系里，
         //    不受屏幕层的圆角裁切影响。

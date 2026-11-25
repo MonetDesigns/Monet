@@ -4,6 +4,7 @@
 use figcraft_doc::Document;
 use figcraft_doc::NodeId;
 use figcraft_doc::proto::{Device, DeviceColor, OverlayAnchor, OverlayPosition};
+use figcraft_engine::devices::FrameInfo;
 use figcraft_geom::Rect;
 
 use super::scroll::{clamp_scroll, page_settings};
@@ -58,8 +59,8 @@ pub struct Geom {
     pub clip: RectPx,
     pub place: Place,
     pub device: Option<Device>,
-    /// The external bezel SVG (relative path), when the device came from the catalogue.
-    pub frame: Option<String>,
+    /// The external bezel PNG and its screen rectangle, when from the catalogue.
+    pub frame: Option<FrameInfo>,
     pub landscape: bool,
     pub color: Option<DeviceColor>,
     pub scale: f64,
@@ -158,11 +159,15 @@ fn anchored_overlay_rect(
 pub fn compute(st: &PresentState, disp: &Document, area: RectPx, pane: bool, ppp: f32) -> Option<Geom> {
     let settings = page_settings(disp, st.current);
     let device = figcraft_engine::devices::presented_device(&settings);
-    let frame = figcraft_engine::devices::frame_path_of(&settings);
+    let landscape_eff = settings.landscape();
+    let color_name = figcraft_engine::devices::device_color(&settings).map(|c| c.name).unwrap_or_default();
+    let mut frame = figcraft_engine::devices::frame_info(&settings, landscape_eff, &color_name);
     let landscape = settings.landscape();
     let fills = settings.responsive && device.is_none();
     let fb = disp.world_bounds(st.current)?;
-    let body = device.as_ref().filter(|d| (pane || st.device_frame) && !d.colors.is_empty()).cloned();
+    let show_body = pane || st.device_frame;
+    // 有外置 frame PNG 时它自带颜色；没有时退回内置几何机身（要求 colours 非空）。
+    let body = device.as_ref().filter(|d| show_body && (frame.is_some() || !d.colors.is_empty())).cloned();
     let scale_mode = if pane { ScaleMode::Fit } else { st.scale };
     let pad = if !fills && matches!(scale_mode, ScaleMode::Fit | ScaleMode::Actual) { if pane { super::PANE_PAD } else { super::PAD } } else { 0.0 };
     let avail_w = (area.w - 2.0 * pad).max(1.0);
@@ -170,12 +175,19 @@ pub fn compute(st: &PresentState, disp: &Document, area: RectPx, pane: bool, ppp
     let (sw, sh) = device.as_ref().map_or((fb.width() as f32, fb.height() as f32), |d| (d.width as f32, d.height as f32));
     let outer = |scale: f64| -> (f32, f32, f32, f32, f32) {
         let (w, h) = ((f64::from(sw) * scale) as f32, (f64::from(sh) * scale) as f32);
-        match body.as_ref() {
-            Some(d) => {
-                let (side, top, bottom) = body_outset(&d.name, w, h, landscape);
-                (side, top, bottom, w + 2.0 * side, h + top + bottom)
-            }
-            None => (0.0, 0.0, 0.0, w, h),
+        if let Some(fi) = frame.as_ref() {
+            // 屏幕 w×h 对应 PNG 里的 screen_rect[2]×[3] 像素；整张 PNG 按比例放大。
+            let k = w / fi.screen_rect[2].max(1.0) as f32;
+            let png_w = (fi.png_size[0] as f32 * k).max(w);
+            let png_h = (fi.png_size[1] as f32 * k).max(h);
+            let left = fi.screen_rect[0] as f32 * k;
+            let top = fi.screen_rect[1] as f32 * k;
+            (left, top, (png_h - top - h).max(0.0), png_w, png_h)
+        } else if let Some(d) = body.as_ref() {
+            let (side, top, bottom) = body_outset(&d.name, w, h, landscape);
+            (side, top, bottom, w + 2.0 * side, h + top + bottom)
+        } else {
+            (0.0, 0.0, 0.0, w, h)
         }
     };
     let factor = |ow: f32, oh: f32| -> f64 {
@@ -213,6 +225,20 @@ pub fn compute(st: &PresentState, disp: &Document, area: RectPx, pane: bool, ppp
         w: snap((f64::from(sw) * scale) as f32).max(1.0 / ppp),
         h: snap((f64::from(sh) * scale) as f32).max(1.0 / ppp),
     };
+    // 真实外框：用已 snap 的 screen 反算 PNG 的位置 / 尺寸 / 窗口圆角，保证机身与内容
+    // 共用一套对齐后的几何，消除半像素缝隙。
+    if let Some(fi) = frame.as_mut() {
+        // dx/dy 必须与 outer() 里的 left/top 是**同一个未取整的值**：screen.x 已按 (ax+side)
+        // 取整，PNG 再按 screen.x-dx 摆放；若 dx 单独 snap 过，二者差 1px 就会在机身圆角
+        // 处露出内容（用户实测的四角红三角 / 缝隙）。这里直接用 side/top 原值。
+        let dx = side;
+        let dy = top;
+        let k = f64::from(screen.w) / fi.screen_rect[2].max(1.0);
+        let png_w = (fi.png_size[0] as f32 * k as f32).max(screen.w);
+        let png_h = (fi.png_size[1] as f32 * k as f32).max(screen.h);
+        let radius = (fi.radii[0] as f32 * k as f32).min(screen.w / 2.0).min(screen.h / 2.0);
+        fi.placed = Some([dx, dy, png_w, png_h, radius]);
+    }
     let place = Place {
         page_min: (fb.x0, fb.y0),
         origin: (
