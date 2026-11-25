@@ -5742,6 +5742,13 @@ impl CanvasView {
 
         self.tool_flyout = None;
 
+        // 取色器关闭后，已采样但还没交给 paint 的颜色没有去处：丢弃它，并让仍在取色模式的
+        // 工具回到 Move（对齐参考实现 colorpicker::show 的 picker=None 分支）。
+        if self.app.session.tool.picked.take().is_some() || self.app.session.tool.pick_only {
+            self.app.session.tool.pick_only = false;
+            self.run_command("tool.move", serde_json::json!({}), cx);
+        }
+
         // 变量编辑器独立于 popup：关闭主菜单/取色器等不影响它，`variables_full` 是会话记忆，
 
         // 绝不能在这里清零（否则每次重新打开都退回 Floating）。
@@ -7924,6 +7931,9 @@ impl Render for CanvasView {
 
             let backdrop = if matches!(p, Popup::Window(_)) {
                 let d = dismiss.clone();
+                // 取色吸管为 picker 取样时，画布上的点击是取样动作，不是「点外面」：
+                // 不能关掉 picker，否则采到的颜色没有回调可写（上游 close_on_outside(!picking)）。
+                let picking = self.app.session.tool.pick_only || self.app.session.tool.picked.is_some();
 
                 div()
                     .absolute()
@@ -7937,7 +7947,7 @@ impl Render for CanvasView {
 
                         let y = f32::from(e.position.y);
 
-                        if x < f32::from(right_edge) && !panels::rail_button_hit(x, y) {
+                        if !picking && x < f32::from(right_edge) && !panels::rail_button_hit(x, y) {
                             d(window, cx);
                         }
                     })
