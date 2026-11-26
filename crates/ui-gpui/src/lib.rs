@@ -1242,6 +1242,10 @@ impl CanvasView {
         if res.is_err() {
             self.app.session.active = i;
         }
+        // A keyboard box/cursor belongs to the document it was opened in. The overlay
+        // already rejects a stale identity, but switching tabs should also drop it so
+        // coming back later cannot revive coordinates from another document.
+        self.app.clear_keyboard_box();
         // ⛔ 必须把新文档记到**本窗口**自己的活动项上：`session.active` 是全局共享的，
         // 别的窗口下一次渲染就会把它改成那边自己的文档；而每次渲染都会按窗口记录把
         // active 写回来（见 `bind_window_document`）。不记这一步，点击那一刻切过去了，
@@ -2201,9 +2205,13 @@ impl CanvasView {
                     // A keyboard menu acts on the selection (not on what happens to sit under
                     // its anchor), and the canvas takes keyboard focus so Up/Down/Enter reach
                     // `popup_context_key` instead of the right-panel field that had focus.
+                    // The context-menu renderer reads `pos.y` as a window coordinate (it already
+                    // adds the canvas left offset to x), while `to_screen` is canvas-local. Keep
+                    // `pointer` local for "Paste here", but lift the menu anchor by the title bar.
+                    let menu_pos = pos2(pos.x, pos.y + this.dock().titlebar_h);
                     self.pointer = Some(pos);
                     self.focus.focus(window);
-                    self.open_context_menu_for_selection(pos, cx);
+                    self.open_context_menu_for_selection(pos, menu_pos, cx);
                     continue;
                 }
 
@@ -3978,6 +3986,11 @@ impl CanvasView {
         // The colour picker's eyedropper and direct pick command both use the session-wide
         // sampling state; remember which window asked for it so another window closing its menu
         // cannot discard the sample.
+        if id == "page.select" {
+            // Page coordinates are per-page; a box left on the old page must not paint or
+            // select on the new one, even though `live_key_box` would reject it as stale.
+            self.app.clear_keyboard_box();
+        }
         if id == "edit.pickColor" {
             note_pick_owner(&mut self.pick_owner, self.pane_wid);
         }
@@ -4911,8 +4924,11 @@ impl CanvasView {
     /// Shift+F10 / Menu: open the context menu on the **current selection**. A keyboard menu must
     /// not run `context_menu::target` (that hit-tests the pointer and can select a different,
     /// overlapping layer); it only needs the selection's geometry for its anchor.
-    fn open_context_menu_for_selection(&mut self, pos: Pos2, cx: &mut Context<Self>) {
-        let page = self.app.to_page(pos);
+    ///
+    /// `page_pos` is canvas-local (for `to_page`); `menu_pos` is the window-space anchor the
+    /// context-menu renderer expects.
+    fn open_context_menu_for_selection(&mut self, page_pos: Pos2, menu_pos: Pos2, cx: &mut Context<Self>) {
+        let page = self.app.to_page(page_pos);
         let ids = self.app.selection();
         let layers = context_menu::layers_at(&self.app, page);
         let doc = self.app.session.doc().ok();
@@ -4926,7 +4942,7 @@ impl CanvasView {
         }
         let first = menu_row_step(&items, None, true);
         self.tool_flyout = None;
-        self.open_context_items(pos, items, cx);
+        self.open_context_items(menu_pos, items, cx);
         // Highlight the first runnable row so Enter works immediately; Up/Down move it.
         if let Some(Popup::Context { sel, .. }) = &mut self.popup {
             *sel = first;
@@ -7465,9 +7481,7 @@ impl Render for CanvasView {
                     cx.stop_propagation();
                     return;
                 }
-                if !this.popup_owns_keyboard()
-                    && (this.app.live_key_box().is_some() || this.app.pick.is_some())
-                {
+                if !this.popup_owns_keyboard() && (this.app.live_key_box().is_some() || this.app.pick.is_some()) {
                     let m = e.keystroke.modifiers;
                     if key_pick(&mut this.app, &key, &m) || key_box_key(&mut this.app, &key, &m) {
                         cx.notify();
@@ -9319,9 +9333,7 @@ impl Render for CanvasView {
                 // 键盘框选 / 点选先于一切：焦点被右栏（属性输入框、列表行）拿走时，
                 // 画布子树的 `on_key_down` 收不到按键，框选中途点一下右栏就再也动不了。
                 // 这里在根节点兜底，和画布子树共用同一份状态机，输入框先把按键吃掉的不受影响。
-                if !this.popup_owns_keyboard()
-                    && (this.app.live_key_box().is_some() || this.app.pick.is_some())
-                {
+                if !this.popup_owns_keyboard() && (this.app.live_key_box().is_some() || this.app.pick.is_some()) {
                     let m = e.keystroke.modifiers;
                     if key_pick(&mut this.app, &key, &m) || key_box_key(&mut this.app, &key, &m) {
                         cx.notify();
