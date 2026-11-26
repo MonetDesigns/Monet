@@ -9788,13 +9788,16 @@ impl EntityInputHandler for CanvasView {
         let _ = textedit::preedit(&mut self.app.session, new_text, Some(cursor));
     }
 
-    fn bounds_for_range(&mut self, _: Range<usize>, element_bounds: Bounds<Pixels>, _: &mut Window, _: &mut Context<Self>) -> Option<Bounds<Pixels>> {
+    fn bounds_for_range(&mut self, _: Range<usize>, element_bounds: Bounds<Pixels>, window: &mut Window, cx: &mut Context<Self>) -> Option<Bounds<Pixels>> {
         // 候选窗定位：给**光标矩形**，不是整个文字层。平台按这个矩形放候选窗，
         // 给图层框会把候选窗丢到文字左上角。
         //
         // `app.to_screen` 返回画布局部坐标（`canvas.rect` 原点恒为 0），而这里要的是
         // 窗口坐标；`element_bounds.origin` 就是画布在窗口里的原点（左导轨 + 面板 +
         // 标题栏）。少了这一步，候选窗会整体偏到画布左上角。
+
+        // IME 回调是事件：先绑定请求窗口，别读到另一个窗口的会话/面板。
+        self.bind_window_document(window, true, cx);
 
         let ds = self.app.session.ds().ok()?;
 
@@ -9810,11 +9813,14 @@ impl EntityInputHandler for CanvasView {
         Some(text.caret_bounds(&self.app, index.min(text.chars), ds.view.zoom, element_bounds.origin))
     }
 
-    fn character_index_for_point(&mut self, point: Point<Pixels>, _: &mut Window, _: &mut Context<Self>) -> Option<usize> {
+    fn character_index_for_point(&mut self, point: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) -> Option<usize> {
         // 平台问「这个屏幕点对应第几个 UTF-16 码元」：走文字排版的字形命中，
         // 和引擎 `text_index_at` 同一条规则；组合中把索引映射回 preedit 的合成文本。
         //
         // `point` 是窗口坐标，`to_page` 吃的是画布局部坐标，先减掉画布原点。
+
+        // 同上：IME 命中也必须绑定发起窗口，避免跨窗口读到别人的会话与 dock。
+        self.bind_window_document(window, true, cx);
 
         let ds = self.app.session.ds().ok()?;
 
