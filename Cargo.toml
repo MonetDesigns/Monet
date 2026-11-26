@@ -20,6 +20,7 @@ repository = "https://github.com/MonetDesigns/Monet"
 # internal
 figcraft-geom = { path = "crates/geom" }
 figcraft-motion-codec = { path = "crates/motion-codec" }
+figcraft-motion-mediafoundation = { path = "crates/motion-mediafoundation" }
 figcraft-color = { path = "crates/color" }
 figcraft-doc = { path = "crates/doc" }
 figcraft-layout = { path = "crates/layout" }

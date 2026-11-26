@@ -2468,6 +2468,7 @@ dependencies = [
  "figcraft-i18n",
  "figcraft-layout",
  "figcraft-motion-codec",
+ "figcraft-motion-mediafoundation",
  "figcraft-pathops",
  "figcraft-pdf",
  "figcraft-plugin",
@@ -2562,6 +2563,14 @@ dependencies = [
  "image",
  "rav1e",
  "zip 2.6.1",
+]
+
+[[package]]
+name = "figcraft-motion-mediafoundation"
+version = "2648.15.0"
+dependencies = [
+ "figcraft-motion-codec",
+ "windows 0.62.2",
 ]
 
 [[package]]
