@@ -752,6 +752,11 @@ pub struct CanvasView {
     /// 键盘焦点（空格平移、Z 缩放工具要收键盘事件）。
     focus: FocusHandle,
 
+    /// 画布文字光标闪烁：按编辑会话重置，节奏与普通输入框共用 `caret::BLINK`。
+    caret_session: Option<u64>,
+    caret_started: Option<Instant>,
+    caret_ticker_started: bool,
+
     /// A21：F6 / Shift+F6 的区域键盘导航状态（焦点环 + 方向键移动选区）。
     a11y: a11y::KeyboardNav,
 
@@ -1329,6 +1334,10 @@ impl CanvasView {
             panel_wake: panel_wake.clone(),
 
             focus: cx.focus_handle(),
+
+            caret_session: None,
+            caret_started: None,
+            caret_ticker_started: false,
 
             a11y: a11y::KeyboardNav::default(),
 
@@ -6204,6 +6213,39 @@ impl Render for CanvasView {
         });
 
         // 正在改名的画布标签：这一帧不要再画旧名字。输入框是透明的，旧字会从底下透出来，
+        // 画布文字光标的闪烁节奏与普通输入框共用一套：按编辑会话重置起点，
+        // 一个视图只起一次定时器，靠 `cx.notify()` 让下一帧重画。
+        let edit_session = self.app.session.ds().ok().and_then(|ds| ds.text_edit.as_ref().map(|te| te.editing_session));
+        if edit_session != self.caret_session {
+            self.caret_session = edit_session;
+            self.caret_started = edit_session.map(|_| Instant::now());
+            self.caret_ticker_started = false;
+        }
+        if edit_session.is_some() && !self.caret_ticker_started {
+            self.caret_ticker_started = true;
+            cx.spawn(async move |this, cx: &mut gpui::AsyncApp| {
+                loop {
+                    cx.background_executor().timer(crate::widgets::input::caret::BLINK).await;
+                    let editing = this
+                        .update(cx, |view, cx| {
+                            let editing = view.app.session.ds().is_ok_and(|ds| ds.text_edit.is_some());
+                            if editing {
+                                cx.notify();
+                            }
+                            editing
+                        })
+                        .unwrap_or(false);
+                    if !editing {
+                        break;
+                    }
+                }
+            })
+            .detach();
+        }
+        self.app.text_caret_visible = edit_session.is_some()
+            && self.focus.is_focused(window)
+            && crate::widgets::input::caret::visible_since(self.caret_started, Instant::now());
+
         // 名字变短时还会露出旧后缀。几何（`label_rename_rect`）不受影响。
         let renaming_label = self.inline_rename.as_ref().filter(|r| r.target == InlineRenameTarget::Label).and_then(|r| r.ids.first().copied());
         let CanvasOutput { image, overview, live, painter, bg, in_flight, retired } =

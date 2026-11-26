@@ -53,7 +53,8 @@ impl TextOnScreen {
     pub(crate) fn caret(&self, app: &CanvasApp, index: usize, zoom: f64) -> [Pos2; 2] {
         let (cx, li) = self.layout.caret(index);
         match self.layout.lines.get(li).or(self.layout.lines.last()) {
-            Some(line) => [self.at(app, cx, line.top), self.at(app, cx, line.top + line.height)],
+            // 和普通输入框一致：光标占字体的 ascent+descent 行盒，不把行距（leading）算进去。
+            Some(line) => [self.at(app, cx, line.baseline - line.ascent), self.at(app, cx, line.baseline + line.descent)],
             None => {
                 let p = self.at(app, 0.0, 0.0);
                 [p, p + vec2(0.0, 14.0 * zoom as f32)]

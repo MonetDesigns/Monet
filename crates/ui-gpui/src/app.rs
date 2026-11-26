@@ -65,6 +65,9 @@ pub struct CanvasApp {
     /// 由 `CanvasView::sync_motion` 每帧设置，渲染请求与叠加层都读它，
     /// 这样 `ds.doc` 在一帧内不再被临时替换，引擎 / 撤销 / 命中 / 右栏始终看到源文档。
     pub display_doc: Option<std::sync::Arc<Document>>,
+    /// 画布文字编辑本帧光标是否处于闪烁的“亮”半周期。
+    /// 由 `CanvasView::render` 按统一的 `caret::visible_since` 写入，叠加层只读。
+    pub text_caret_visible: bool,
 }
 
 impl CanvasApp {
@@ -93,6 +96,7 @@ impl CanvasApp {
             connect: crate::canvas::board_connect::State::default(),
             crop: None,
             display_doc: None,
+            text_caret_visible: true,
         };
         // 预选一个自动布局容器：启动即可见 hatch（紧贴轮廓 + padding 蓝斜线 + spacing 粉斜线），
         // 不用先手动点选，方便核对"选中=1px / 悬停=2px"与边距斜线管线。

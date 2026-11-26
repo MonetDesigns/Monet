@@ -14,6 +14,7 @@ use super::outline::{crisp_line, draw_outline, node_quad, outline_colour, quad, 
 use super::painter::{Label, Painter, text_size};
 use super::rulers::fmt;
 use crate::app::CanvasApp;
+use crate::widgets::input::caret;
 use crate::theme::{COMPONENT, SLOT, Tokens, stroke as s};
 
 /// 三次贝塞尔在 `t` 处的点（GPUI 画笔没有贝塞尔图元，段要采样成折线）。
@@ -515,8 +516,8 @@ pub(super) fn overlays(
         }
         let (a, b) = (te.caret.min(te.anchor), te.caret.max(te.anchor));
         if a != b && preedit.is_none() {
-            // 和普通输入框用同一套选区色：暗色主题 22% 白，亮色主题 22% 黑。
-            let selection_colour = if t.dark { Color32::from_white_alpha(56) } else { Color32::from_black_alpha(56) };
+            // 选区色与普通输入框共用同一份定义。
+            let selection_colour = caret::selection(t);
             for q in text.selection(app, a, b) {
                 painter.add(Shape::convex_polygon(q.to_vec(), selection_colour, Stroke::NONE));
             }
@@ -538,9 +539,16 @@ pub(super) fn overlays(
                 painter.line_segment([text.at(app, r.x0, y), text.at(app, x1, y)], stroke(t.text, 1.0));
             }
         }
-        let caret = preedit.as_ref().map(|(_, _, cursor)| *cursor).unwrap_or(te.caret);
-        // 光标色跟普通输入框一致，用强调色而不是正文墨色。
-        painter.line_segment(text.caret(app, caret, zoom), stroke(t.accent, 1.0));
+        let caret_index = preedit.as_ref().map(|(_, _, cursor)| *cursor).unwrap_or(te.caret);
+        // 光标粗细、圆角、颜色和闪烁都跟普通输入框共用同一套参数。
+        if app.text_caret_visible {
+            let [a, b] = text.caret(app, caret_index, zoom);
+            let (y0, y1) = (a.y.min(b.y), a.y.max(b.y));
+            if y1 > y0 {
+                let r = Rect::from_min_size(pos2(a.x, y0), vec2(caret::WIDTH, y1 - y0));
+                painter.rect_filled(r, CornerRadius::same(caret::RADIUS), caret::color(t));
+            }
+        }
     }
 
     // ── 智能参考线与测量标注（标签避开尺寸标签）。
@@ -854,10 +862,10 @@ mod text_edit_colour_tests {
         assert_eq!(selection, Some(Color32::from_white_alpha(56)), "dark theme selection must be 22% white like the input field");
 
         let caret = painter.ops.iter().find_map(|op| match op {
-            Op::Line { stroke, .. } if stroke.width <= 1.0 && stroke.color == t.accent => Some(stroke.color),
+            Op::Rect { radius, fill, .. } if *fill == t.accent && *radius == CornerRadius::same(caret::RADIUS) => Some(*fill),
             _ => None,
         });
-        assert_eq!(caret, Some(t.accent), "caret must use the same accent as the input field");
+        assert_eq!(caret, Some(t.accent), "caret must use the same accent and rounded 1pt shape as the input field");
     }
 }
 
