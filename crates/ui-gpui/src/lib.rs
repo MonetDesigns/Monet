@@ -140,6 +140,9 @@ mod parity_contract;
 #[cfg(test)]
 mod undo_audit_tests;
 
+#[cfg(test)]
+mod keyboard_selection_tests;
+
 mod panels;
 
 /// 左面板控件树（Layers 树）：可展开/折叠、选中、显隐/锁定，含父子级拖动排序（复用 `drag` 通用件）。
@@ -299,6 +302,110 @@ fn canonical_key(key: &str) -> String {
     };
 
     named.to_string()
+}
+
+/// 键盘框选时按键（egui `shortcuts.rs::key_box`）：方向键移动框，Shift 或 Cmd/Ctrl
+/// 移动远角改变大小（Shift+Cmd/Ctrl 五倍步长），Tab 转点选，Enter 像框选一样选中
+/// 框内层（Shift 切换、Cmd/Ctrl 取嵌套层），Escape 取消。
+pub(crate) fn key_box_key(app: &mut CanvasApp, key: &str, m: &Modifiers) -> bool {
+    let Some(mut b) = app.key_box else { return false };
+    // Tab：框变成点选光标。
+    if key == "Tab" && !m.shift && !m.control && !m.alt && !m.platform {
+        app.key_box = None;
+        app.start_pick_select();
+        return true;
+    }
+    let cmd = m.platform || m.control;
+    let size = m.shift || cmd;
+    let zoom = app.session.ds().map_or(1.0, |d| d.view.zoom.max(1e-6));
+    let step = (if m.shift && cmd { 50.0 } else { 10.0 }) / zoom;
+    let (dx, dy) = match key {
+        "ArrowLeft" => (-step, 0.0),
+        "ArrowRight" => (step, 0.0),
+        "ArrowUp" => (0.0, -step),
+        "ArrowDown" => (0.0, step),
+        _ => (0.0, 0.0),
+    };
+    if (dx, dy) != (0.0, 0.0) {
+        if !size {
+            b[0] += dx;
+            b[1] += dy;
+        }
+        b[2] += dx;
+        b[3] += dy;
+        app.key_box = Some(b);
+        return true;
+    }
+    match key {
+        "Enter" => {
+            app.key_box = None;
+            let [x0, y0, x1, y1] = b;
+            app.session
+                .execute(
+                    "select.area",
+                    &serde_json::json!({
+                        "x": x0,
+                        "y": y0,
+                        "width": x1 - x0,
+                        "height": y1 - y0,
+                        "add": m.shift,
+                        "deep": cmd,
+                    }),
+                )
+                .is_ok()
+        }
+        "Escape" => {
+            app.key_box = None;
+            true
+        }
+        _ => false,
+    }
+}
+
+/// 点选光标所在的同层兄弟（Layers 面板里的上下顺序：dir=1 是按面板「下一个」，
+/// 即文档里的前一个兄弟；到头回绕）。对应 egui `shortcuts.rs::pick_sibling`。
+fn pick_sibling(doc: &Document, id: NodeId, dir: i64) -> Option<NodeId> {
+    let siblings = &doc.node(doc.node(id)?.parent?)?.children;
+    let n = i64::try_from(siblings.len()).ok()?;
+    let idx = i64::try_from(siblings.iter().position(|c| *c == id)?).ok()?;
+    siblings.get(usize::try_from((idx - dir).rem_euclid(n)).ok()?).copied()
+}
+
+/// 点选光标时的按键（egui `shortcuts.rs::key_pick`）：Tab / Shift+Tab 在兄弟层间走，
+/// Enter 进容器的最后一个子层、Shift+Enter 回父级（不到页面），Space 选中，Escape 取消。
+pub(crate) fn key_pick(app: &mut CanvasApp, key: &str, m: &Modifiers) -> bool {
+    if app.pick.is_none() {
+        return false;
+    }
+    // 层已换文档/换页/被删：点选作废，按键继续走正常快捷键。
+    let Some(at) = app.picked() else {
+        app.pick = None;
+        return false;
+    };
+    let Ok(ds) = app.session.ds() else { return false };
+    let Some(node) = ds.doc.node(at) else { return false };
+    let uid = ds.uid;
+    let cmd = m.platform || m.control;
+    let plain = !cmd && !m.alt && !m.control;
+    let next = match key {
+        "Tab" if plain => pick_sibling(&ds.doc, at, if m.shift { -1 } else { 1 }),
+        "Enter" if plain && m.shift => node.parent.filter(|p| ds.doc.node(*p).is_some_and(|n| !n.is_page())),
+        "Enter" if plain => node.children.last().copied(),
+        "Space" if !m.shift && !cmd && !m.alt => {
+            app.pick = None;
+            let _ = app.session.execute("select.set", &serde_json::json!({"ids": [at]}));
+            return true;
+        }
+        "Escape" => {
+            app.pick = None;
+            return true;
+        }
+        _ => return false,
+    };
+    if let Some(n) = next {
+        app.pick = Some((uid, n));
+    }
+    true
 }
 
 /// 跑一条键盘绑定：照搬 `ui-egui/src/shortcuts.rs::run_binding` 的画布分支，
@@ -1953,6 +2060,64 @@ impl CanvasView {
                         let _ = self.app.session.execute("select.set", &serde_json::json!({ "ids": [id] }));
                     }
                     cx.notify();
+                    continue;
+                }
+
+                // 键盘框选：引擎的 `select.area` 不带坐标时只发这个 UI 请求，框与按键状态归 UI
+                // （egui `app/commands.rs:241` → `start_key_box`）。之前 GPUI 端没有这个分支，
+                // 请求落到默认丢弃，Alt+Space / Ctrl+Space / F8 按了没反应（用户 2026-11-26）。
+                "selectArea" => {
+                    self.app.start_key_box();
+                    if self.app.key_box.is_some() {
+                        let cmd = crate::toolbar::pretty_shortcut("Cmd");
+                        let text = figcraft_i18n::trf(
+                            "Selection box: arrows move it, Shift+arrows or {cmd}+arrows size it, Enter selects, Escape cancels",
+                            &[("cmd", &cmd)],
+                        );
+                        self.toast(text, cx);
+                    } else if self.app.pick.is_some() {
+                        self.toast(
+                            figcraft_i18n::tr(
+                                "Pick select: Tab and Shift+Tab move between layers, Enter goes into one, Shift+Enter out, Space selects, Escape cancels",
+                            ),
+                            cx,
+                        );
+                    } else {
+                        self.toast(figcraft_i18n::tr("Nothing to pick: the page is empty"), cx);
+                    }
+                    cx.notify();
+                    continue;
+                }
+
+                // Alt+L：收起所有图层，只展开通往选中层的祖先（egui `layers::collapse_all`）。
+                // 引擎只发请求，面板状态在 UI 侧；之前 GPUI 没接，Alt+L 静默无效。
+                "layers.collapseAll" => {
+                    let ancestors: Vec<figcraft_doc::NodeId> = match self.app.session.ds() {
+                        Ok(ds) => ds.selection.iter().flat_map(|s| ds.doc.ancestors(*s)).filter(|a| *a != ds.page).collect(),
+                        Err(_) => Vec::new(),
+                    };
+                    self.layer_tree.expanded.clear();
+                    self.layer_tree.expanded.extend(ancestors);
+                    cx.notify();
+                    continue;
+                }
+
+                // Shift+F10 / Menu：在选中层下方（无选中时画布中央）打开右键菜单
+                // （egui `a11y::context_menu`）。引擎只发请求，位置与菜单内容归 UI。
+                "contextMenu" => {
+                    let pos = self
+                        .app
+                        .session
+                        .ds()
+                        .ok()
+                        .and_then(|ds| {
+                            let b = ds.selection.iter().filter_map(|i| ds.doc.world_bounds(*i)).reduce(|a, b| a.union(b))?;
+                            let p = self.app.to_screen(b.x0, b.y1);
+                            Some(pos2(p.x, p.y + 8.0))
+                        })
+                        .filter(|p| self.app.canvas.rect.contains(*p))
+                        .unwrap_or(self.app.canvas.rect.center());
+                    self.open_context_menu(pos, cx);
                     continue;
                 }
 
@@ -6568,6 +6733,9 @@ impl Render for CanvasView {
 
                     this.mods = e.modifiers;
 
+                    // 指针落到画布上：键盘框选 / 点选光标结束（egui `canvas/input.rs::end_keyboard_box`）。
+                    this.app.clear_keyboard_box();
+
                     let pos = this.local(e.position);
 
                     this.pointer = Some(pos);
@@ -6916,6 +7084,9 @@ impl Render for CanvasView {
 
                     this.pointer = Some(pos);
 
+                    // 右键也是画布上的指针按下：键盘框选 / 点选结束（egui 同款）。
+                    this.app.clear_keyboard_box();
+
                     this.commit_edits(window, cx);
 
                     if e.modifiers.control || e.modifiers.platform {
@@ -6958,6 +7129,9 @@ impl Render for CanvasView {
                     let pos = this.local(e.position);
 
                     this.pointer = Some(pos);
+
+                    // 中键平移同样结束键盘框选（egui 对任意指针按下都清）。
+                    this.app.clear_keyboard_box();
 
                     if let Ok(ds) = this.app.session.ds() {
                         this.pan = Some((pos, ds.view.cx, ds.view.cy));
@@ -7007,6 +7181,20 @@ impl Render for CanvasView {
                     cx.notify();
 
                     return;
+                }
+
+                // 键盘框选 / 点选（egui `shortcuts.rs` 的 `key_pick || key_box`）：
+                // 框或点选光标在时，方向键 / Shift+方向键 / Tab / Enter / Escape 先归它，
+                // 不能落到图层 nudge 或全局选中。画布子树先处理；根节点还会兜底一次，
+                // 让焦点在右栏时也能继续操作（见根节点 `on_key_down`）。
+                if this.app.key_box.is_some() || this.app.pick.is_some() {
+                    let key = canonical_key(&e.keystroke.key);
+                    let m = e.keystroke.modifiers;
+                    if key_pick(&mut this.app, &key, &m) || key_box_key(&mut this.app, &key, &m) {
+                        cx.notify();
+                        cx.stop_propagation();
+                        return;
+                    }
                 }
 
                 // ── Motion 时间轴快捷键（egui timeline.rs:1093-1158）──
@@ -8832,6 +9020,19 @@ impl Render for CanvasView {
             .on_key_down(cx.listener(|this: &mut CanvasView, e: &KeyDownEvent, window, cx| {
                 this.bind_window_document(window, true, cx);
                 let accel = e.keystroke.modifiers.platform || e.keystroke.modifiers.control;
+
+                // 键盘框选 / 点选先于一切：焦点被右栏（属性输入框、列表行）拿走时，
+                // 画布子树的 `on_key_down` 收不到按键，框选中途点一下右栏就再也动不了。
+                // 这里在根节点兜底，和画布子树共用同一份状态机，输入框先把按键吃掉的不受影响。
+                if this.app.key_box.is_some() || this.app.pick.is_some() {
+                    let key = canonical_key(&e.keystroke.key);
+                    let m = e.keystroke.modifiers;
+                    if key_pick(&mut this.app, &key, &m) || key_box_key(&mut this.app, &key, &m) {
+                        cx.notify();
+                        cx.stop_propagation();
+                        return;
+                    }
+                }
 
                 // 撤销 / 重做必须在根节点兜底：GPUI 的按键沿**焦点链**派发，而整套命令快捷键
                 // 挂在画布元素上，只有焦点在画布子树时才收得到。右栏属性框、对话框输入框、

@@ -268,6 +268,15 @@ pub fn handle(app: &mut CanvasApp, method: &str, p: &Value) -> Result<Value, Str
                 figcraft_engine::textedit::key(&mut app.session, key, m.shift, word, line).map_err(|e| e.to_string())?;
                 return Ok(json!({"ok": true}));
             }
+            // 键盘框选 / 点选优先（与真实按键同一份状态机）：框在时方向键移动/改大小，
+            // Enter 执行、Escape 取消；否则方向键会当成图层 nudge，框就动不了。
+            if app.key_box.is_some() || app.pick.is_some() {
+                let gm = gpui::Modifiers { shift: m.shift, control: m.ctrl, alt: m.alt, platform: m.cmd, function: false };
+                let name = crate::canonical_key(key);
+                if crate::key_pick(app, &name, &gm) || crate::key_box_key(app, &name, &gm) {
+                    return Ok(json!({ "ok": true }));
+                }
+            }
             // 向量编辑模式与形状构建器的键（工具、推点、删除、连接、Enter）。
             if app.session.tool_key(key, m.shift, m.alt, m.cmd).map_err(|e| e.to_string())? {
                 return Ok(json!({"ok": true}));
@@ -399,6 +408,9 @@ fn inspect(app: &CanvasApp) -> Value {
                 .collect::<Vec<_>>(),
         },
         "selection": app.session.selection(),
+        // 键盘框选 / 点选状态（`ui.inspect` 用来核对 `select.area` 的 UI 侧状态机）。
+        "keyBox": app.key_box,
+        "pick": app.picked(),
         "canvas": view,
         "canvasRect": [app.canvas.rect.min.x, app.canvas.rect.min.y, app.canvas.rect.max.x, app.canvas.rect.max.y],
         "editing": ds.and_then(|d| d.text_edit.as_ref()).map(|t| t.id.0),
