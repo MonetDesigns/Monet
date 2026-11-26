@@ -428,7 +428,7 @@ pub(super) fn overlays(
     }
 
     // ── 框选框（指针拖出的优先，其次是键盘框选 `selectArea` 建的框）。
-    if let Some([x0, y0, x1, y1]) = ov.marquee.or(app.key_box) {
+    if let Some([x0, y0, x1, y1]) = ov.marquee.or(app.live_key_box()) {
         let r = Rect::from_two_pos(app.to_screen(x0, y0), app.to_screen(x1, y1));
         painter.rect_filled(r, CornerRadius::ZERO, accent.gamma_multiply(0.1));
         painter.rect_stroke(r, CornerRadius::ZERO, stroke(accent, 1.0), StrokeKind::Inside);

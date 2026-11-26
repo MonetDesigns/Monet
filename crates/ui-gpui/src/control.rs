@@ -270,9 +270,18 @@ pub fn handle(app: &mut CanvasApp, method: &str, p: &Value) -> Result<Value, Str
             }
             // 键盘框选 / 点选优先（与真实按键同一份状态机）：框在时方向键移动/改大小，
             // Enter 执行、Escape 取消；否则方向键会当成图层 nudge，框就动不了。
-            if app.key_box.is_some() || app.pick.is_some() {
-                let gm = gpui::Modifiers { shift: m.shift, control: m.ctrl, alt: m.alt, platform: m.cmd, function: false };
-                let name = crate::canonical_key(key);
+            // `ui.key` 的键名可能是引擎规范名（"Right" / "Esc" / "Return"），也可能是
+            // GPUI 的 `keystroke.key`（"right" / "escape"）：先过 `normalize` 再回退
+            // `canonical_key`，否则 "Right" 不进选择状态机（CodeRabbit PR#33）。
+            let mut gm = gpui::Modifiers { shift: m.shift, control: m.ctrl, alt: m.alt, platform: m.cmd, function: false };
+            let name = match normalize(key) {
+                Some((name, implied_shift)) => {
+                    gm.shift |= implied_shift;
+                    name.to_string()
+                }
+                None => crate::canonical_key(key),
+            };
+            if app.live_key_box().is_some() || app.pick.is_some() {
                 if crate::key_pick(app, &name, &gm) || crate::key_box_key(app, &name, &gm) {
                     return Ok(json!({ "ok": true }));
                 }
@@ -356,6 +365,12 @@ fn pointer(app: &mut CanvasApp, p: &Value) -> Result<Value, String> {
     // A drag's pressure goes from `pressure` to `pressureTo`.
     let (pr0, pr1) = (pressure("pressure"), pressure("pressureTo").or(pressure("pressure")));
     let kind = p.get("kind").and_then(Value::as_str).unwrap_or("click");
+    // A synthetic press is still a pointer press: it ends keyboard box / pick mode, exactly like
+    // `on_mouse_down` does. Otherwise `ui.pointer` click followed by ArrowRight keeps moving a
+    // stale box (CodeRabbit PR#33).
+    if matches!(kind, "down" | "click" | "double" | "drag") {
+        app.clear_keyboard_box();
+    }
     let run = |app: &mut CanvasApp, ev: PointerEvent| app.session.pointer(&ev).map_err(|e| e.to_string());
     match kind {
         "down" => run(app, mk(PointerKind::Down, x, y))?,
@@ -409,7 +424,7 @@ fn inspect(app: &CanvasApp) -> Value {
         },
         "selection": app.session.selection(),
         // 键盘框选 / 点选状态（`ui.inspect` 用来核对 `select.area` 的 UI 侧状态机）。
-        "keyBox": app.key_box,
+        "keyBox": app.live_key_box(),
         "pick": app.picked(),
         "canvas": view,
         "canvasRect": [app.canvas.rect.min.x, app.canvas.rect.min.y, app.canvas.rect.max.x, app.canvas.rect.max.y],
@@ -516,6 +531,26 @@ mod tests {
         let r = handle(&mut app, "ui.pointer", &json!({"kind": "click", "x": 200.0, "y": 180.0})).expect("click");
         assert!(r.get("selection").is_some());
         assert!(!app.session.selection().is_empty(), "clicking the rectangle should select it");
+    }
+
+    #[test]
+    fn ui_key_accepts_engine_key_names_for_the_keyboard_box() {
+        let mut app = CanvasApp::new(crate::app::sample_doc());
+        app.start_key_box();
+        let before = app.live_key_box().expect("box");
+        // `ui.key` callers use keymap names ("Right"), not GPUI's "right".
+        handle(&mut app, "ui.key", &json!({"key": "Right"})).expect("Right");
+        let after = app.live_key_box().expect("box");
+        assert!(after[0] > before[0] && after[2] > before[2], "Right must move the box: {before:?} -> {after:?}");
+    }
+
+    #[test]
+    fn ui_pointer_press_ends_keyboard_box_mode() {
+        let mut app = CanvasApp::new(crate::app::sample_doc());
+        app.start_key_box();
+        assert!(app.live_key_box().is_some());
+        handle(&mut app, "ui.pointer", &json!({"kind": "click", "x": 200.0, "y": 180.0})).expect("click");
+        assert!(app.live_key_box().is_none(), "a synthetic click is a pointer press: it must end the box");
     }
 
     #[test]

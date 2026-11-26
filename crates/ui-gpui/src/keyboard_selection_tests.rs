@@ -6,7 +6,8 @@
 //! 的状态机与 egui 一致。
 
 use crate::app::{CanvasApp, sample_doc};
-use crate::{key_box_key, key_pick};
+use crate::menu_card::Item;
+use crate::{key_box_key, key_pick, menu_row_step};
 use gpui::Modifiers;
 
 fn plain() -> Modifiers {
@@ -99,6 +100,39 @@ fn the_chord_while_the_box_shows_switches_to_pick_select() {
     assert!(key_pick(&mut app, "Space", &plain()), "Space selects the picked layer");
     assert!(app.pick.is_none(), "pick cursor goes away after selecting");
     assert_eq!(app.selection(), vec![walked], "selection follows the pick cursor");
+}
+
+#[test]
+fn a_box_belongs_to_the_document_and_page_it_was_opened_in() {
+    let mut app = CanvasApp::new(sample_doc());
+    let ds = app.session.ds().expect("document session");
+    let (uid, page) = (ds.uid, ds.page);
+    app.start_key_box();
+    let before = app.live_key_box().expect("box");
+    // Same document, different page: the page-space rectangle must not be reused there.
+    app.key_box_doc = Some((uid, figcraft_doc::NodeId(page.0.wrapping_add(1))));
+    assert!(app.live_key_box().is_none(), "a box from another page is stale");
+    assert!(!key_box_key(&mut app, "ArrowRight", &plain()), "a stale box must not move or swallow arrows");
+    assert_eq!(app.key_box, Some(before), "the stale value stays inert until replaced");
+    app.start_key_box();
+    assert!(app.live_key_box().is_some(), "a new box is owned by the current page");
+}
+
+#[test]
+fn menu_keyboard_highlight_skips_disabled_rows_and_wraps() {
+    let items = vec![
+        Item::new("a", "A"),
+        Item::new("b", "B").disabled(true),
+        Item::new("c", "C"),
+    ];
+    assert_eq!(menu_row_step(&items, None, true), Some(0), "Down from nothing goes to the first row");
+    assert_eq!(menu_row_step(&items, Some(0), true), Some(2), "skip the disabled middle row");
+    assert_eq!(menu_row_step(&items, Some(2), true), Some(0), "wrap at the bottom");
+    assert_eq!(menu_row_step(&items, Some(0), false), Some(2), "Up wraps over the disabled row");
+    assert_eq!(menu_row_step(&items, None, false), Some(2), "Up from nothing goes to the last row");
+
+    let all_disabled = vec![Item::new("a", "A").disabled(true)];
+    assert_eq!(menu_row_step(&all_disabled, None, true), None, "a menu with no runnable row has no highlight");
 }
 
 #[test]

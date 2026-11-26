@@ -73,6 +73,9 @@ pub struct CanvasApp {
     /// 键盘框选的页面矩形 `[x0, y0, x1, y1]`（对应 egui `FigApp::ui.key_box`）。
     /// `select.area` / `selectArea` 建立，方向键移动、Shift/Cmd 改大小、Enter 选中、Escape 取消。
     pub key_box: Option<[f64; 4]>,
+    /// `key_box` 是在哪个文档/页面里打开的（文档 uid + 页面）。框的坐标是页面坐标，
+    /// 换文档/换页后若继续用旧框会选中新文档里的层；`live_key_box` 在归属不符时隐藏它。
+    pub key_box_doc: Option<(u64, NodeId)>,
     /// 键盘框选按 Tab 后切到的“点选”停留节点（文档 uid + 节点，对应 egui `FigApp::ui.pick`）。
     pub pick: Option<(u64, NodeId)>,
     /// 本帧画布要显示的文档（Motion 求值后的预览）；None = 源文档。
@@ -111,6 +114,7 @@ impl CanvasApp {
             connect: crate::canvas::board_connect::State::default(),
             crop: None,
             key_box: None,
+            key_box_doc: None,
             pick: None,
             display_doc: None,
             text_caret_visible: true,
@@ -179,7 +183,7 @@ impl CanvasApp {
     /// 建立键盘框选：围绕当前选中层在页面上的合并包围盒，没有选中时围绕视图中心。
     /// 对应 egui `shortcuts::start_key_box`（已有框时再按一次则转“点选”）。
     pub fn start_key_box(&mut self) {
-        if self.key_box.is_some() {
+        if self.live_key_box().is_some() {
             self.start_pick_select();
             return;
         }
@@ -201,6 +205,7 @@ impl CanvasApp {
             ],
         };
         self.key_box = Some(b);
+        self.key_box_doc = Some((ds.uid, ds.page));
         self.pick = None;
     }
 
@@ -212,8 +217,18 @@ impl CanvasApp {
         let Some(at) = at else { return false };
         let uid = ds.uid;
         self.key_box = None;
+        self.key_box_doc = None;
         self.pick = Some((uid, at));
         true
+    }
+
+    /// 当前文档/页面里仍然有效的键盘框选；换了文档或页面返回 `None`（旧框不再绘制，
+    /// 也不会再用它的页面坐标去选新文档里的层）。
+    pub fn live_key_box(&self) -> Option<[f64; 4]> {
+        let b = self.key_box?;
+        let (uid, page) = self.key_box_doc?;
+        let ds = self.session.ds().ok()?;
+        (ds.uid == uid && ds.page == page).then_some(b)
     }
 
     /// 当前“点选”停留的节点；换了文档或页面就自动作废（egui `FigApp::picked`）。
@@ -226,6 +241,7 @@ impl CanvasApp {
     /// 清掉键盘框选/点选状态（指针按下、选中完成、Escape 都走这里）。
     pub fn clear_keyboard_box(&mut self) {
         self.key_box = None;
+        self.key_box_doc = None;
         self.pick = None;
     }
 }
