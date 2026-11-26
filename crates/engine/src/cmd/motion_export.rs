@@ -406,6 +406,8 @@ fn encode_mp4_stream<F>(render: &mut F, size: (u32, u32), o: &figcraft_motion_co
 where
     F: FnMut(&mut dyn FnMut(figcraft_motion_codec::FrameRgba) -> std::result::Result<(), String>) -> Result<()>,
 {
+    #[cfg(test)]
+    MP4_EXPORT_BACKEND.with(|b| b.set(0));
     #[cfg(not(windows))]
     let _ = quality;
     #[cfg(windows)]
@@ -419,7 +421,11 @@ where
                     Err(e) => Err(e),
                 };
                 match attempt {
-                    Ok(bytes) => return Ok(bytes),
+                    Ok(bytes) => {
+                        #[cfg(test)]
+                        MP4_EXPORT_BACKEND.with(|b| b.set(1));
+                        return Ok(bytes);
+                    }
                     Err(e) => eprintln!("[motion] Media Foundation encode failed, retrying on CPU: {e}"),
                 }
             }
@@ -428,7 +434,18 @@ where
     }
     let mut enc = figcraft_motion_codec::Mp4Encoder::new(size.0, size.1, o, [255, 255, 255]).map_err(|e| bad("motion.export", e))?;
     render(&mut |f| enc.push(f))?;
-    enc.finish().map_err(|e| bad("motion.export", e))
+    let bytes = enc.finish().map_err(|e| bad("motion.export", e))?;
+    #[cfg(test)]
+    MP4_EXPORT_BACKEND.with(|b| b.set(2));
+    Ok(bytes)
+}
+
+/// Test-only observation of which MP4 backend the last export in this thread used:
+/// 0 = none, 1 = Media Foundation hardware, 2 = portable CPU. It lets the hardware smoke test
+/// prove the hardware path ran instead of silently accepting the CPU fallback.
+#[cfg(test)]
+std::thread_local! {
+    static MP4_EXPORT_BACKEND: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
 }
 
 /// The `motion.export` command: no document write, no undo — it only reads and encodes.
@@ -488,6 +505,7 @@ mod tests {
     /// GitHub's Windows runners have no GPU encoder; run locally with
     /// `cargo test -p figcraft-engine hardware_mp4_export -- --ignored --nocapture`.
     #[test]
+    #[cfg(windows)]
     #[ignore = "requires a Windows GPU with a hardware H.264 encoder"]
     fn hardware_mp4_export() {
         use serde_json::json;
@@ -508,6 +526,11 @@ mod tests {
         let mut s = Session::with_document(d);
         let t = Instant::now();
         let out = s.execute("motion.export", &json!({"id": frame.0, "format": "mp4", "fps": 10, "scale": 1.0})).unwrap();
+        assert_eq!(
+            MP4_EXPORT_BACKEND.with(|b| b.get()),
+            1,
+            "this test is only evidence when Media Foundation actually encoded it; 2 means the CPU fallback ran"
+        );
         let data = base64::engine::general_purpose::STANDARD.decode(out["data"].as_str().unwrap()).unwrap();
         assert_eq!(&data[4..8], b"ftyp", "an ISO BMFF file");
         assert!(data.windows(4).any(|w| w == b"avc1"), "H.264 sample entry");
