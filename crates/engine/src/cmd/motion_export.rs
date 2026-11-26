@@ -10,7 +10,9 @@
 //!
 //! WebM/AV1 export is intentionally not included here — it needs the `rav1e` encoder and is a
 //! separate, larger step.
-
+//!
+//! MP4 first tries the Windows Media Foundation hardware H.264 encoder and re-renders on the
+//! portable CPU encoder if none is available or a hardware encode fails mid-stream.
 
 use std::sync::mpsc;
 
@@ -353,15 +355,14 @@ pub fn encode_animation(
     // Frames are drawn in parallel and streamed straight into the encoder, so a long export both
     // finishes much sooner and never buffers the whole animation as raw RGBA.
     let threads = render_threads();
-    let render = |sink: &mut dyn FnMut(figcraft_motion_codec::FrameRgba) -> std::result::Result<(), String>| {
+    let mut render = |sink: &mut dyn FnMut(figcraft_motion_codec::FrameRgba) -> std::result::Result<(), String>| {
         anim.render_frames(&times, threads, |_, frame| sink(frame)).map_err(|e| bad(cmd, e))
     };
     let (bytes, ext) = match format {
         AnimFormat::Mp4 => {
             let o = figcraft_motion_codec::Mp4Options { fps, crf: mp4_crf(quality) };
-            let mut enc = figcraft_motion_codec::Mp4Encoder::new(size.0, size.1, &o, [255, 255, 255]).map_err(|e| bad(cmd, e))?;
-            render(&mut |f| enc.push(f))?;
-            (enc.finish().map_err(|e| bad(cmd, e))?, "mp4")
+            let bytes = encode_mp4_stream(&mut render, size, &o, quality)?;
+            (bytes, "mp4")
         }
         AnimFormat::Webm => {
             let o = figcraft_motion_codec::WebmOptions { fps, quality, speed, ..Default::default() };
@@ -395,6 +396,39 @@ pub fn encode_animation(
 fn mp4_crf(quality: u8) -> f32 {
     let q = quality.clamp(1, 100) as f32;
     51.0 - (q - 1.0) * 33.0 / 99.0
+}
+
+/// Encode MP4 frames through Media Foundation when available, and re-render on the CPU path if
+/// the hardware encoder fails part-way through. The retry is deliberate: streaming export has
+/// already released earlier frames, so a mid-stream hardware failure cannot be repaired without
+/// drawing the animation again.
+fn encode_mp4_stream<F>(render: &mut F, size: (u32, u32), o: &figcraft_motion_codec::Mp4Options, quality: u8) -> Result<Vec<u8>>
+where
+    F: FnMut(&mut dyn FnMut(figcraft_motion_codec::FrameRgba) -> std::result::Result<(), String>) -> Result<()>,
+{
+    #[cfg(not(windows))]
+    let _ = quality;
+    #[cfg(windows)]
+    let force_cpu = std::env::var_os("MONET_MOTION_CPU").is_some();
+    #[cfg(windows)]
+    if !force_cpu {
+        match figcraft_motion_mediafoundation::MfMp4Encoder::new(size.0, size.1, o, [255, 255, 255], quality) {
+            Ok(mut enc) => {
+                let attempt = match render(&mut |f| enc.push(f)) {
+                    Ok(()) => enc.finish().map_err(|e| bad("motion.export", e)),
+                    Err(e) => Err(e),
+                };
+                match attempt {
+                    Ok(bytes) => return Ok(bytes),
+                    Err(e) => eprintln!("[motion] Media Foundation encode failed, retrying on CPU: {e}"),
+                }
+            }
+            Err(e) => eprintln!("[motion] Media Foundation encoder unavailable, using CPU: {e}"),
+        }
+    }
+    let mut enc = figcraft_motion_codec::Mp4Encoder::new(size.0, size.1, o, [255, 255, 255]).map_err(|e| bad("motion.export", e))?;
+    render(&mut |f| enc.push(f))?;
+    enc.finish().map_err(|e| bad("motion.export", e))
 }
 
 /// The `motion.export` command: no document write, no undo — it only reads and encodes.
@@ -448,6 +482,36 @@ mod tests {
         }
         d.timelines.insert(frame, TimelineSettings { duration_ms: 500, fps: 10, looping: true });
         (d, frame, id)
+    }
+
+    /// End-to-end MP4 export at the minimum size accepted by the hardware encoder. Ignored because
+    /// GitHub's Windows runners have no GPU encoder; run locally with
+    /// `cargo test -p figcraft-engine hardware_mp4_export -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "requires a Windows GPU with a hardware H.264 encoder"]
+    fn hardware_mp4_export() {
+        use serde_json::json;
+        use std::time::Instant;
+
+        let (mut d, _, _) = animated_doc();
+        let page = d.first_page().unwrap();
+        let frame = d.create(page, NodeKind::Frame, "Stage", 0.0, 0.0, 256.0, 256.0).unwrap();
+        let dot = d.create(frame, NodeKind::Rectangle, "Dot", 8.0, 8.0, 32.0, 32.0).unwrap();
+        {
+            let n = d.node_mut(dot).unwrap();
+            let pos = n.motion.ensure_track(AnimProperty::Position);
+            pos.set_key(0, AnimValue::Vec2(Vec2::new(8.0, 8.0)), None);
+            pos.set_key(500, AnimValue::Vec2(Vec2::new(216.0, 8.0)), Some(Ease::Linear));
+        }
+        d.timelines.insert(frame, TimelineSettings { duration_ms: 500, fps: 10, looping: true });
+
+        let mut s = Session::with_document(d);
+        let t = Instant::now();
+        let out = s.execute("motion.export", &json!({"id": frame.0, "format": "mp4", "fps": 10, "scale": 1.0})).unwrap();
+        let data = base64::engine::general_purpose::STANDARD.decode(out["data"].as_str().unwrap()).unwrap();
+        assert_eq!(&data[4..8], b"ftyp", "an ISO BMFF file");
+        assert!(data.windows(4).any(|w| w == b"avc1"), "H.264 sample entry");
+        println!("[motion] hardware MP4 export: {} ms, {} bytes, {} frames", t.elapsed().as_millis(), data.len(), out["frames"]);
     }
 
     #[test]

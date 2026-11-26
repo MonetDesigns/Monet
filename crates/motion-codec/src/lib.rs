@@ -321,7 +321,7 @@ fn mux(w: u32, h: u32, fps: u32, av1c: &[u8], blocks: &[Block]) -> Vec<u8> {
 /// pixels and video exports do this for every frame. The buffers are reused across frames so a
 /// long export allocates them once, not three times per frame.
 #[allow(clippy::too_many_arguments)]
-fn rgba_to_yuv420_into(rgba: &[u8], w: usize, h: usize, bg: [u8; 3], y: &mut [u8], u: &mut [u8], v: &mut [u8]) {
+pub fn rgba_to_yuv420_into(rgba: &[u8], w: usize, h: usize, bg: [u8; 3], y: &mut [u8], u: &mut [u8], v: &mut [u8]) {
     #[inline]
     fn over(c: u8, a: u8, bg: u8) -> u32 {
         c as u32 + (bg as u32 * (255 - a as u32) + 127) / 255
@@ -361,7 +361,7 @@ fn rgba_to_yuv420_into(rgba: &[u8], w: usize, h: usize, bg: [u8; 3], y: &mut [u8
 }
 
 /// Size of the three reusable plane buffers of a `w`×`h` picture.
-fn yuv_sizes(w: usize, h: usize) -> (usize, usize) {
+pub fn yuv_sizes(w: usize, h: usize) -> (usize, usize) {
     (w * h, w.div_ceil(2) * h.div_ceil(2))
 }
 
@@ -642,5 +642,33 @@ mod tests {
         rgba_to_yuv420_into(&[0, 0, 0, 0].repeat(4), 2, 2, [255, 255, 255], &mut y, &mut u, &mut v);
         assert!(y.iter().all(|&c| c == 235), "transparent over white is white (luma 235): {y:?}");
         assert!(u[0].abs_diff(128) <= 1 && v[0].abs_diff(128) <= 1, "white has neutral chroma: {} {}", u[0], v[0]);
+    }
+
+    /// Local baseline for the hardware backend probes; ignored in normal CI because it encodes
+    /// 150 full-HD frames.
+    #[test]
+    #[ignore = "local throughput probe for the MP4 encoder"]
+    fn cpu_h264_1080p_probe() {
+        use std::time::Instant;
+
+        let o = Mp4Options { fps: 30, crf: 23.0 };
+        let mut enc = Mp4Encoder::new(1920, 1080, &o, [255, 255, 255]).unwrap();
+        let mut rgba = vec![0u8; 1920 * 1080 * 4];
+        for y in 0..1080usize {
+            for x in 0..1920usize {
+                let p = (y * 1920 + x) * 4;
+                rgba[p] = (x % 256) as u8;
+                rgba[p + 1] = (y % 256) as u8;
+                rgba[p + 2] = 128;
+                rgba[p + 3] = 255;
+            }
+        }
+        let frame = FrameRgba::new(1920, 1080, rgba).unwrap();
+        let start = Instant::now();
+        for _ in 0..150 {
+            enc.push(frame.clone()).unwrap();
+        }
+        let bytes = enc.finish().unwrap();
+        eprintln!("[motion] CPU H.264 1080p150: {} ms, {} bytes", start.elapsed().as_millis(), bytes.len());
     }
 }
