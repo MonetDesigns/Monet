@@ -8,6 +8,8 @@ use serde_json::{Map, Value, json};
 
 use crate::cmd::CommandSpec;
 use crate::codegen::CodeLang;
+// The playground reads parameters through the shared command helpers.
+#[allow(clippy::wildcard_imports)]
 use crate::params::*;
 use crate::{EngineError, Result, Session, bad, spec};
 

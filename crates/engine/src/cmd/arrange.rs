@@ -13,14 +13,62 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         // In vector edit mode the commands act on the selected points when they carry no ids
         // (and nothing moves with none selected).
-        spec!("align.left", "Align left", "{ids?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)", true, |s, p| align(s, p, Al::Left)),
-        spec!("align.hcenter", "Align horizontal centers", "{ids?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)", true, |s, p| align(s, p, Al::HCenter)),
-        spec!("align.right", "Align right", "{ids?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)", true, |s, p| align(s, p, Al::Right)),
-        spec!("align.top", "Align top", "{ids?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)", true, |s, p| align(s, p, Al::Top)),
-        spec!("align.vcenter", "Align vertical centers", "{ids?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)", true, |s, p| align(s, p, Al::VCenter)),
-        spec!("align.bottom", "Align bottom", "{ids?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)", true, |s, p| align(s, p, Al::Bottom)),
-        spec!("distribute.horizontal", "Distribute horizontal spacing", "{ids?, spacing?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)", true, |s, p| distribute(s, p, true, true)),
-        spec!("distribute.vertical", "Distribute vertical spacing", "{ids?, spacing?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)", true, |s, p| distribute(s, p, false, true)),
+        spec!(
+            "align.left",
+            "Align left",
+            "{ids?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)",
+            true,
+            |s, p| align(s, p, Al::Left)
+        ),
+        spec!(
+            "align.hcenter",
+            "Align horizontal centers",
+            "{ids?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)",
+            true,
+            |s, p| align(s, p, Al::HCenter)
+        ),
+        spec!(
+            "align.right",
+            "Align right",
+            "{ids?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)",
+            true,
+            |s, p| align(s, p, Al::Right)
+        ),
+        spec!(
+            "align.top",
+            "Align top",
+            "{ids?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)",
+            true,
+            |s, p| align(s, p, Al::Top)
+        ),
+        spec!(
+            "align.vcenter",
+            "Align vertical centers",
+            "{ids?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)",
+            true,
+            |s, p| align(s, p, Al::VCenter)
+        ),
+        spec!(
+            "align.bottom",
+            "Align bottom",
+            "{ids?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)",
+            true,
+            |s, p| align(s, p, Al::Bottom)
+        ),
+        spec!(
+            "distribute.horizontal",
+            "Distribute horizontal spacing",
+            "{ids?, spacing?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)",
+            true,
+            |s, p| distribute(s, p, true, true)
+        ),
+        spec!(
+            "distribute.vertical",
+            "Distribute vertical spacing",
+            "{ids?, spacing?} (in vector edit mode without ids: the selected points, and nothing moves with none selected)",
+            true,
+            |s, p| distribute(s, p, false, true)
+        ),
         spec!(
             "arrange.spacing",
             "Spacing",
@@ -228,10 +276,8 @@ fn align(s: &mut Session, p: &Value, a: Al) -> Result<Value> {
 fn distribute(s: &mut Session, p: &Value, horizontal: bool, points: bool) -> Result<Value> {
     // Only the two distribution commands delegate to point distribution; packH/packV
     // call this with spacing=0 to pack layers and must stay on the layer path.
-    if points {
-        if let Some(r) = crate::vectoredit::transform::distribute_points_in_edit_mode(s, p, horizontal) {
-            return r;
-        }
+    if points && let Some(r) = crate::vectoredit::transform::distribute_points_in_edit_mode(s, p, horizontal) {
+        return r;
     }
     let ids = req_targets("distribute", s, p)?;
     let doc = s.doc_mut()?;

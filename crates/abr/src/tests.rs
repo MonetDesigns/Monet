@@ -83,7 +83,7 @@ fn v6_round_trips_samples_presets_and_folders() {
 fn v6_rle_tips_decode() {
     let s = sample("rle-tip", 16, 8, (0..128).map(|i| (i % 5) as u8 * 51).collect());
     let p = preset("RLE", "rle-tip", 25.0);
-    let bytes = write_v6(2, &[s.clone()], &[p], &[], true).unwrap();
+    let bytes = write_v6(2, std::slice::from_ref(&s), &[p], &[], true).unwrap();
     let f = parse(&bytes).unwrap();
     assert_eq!(f.samples.len(), 1);
     assert_eq!(f.samples[0].data, s.data);

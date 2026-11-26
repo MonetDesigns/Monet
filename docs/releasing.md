@@ -1,4 +1,11 @@
-# Releasing FigCraft
+# Releasing Monet
+
+> **Status: packaging migration in progress.** `apps/monet` is the only release target, but the
+> scripts under `packaging/` still build `-p figcraft` (the excluded egui shell) and carry legacy
+> `figcraft` ids. Automatic releases are therefore disabled in `.github/workflows/release.yml`;
+> a `workflow_dispatch` run is a dry run until the packaging migration lands and one end-to-end
+> draft has been verified. The rest of this page is the upstream playbook, kept as the reference for
+> that migration.
 
 Every push to the `release` branch runs `.github/workflows/release.yml`. The workflow builds
 installers for macOS, Windows, Linux and the web, plus a FreeBSD tarball and the collaboration

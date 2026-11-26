@@ -489,6 +489,9 @@ fn distribute_flow_lines(items: &mut [Item], lines: &[Vec<usize>], inner_main: f
 }
 
 /// Lay out one auto layout frame's children and size the frame if it hugs.
+// One sequential pass: every step reads the state the previous step wrote (text fit → line split →
+// fill distribution → alignment), so splitting it would hide the order the layout depends on.
+#[allow(clippy::cognitive_complexity)]
 pub fn layout_frame(doc: &mut Document, frame: NodeId, m: &dyn Measure) {
     let Some(_nested) = Nested::enter() else { return };
     let Some(f) = doc.node(frame) else { return };

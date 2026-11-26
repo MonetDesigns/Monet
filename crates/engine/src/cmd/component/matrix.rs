@@ -18,7 +18,9 @@ use crate::{EngineError, Result, Session, bad};
 pub(crate) use matrix_impl::*;
 
 mod matrix_impl {
-use super::*;
+    // The command module re-exports the primitives every `matrix_*` entry point uses.
+    #[allow(clippy::wildcard_imports)]
+    use super::*;
 
     const MATRIX_FIELDS: &[&str] = &[
         "fill",

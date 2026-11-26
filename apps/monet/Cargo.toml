@@ -1,0 +1,19 @@
+[package]
+name = "monet"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Monet desktop app (GPUI front-end)"
+default-run = "monet"
+
+[lints]
+workspace = true
+
+[features]
+default = ["gpu"]
+# Forwarded so `cargo run -p monet --no-default-features` gives the CPU-only canvas.
+gpu = ["figcraft-ui-gpui/gpu"]
+
+[dependencies]
+figcraft-ui-gpui = { workspace = true, default-features = false }

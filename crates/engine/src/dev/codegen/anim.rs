@@ -219,15 +219,15 @@ fn frames(node: &Node, p: AnimProperty, duration: u32, baked: bool) -> Vec<(u32,
         let timing = (i + 1 < tr.keys.len()).then_some(k.easing);
         out.push((k.time_ms.min(duration), k.value, timing));
     }
-    if let Some(first) = out.first().cloned() {
-        if first.0 > 0 {
-            out.insert(0, (0, first.1, None));
-        }
+    if let Some(first) = out.first().cloned()
+        && first.0 > 0
+    {
+        out.insert(0, (0, first.1, None));
     }
-    if let Some(last) = out.last().cloned() {
-        if last.0 < duration {
-            out.push((duration, last.1, None));
-        }
+    if let Some(last) = out.last().cloned()
+        && last.0 < duration
+    {
+        out.push((duration, last.1, None));
     }
     // keys past the end collapse onto it: keep the first of equal times
     out.dedup_by_key(|f| f.0);
@@ -300,7 +300,7 @@ fn shadow_frames(node: &Node, duration: u32) -> Vec<(u32, String, Option<Ease>)>
             out.push((a, value_at_t(a), Some(ease)));
         } else {
             let span = b.saturating_sub(a).max(1);
-            let steps = span.div_ceil(SHADOW_SAMPLE_MS).max(2).min(SHADOW_MAX_SAMPLES);
+            let steps = span.div_ceil(SHADOW_SAMPLE_MS).clamp(2, SHADOW_MAX_SAMPLES);
             let mut prev = a;
             for s in 1..steps {
                 let t = a + ((span as u64 * s as u64) / steps as u64) as u32;
@@ -495,7 +495,7 @@ pub fn swiftui_animation_for(doc: &Document, node: NodeId) -> String {
             for w in c.frames.windows(2) {
                 let (t0, v0, e) = w[0];
                 let (_, v1, _) = w[1];
-                let d = secs((w[1].0 - t0).max(0));
+                let d = secs(w[1].0 - t0);
                 let e = e.unwrap_or(Ease::Linear);
                 if matches!(e, Ease::Hold) {
                     out.line(2, format!("LinearKeyframe({}, duration: {d})", num(v0)));

@@ -17,12 +17,14 @@
 //! [`NodeKind::Icon`]: figcraft_doc::NodeKind::Icon
 
 use base64::Engine as _;
+#[allow(clippy::wildcard_imports)]
 use figcraft_doc::*;
 use figcraft_geom::{Affine, BezPath, Rect};
 use serde_json::{Value, json};
 
 use super::CommandSpec;
 use super::edit::{roots, z_sorted};
+#[allow(clippy::wildcard_imports)]
 use crate::params::*;
 use crate::{Result, Session, bad, spec};
 

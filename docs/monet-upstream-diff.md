@@ -5,6 +5,11 @@
 - **分叉点**：`a2e87433`
 - **审计基线**：全部基于已提交的 git blob，工作区干净（0 改动）。
 
+> **2026-11-26 状态**：本文件是 11-20 的审计快照，不再作为「当前落后多少」的来源。实时锚点看
+> [`../upstream.toml`](../upstream.toml)，机器生成的命令 / 文件差异看
+> [`upstream-sync.md`](upstream-sync.md)（`cargo xtask upstream-report`）。两边历史无共同祖先，
+> 任何 commit 计数都没有语义，只能按内容同步。
+
 ## 总览
 
 | 维度 | 数据 |

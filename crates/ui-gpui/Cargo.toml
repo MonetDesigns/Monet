@@ -7,9 +7,8 @@ rust-version = "1.95"
 repository = "https://github.com/MonetDesigns/Monet"
 description = "Monet UI layer on GPUI"
 
-# NOTE: this crate is intentionally listed in the workspace root `exclude` so it does NOT
-# participate in the default `crates/*` build. Remove it from `exclude` once it compiles and
-# is ready to be wired into `apps/figcraft` / `apps/figcraft-web`.
+# This crate is a normal workspace member: `apps/monet` is its desktop binary, and the crate is
+# also run directly as `cargo run -p figcraft-ui-gpui --example run` for development.
 #
 # 阶段0 画布切片依赖：engine / doc / render（注意：不依赖 ui-egui —— 画布位图由 engine 侧的
 # `figcraft_render::render_view` 直接产出，GPUI 只负责显示，证明迁移"只动外层"。

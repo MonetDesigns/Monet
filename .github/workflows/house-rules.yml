@@ -58,4 +58,19 @@ jobs:
           # The house rules must not silently disappear behind a different filename.
           [ "$(wc -l < AGENTS.md)" -ge 100 ] || fail "AGENTS.md looks truncated"
 
+          # The rules must describe THIS repository: the GPUI front-end, its binary and the
+          # parity contract that makes a "done" claim testable.
+          for needle in "crates/ui-gpui" "parity_contract" "apps/monet" "docs/development-model.md"; do
+            grep -qF "$needle" AGENTS.md || fail "AGENTS.md does not mention '$needle'"
+          done
+
+          # The old inherited rule told agents to push straight to main, which contradicts the
+          # protected-branch workflow in CONTRIBUTING.md.
+          if grep -qF 'push to `main`' AGENTS.md; then
+            fail "AGENTS.md still tells agents to push to main; changes land through pull requests"
+          fi
+
+          # The charter is the tie-breaker; both rule files must point at it.
+          grep -qF "docs/development-model.md" CONTRIBUTING.md || fail "CONTRIBUTING.md must reference docs/development-model.md"
+
           echo "House rules are intact."

@@ -76,15 +76,12 @@ impl DeviceVariant {
 
     /// The screen rectangle for an orientation, falling back to any orientation.
     pub fn screen_rect(&self, orientation: &str) -> Option<[f64; 4]> {
-        self.screen_rects.get(orientation).copied()
-            .or_else(|| self.screen_rects.values().next().copied())
+        self.screen_rects.get(orientation).copied().or_else(|| self.screen_rects.values().next().copied())
     }
 
     /// Corner radii for an orientation, falling back to any orientation.
     pub fn radii(&self, orientation: &str) -> (f64, f64) {
-        let pick = |m: &std::collections::BTreeMap<String, f64>| {
-            m.get(orientation).copied().or_else(|| m.values().next().copied()).unwrap_or(0.0)
-        };
+        let pick = |m: &std::collections::BTreeMap<String, f64>| m.get(orientation).copied().or_else(|| m.values().next().copied()).unwrap_or(0.0);
         (pick(&self.screen_radii), pick(&self.outer_radii))
     }
 }
@@ -153,10 +150,8 @@ impl DeviceCatalog {
     /// Resolve a document's `device` + `variant` pair. Old documents store a variant name in
     /// `device`; those keep working by finding its family. `None` / `Custom size` are not here.
     pub fn resolve(&self, device: &str, variant: Option<&str>) -> Option<&DeviceVariant> {
-        if let Some(v) = variant.filter(|v| !v.is_empty()) {
-            if let Some(found) = self.variant(v) {
-                return Some(found);
-            }
+        if let Some(found) = variant.filter(|v| !v.is_empty()).and_then(|v| self.variant(v)) {
+            return Some(found);
         }
         if let Some(f) = self.family(device) {
             return f.variants.first();

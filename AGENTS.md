@@ -1,29 +1,31 @@
-# FigCraft — instructions for agents
+# Monet — instructions for agents
 
-FigCraft is a clean-room, open-source, pure-Rust (egui) reimplementation of the Figma design workflow:
-interface design, auto layout, components and variants, styles and variables, prototyping and
-inspection. It runs natively on macOS, Windows, Linux and FreeBSD, and in the browser via WASM.
-Siblings: `../vectorcraft` (Illustrator-class), `../photocraft` (Photoshop-class), `../designcraft`
-(InDesign-class) and the other Crafting Apps; same conventions.
+Monet is the **GPUI front-end** of a design tool. The document engine and the egui front-end live
+upstream at [`storytold/figcraft`](https://github.com/storytold/figcraft); this repository owns
+`crates/ui-gpui` and its desktop binary `apps/monet`. `crates/ui-egui` and the two legacy app shells
+are read-only reference copies, outside the workspace build.
 
-Standards and learnings shared across the crafting apps live in `../../craftrules` (checked out
-next to `craft-apps/`, or `storytold/craftrules`). Read its `AGENTS.md` at the start of a session,
-follow its standards, and contribute reusable learnings back there. Never code: repos don't share
-code.
+Read [`docs/development-model.md`](docs/development-model.md) first: it is the charter that says what
+this repository inherits from the Craft suite, what it deliberately does not, and which rule wins
+when two documents disagree.
 
 ## Start every session here
-1. Read [`ROADMAP.md`](ROADMAP.md) (stage, headline numbers, estimates) and
-   [`docs/gaps.md`](docs/gaps.md) (the ranked work list). Unless the user gives you a task, pick
-   work from the top of `docs/gaps.md`.
-2. Read `plan/STATUS.md` and `plan/execution-plan.md` (local, gitignored) if present; behaviour
-   reference notes are in `plan/figma/*.md`.
-3. Orient → plan → implement + test → verify (screenshot) → record (ROADMAP, devlog) → commit.
 
-`plan/` is gitignored (local only).
+1. Read [`docs/development-model.md`](docs/development-model.md), then
+   [`docs/gpui-egui-parity-plan.md`](docs/gpui-egui-parity-plan.md) (the GPUI work queue) and
+   [`docs/upstream-sync.md`](docs/upstream-sync.md) with [`upstream.toml`](upstream.toml) (how far
+   behind upstream we are). Unless the user gives you a task, pick work from the parity plan.
+2. Read `plan/STATUS.md` and `plan/execution-plan.md` (local, gitignored) if present.
+3. Orient → plan → implement + test → verify (screenshot) → record (parity plan / progress note) →
+   open a PR.
+
+`docs/gaps.md` and `docs/target-app-parity.md` describe the **upstream engine's** Figma parity. They
+are reference material, not a Monet task list; do not pick work from them.
 
 ## Non-negotiables
 
 ### Clean-room
+
 - Behaviour comes from public documentation and black-box observation of the running incumbent app
   with synthetic documents only. Never read, disassemble or copy anything inside the incumbent's
   application bundle, web bundle or network traffic (names and public listings only).
@@ -31,135 +33,122 @@ code.
 - Reference screenshots of the incumbent stay local under the gitignored `plan/figma/screenshots/`
   and are never committed, published or used as assets.
 
-### Assets: no third-party product iconography or images — ever (absolute rule from the project owner)
+### Assets: no third-party product iconography or images — ever
+
 - **Never add, copy, trace, redraw-from, embed or ship any icon, image, illustration, cursor, logo,
   template, UI kit, preset library, font file or screenshot from Figma, Adobe, Avid, Autodesk or any
-  other product, or from any source whose licence doesn't allow it.** This includes "lookalike"
-  redraws of their icons. Breaking this rule is the worst thing you can do in this repo.
-- Every image, icon, font or other asset must be one of:
-  - original work created for FigCraft by a contributor (licensed MIT OR Apache-2.0);
-  - OSI open source;
-  - public domain / CC0;
-  - Creative Commons with redistribution allowed.
-- **Every asset file must have a row in [`ATTRIBUTION.md`](ATTRIBUTION.md)** (path, author, source,
-  licence, notes). `cargo xtask assets` (part of `cargo xtask ci`) fails on any unlisted file under
+  other product, or from any source whose licence doesn't allow it.** Breaking this rule is the
+  worst thing you can do in this repository.
+- Every asset must be original work for Monet, OSI open source, public domain/CC0, or Creative
+  Commons with redistribution allowed, and every file needs a row in
+  [`ATTRIBUTION.md`](ATTRIBUTION.md). `cargo xtask assets` fails on an unlisted file under
   `assets/`, `docs/brand/` or `docs/images/`.
-- FigCraft's UI icons are drawn in code (`crates/ui-egui/src/icons.rs`) from simple primitives and
-  are original. Keep it that way: new icons are new code, designed from scratch.
-- The app icon is the owner's chameleon drawing, vectorised (`assets/app-icon/README.md`); `cargo xtask icon`
-  renders the PNGs and `.ico` from `assets/app-icon/monet.svg`.
-- **Fonts live in [storytold/craft-fonts](https://github.com/storytold/craft-fonts), never in this
-  repo.** The app uses it only through the optional `CRAFT_FONTS_DIR` build input
-  (`.cargo/config.toml` points it at `../craft-fonts` for local builds; `crates/text/build.rs`
-  embeds it). Everything must build, test and run without it (system fonts are scanned at runtime).
+- UI icons are drawn in code (`crates/ui-gpui/src/icons_panel.rs`); new icons are new code, designed
+  from scratch. The app icon is `assets/app-icon/monet.svg`; `cargo xtask icon` renders the PNGs and
+  `.ico`.
+- Fonts live in [storytold/craft-fonts](https://github.com/storytold/craft-fonts), never here. CI
+  builds with `craft-fonts-ref`; local builds may point `CRAFT_FONTS_DIR` at a checkout, and a build
+  without it must still work with system fonts.
 - Demo and test content is synthetic or public domain; never personal photos or data.
-- Code and original assets are MIT OR Apache-2.0 (`LICENSE-MIT`, `LICENSE-APACHE`, `NOTICE`). The
-  ArtCraft logos in `docs/brand/` are trademarks, not open source, under
-  `docs/brand/LICENSE-brand.txt`: never modify them or use them outside FigCraft.
-- If the provenance of an asset is unclear, don't add it.
 
 ### Never crash
+
 - No `unwrap()`, `expect()`, `panic!`, `unreachable!`, `todo!`, `unimplemented!` in shipped code
   (workspace clippy lints deny them; tests may use them). Return `Result`/`Option`; use `.get()` for
   data-derived indexes; slice strings only at char boundaries; check floats are finite; cap sizes.
-- `figcraft_engine::guard` turns a panicking command into `EngineError::Internal` and the document
-  is rolled back; the desktop app also guards each UI frame and writes recovery copies. These are
-  safety nets, not substitutes for `Result`.
+- `figcraft_engine::guard` turns a panicking command into `EngineError::Internal` and rolls the
+  document back. This front-end guards its entry points; these are safety nets, not substitutes for
+  `Result`.
 - `unsafe_code = "forbid"` workspace-wide.
-- Every crash fix comes with a regression test. The engine has a junk-parameter sweep over every
-  command (`crates/engine/src/tests.rs`): extend fuzz/sweep tests when you add parsers or commands.
+- Every crash fix comes with a regression test. Extend the engine's junk-parameter sweep when you
+  add parsers or commands.
 
 ### Architecture
-- **Everything is a command.** User-visible behaviour = a command in `crates/engine/src/cmd/*`
-  (`spec!(id, label, params doc, undoable, run)`) + tests. The menus, shortcuts, Actions palette,
-  CLI, control channel and MCP server all dispatch the same command ids. Command ids follow the
-  incumbent's menu catalog in `crates/engine/src/catalog.rs` (the parity metric: `cargo xtask parity`).
+
+- **Everything is a command.** The engine owns the command catalog in
+  `crates/engine/src/cmd/*` upstream; this front-end does not invent ids. GPUI panels read engine
+  state and act through `app.run(id, params)` / `app.set_props(ids, props)`. Menus, shortcuts, the
+  Actions palette, CLI, the control channel and the MCP server dispatch the same ids.
 - **Programmatic calls never open dialogs.** Commands only *request* UI (`Session::request_ui`); the
   control channel drops dialog requests.
-- **Layering** is enforced by `cargo xtask layers`: geom/color (L0) → doc (L1) → layout/text/pathops/plugin/collab
-  (L2) → render/format (L3) → svg/pdf (L4) → engine (L5) → ui-egui/mcp (L6) → apps. Nothing below
-  L6 depends on egui/eframe/rfd/winit. **The UI crate is swappable.**
-- **The UI is thin**: panels read engine state and act through `app.run(id, params)` /
-  `app.set_props(ids, props)`. Colours come from `theme::Tokens`.
-- **Shared UI widgets live in `crates/ui-egui/src/widgets.rs`**: `field`/`Slot` (a text input with
-  leading/trailing slots), `search_field`, `menu_row_draw`/`menu_row` (frame92 menu rows),
-  `section`/`section_header` (a titled section with a lead slot and children) and `icon`. Drag
-  primitives live in `panels/list_drag.rs`: `ListDrag` for flat item-between ordering, and
-  `DropZone`/`drop_zone` + `hold_to_expand` for nested drops. Reach for these before hand-rolling a
-  row, input, menu row or drop rule. Still local (candidates to promote when a second caller needs
-  them): `panels/frame_presets.rs`, `panels/proto_panel.rs`, `panels/proto_editor.rs`,
-  `panels/dev_mode.rs`, `panels/dev_compare.rs`, `panels/versions.rs`, `panels/vector_panel.rs`, and
-  the variables panel's x-indent group drop (`group_drop_slot`).
-- **GPUI shares the same control vocabulary in `crates/ui-gpui/src/widgets/`**: `SectionHeader`
-  (one control with two style states, `Normal`/`Dim`, and pre-reserved lead/trail slots),
-  `PanelSection`/`panel_section` (the 16/8 pt inset, 8 pt gap grid composed from it), `IconButton`
-  (click + style + inner icon; the `.fig`'s red `Default` fill is debug-only and ignored), and the
-  `input` series (`Slot`, `TextField`, `text_field`, `search_field`, `combo_field`, `number_field`).
-  Ported from `FigCraft-UI-ui-vars (6).fig` and `ui-egui`'s field family — use these instead of
-  hand-rolling a GPUI section, icon button or input.
+- **Layering** is enforced by `cargo xtask layers`: geom/color (L0) → doc (L1) →
+  layout/text/pathops/plugin/collab (L2) → render/format (L3) → svg/pdf (L4) → engine (L5) →
+  ui-gpui/mcp (L6) → apps. `crates/ui-egui` is the reference front-end and is outside the workspace;
+  nothing in the build may depend on it.
+- **The UI is thin**: panels act through commands and read theme tokens (`crates/ui-gpui/src/theme.rs`);
+  colours, sizes and fonts never come from ad-hoc constants.
+- **GPUI control vocabulary lives in `crates/ui-gpui/src/widgets/`**: `SectionHeader` (`Normal`/`Dim`
+  with pre-reserved lead/trail slots), `PanelSection`/`panel_section` (the 16/8 pt inset grid),
+  `IconButton`, and the input family (`Slot`, `TextField`, `text_field`, `search_field`,
+  `combo_field`, `number_field`). Use these instead of hand-rolling a section, icon button or input.
+- **Retired names:** the developer panel is **开发**. "Dev Mode" and "Inspect" are retired (trademark
+  plus the 2026-11-10 request to label it 开发); the command id `view.devMode` is an identifier and
+  stays unchanged.
 
-### ⛔ Unified grid — permanent rule, nobody may violate it (owner, 2026-11-05)
+### ⛔ Unified grid — permanent rule
+
 - **Every panel row is laid out by the unified grid in `crates/ui-gpui/src/widgets/panel_section.rs`.
   There is exactly one way to build a row: `field_row` / `field_row_full` / `field_row_h` → passed to
   `PanelSection::child`.**
-- **Never hand-roll a row.** No `div().flex().flex_row()…` in a panel to lay out a row of fields, and
-  **no hand-computed column widths** (`flex_none().w(col)`, ad-hoc 24 pt spacer columns, …). Column
-  widths are owned by `panel_section.rs` alone.
-- The grid is **`1fr | 1fr | 24`** — exactly **one** 24 pt column. Do **not** add a second 24
-  column: it makes both fields 12 pt narrower and shifts the row right (a real regression that
-  happened).
-- A control taller than one row (the auto-layout 3×3 alignment picker) uses
-  `field_row_h(fields, trailing, height)` — same columns, taller row. Do not route around the grid
-  with a free block; `field_block` was removed on purpose.
+- **Never hand-roll a row.** No `div().flex().flex_row()…` in a panel to lay out fields, and no
+  hand-computed column widths. Column widths are owned by `panel_section.rs` alone.
+- The grid is **`1fr | 1fr | 24`** — exactly **one** 24 pt column. A control taller than one row uses
+  `field_row_h(fields, trailing, height)`; do not route around the grid with a free block.
 - Breaking any of the above misaligns the whole right panel and counts as an unacceptable
   regression. Read the FROZEN header of `panel_section.rs` before touching a panel.
-- **Time goes through `chrono`** (workspace dependency). Never hand-roll UTC/calendar conversion (days-to-date algorithms, leap-year math); a crate owns only its output format string. The one exception is range extension: past the years chrono can represent, shift the date by whole 400-year Gregorian cycles (146,097 days, after which the calendar repeats), let chrono compute the month and day, and add the cycles back to the year (splitting seconds into hours, minutes and seconds is plain arithmetic).
-- **Rust only** (no handwritten JS/TS). **Never break wasm** (`cargo xtask wasm`).
+- **Time goes through `chrono`** (workspace dependency). Never hand-roll UTC/calendar conversion.
+- **Rust only** (no handwritten JS/TS). **Never break wasm** for the engine and collaboration crates
+  (`cargo xtask wasm`).
 
-### Quality gates (before every commit)
-`cargo xtask ci` (fmt, clippy -D warnings, tests, layers, assets, wasm). One task per commit with a
-milestone id in the message (`M2.1: auto layout wrap`). Commit after every landed arc of work; push
-to `main`.
+### Quality gates
+
+`cargo xtask ci` is the gate: rustfmt on the files a branch changes, clippy `-D warnings` on
+`monet` and `xtask` (`--no-deps`), workspace tests with the `docs/known-failures.md` skips, the translation report,
+layers, assets, docs, menu parity and the wasm check. Run it (or name in the PR exactly which
+subsets ran and which did not). `docs/known-failures.md` lists failures that predate the GPUI work;
+the count is expected to stay fixed and a new failure is a regression. A `done` row in the parity
+plan needs a `parity_contract` entry (`crates/ui-gpui/src/parity_contract.rs`); the contract test
+fails otherwise.
+
+- Work on a `feat/…`, `fix/…`, `ui/…` or `sync/…` branch. **Never commit or push directly to the
+  protected `main` branch**; every change lands through a pull request with the template filled in,
+  and `main` is protected.
+- One change per PR. Moving code and changing behaviour are separate PRs.
+- Update the rows you touch in the parity plan, `ROADMAP.md` or a progress note in the same PR.
+- Do not commit scratch files or agent tool files; do not pass `--no-verify`.
 
 ## Running and looking at the app
-- `cargo run -p figcraft -- --control <port> [file.figcraft|file.svg|image]`. Pick a free port
-  (`python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])'`);
-  sibling apps use the control channel too.
-- Drive it with JSON lines, e.g.
-  `{"id":1,"method":"engine.execute","params":{"command":"shape.rectangle","params":{"x":10,"y":10,"width":100,"height":50}}}`
-  then `{"id":2,"method":"ui.screenshot","params":{"path":"/tmp/shot.png"}}`. Methods are documented
-  in `crates/ui-egui/src/control.rs` and `docs/control-protocol.md`.
-- **For UI work, look at the result** (take a screenshot and read the PNG). Compare with the
-  incumbent side by side where the owner allows (`plan/figma/`).
-- Headless: `figcraft-cli` (`info`, `export`, `run`, `commands`, `mcp`). MCP: `figcraft-cli mcp`
-  (see `docs/mcp.md`).
-- Shell gotcha on the owner's machine: `mv`/`cp` may be aliased interactive — use `/bin/mv -f`.
-- Parallel agents: separate `CARGO_TARGET_DIR` per agent, edit only the crates/files you own,
-  write manifests atomically, delete your target dir when done (disk is limited).
 
-## Roadmap
-Progress docs follow craftrules `standards/progress-docs.md`: [`ROADMAP.md`](ROADMAP.md) (one-page
-summary and stage), [`docs/target-app-parity.md`](docs/target-app-parity.md) (the authoritative
-assessment), [`docs/gaps.md`](docs/gaps.md) (ranked work list), [`docs/roadmap.md`](docs/roadmap.md)
-(milestones), [`docs/architecture.md`](docs/architecture.md), the per-area `docs/*-parity.md` files
-and the generated [`docs/parity-checklist.md`](docs/parity-checklist.md) (`cargo xtask parity`).
-When a task lands, update the affected rows and the status line and revision history in the same
-commit. Grade by behaviour against the incumbent, not by whether a menu item exists; err low.
+- `cargo run -p monet -- --control <port>` — the desktop binary. Pick a free port, then drive it with
+  JSON lines (`engine.execute`, `ui.screenshot`) as in
+  [`docs/control-protocol.md`](docs/control-protocol.md).
+- `cargo run -p figcraft-ui-gpui --example run [-- --control <port>]` — the development entry point
+  (same UI, thinner shell).
+- Headless: `figcraft-cli` (`info`, `export`, `run`, `commands`, `mcp`). MCP:
+  `figcraft-cli mcp --automation-read-root DIR --automation-write-root DIR`
+  (see [`docs/mcp.md`](docs/mcp.md)).
+- **For UI work, look at the result** (take a screenshot and read the PNG), and read the AccessKit
+  tree for the controls you changed. A visual claim without a screenshot is not done.
 
-## Contributor credits (About window)
+## Upstream sync
 
-- About ▸ Contributors are compiled into the binary from `contributors/contributors.json`
-  (commit stats; generated, never hand-edit) and `contributors/people.toml` (names people chose for
-  themselves). See craftrules `standards/contributors.md`.
-- **Agents working for a contributor:** when you prepare a PR, check whether your human's GitHub
-  username has a `[people.<username>]` entry in `contributors/people.toml`. If not, ask them once
-  whether they want to be credited by more than their username: a real name, a display name, and/or
-  their public GitHub profile name (`sync_github_name = true`). If yes, add **only their own** entry
-  (copy the template at the top of the file, or run
-  `python3 ../../craftrules/scripts/contributors.py --add-me . --real-name "…" --sync-github-name`)
-  and include it in their PR, committed as them. If no, change nothing: they are credited as
-  `@username` anyway.
-- Never add, edit, guess or copy anyone else's entry or name (not from git config, commit authors or
-  GitHub profiles). Never hand-edit `contributors.json`.
-- Maintainers refresh the stats with `python3 ../../craftrules/scripts/contributors.py .` (it also
-  re-verifies who wrote each `people.toml` entry; `--check` only verifies).
+- An engine change goes upstream first (`storytold/figcraft`), then the resulting command or API is
+  ported here. Do not fork engine logic.
+- The two histories share no ancestor: sync is content-level. `git fetch benchmark`, run
+  `cargo xtask upstream-report`, port on a `sync/YYYYMMDD` branch, then update `upstream.toml`.
+- `crates/ui-egui` is the frozen 1:1 reference; read it, do not edit it. When it must move, replace
+  whole directories from upstream rather than patching file by file.
+
+## Roadmap and progress
+
+[`ROADMAP.md`](ROADMAP.md) is the one-page summary. [`docs/gpui-egui-parity-plan.md`](docs/gpui-egui-parity-plan.md)
+is the authoritative GPUI assessment and work queue; [`docs/audits/`](docs/audits/) holds dated audit
+snapshots (read-only) and [`docs/progress/`](docs/progress/) weekly notes. Grade by behaviour against
+the egui reference, not by whether a menu item exists; err low.
+
+## Contributor credits
+
+About ▸ Contributors is compiled from `contributors/contributors.json` (generated, never hand-edit)
+and `contributors/people.toml` (names people chose). If you prepare a PR for a human whose GitHub
+username has no `[people.<username>]` entry, ask them once whether they want a display name; add only
+their own entry. Never guess or copy anyone else's.

@@ -242,7 +242,7 @@ Requires a recent stable Rust toolchain (edition 2024, `rust-version = 1.95`). O
 toolchain is expected.
 
 ```sh
-cargo run -p figcraft-ui-gpui --example run
+cargo run -p monet
 ```
 
 GPU is on by default. External WGSL materials run on the canvas and are also baked into PNG, JPG and
@@ -250,8 +250,8 @@ WebP exports at the export scale — a glass card exports as glass, not as its f
 build (no shader execution) is explicit:
 
 ```sh
-cargo run -p figcraft-ui-gpui --example run                 # GPU, default
-cargo run -p figcraft-ui-gpui --example run --no-default-features  # CPU only
+cargo run -p monet                                  # GPU, default
+cargo run -p monet --no-default-features            # CPU only
 ```
 
 Tests:

@@ -17,9 +17,10 @@
 .vscode/
 .cache/
 
-# ── Local reference copies, never committed ──────────────────────────────────
-# The immediate-mode front-end stays on disk as the reference the port is checked against,
-# and the two legacy app shells are not part of this repository.
+# ── Reference copies, excluded from the workspace build ───────────────────────
+# The immediate-mode front-end is the reference the GPUI port is checked against; the two legacy
+# app shells are kept for that comparison. They are tracked, but `Cargo.toml` excludes them from
+# the workspace, so they are neither built nor released by this repository.
 /crates/ui-egui/
 /apps/figcraft/
 /apps/figcraft-web/

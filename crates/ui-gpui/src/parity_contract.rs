@@ -242,6 +242,14 @@ fn declared_status(id: &str) -> Option<String> {
     None
 }
 
+/// Every line of the machine-readable block, so a `done` claim cannot exist without a contract.
+fn declared_statuses() -> Vec<(String, String)> {
+    let doc = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/gpui-egui-parity-plan.md"))
+        .expect("the parity plan must exist next to the crates");
+    let block = doc.split("<!-- PARITY_CONTRACT_STATUS").nth(1).and_then(|s| s.split("-->").next()).unwrap_or_default();
+    block.lines().filter_map(|line| line.trim().split_once('=')).map(|(id, value)| (id.trim().to_string(), value.trim().to_string())).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -301,5 +309,21 @@ mod tests {
             assert!(!c.requires.is_empty(), "{} declares no capabilities", c.id);
         }
         assert_eq!(dialogs::Kind::ALL.len(), 18, "a new dialog needs an audited contract or spec");
+    }
+
+    /// The plan's status block may only claim `done` for an item that has a contract. Without
+    /// this, a new `X=done` line is a hand-written claim again — the exact failure the contract
+    /// mechanism was introduced to stop.
+    #[test]
+    fn every_done_status_has_a_contract() {
+        let contracted: BTreeSet<&str> = CONTRACTS.iter().map(|c| c.id).collect();
+        for (id, value) in declared_statuses() {
+            if value == "done" {
+                assert!(
+                    contracted.contains(id.as_str()),
+                    "`{id}=done` has no contract in CONTRACTS — add the code-derived capabilities it depends on, or downgrade the status"
+                );
+            }
+        }
     }
 }

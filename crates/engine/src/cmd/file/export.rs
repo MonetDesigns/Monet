@@ -200,11 +200,11 @@ pub(in crate::cmd) fn export_setting(cmd: &str, mut e: ExportSetting, p: &Value)
     if let Some(q) = quality_param(cmd, p)? {
         e.quality = q;
     }
-    if let Some(v) = get(p, "fps") {
-        if !v.is_null() {
-            let fps = f64_of(v).filter(|f| f.is_finite() && f.fract() == 0.0 && (0.0..=120.0).contains(f));
-            e.fps = fps.ok_or_else(|| bad(cmd, "fps: a whole number from 0 (Auto) to 120"))? as u32;
-        }
+    if let Some(v) = get(p, "fps")
+        && !v.is_null()
+    {
+        let fps = f64_of(v).filter(|f| f.is_finite() && f.fract() == 0.0 && (0.0..=120.0).contains(f));
+        e.fps = fps.ok_or_else(|| bad(cmd, "fps: a whole number from 0 (Auto) to 120"))? as u32;
     }
     e.print = print_param(cmd, p, e.print)?;
     for (key, slot) in [

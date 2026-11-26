@@ -6,6 +6,8 @@
 //! Visibility itself (does the raster get drawn?) is covered by `material_per_layer.rs`; this file
 //! only pins the request geometry.
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::collections::HashMap;
 use std::sync::Arc;
 

@@ -4760,6 +4760,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "monet"
+version = "2648.15.0"
+dependencies = [
+ "figcraft-ui-gpui",
+]
+
+[[package]]
 name = "moxcms"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -84,7 +84,7 @@ pub fn resolve(level: ContrastLevel, categories: &[ContrastCategory]) -> Option<
     }
     let cat = if unique.len() == 1 {
         Some(unique[0])
-    } else if categories.iter().any(|&c| c == ContrastCategory::NormalText) {
+    } else if categories.contains(&ContrastCategory::NormalText) {
         None
     } else {
         Some(ContrastCategory::Mixed)
@@ -179,15 +179,15 @@ pub fn boundary_line(bg: Color, ratio: f32, hue: f32) -> (Vec<BoundaryPoint>, Ve
     let l_dark = boundary_luminance(bg, ratio, false);
     let mut s = 0.0_f32;
     while s <= 1.0 + 1e-6 {
-        if let Some(target) = l_dark {
-            if let Some(v) = solve_value(hue, s, target, false) {
-                darker.push(BoundaryPoint { s, v });
-            }
+        if let Some(target) = l_dark
+            && let Some(v) = solve_value(hue, s, target, false)
+        {
+            darker.push(BoundaryPoint { s, v });
         }
-        if let Some(target) = l_light {
-            if let Some(v) = solve_value(hue, s, target, true) {
-                lighter.push(BoundaryPoint { s, v });
-            }
+        if let Some(target) = l_light
+            && let Some(v) = solve_value(hue, s, target, true)
+        {
+            lighter.push(BoundaryPoint { s, v });
         }
         s += 0.02;
     }

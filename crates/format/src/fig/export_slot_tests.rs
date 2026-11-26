@@ -79,7 +79,7 @@ fn names(doc: &Document, id: NodeId) -> Vec<String> {
     doc.node(id).unwrap().children.iter().map(|c| doc.node(*c).unwrap().name.clone()).collect()
 }
 
-fn instance_slot<'a>(doc: &'a Document) -> &'a figcraft_doc::Node {
+fn instance_slot(doc: &Document) -> &figcraft_doc::Node {
     let inst = doc.nodes().find(|n| matches!(n.kind, NodeKind::Instance { .. })).unwrap();
     inst.children.iter().filter_map(|c| doc.node(*c)).find(|n| n.name == "Content").unwrap()
 }

@@ -30,10 +30,10 @@ mod mindmap;
 mod reshape;
 mod tools;
 
+pub use code::is_code_text;
 pub(crate) use connectors::end_handle_at;
 pub use connectors::{END_HANDLE_PX, selected_connector_ends};
 use connectors::{connector_cmd, reattach};
-pub use code::is_code_text;
 pub use derived::route;
 pub(crate) use derived::{settle_routes, settle_stamps, settle_text, stamp_target};
 
@@ -48,10 +48,10 @@ pub fn sticky_or_shape_at(doc: &Document, page: NodeId, p: Point, except: Option
                 continue;
             }
             match k.board {
-                Some(BoardItem::Sticky { .. } | BoardItem::Shape { .. }) => {
-                    if Some(*c) != except && doc.world_bounds(*c).is_some_and(|b| b.contains(p)) {
-                        return Some(*c);
-                    }
+                Some(BoardItem::Sticky { .. } | BoardItem::Shape { .. })
+                    if Some(*c) != except && doc.world_bounds(*c).is_some_and(|b| b.contains(p)) =>
+                {
+                    return Some(*c);
                 }
                 // Not a board object of its own (a section, a frame): what is inside it may be.
                 None if depth < 32 => {

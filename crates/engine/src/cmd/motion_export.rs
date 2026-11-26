@@ -11,7 +11,6 @@
 //! WebM/AV1 export is intentionally not included here — it needs the `rav1e` encoder and is a
 //! separate, larger step.
 
-
 use base64::Engine as _;
 use figcraft_doc::Document;
 use figcraft_doc::NodeId;
@@ -20,6 +19,7 @@ use figcraft_geom::Rect;
 use figcraft_render::{Pixmap, View};
 use serde_json::{Value, json};
 
+#[allow(clippy::wildcard_imports)]
 use crate::params::*;
 use crate::{Result, Session, bad};
 
@@ -195,15 +195,7 @@ pub fn scale_for(doc: &Document, node: NodeId, size: figcraft_doc::ExportSize) -
 
 /// Encode one Motion export from a plain document. This is the single encoder used by
 /// `motion.export` and by a normal Export row whose format is GIF / WebM / PNG frames / MP4.
-pub fn encode_animation(
-    doc: &Document,
-    node: NodeId,
-    format: AnimFormat,
-    scale: f64,
-    fps: u32,
-    quality: u8,
-    speed: u8,
-) -> Result<AnimationOutput> {
+pub fn encode_animation(doc: &Document, node: NodeId, format: AnimFormat, scale: f64, fps: u32, quality: u8, speed: u8) -> Result<AnimationOutput> {
     let cmd = "motion.export";
     let anim = Animation::new(doc, node, scale).ok_or_else(|| bad(cmd, "nothing to export (no node, no bounds, or too large)"))?;
     // MP4/H.264 and WebM/AV1 encode 4:2:0 and require even picture sizes. GIF and PNG frames keep
@@ -233,7 +225,8 @@ pub fn encode_animation(
             let mut rendered = Vec::with_capacity(times.len());
             for t in &times {
                 let pm = anim.render(*t).ok_or_else(|| bad(cmd, "a frame failed to render"))?;
-                rendered.push(figcraft_motion_codec::FrameRgba::new(pm.width(), pm.height(), figcraft_render::to_rgba8(&pm)).map_err(|e| bad(cmd, e))?);
+                rendered
+                    .push(figcraft_motion_codec::FrameRgba::new(pm.width(), pm.height(), figcraft_render::to_rgba8(&pm)).map_err(|e| bad(cmd, e))?);
             }
             let o = figcraft_motion_codec::Mp4Options { fps, crf: (100.0 - quality as f64 / 4.0) as f32 };
             let bytes = figcraft_motion_codec::encode_mp4(&rendered, &o, [255, 255, 255]).map_err(|e| bad(cmd, e))?;
@@ -245,7 +238,8 @@ pub fn encode_animation(
             let mut rendered = Vec::with_capacity(times.len());
             for t in &times {
                 let pm = anim.render(*t).ok_or_else(|| bad(cmd, "a frame failed to render"))?;
-                rendered.push(figcraft_motion_codec::FrameRgba::new(pm.width(), pm.height(), figcraft_render::to_rgba8(&pm)).map_err(|e| bad(cmd, e))?);
+                rendered
+                    .push(figcraft_motion_codec::FrameRgba::new(pm.width(), pm.height(), figcraft_render::to_rgba8(&pm)).map_err(|e| bad(cmd, e))?);
             }
             let o = figcraft_motion_codec::WebmOptions { fps, quality, speed, ..Default::default() };
             (figcraft_motion_codec::encode_webm(&rendered, &o).map_err(|e| bad(cmd, e))?, "webm")

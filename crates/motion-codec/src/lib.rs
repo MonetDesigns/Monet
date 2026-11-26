@@ -303,7 +303,6 @@ fn strip_temporal_delimiter(data: &[u8]) -> &[u8] {
     if data.len() >= 2 && data[0] == 0x12 && data[1] == 0x00 { &data[2..] } else { data }
 }
 
-
 /// Encode the animation as an AV1 WebM. Returns the file bytes.
 pub fn encode_webm(frames: &[FrameRgba], o: &WebmOptions) -> Result<Vec<u8>, String> {
     let fps = o.fps.clamp(1, 120);
@@ -376,7 +375,7 @@ pub fn encode_webm(frames: &[FrameRgba], o: &WebmOptions) -> Result<Vec<u8>, Str
 
 // ---------------------------------------------------------------------------------- MP4 / H.264
 
-use craft_media::isobmff::{AvcConfig, Brand, Mp4Writer, SampleEntry, TrackConfig, WriterOptions, WriteSample};
+use craft_media::isobmff::{AvcConfig, Brand, Mp4Writer, SampleEntry, TrackConfig, WriteSample, WriterOptions};
 use craft_video::h264::{Encoder as H264Encoder, EncoderConfig as H264Config, PacketFormat, RateControl, YuvFrame};
 
 /// H.264-in-MP4 encoder options.
@@ -417,9 +416,7 @@ pub fn encode_mp4(frames: &[FrameRgba], o: &Mp4Options, background: [u8; 3]) -> 
     let timescale = 90_000u32;
     let step = (timescale / fps).max(1);
     let mut writer = Mp4Writer::new(std::io::Cursor::new(Vec::new()), WriterOptions::new(Brand::Mp4)).map_err(|e| format!("MP4 writer: {e}"))?;
-    let track = writer
-        .add_track(TrackConfig::new(SampleEntry::avc(avc, w as u16, h as u16), timescale))
-        .map_err(|e| format!("MP4 track: {e}"))?;
+    let track = writer.add_track(TrackConfig::new(SampleEntry::avc(avc, w as u16, h as u16), timescale)).map_err(|e| format!("MP4 track: {e}"))?;
 
     // Samples are written in decode order; composition_offset restores presentation order.
     let mut write = |data: &[u8], key: bool, cto: i64| -> Result<(), String> {
@@ -428,8 +425,7 @@ pub fn encode_mp4(frames: &[FrameRgba], o: &Mp4Options, background: [u8; 3]) -> 
             .map_err(|e| format!("MP4 sample: {e}"))
     };
     let mut sent = 0usize;
-    let mut last_pts = 0i64;
-    for f in frames {
+    for (last_pts, f) in (0i64..).zip(frames) {
         let rgb = flatten_rgb(&f.rgba, background);
         let ([y, u, v], cw) = to_yuv420(&rgb, w as usize, h as usize);
         let pic = YuvFrame { y: &y, u: &u, v: &v, y_stride: w as usize, uv_stride: cw };
@@ -438,7 +434,6 @@ pub fn encode_mp4(frames: &[FrameRgba], o: &Mp4Options, background: [u8; 3]) -> 
         for p in enc.encode(&pic, last_pts).map_err(|e| format!("H.264 encode: {e}"))? {
             write(&p.data, p.keyframe, p.pts - p.dts)?;
         }
-        last_pts += 1;
         sent += 1;
     }
     for p in enc.flush() {

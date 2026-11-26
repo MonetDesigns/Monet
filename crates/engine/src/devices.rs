@@ -10,7 +10,6 @@
 
 use figcraft_devices::{DeviceVariant, NONE_DEVICE, with_catalog};
 use figcraft_doc::proto::{Device, DeviceColor, PrototypeSettings};
-use figcraft_i18n::tr;
 
 /// Convert an external variant into the document's owned device shape.
 fn to_device(v: &DeviceVariant) -> Device {
@@ -46,11 +45,7 @@ pub fn resolve_device(ps: &PrototypeSettings) -> Option<Device> {
     // Prefer the external catalogue; fall back to the built-in defaults for a name it lacks.
     with_catalog(|cat| cat.resolve(&ps.device, Some(&ps.variant)).map(to_device))
         .flatten()
-        .or_else(|| {
-            PrototypeSettings::fallback_devices()
-                .into_iter()
-                .find(|d| d.name == ps.device || d.name == ps.variant)
-        })
+        .or_else(|| PrototypeSettings::fallback_devices().into_iter().find(|d| d.name == ps.device || d.name == ps.variant))
 }
 
 /// The effective device as presented (screen swapped when turned to landscape).
@@ -140,11 +135,7 @@ pub fn frame_info(ps: &PrototypeSettings, landscape: bool, color: &str) -> Optio
 /// Family names for the top-level dropdown.
 pub fn family_names() -> Vec<String> {
     with_catalog(|cat| {
-        if cat.families.is_empty() {
-            PrototypeSettings::fallback_devices().into_iter().map(|d| d.name).collect()
-        } else {
-            cat.family_names()
-        }
+        if cat.families.is_empty() { PrototypeSettings::fallback_devices().into_iter().map(|d| d.name).collect() } else { cat.family_names() }
     })
     .unwrap_or_else(|| PrototypeSettings::fallback_devices().into_iter().map(|d| d.name).collect())
 }
@@ -159,9 +150,7 @@ pub fn variant_names(family: &str) -> Vec<String> {
 /// A variant's colours by name (the catalogue's, else the built-in device's).
 pub fn colors_for(family: &str, variant: &str) -> Vec<(String, [u8; 3])> {
     let from_cat = with_catalog(|cat| {
-        cat.variant(variant)
-            .or_else(|| cat.default_variant(family))
-            .map(|v| v.colors.iter().map(|c| (c.name.clone(), c.rgb)).collect::<Vec<_>>())
+        cat.variant(variant).or_else(|| cat.default_variant(family)).map(|v| v.colors.iter().map(|c| (c.name.clone(), c.rgb)).collect::<Vec<_>>())
     })
     .flatten();
     from_cat

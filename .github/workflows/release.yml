@@ -1,8 +1,12 @@
 name: Release
 
+# Automatic release is disabled until the packaging scripts target `apps/monet`. The scripts still
+# build `-p figcraft` (the excluded egui shell) and carry legacy `figcraft` ids, so a push to a
+# `release` branch would fail or produce a package with the wrong binary. Run this manually only as
+# a dry run while `docs/releasing.md` says the migration is in progress.
 on:
-  push:
-    branches: [release]
+  # push:
+  #   branches: [release]
   workflow_dispatch:
     inputs:
       version:

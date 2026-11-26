@@ -563,7 +563,7 @@ fn vectors_import_as_editable_networks() {
 
 #[test]
 fn per_point_smoothing_and_cap_size_import_from_style_rows() {
-    let mut blob = square_blob();
+    let blob = square_blob();
     // Vertex 1's style row is id 1; add both new fields to that row.
     let mut message = tail_message();
     {
@@ -584,10 +584,7 @@ fn per_point_smoothing_and_cap_size_import_from_style_rows() {
     assert_eq!(wave.vertices[1].smoothing, Some(f64::from(0.6_f32)));
     assert_eq!(wave.vertices[1].cap_size, Some(3.0));
     assert_eq!(wave.vertices[0].smoothing, None);
-    assert!(
-        !warnings.iter().any(|w| w.contains("style settings of some vector segments aren't supported")),
-        "{warnings:?}"
-    );
+    assert!(!warnings.iter().any(|w| w.contains("style settings of some vector segments aren't supported")), "{warnings:?}");
 }
 
 #[test]
