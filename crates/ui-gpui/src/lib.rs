@@ -2208,7 +2208,7 @@ impl CanvasView {
                     // The context-menu renderer reads `pos.y` as a window coordinate (it already
                     // adds the canvas left offset to x), while `to_screen` is canvas-local. Keep
                     // `pointer` local for "Paste here", but lift the menu anchor by the title bar.
-                    let menu_pos = pos2(pos.x, pos.y + this.dock().titlebar_h);
+                    let menu_pos = pos2(pos.x, pos.y + self.dock().titlebar_h);
                     self.pointer = Some(pos);
                     self.focus.focus(window);
                     self.open_context_menu_for_selection(pos, menu_pos, cx);

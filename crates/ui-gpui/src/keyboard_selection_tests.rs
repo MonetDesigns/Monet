@@ -120,11 +120,7 @@ fn a_box_belongs_to_the_document_and_page_it_was_opened_in() {
 
 #[test]
 fn menu_keyboard_highlight_skips_disabled_rows_and_wraps() {
-    let items = vec![
-        Item::new("a", "A"),
-        Item::new("b", "B").disabled(true),
-        Item::new("c", "C"),
-    ];
+    let items = vec![Item::new("a", "A"), Item::new("b", "B").disabled(true), Item::new("c", "C")];
     assert_eq!(menu_row_step(&items, None, true), Some(0), "Down from nothing goes to the first row");
     assert_eq!(menu_row_step(&items, Some(0), true), Some(2), "skip the disabled middle row");
     assert_eq!(menu_row_step(&items, Some(2), true), Some(0), "wrap at the bottom");

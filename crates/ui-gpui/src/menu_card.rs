@@ -275,7 +275,8 @@ pub(crate) fn card_selected(
         Width::Min(f) => (content_w + 2.0 * PAD).max(f),
         Width::Anchor => (content_w + 2.0 * PAD).max(48.0),
     };
-    let (row_els, sub_els) = rows(items, row_h, has_check, open_sub, selected, sub_selected, left, top, w, on_pick, on_sub, on_hover, true, window, vh);
+    let (row_els, sub_els) =
+        rows(items, row_h, has_check, open_sub, selected, sub_selected, left, top, w, on_pick, on_sub, on_hover, true, window, vh);
     // 唯一的浮层控件：宽度三档、锚点跟随、上下防溢出与滚动全在 `Menu::show` 里。
     crate::widgets::menu(crate::widgets::at_point(left, top))
         .gap(0.0)
