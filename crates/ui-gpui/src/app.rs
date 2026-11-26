@@ -15,6 +15,15 @@ use crate::canvas::geom::*;
 use crate::canvas::guides;
 use crate::theme::{Tokens, canvas_accent};
 
+/// 输入法组合期间的组合文档缓存。
+/// key 包含源文档指针、revision、文字层、caret 与组合内容；内容没变时复用同一个 `Arc`，
+/// 让渲染缓存的 `JobKey.doc` 稳定，不会每帧重提整页。
+#[derive(Clone)]
+pub(crate) struct PreeditDocCache {
+    pub key: (usize, u64, u64, usize, String, usize),
+    pub doc: std::sync::Arc<Document>,
+}
+
 pub struct CanvasApp {
     pub session: Session,
     pub canvas: CanvasState,
@@ -65,6 +74,10 @@ pub struct CanvasApp {
     /// 由 `CanvasView::sync_motion` 每帧设置，渲染请求与叠加层都读它，
     /// 这样 `ds.doc` 在一帧内不再被临时替换，引擎 / 撤销 / 命中 / 右栏始终看到源文档。
     pub display_doc: Option<std::sync::Arc<Document>>,
+    /// 画布文字编辑本帧光标是否处于闪烁的“亮”半周期。
+    /// 由 `CanvasView::render` 按统一的 `caret::visible_since` 写入，叠加层只读。
+    pub text_caret_visible: bool,
+    pub(crate) preedit_doc_cache: Option<PreeditDocCache>,
 }
 
 impl CanvasApp {
@@ -93,6 +106,8 @@ impl CanvasApp {
             connect: crate::canvas::board_connect::State::default(),
             crop: None,
             display_doc: None,
+            text_caret_visible: true,
+            preedit_doc_cache: None,
         };
         // 预选一个自动布局容器：启动即可见 hatch（紧贴轮廓 + padding 蓝斜线 + spacing 粉斜线），
         // 不用先手动点选，方便核对"选中=1px / 悬停=2px"与边距斜线管线。

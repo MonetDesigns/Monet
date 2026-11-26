@@ -20,6 +20,7 @@
 //!
 //! One `Slot` vocabulary covers every input (icon, short label, colour dot, custom content).
 
+pub mod caret;
 pub mod edit_buffer;
 pub mod field;
 pub mod number_field;
