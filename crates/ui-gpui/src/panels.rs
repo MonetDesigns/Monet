@@ -17,7 +17,7 @@ use figcraft_color::BlendMode;
 use figcraft_i18n::tr;
 use figcraft_i18n::tr_noop;
 use gpui::{App, Div, Entity, Hsla, SharedString, Stateful, Window, div, prelude::*, px, svg};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::rc::Rc;
 
 /// 四块整面板（Shortcuts / Versions / Dev compare / Assets），由引擎 `ui_requests` 打开的浮层。
@@ -468,7 +468,7 @@ pub(crate) struct LayoutVals {
 /// egui 每帧用 `Id::unique((row, i))` 重建临时输入框；GPUI 是 retained tree，输入框必须
 /// 缓存，因此用一个**固定大小的编辑器池** + 每帧刷新的上下文表：第 `n` 个编辑器提交时
 /// 读 `ctx[n]` 决定写到哪个命令/哪一行。`right_panel` 每帧按顺序认领槽位。
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) struct RowEditCtx {
     pub cmd: &'static str,
     /// 提交时合并进 params 的固定部分（如 `{"index": 0}`）。
@@ -492,6 +492,10 @@ pub(crate) struct RowEditCtx {
     pub nest: Option<&'static str>,
     /// `nest` 的键名需要是运行时字符串时用它（组件属性名是 `String`，不能 `&'static str`）。
     pub nest_key: Option<String>,
+    /// 自定义提交：拿到用户输入的**原始文本**，返回一条完整命令参数；`None` = 不提交。
+    /// 用于必须整体替换一个数组/对象的字段（layout grid 的 `props.grids`、selection spacing 的
+    /// `{horizontal|vertical}` 等），它们无法用 `key` + 标量值表达。
+    pub map: Option<std::rc::Rc<dyn Fn(&str) -> Option<Value>>>,
 }
 
 /// 一个 WGSL 参数输入框提交时所需的全部上下文。持有当前绑定快照，提交时只改这一个参数、
@@ -718,6 +722,9 @@ pub(crate) struct RightFields {
     /// Prototype 面板里展开编辑的那条交互：`(节点, 行下标)`；`None` = 都没展开。
     /// 带节点是因为画布上的原型连线/手柄也能打开编辑器，切选后同一下标不该串行。
     proto_open: std::rc::Rc<std::cell::RefCell<Option<(figcraft_doc::NodeId, usize)>>>,
+    /// 展开了设置的 layout grid 行下标（egui `grid_open` 临时状态）。一次只展开一条，
+    /// 设置里的输入框池按「当前展开那一行」认领。
+    grid_open: std::rc::Rc<std::cell::RefCell<Option<usize>>>,
     /// WGSL 参数输入框池：retained tree 不能每帧新建，预建固定个数，按当前 shader 的参数数认领。
     wgsl_param_fields: Vec<Entity<TextField>>,
     /// 每个参数字段提交时的运行时上下文（当前绑定快照 + uniform 路径 + 控件范围）。
@@ -1242,6 +1249,13 @@ impl RightFields {
                 te.set_right_pad(8.0);
                 te.set_on_commit(move |text, _window, _cx| {
                     let Some(c) = ctx.borrow().get(slot).cloned().flatten() else { return };
+                    // 需要整体替换 JSON（grids / spacing）：闭包自己构造完整 params，绕过 key/scale。
+                    if let Some(map) = &c.map {
+                        if let Some(params) = map(text.trim()) {
+                            cmds.push(Cmd { id: c.cmd, params: Some(params) });
+                        }
+                        return;
+                    }
                     let mut params = c.params.clone();
                     // `nest` = 写进子对象（`instance.setProperties` 的 `properties`）。
                     let put = |params: &mut Value, key: &str, v: Value| match c.nest {
@@ -1377,6 +1391,7 @@ impl RightFields {
             playground_cache: std::rc::Rc::new(std::cell::RefCell::new(None)),
             playground_edits: std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new())),
             proto_open: std::rc::Rc::new(std::cell::RefCell::new(None)),
+            grid_open: std::rc::Rc::new(std::cell::RefCell::new(None)),
             // WGSL 材质（另一条并行开发线新增的字段）：这里先给可编译的默认值，
             // 参数输入框池由该功能自己按需预建。
             wgsl_param_fields,
@@ -1563,6 +1578,7 @@ impl RightFields {
         f.inspect_fmt = Default::default();
         f.inspect_rem = Default::default();
         f.proto_open = Default::default();
+        f.grid_open = Default::default();
         // ⛔ 不要把 row_ctx / wgsl_param_ctx / scale_ctx / pad 换成新的空 Rc：
         // 这些 editor 实体是 clone 的（共享），回调在 new 时捕获的是**原** context Rc。
         // 一旦换成空 Rc，新窗口的行编辑提交时 get_mut(slot) 读不到、直接 return —— 编辑
@@ -2569,7 +2585,7 @@ pub(crate) fn right_panel(
     let header_sec = right::sections::header(f, data, col);
     // Component / Instance（egui `header` 末尾的 `component_panel::instance_section`）。
     let component_sec = right::component::section(f, data, cx, &mut n);
-    let section_sec = right::sections::section(f, data, row_w);
+    let section_sec = right::sections::section(f, data, row_w, cx, &mut n);
     let modes_sec = right::sections::variable_modes(f, data, row_w);
     // Design panel: not in Motion mode, so paint rows carry no keyframe diamond. The motion queue
     // is a placeholder (never used — `keyframe_layer` is `None`), keeping the shared `paints` call
@@ -2579,7 +2595,7 @@ pub(crate) fn right_panel(
     let strokes_sec = right::sections::paints(f, data, false, sel.has_vector, row_w, col, &mut n, window, cx, None, false, 0, &motion_q);
     let effects_sec = right::sections::effects(f, data, col, cx, None);
     let sel_colors_sec = right::sections::selection_colors(f, data, row_w, col, &mut n, window, cx);
-    let grids_sec = right::sections::grids(f, data, col);
+    let grids_sec = right::sections::grids(f, data, col, &mut n, cx);
     let export_sec = right::sections::export(f, data, col, &mut n, cx, motion);
 
     // ⛔ 分隔线的规则：**一条线属于「它上面那一节」的结尾**，且只有那一节真的存在时才加。
@@ -2806,7 +2822,7 @@ pub(crate) fn right_panel(
         // 的 trail 菜单（Fixed/Hug/Fill + min/max），min/max 用 `any_min/any_max` 行，3×3 对齐
         // picker 由 `right::picker::alignment_picker` 自绘。grid tracks 见 `grid_track_rows`。
         // 矢量点被选中时整节让位给点面板（egui `if !points_selected { layout_section(…) }`）。
-        .child(auto_layout_section(f, sel, data, cx, &mut n, points_selected, true))
+        .child(auto_layout_section(f, sel, data, cx, &mut n, points_selected, true, col))
         .child(sep());
 
     // ── Arc：仅当全部选中都是 Ellipse（原版 `arc_section` 返回 false 就不画） ──────
@@ -2830,7 +2846,7 @@ pub(crate) fn right_panel(
 
     // ── Typography：仅当选中含 Text（原版 `sel.iter().any(Text)`） ────────────────
     if sel.has_text {
-        body = body.child(right::sections::typography(f, data)).child(sep());
+        body = body.child(right::sections::typography(f, data, cx, &mut n)).child(sep());
     }
 
     body = body
@@ -2886,6 +2902,7 @@ pub(crate) fn auto_layout_section(
     n: &mut usize,
     points_selected: bool,
     with_dimensions: bool,
+    col: f32,
 ) -> gpui::AnyElement {
     if points_selected {
         return div().into_any_element();
@@ -3137,6 +3154,149 @@ pub(crate) fn auto_layout_section(
     // ④ 网格轨道（egui `layout_panel.rs::tracks`，只在 grid frame 上出现）：
     // 每轴一组「Column sizes / Row sizes」+ 每条轨道一行（序号 / 尺寸 / sizing 下拉）。
     sec = right::sections::grid_track_rows(f, data, cx, n, sec);
+    // ⑤ 智能选区间距（egui `canvas::selection_spacing::panel`，在 auto layout 之后）。
+    if let Some(sp) = data.selection_spacing.as_ref() {
+        let mut spacing_field = |axis: &'static str, value: Option<f64>| -> gpui::AnyElement {
+            if value.is_none() && !matches!(axis, "horizontal" if sp.horizontal.is_some()) && !matches!(axis, "vertical" if sp.vertical.is_some()) {
+                return div().into_any_element();
+            }
+            let ids = data.ids.clone();
+            let map = Rc::new(move |s: &str| {
+                let v = s.parse::<f64>().ok()?;
+                Some(json!({ "ids": ids, axis: v.clamp(-1e6, 1e6), "fromGesture": true }))
+            });
+            let shown = value.map(|v| format!("{v}")).unwrap_or_default();
+            let edit = f.row_field(
+                cx,
+                right::sections::slot(n),
+                &shown,
+                RowEditCtx {
+                    cmd: "arrange.spacing",
+                    params: json!({}),
+                    key: axis,
+                    scale: 1.0,
+                    string_value: false,
+                    paint: None,
+                    nest: None,
+                    nest_key: None,
+                    map: Some(map),
+                    paint_color: None,
+                },
+            );
+            if value.is_none() {
+                edit.update(cx, |te, _| te.set_placeholder(tr("Mixed")));
+            }
+            edit.into_any_element()
+        };
+        sec = sec.child(sublabel_row(tr("Spacing"))).child(field_row(
+            vec![spacing_field("horizontal", sp.horizontal.flatten()), spacing_field("vertical", sp.vertical.flatten())],
+            Vec::<IconButton>::new(),
+        ));
+    }
+    // ⑤ 网格单元格（egui `layout_panel.rs::grid_cell`）：父级是 grid、子层不 absolute 时出现。
+    if let Some(cell) = data.grid_cell.as_ref() {
+        let id = data.ids[0];
+        let ids = data.ids.clone();
+        let set = |props: Value| json!({ "ids": ids, "props": props });
+        let col_map = {
+            let ids = data.ids.clone();
+            let row = cell.row.saturating_sub(1);
+            Rc::new(move |s: &str| {
+                let c = s.parse::<f64>().ok()?;
+                Some(json!({ "ids": ids, "props": { "gridColumn": (c - 1.0).max(0.0), "gridRow": row } }))
+            })
+        };
+        let row_map = {
+            let ids = data.ids.clone();
+            let column = cell.column.saturating_sub(1);
+            Rc::new(move |s: &str| {
+                let r = s.parse::<f64>().ok()?;
+                Some(json!({ "ids": ids, "props": { "gridColumn": column, "gridRow": (r - 1.0).max(0.0) } }))
+            })
+        };
+        let cspan_map = {
+            let ids = data.ids.clone();
+            Rc::new(move |s: &str| Some(json!({ "ids": ids, "props": { "gridColumnSpan": s.parse::<f64>().ok()?.max(1.0) } })))
+        };
+        let rspan_map = {
+            let ids = data.ids.clone();
+            Rc::new(move |s: &str| Some(json!({ "ids": ids, "props": { "gridRowSpan": s.parse::<f64>().ok()?.max(1.0) } })))
+        };
+        let mut cell_field = |slot: usize, value: String, string_value: bool, map: std::rc::Rc<dyn Fn(&str) -> Option<serde_json::Value>>| {
+            f.row_field(
+                cx,
+                slot,
+                &value,
+                RowEditCtx {
+                    cmd: "node.set",
+                    params: serde_json::json!({}),
+                    key: "gridCell",
+                    scale: 1.0,
+                    string_value,
+                    paint: None,
+                    nest: None,
+                    nest_key: None,
+                    map: Some(map),
+                    paint_color: None,
+                },
+            )
+        };
+        let col_el = cell_field(right::sections::slot(n), cell.column.to_string(), false, col_map);
+        let row_el = cell_field(right::sections::slot(n), cell.row.to_string(), false, row_map);
+        let reset = if cell.anchored {
+            Some(right::sections::icon_cmd(Icon::Rotate, "node.set", json!({ "ids": &ids, "props": { "gridColumn": null, "gridRow": null } }), f, false))
+        } else {
+            None
+        };
+        let mut first = field_row(vec![col_el.into_any_element(), row_el.into_any_element()], reset.into_iter().collect::<Vec<_>>());
+        sec = sec.child(sublabel_row2(tr("Column"), tr("Row"))).child(first);
+        let cs = cell_field(right::sections::slot(n), cell.column_span.to_string(), false, cspan_map);
+        let rs = cell_field(right::sections::slot(n), cell.row_span.to_string(), false, rspan_map);
+        sec = sec
+            .child(sublabel_row2(tr("Column span"), tr("Row span")))
+            .child(field_row(vec![cs.into_any_element(), rs.into_any_element()], Vec::<IconButton>::new()));
+        let h_cur = if cell.align_h_mixed {
+            tr("Mixed").to_string()
+        } else {
+            match cell.align_h {
+                None => tr("Auto").to_string(),
+                Some("min") => tr("Left").to_string(),
+                Some("center") => tr("Center").to_string(),
+                _ => tr("Right").to_string(),
+            }
+        };
+        let h_choices = vec![
+            (tr("Auto").to_string(), "node.set", set(json!({ "gridAlignH": null }))),
+            (tr("Left").to_string(), "node.set", set(json!({ "gridAlignH": "min" }))),
+            (tr("Center").to_string(), "node.set", set(json!({ "gridAlignH": "center" }))),
+            (tr("Right").to_string(), "node.set", set(json!({ "gridAlignH": "max" }))),
+        ];
+        let v_cur = if cell.align_v_mixed {
+            tr("Mixed").to_string()
+        } else {
+            match cell.align_v {
+                None => tr("Auto").to_string(),
+                Some("min") => tr("Top").to_string(),
+                Some("center") => tr("Center").to_string(),
+                _ => tr("Bottom").to_string(),
+            }
+        };
+        let v_choices = vec![
+            (tr("Auto").to_string(), "node.set", set(json!({ "gridAlignV": null }))),
+            (tr("Top").to_string(), "node.set", set(json!({ "gridAlignV": "min" }))),
+            (tr("Center").to_string(), "node.set", set(json!({ "gridAlignV": "center" }))),
+            (tr("Bottom").to_string(), "node.set", set(json!({ "gridAlignV": "max" }))),
+        ];
+        sec = sec
+            .child(sublabel_row2(tr("Horizontal align"), tr("Vertical align")))
+            .child(field_row(
+                vec![
+                    right::sections::pick_dropdown(f, h_cur, col, h_choices).into_any_element(),
+                    right::sections::pick_dropdown(f, v_cur, col, v_choices).into_any_element(),
+                ],
+                Vec::<IconButton>::new(),
+            ));
+    }
     // ⑤ Clip content：egui `layout_section` 末尾 `if frames { row(24, checkbox) }` —— 它属于
     // **Layout 节**，不是 Appearance，也不是独立 "Frame" 节。
     if sel.all_frame {

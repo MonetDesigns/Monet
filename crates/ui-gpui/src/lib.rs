@@ -1779,6 +1779,10 @@ impl CanvasView {
         let text_range = figcraft_engine::textedit::selected_range(&self.app.session);
         d.selected_text_range = text_range;
         d.range_fill = panels::right::data::read_range_fill(&ds.doc, &ds.selection, text_range);
+        // 矢量 region 选中：Fill 节只画 region 自己的 fills（egui `paints.rs` 的 region 分支）。
+        if let [id] = ds.selection.as_slice() {
+            d.region_fills = figcraft_engine::vectoredit::selected_region_fills(&self.app.session, *id);
+        }
 
         // 参考实现 `Id::new(("selection_colors_open", ds.uid))`：展开态按文档 uid 分档。
         d.doc_uid = ds.uid;

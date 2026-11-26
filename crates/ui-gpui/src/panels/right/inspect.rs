@@ -451,6 +451,7 @@ fn link_field(
             scale: 1.0,
             string_value: true,
             paint: None,
+            map: None,
             paint_color: None,
             nest: None,
             nest_key: None,

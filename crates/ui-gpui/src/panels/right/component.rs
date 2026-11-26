@@ -90,6 +90,7 @@ fn variant_section(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut usi
                 paint: None,
                 nest: None,
                 nest_key: None,
+                map: None,
                 paint_color: None,
             },
         );
@@ -115,6 +116,7 @@ fn variant_section(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut usi
                 paint: None,
                 nest: None,
                 nest_key: None,
+                map: None,
                 paint_color: None,
             },
         );
@@ -151,6 +153,7 @@ fn properties_section(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut 
             paint: None,
             nest: Some("props"),
             nest_key: None,
+            map: None,
             paint_color: None,
         },
     );
@@ -206,6 +209,7 @@ fn property_rows(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut usize
                 paint: None,
                 nest: None,
                 nest_key: None,
+                map: None,
                 paint_color: None,
             },
         );
@@ -265,6 +269,7 @@ fn property_rows(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut usize
                         paint: None,
                         nest: None,
                         nest_key: None,
+                        map: None,
                         paint_color: None,
                     },
                 );
@@ -311,6 +316,7 @@ fn property_rows(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut usize
                 paint: None,
                 nest: None,
                 nest_key: None,
+                map: None,
                 paint_color: None,
             },
         );
@@ -341,6 +347,7 @@ fn property_rows(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut usize
                         paint: None,
                         nest: None,
                         nest_key: None,
+                        map: None,
                         paint_color: None,
                     },
                 )
@@ -707,6 +714,7 @@ fn instance_prop_row(
                     paint: None,
                     nest: Some("properties"),
                     nest_key: Some(p.name.clone()),
+                    map: None,
                     paint_color: None,
                 },
             )

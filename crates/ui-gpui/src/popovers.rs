@@ -2775,6 +2775,10 @@ impl WindowState {
                                 color: g.color.to_hex(),
                                 visible: g.visible,
                                 grids: serde_json::to_value(&gl).unwrap_or(serde_json::Value::Array(vec![])),
+                                layout: g.clone(),
+                                kind: g.kind,
+                                count: crate::panels::right::data::grid_count_cell(g),
+                                align: g.align,
                             })
                             .collect(),
                     ),

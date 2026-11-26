@@ -78,6 +78,12 @@ pub struct GridRow {
     pub visible: bool,
     /// 整个 grids 数组的 JSON（改类型 / 颜色时替换其中一项，推 `node.set {"grids": …}`）。
     pub grids: serde_json::Value,
+    /// 这一条网格的原始快照：展开设置时按字段改写后重新序列化。
+    pub layout: figcraft_doc::LayoutGrid,
+    pub kind: figcraft_doc::GridKind,
+    /// `None` = Auto（fixed 列的 count 为 0）；Stretch 至少 1。
+    pub count: Option<u32>,
+    pub align: figcraft_doc::GridAlign,
 }
 
 /// 一个 export setting 行（egui `export_panel.rs::setting_row`）。
@@ -213,6 +219,14 @@ pub struct TextData {
     pub features_supported: std::collections::BTreeSet<String>,
     /// 可变字体的轴（只有单一字体族的可变字面才有）：驱动 Type settings 的 Variable 页。
     pub axes: Vec<AxisRow>,
+    /// 文本是否全部在路径上（egui `typography.rs::path_row`）。
+    pub has_path: bool,
+    /// 路径起点（0..1）；多选不一致时 `None`。
+    pub path_start: Option<f64>,
+    /// 文本是否翻到路径另一侧（全选一致）。
+    pub path_flip: bool,
+    /// 文本 + 一个矢量路径双选：可以 “Put text on path”。
+    pub can_put_on_path: bool,
 }
 
 /// 可变字体的一条轴（`figcraft_text::Axis` + 当前值），供 Type settings 的 Variable 页使用。
@@ -1542,6 +1556,31 @@ pub struct GridTracksData {
     pub rows: Vec<TrackRow>,
 }
 
+/// 网格父级里的一个子层：它的单元格（1-based，Auto 时为算出来的位置）与跨格 / 对齐
+/// （egui `layout_panel.rs::grid_cell`）。
+#[derive(Clone, Debug, PartialEq)]
+pub struct GridCellData {
+    pub column: u32,
+    pub row: u32,
+    /// 有显式 `gridColumn` / `gridRow`（显示 Reset 按钮）；Auto 放置时为 `false`。
+    pub anchored: bool,
+    pub column_span: u32,
+    pub row_span: u32,
+    pub align_h: Option<&'static str>,
+    pub align_v: Option<&'static str>,
+    /// H / V 对齐多选不一致。
+    pub align_h_mixed: bool,
+    pub align_v_mixed: bool,
+}
+
+/// 智能选区间距（egui `canvas::selection_spacing::panel`）：外层 `Some` = 该轴存在，
+/// 内层 `None` = 间距不一致（Mixed，留空）。
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SelectionSpacingData {
+    pub horizontal: Option<Option<f64>>,
+    pub vertical: Option<Option<f64>>,
+}
+
 /// 变量模式的一行（egui `paints.rs::variable_modes`）。
 #[derive(Clone, Debug, PartialEq)]
 pub struct ModeRow {
@@ -1567,6 +1606,8 @@ pub struct SectionData {
     pub newest_version: Option<String>,
     pub hide_contents: bool,
     pub color_hex: Option<String>,
+    /// `dev_note`：上次改动说明（非空时显示 “Last change: …”）。
+    pub last_note: String,
 }
 
 /// 取色器 AA 对比度的选区上下文（selection → picker）。右栏拿不到 doc，所以和别的节一样
@@ -1922,6 +1963,12 @@ pub struct PanelData {
     pub contrast: ContrastContext,
     /// 网格 auto layout 的轨道快照（仅单选一个 grid frame 时 `Some`）。
     pub grid_tracks: Option<GridTracksData>,
+    /// 网格父级里的子层单元格快照（父级是 grid 且 `absolute == false` 时 `Some`）。
+    pub grid_cell: Option<GridCellData>,
+    /// 多选时的智能间距（`Some` 且任一轴有值时才画 Spacing 行）。
+    pub selection_spacing: Option<SelectionSpacingData>,
+    /// 矢量编辑中选中 region 时它自己的 fills（`Some` = region 模式，`None` 内层 = mixed）。
+    pub region_fills: Option<Option<Vec<Paint>>>,
     /// Scale 工具激活时的快照；`Some` 时右栏用 Scale 节**替换** Position 节。
     pub scale: Option<ScaleData>,
     /// Frame 工具（F）激活时，Design 标签整页换成 Frame 预设（egui `right.rs` 的
@@ -2302,6 +2349,10 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
                                 color: g.color.to_hex(),
                                 visible: g.visible,
                                 grids: grids_json.clone(),
+                                layout: g.clone(),
+                                kind: g.kind,
+                                count: grid_count_cell(g),
+                                align: g.align,
                             })
                             .collect(),
                     )
@@ -2464,7 +2515,7 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
         let grids_json = serde_json::to_value(&list).unwrap_or(serde_json::Value::Array(vec![]));
         list.iter()
             .enumerate()
-            .map(|(index, g)| GridRow { index, label: grid_label(g), color: g.color.to_hex(), visible: g.visible, grids: grids_json.clone() })
+            .map(|(index, g)| GridRow { index, label: grid_label(g), color: g.color.to_hex(), visible: g.visible, grids: grids_json.clone(), layout: g.clone(), kind: g.kind, count: grid_count_cell(g), align: g.align })
             .collect()
     });
 
@@ -2514,6 +2565,7 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
             newest_version: None,
             hide_contents: ids.iter().all(|i| doc.node(*i).is_some_and(|n| n.hides_contents())),
             color_hex: common(doc, ids, |n| n.fills.first().and_then(|p| p.solid_color()).map(|c| c.to_hex())).flatten(),
+            last_note: common(doc, ids, |n| n.dev_note.clone()).unwrap_or_default(),
         });
     }
 
@@ -2655,6 +2707,12 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
                 _ => None,
             }
         }
+        let has_path = ids.iter().all(|i| doc.node(*i).and_then(|n| text_of(n)).and_then(|t| t.path.as_ref()).is_some());
+        let path_start = common(doc, ids, |n| text_of(n).and_then(|t| t.path.as_ref()).map(|p| p.start())).flatten();
+        let path_flip = ids.iter().all(|i| doc.node(*i).and_then(|n| text_of(n)).and_then(|t| t.path.as_ref()).is_some_and(|p| p.flip));
+        let can_put_on_path = text_ids.len() == 1
+            && ids.len() == 2
+            && ids.iter().find(|i| !text_ids.contains(*i)).and_then(|i| doc.node(*i)).is_some_and(|n| figcraft_doc::geometry::stroke_geometry(n).is_some());
         Some(TextData {
             font_family: common(doc, ids, |n| text_of(n).map(|t| t.style.font_family.clone())).flatten(),
             font_style: common(doc, ids, |n| text_of(n).map(|t| t.style.font_style.clone())).flatten(),
@@ -2774,6 +2832,10 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
             // 可变字体的轴：只有**单一**字体族 + 单一字面才谈得上「这个字体的轴」（egui
             // `variable_face`）；值取该字面的 `axis_values`，缺省退回轴的默认值。
             axes: variable_axes(doc, ids),
+            has_path,
+            path_start,
+            path_flip,
+            can_put_on_path,
         })
     } else {
         None
@@ -2828,6 +2890,65 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
         Some(GridTracksData { columns: track_rows(&layout.column_tracks, &g.columns), rows: track_rows(&layout.row_tracks, &g.rows) })
     });
 
+    // ── 网格单元格（egui `layout_panel.rs::grid_cell`）：父级是 grid、子层不 absolute ──
+    let grid_parent = !ids.is_empty()
+        && ids.iter().all(|i| {
+            doc.node(*i)
+                .and_then(|n| n.parent)
+                .and_then(|p| doc.node(p))
+                .and_then(|p| p.layout.as_ref())
+                .is_some_and(|l| l.mode == figcraft_doc::LayoutMode::Grid)
+        });
+    let all_relative = common(doc, ids, |n| n.child_layout.absolute) == Some(false);
+    d.grid_cell = if grid_parent && all_relative {
+        ids.first().and_then(|id| {
+            let parent = doc.node(*id)?.parent.and_then(|p| doc.node(p))?;
+            let g = figcraft_layout::grid_geometry(doc, parent.id)?;
+            let cell = g.cells.into_iter().find(|c| c.id == *id)?;
+            let n = doc.node(*id)?;
+            let align_name = |a: figcraft_doc::CellAlign| match a {
+                figcraft_doc::CellAlign::Min => "min",
+                figcraft_doc::CellAlign::Center => "center",
+                figcraft_doc::CellAlign::Max => "max",
+            };
+            let aligns: Vec<Option<&'static str>> =
+                ids.iter().filter_map(|i| doc.node(*i)).map(|n| n.child_layout.grid_align_h.map(align_name)).collect();
+            let vs: Vec<Option<&'static str>> =
+                ids.iter().filter_map(|i| doc.node(*i)).map(|n| n.child_layout.grid_align_v.map(align_name)).collect();
+            let pick = |list: &[Option<&'static str>]| {
+                let first = list.first().copied().flatten();
+                let mixed = list.iter().any(|x| *x != list[0]);
+                (first, mixed)
+            };
+            let (align_h, align_h_mixed) = pick(&aligns);
+            let (align_v, align_v_mixed) = pick(&vs);
+            Some(GridCellData {
+                column: cell.column as u32 + 1,
+                row: cell.row as u32 + 1,
+                anchored: n.child_layout.grid_column.is_some() || n.child_layout.grid_row.is_some(),
+                column_span: n.child_layout.column_span(),
+                row_span: n.child_layout.row_span(),
+                align_h,
+                align_v,
+                align_h_mixed,
+                align_v_mixed,
+            })
+        })
+    } else {
+        None
+    };
+
+    // ── 智能选区间距（egui `canvas::selection_spacing::panel`）──
+    let sp = figcraft_engine::selection_spacing::selection_spacing(doc, ids);
+    d.selection_spacing = if sp.horizontal.is_some() || sp.vertical.is_some() {
+        Some(SelectionSpacingData {
+            horizontal: sp.horizontal.as_ref().map(|a| a.value),
+            vertical: sp.vertical.as_ref().map(|a| a.value),
+        })
+    } else {
+        None
+    };
+
     d
 }
 
@@ -2836,8 +2957,8 @@ pub(crate) fn grid_label(g: &figcraft_doc::LayoutGrid) -> String {
     let trim = |v: f64| format!("{v}");
     match g.kind {
         GridKind::Grid => format!("Grid ({})", trim(g.size)),
-        GridKind::Columns if g.count == 0 => tr("Auto columns").into(),
-        GridKind::Rows if g.count == 0 => tr("Auto rows").into(),
+        GridKind::Columns if grid_auto(g) => tr("Auto columns").into(),
+        GridKind::Rows if grid_auto(g) => tr("Auto rows").into(),
         GridKind::Diagonal if g.count == 0 => "Auto 45° lines".into(),
         GridKind::Rings if g.count == 0 => "Auto rings".into(),
         GridKind::Columns => format!("{} columns", g.count.max(1)),
@@ -2845,6 +2966,16 @@ pub(crate) fn grid_label(g: &figcraft_doc::LayoutGrid) -> String {
         GridKind::Diagonal => format!("{} lines at 45°", g.count.max(1)),
         GridKind::Rings => format!("{} rings", g.count.max(1)),
     }
+}
+
+/// Fixed-size columns/rows counted Auto：`count == 0` 且不是 Stretch（上游 `auto_count`）。
+pub(crate) fn grid_auto(g: &figcraft_doc::LayoutGrid) -> bool {
+    g.count == 0 && g.align != figcraft_doc::GridAlign::Stretch
+}
+
+/// 设置面板里 Count 的显示值：Auto 时留空。
+pub(crate) fn grid_count_cell(g: &figcraft_doc::LayoutGrid) -> Option<u32> {
+    (!grid_auto(g)).then(|| g.count.max(1))
 }
 
 /// 选区颜色分组。**直接用引擎的 `collect`**，与 egui `selection_colors::colors` 是同一份数据。
