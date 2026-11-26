@@ -267,6 +267,11 @@ pub(super) fn overlays(
         }
     }
 
+    // ── 键盘点选光标（egui `canvas/overlays.rs` 的 `pick_outline`）：粉色 2px 描边。
+    if let Some(p) = app.picked() {
+        draw_outline(app, painter, &doc, p, stroke(super::handles::PINK, 2.0));
+    }
+
     // ── 选中：每个选中层的真实轮廓 + 变换框。
     // 选中框的尺寸标签，测量标签要避开它。
     let mut size_label = None;
@@ -422,8 +427,8 @@ pub(super) fn overlays(
         }
     }
 
-    // ── 框选框。
-    if let Some([x0, y0, x1, y1]) = ov.marquee {
+    // ── 框选框（指针拖出的优先，其次是键盘框选 `selectArea` 建的框）。
+    if let Some([x0, y0, x1, y1]) = ov.marquee.or(app.live_key_box()) {
         let r = Rect::from_two_pos(app.to_screen(x0, y0), app.to_screen(x1, y1));
         painter.rect_filled(r, CornerRadius::ZERO, accent.gamma_multiply(0.1));
         painter.rect_stroke(r, CornerRadius::ZERO, stroke(accent, 1.0), StrokeKind::Inside);

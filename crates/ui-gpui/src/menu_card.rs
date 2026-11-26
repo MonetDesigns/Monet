@@ -183,6 +183,8 @@ pub(crate) fn rows(
     open_sub: Option<usize>,
     // The keyboard-highlighted row (palette Up/Down); `None` for menus that have no keyboard.
     selected: Option<usize>,
+    // The highlighted row inside the expanded submenu; only the context menu sets this.
+    sub_selected: Option<usize>,
     left: f32,
     top: f32,
     width: f32,
@@ -200,12 +202,14 @@ pub(crate) fn rows(
     let make_sub = {
         let (on_pick, on_sub) = (on_pick.clone(), on_sub.clone());
         Rc::new(move |sub: &[Item], row_top: f32, window: &Window| {
-            Some(card(
+            Some(card_selected(
                 left + width + 4.0,
                 row_top - menu_rows::PAD,
                 Width::Min(width),
                 row_h,
                 sub,
+                None,
+                sub_selected,
                 None,
                 on_pick.clone(),
                 on_sub.clone(),
@@ -242,6 +246,27 @@ pub(crate) fn card(
     window: &Window,
     vh: f32,
 ) -> AnyElement {
+    card_selected(left, top, sizing, row_h, items, open_sub, None, None, on_pick, on_sub, on_hover, window, vh)
+}
+
+/// [`card`] with a keyboard-highlighted row (`selected`): the context menu opened via
+/// Shift+F10 / Menu uses this so Up/Down visibly move before Enter runs a row.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn card_selected(
+    left: f32,
+    top: f32,
+    sizing: Width,
+    row_h: f32,
+    items: &[Item],
+    open_sub: Option<usize>,
+    selected: Option<usize>,
+    sub_selected: Option<usize>,
+    on_pick: OnPick,
+    on_sub: OnSub,
+    on_hover: OnSub,
+    window: &Window,
+    vh: f32,
+) -> AnyElement {
     let has_check = items.iter().any(|r| r.checked.is_some());
     let content_w = widest(items, has_check, window);
     let rows_h = height(items, row_h) - 2.0 * PAD;
@@ -250,7 +275,8 @@ pub(crate) fn card(
         Width::Min(f) => (content_w + 2.0 * PAD).max(f),
         Width::Anchor => (content_w + 2.0 * PAD).max(48.0),
     };
-    let (row_els, sub_els) = rows(items, row_h, has_check, open_sub, None, left, top, w, on_pick, on_sub, on_hover, true, window, vh);
+    let (row_els, sub_els) =
+        rows(items, row_h, has_check, open_sub, selected, sub_selected, left, top, w, on_pick, on_sub, on_hover, true, window, vh);
     // 唯一的浮层控件：宽度三档、锚点跟随、上下防溢出与滚动全在 `Menu::show` 里。
     crate::widgets::menu(crate::widgets::at_point(left, top))
         .gap(0.0)

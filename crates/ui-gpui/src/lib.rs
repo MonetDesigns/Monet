@@ -140,6 +140,9 @@ mod parity_contract;
 #[cfg(test)]
 mod undo_audit_tests;
 
+#[cfg(test)]
+mod keyboard_selection_tests;
+
 mod panels;
 
 /// 左面板控件树（Layers 树）：可展开/折叠、选中、显隐/锁定，含父子级拖动排序（复用 `drag` 通用件）。
@@ -301,6 +304,132 @@ fn canonical_key(key: &str) -> String {
     named.to_string()
 }
 
+/// Move a menu highlight to the next enabled row, wrapping at either end. `down=false` walks
+/// upwards. `current=None` starts at the first / last row, so Home / End and the first key press
+/// share the same path.
+fn menu_row_step(items: &[menu_card::Item], current: Option<usize>, down: bool) -> Option<usize> {
+    let len = items.len();
+    if len == 0 {
+        return None;
+    }
+    let start = match current {
+        Some(i) if i < len => {
+            if down {
+                (i + 1) % len
+            } else {
+                (i + len - 1) % len
+            }
+        }
+        _ if down => 0,
+        _ => len - 1,
+    };
+    (0..len).map(|n| if down { (start + n) % len } else { (start + len - n) % len }).find(|i| !items[*i].disabled)
+}
+
+/// 键盘框选时按键（egui `shortcuts.rs::key_box`）：方向键移动框，Shift 或 Cmd/Ctrl
+/// 移动远角改变大小（Shift+Cmd/Ctrl 五倍步长），Tab 转点选，Enter 像框选一样选中
+/// 框内层（Shift 切换、Cmd/Ctrl 取嵌套层），Escape 取消。
+pub(crate) fn key_box_key(app: &mut CanvasApp, key: &str, m: &Modifiers) -> bool {
+    let Some(mut b) = app.live_key_box() else { return false };
+    // Tab：框变成点选光标。
+    if key == "Tab" && !m.shift && !m.control && !m.alt && !m.platform {
+        app.clear_keyboard_box();
+        app.start_pick_select();
+        return true;
+    }
+    let cmd = m.platform || m.control;
+    let size = m.shift || cmd;
+    let zoom = app.session.ds().map_or(1.0, |d| d.view.zoom.max(1e-6));
+    let step = (if m.shift && cmd { 50.0 } else { 10.0 }) / zoom;
+    let (dx, dy) = match key {
+        "ArrowLeft" => (-step, 0.0),
+        "ArrowRight" => (step, 0.0),
+        "ArrowUp" => (0.0, -step),
+        "ArrowDown" => (0.0, step),
+        _ => (0.0, 0.0),
+    };
+    if (dx, dy) != (0.0, 0.0) {
+        if !size {
+            b[0] += dx;
+            b[1] += dy;
+        }
+        b[2] += dx;
+        b[3] += dy;
+        app.key_box = Some(b);
+        return true;
+    }
+    match key {
+        "Enter" => {
+            app.clear_keyboard_box();
+            let [x0, y0, x1, y1] = b;
+            app.session
+                .execute(
+                    "select.area",
+                    &serde_json::json!({
+                        "x": x0,
+                        "y": y0,
+                        "width": x1 - x0,
+                        "height": y1 - y0,
+                        "add": m.shift,
+                        "deep": cmd,
+                    }),
+                )
+                .is_ok()
+        }
+        "Escape" => {
+            app.clear_keyboard_box();
+            true
+        }
+        _ => false,
+    }
+}
+
+/// 点选光标所在的同层兄弟（Layers 面板里的上下顺序：dir=1 是按面板「下一个」，
+/// 即文档里的前一个兄弟；到头回绕）。对应 egui `shortcuts.rs::pick_sibling`。
+fn pick_sibling(doc: &Document, id: NodeId, dir: i64) -> Option<NodeId> {
+    let siblings = &doc.node(doc.node(id)?.parent?)?.children;
+    let n = i64::try_from(siblings.len()).ok()?;
+    let idx = i64::try_from(siblings.iter().position(|c| *c == id)?).ok()?;
+    siblings.get(usize::try_from((idx - dir).rem_euclid(n)).ok()?).copied()
+}
+
+/// 点选光标时的按键（egui `shortcuts.rs::key_pick`）：Tab / Shift+Tab 在兄弟层间走，
+/// Enter 进容器的最后一个子层、Shift+Enter 回父级（不到页面），Space 选中，Escape 取消。
+pub(crate) fn key_pick(app: &mut CanvasApp, key: &str, m: &Modifiers) -> bool {
+    if app.pick.is_none() {
+        return false;
+    }
+    // 层已换文档/换页/被删：点选作废，按键继续走正常快捷键。
+    let Some(at) = app.picked() else {
+        app.pick = None;
+        return false;
+    };
+    let Ok(ds) = app.session.ds() else { return false };
+    let Some(node) = ds.doc.node(at) else { return false };
+    let uid = ds.uid;
+    let cmd = m.platform || m.control;
+    let plain = !cmd && !m.alt && !m.control;
+    let next = match key {
+        "Tab" if plain => pick_sibling(&ds.doc, at, if m.shift { -1 } else { 1 }),
+        "Enter" if plain && m.shift => node.parent.filter(|p| ds.doc.node(*p).is_some_and(|n| !n.is_page())),
+        "Enter" if plain => node.children.last().copied(),
+        "Space" if !m.shift && !cmd && !m.alt => {
+            app.pick = None;
+            let _ = app.session.execute("select.set", &serde_json::json!({"ids": [at]}));
+            return true;
+        }
+        "Escape" => {
+            app.pick = None;
+            return true;
+        }
+        _ => return false,
+    };
+    if let Some(n) = next {
+        app.pick = Some((uid, n));
+    }
+    true
+}
+
 /// 跑一条键盘绑定：照搬 `ui-egui/src/shortcuts.rs::run_binding` 的画布分支，
 
 /// 其余都是引擎命令（撤销/重做、删除、复制粘贴、全选、成组……都在 `keymap` 里）。
@@ -402,6 +531,14 @@ enum Popup {
 
         open_sub: Option<usize>,
 
+        /// Keyboard-highlighted row (opened via Shift+F10 / Menu): Up/Down move it, Enter runs it.
+        /// `None` for a mouse-opened menu (no row looks selected until the pointer hovers).
+        sel: Option<usize>,
+
+        /// Highlighted row inside the expanded submenu (`open_sub`); keyboard Up/Down moves it.
+        /// `None` until a submenu is opened by the keyboard (a mouse-opened submenu has no row lit).
+        sub_sel: Option<usize>,
+
         /// 通用菜单行为（安全三角 / 悬停延迟 / 静止交接）：右键菜单与主菜单共用同一份
 
         /// `widgets::MenuAim`，斜着划向「Copy as」子菜单不会闪、经过的行不抢展开。
@@ -473,7 +610,7 @@ enum InlineRenameTarget {
 /// 面板宽度/指针/拖拽」这些是窗口私有的。进入某个窗口的渲染或事件前 `enter_pane` 把整个
 /// `PaneState` 换入（等价 EGUI `exchange()` 的整块 swap），这样新增字段不可能漏。
 ///
-/// 68 个窗口私有字段全部集中在这里；`CanvasView` 通过 `Deref/DerefMut` 保持 `self.popup`
+/// 所有窗口私有字段都集中在这里；`CanvasView` 通过 `Deref/DerefMut` 保持 `self.popup`
 /// 这类访问不变。要加窗口私有状态，加在这个结构里，**不要**再加回 `CanvasView`。
 #[derive(Clone)]
 pub struct PaneState {
@@ -492,6 +629,14 @@ pub struct PaneState {
 
     /// 指针最后的位置（画布局部坐标）。
     pointer: Option<Pos2>,
+
+    /// 键盘框选 / 点选是窗口私有状态：同一个 `CanvasApp` 被所有窗口共享，框若留在里面，
+    /// 在 A 窗建立的框会出现在 B 窗（CodeRabbit PR#33）。`enter_pane` 整块换入/换出。
+    key_box: Option<[f64; 4]>,
+
+    key_box_doc: Option<(u64, NodeId)>,
+
+    pick: Option<(u64, NodeId)>,
 
     /// 当前修饰键状态（GPUI 不给「当前状态」，只能从事件里记）。
     mods: Modifiers,
@@ -817,6 +962,11 @@ impl CanvasView {
         // A crop target belongs to the pane that opened it: leaving it must not turn off
         // transform handles or draw crop marks on a same-id image in another pane.
         self.app.crop = None;
+        // Save the keyboard box / pick cursor into the pane we are leaving; restoring the next
+        // pane's copy below makes them genuinely window-private (CodeRabbit PR#33).
+        self.pane.key_box = self.app.key_box;
+        self.pane.key_box_doc = self.app.key_box_doc;
+        self.pane.pick = self.app.pick;
         let old = self.pane_wid;
         let next = match self.panes.remove(&wid) {
             Some(n) => n,
@@ -827,6 +977,10 @@ impl CanvasView {
                 p.tabs.home = false;
                 p.extra = None;
                 p.pointer = None;
+                // A brand-new window must not inherit another window's selection box.
+                p.key_box = None;
+                p.key_box_doc = None;
+                p.pick = None;
                 // TabDragState 包着 Rc<RefCell<_>>：clone 会和源窗口共享拖拽记录，
                 // 另一个窗口的标签渲染会把本窗口正在拖的目标清掉（CodeRabbit PR#27/#28）。
                 p.tabs.drag = Default::default();
@@ -892,6 +1046,10 @@ impl CanvasView {
         std::mem::swap(&mut self.worker, &mut next_canvas.worker);
         self.canvases.insert(old, next_canvas);
         self.pane_wid = wid;
+        // Restore the incoming window's keyboard box / pick cursor (saved on the previous switch).
+        self.app.key_box = self.pane.key_box;
+        self.app.key_box_doc = self.pane.key_box_doc;
+        self.app.pick = self.pane.pick;
         // display_doc 是跨窗口共享的，只在渲染时由 sync_motion 写。换入新 pane 后必须
         // 按这份 pane 的 motion 状态刷新，否则一个窗口的运动预览会被另一个窗口的
         // 命中几何使用（点击落空 / 选错对象，CodeRabbit PR#28）。
@@ -1084,6 +1242,10 @@ impl CanvasView {
         if res.is_err() {
             self.app.session.active = i;
         }
+        // A keyboard box/cursor belongs to the document it was opened in. The overlay
+        // already rejects a stale identity, but switching tabs should also drop it so
+        // coming back later cannot revive coordinates from another document.
+        self.app.clear_keyboard_box();
         // ⛔ 必须把新文档记到**本窗口**自己的活动项上：`session.active` 是全局共享的，
         // 别的窗口下一次渲染就会把它改成那边自己的文档；而每次渲染都会按窗口记录把
         // active 写回来（见 `bind_window_document`）。不记这一步，点击那一刻切过去了，
@@ -1189,6 +1351,12 @@ impl CanvasView {
             right_pan: false,
 
             pointer: None,
+
+            key_box: None,
+
+            key_box_doc: None,
+
+            pick: None,
 
             mods: Modifiers::default(),
 
@@ -1903,7 +2071,7 @@ impl CanvasView {
         Some(hash)
     }
 
-    fn sync_ui_requests(&mut self, cx: &mut Context<Self>) {
+    fn sync_ui_requests(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if *self.extra_state.dismiss.borrow() {
             *self.extra_state.dismiss.borrow_mut() = false;
 
@@ -1977,6 +2145,73 @@ impl CanvasView {
                         let _ = self.app.session.execute("select.set", &serde_json::json!({ "ids": [id] }));
                     }
                     cx.notify();
+                    continue;
+                }
+
+                // 键盘框选：引擎的 `select.area` 不带坐标时只发这个 UI 请求，框与按键状态归 UI
+                // （egui `app/commands.rs:241` → `start_key_box`）。之前 GPUI 端没有这个分支，
+                // 请求落到默认丢弃，Alt+Space / Ctrl+Space / F8 按了没反应（用户 2026-11-26）。
+                "selectArea" => {
+                    self.app.start_key_box();
+                    if self.app.live_key_box().is_some() {
+                        let cmd = crate::toolbar::pretty_shortcut("Cmd");
+                        let text = figcraft_i18n::trf(
+                            "Selection box: arrows move it, Shift+arrows or {cmd}+arrows size it, Enter selects, Escape cancels",
+                            &[("cmd", &cmd)],
+                        );
+                        self.toast(text, cx);
+                    } else if self.app.pick.is_some() {
+                        self.toast(
+                            figcraft_i18n::tr(
+                                "Pick select: Tab and Shift+Tab move between layers, Enter goes into one, Shift+Enter out, Space selects, Escape cancels",
+                            ),
+                            cx,
+                        );
+                    } else {
+                        self.toast(figcraft_i18n::tr("Nothing to pick: the page is empty"), cx);
+                    }
+                    cx.notify();
+                    continue;
+                }
+
+                // Alt+L：收起所有图层，只展开通往选中层的祖先（egui `layers::collapse_all`）。
+                // 引擎只发请求，面板状态在 UI 侧；之前 GPUI 没接，Alt+L 静默无效。
+                "layers.collapseAll" => {
+                    let ancestors: Vec<figcraft_doc::NodeId> = match self.app.session.ds() {
+                        Ok(ds) => ds.selection.iter().flat_map(|s| ds.doc.ancestors(*s)).filter(|a| *a != ds.page).collect(),
+                        Err(_) => Vec::new(),
+                    };
+                    self.layer_tree.expanded.clear();
+                    self.layer_tree.expanded.extend(ancestors);
+                    cx.notify();
+                    continue;
+                }
+
+                // Shift+F10 / Menu：在选中层下方（无选中时画布中央）打开右键菜单
+                // （egui `a11y::context_menu`）。引擎只发请求，位置与菜单内容归 UI。
+                "contextMenu" => {
+                    let pos = self
+                        .app
+                        .session
+                        .ds()
+                        .ok()
+                        .and_then(|ds| {
+                            let b = ds.selection.iter().filter_map(|i| ds.doc.world_bounds(*i)).reduce(|a, b| a.union(b))?;
+                            let p = self.app.to_screen(b.x0, b.y1);
+                            Some(pos2(p.x, p.y + 8.0))
+                        })
+                        .filter(|p| self.app.canvas.rect.contains(*p))
+                        .unwrap_or(self.app.canvas.rect.center());
+                    // A keyboard menu acts on the selection (not on what happens to sit under
+                    // its anchor), and the canvas takes keyboard focus so Up/Down/Enter reach
+                    // `popup_context_key` instead of the right-panel field that had focus.
+                    // The context-menu renderer reads `pos.y` as a window coordinate (it already
+                    // adds the canvas left offset to x), while `to_screen` is canvas-local. Keep
+                    // `pointer` local for "Paste here", but lift the menu anchor by the title bar.
+                    let menu_pos = pos2(pos.x, pos.y + self.dock().titlebar_h);
+                    self.pointer = Some(pos);
+                    self.focus.focus(window);
+                    self.open_context_menu_for_selection(pos, menu_pos, cx);
                     continue;
                 }
 
@@ -3751,6 +3986,11 @@ impl CanvasView {
         // The colour picker's eyedropper and direct pick command both use the session-wide
         // sampling state; remember which window asked for it so another window closing its menu
         // cannot discard the sample.
+        if id == "page.select" {
+            // Page coordinates are per-page; a box left on the old page must not paint or
+            // select on the new one, even though `live_key_box` would reject it as stale.
+            self.app.clear_keyboard_box();
+        }
         if id == "edit.pickColor" {
             note_pick_owner(&mut self.pick_owner, self.pane_wid);
         }
@@ -4511,6 +4751,130 @@ impl CanvasView {
 
     /// open the card at the pointer (`ui-egui`'s `open_context_menu`).
 
+    /// 键盘是否正被某个弹层/对话框占用（此时键盘框选让路：Escape 先关弹层，
+    /// 方向键也不能去移动弹层背后的框 —— CodeRabbit PR#33）。
+    fn popup_owns_keyboard(&self) -> bool {
+        self.popup.is_some() || self.dialog.is_some() || self.extra.is_some() || self.variables_open
+    }
+
+    /// 右键菜单的键盘操作：Up/Down 移动高亮行、Enter 执行、Right/Left 开/关子菜单、
+    /// Escape 关闭。只在 `Popup::Context` 打开时接管，返回 `true` 表示按键已消费。
+    fn popup_context_key(&mut self, key: &str, cx: &mut Context<Self>) -> bool {
+        enum Act {
+            Close,
+            Notify,
+            Pick(String),
+        }
+        let act = {
+            let Some(Popup::Context { items, sel, open_sub, sub_sel, .. }) = &mut self.popup else {
+                return false;
+            };
+            let in_sub = *open_sub;
+            match key {
+                "Escape" => {
+                    if in_sub.is_some() {
+                        *open_sub = None;
+                        *sub_sel = None;
+                        Act::Notify
+                    } else {
+                        Act::Close
+                    }
+                }
+                "ArrowDown" | "ArrowUp" => {
+                    let down = key == "ArrowDown";
+                    if let Some(parent) = in_sub {
+                        if let Some(sub) = items.get(parent).map(|i| i.sub.as_slice())
+                            && let Some(i) = menu_row_step(sub, *sub_sel, down)
+                        {
+                            *sub_sel = Some(i);
+                        }
+                    } else if let Some(i) = menu_row_step(items, *sel, down) {
+                        *sel = Some(i);
+                    }
+                    Act::Notify
+                }
+                "Home" | "End" => {
+                    let down = key == "Home";
+                    if let Some(parent) = in_sub {
+                        if let Some(sub) = items.get(parent).map(|i| i.sub.as_slice()) {
+                            *sub_sel = menu_row_step(sub, None, down);
+                        }
+                    } else {
+                        *sel = menu_row_step(items, None, down);
+                    }
+                    Act::Notify
+                }
+                "Enter" => {
+                    if let Some(parent) = in_sub {
+                        let Some(i) = *sub_sel else { return true };
+                        let Some(item) = items.get(parent).and_then(|p| p.sub.get(i)) else { return true };
+                        if item.disabled {
+                            Act::Notify
+                        } else if item.sub.is_empty() {
+                            Act::Pick(item.key.to_string())
+                        } else {
+                            // The GPUI context menu only nests one level; don't pretend to open
+                            // a second one without a highlight model for it.
+                            Act::Notify
+                        }
+                    } else {
+                        let Some(i) = *sel else { return true };
+                        let Some(item) = items.get(i) else { return true };
+                        if item.disabled {
+                            Act::Notify
+                        } else if !item.sub.is_empty() {
+                            let first = menu_row_step(&item.sub, None, true);
+                            *open_sub = Some(i);
+                            *sub_sel = first;
+                            Act::Notify
+                        } else {
+                            Act::Pick(item.key.to_string())
+                        }
+                    }
+                }
+                "ArrowRight" => {
+                    if in_sub.is_none()
+                        && let Some(i) = *sel
+                        && let Some(item) = items.get(i)
+                        && !item.disabled
+                        && !item.sub.is_empty()
+                    {
+                        let first = menu_row_step(&item.sub, None, true);
+                        *open_sub = Some(i);
+                        *sub_sel = first;
+                    }
+                    Act::Notify
+                }
+                "ArrowLeft" => {
+                    if in_sub.is_some() {
+                        *open_sub = None;
+                        *sub_sel = None;
+                    }
+                    Act::Notify
+                }
+                // A context menu owns the keyboard while it is open: swallow everything else
+                // (Delete must not delete the selection behind the menu).
+                _ => Act::Notify,
+            }
+        };
+        match act {
+            Act::Notify => {
+                cx.notify();
+                true
+            }
+            Act::Close => {
+                self.popup = None;
+                self.tool_flyout = None;
+                cx.notify();
+                true
+            }
+            Act::Pick(id) => {
+                self.pick_context(&id, cx);
+                true
+            }
+        }
+    }
+
     fn open_context_menu(&mut self, pos: Pos2, cx: &mut Context<Self>) {
         let page = self.app.to_page(pos);
 
@@ -4547,12 +4911,42 @@ impl CanvasView {
             pos,
             items,
             open_sub: None,
+            sel: None,
+            sub_sel: None,
             aim: crate::widgets::MenuAim::new(),
             pointer: Point { x: px(0.0), y: px(0.0) },
             born: std::time::Instant::now(),
             aim_busy: std::rc::Rc::new(std::cell::Cell::new(false)),
         });
         cx.notify();
+    }
+
+    /// Shift+F10 / Menu: open the context menu on the **current selection**. A keyboard menu must
+    /// not run `context_menu::target` (that hit-tests the pointer and can select a different,
+    /// overlapping layer); it only needs the selection's geometry for its anchor.
+    ///
+    /// `page_pos` is canvas-local (for `to_page`); `menu_pos` is the window-space anchor the
+    /// context-menu renderer expects.
+    fn open_context_menu_for_selection(&mut self, page_pos: Pos2, menu_pos: Pos2, cx: &mut Context<Self>) {
+        let page = self.app.to_page(page_pos);
+        let ids = self.app.selection();
+        let layers = context_menu::layers_at(&self.app, page);
+        let doc = self.app.session.doc().ok();
+        let mut items = context_menu::items(doc, &ids, &layers, &ids);
+        // A ruler guide selected on the rulers supplies the extra first row of an empty menu.
+        if ids.is_empty() && self.app.session.ds().is_ok_and(|d| d.selected_guide().is_some()) {
+            items.insert(0, menu_card::Item::new("guide.remove", tr("Remove guide")));
+            if let Some(first) = items.get_mut(1) {
+                first.separator_before = true;
+            }
+        }
+        let first = menu_row_step(&items, None, true);
+        self.tool_flyout = None;
+        self.open_context_items(menu_pos, items, cx);
+        // Highlight the first runnable row so Enter works immediately; Up/Down move it.
+        if let Some(Popup::Context { sel, .. }) = &mut self.popup {
+            *sel = first;
+        }
     }
 
     /// The Layers-panel row's right-click menu: the row becomes the single menu target unless it is
@@ -4959,7 +5353,7 @@ impl CanvasView {
         let mut wait = None;
 
         {
-            let Some(Popup::Context { pos, items, open_sub, aim, pointer: p, born, .. }) = &mut self.popup else {
+            let Some(Popup::Context { pos, items, open_sub, sub_sel, aim, pointer: p, born, .. }) = &mut self.popup else {
                 return;
             };
 
@@ -4974,9 +5368,15 @@ impl CanvasView {
             let is_sub = items.get(row).is_some_and(|it| !it.sub.is_empty());
 
             match aim.hover(0, row, is_sub, pointer, now) {
-                crate::widgets::AimAction::Open(_, r) => *open_sub = Some(r),
+                crate::widgets::AimAction::Open(_, r) => {
+                    *open_sub = Some(r);
+                    *sub_sel = None;
+                }
 
-                crate::widgets::AimAction::Close(_) => *open_sub = None,
+                crate::widgets::AimAction::Close(_) => {
+                    *open_sub = None;
+                    *sub_sel = None;
+                }
 
                 crate::widgets::AimAction::Hold => {}
             }
@@ -5000,14 +5400,20 @@ impl CanvasView {
     fn settle_context(&mut self, cx: &mut Context<Self>) {
         let mut wait = None;
 
-        if let Some(Popup::Context { open_sub, aim, pointer, born, .. }) = &mut self.popup {
+        if let Some(Popup::Context { open_sub, sub_sel, aim, pointer, born, .. }) = &mut self.popup {
             let now = born.elapsed().as_secs_f64();
 
             for action in aim.settle(*pointer, now) {
                 match action {
-                    crate::widgets::AimAction::Open(_, r) => *open_sub = Some(r),
+                    crate::widgets::AimAction::Open(_, r) => {
+                        *open_sub = Some(r);
+                        *sub_sel = None;
+                    }
 
-                    crate::widgets::AimAction::Close(_) => *open_sub = None,
+                    crate::widgets::AimAction::Close(_) => {
+                        *open_sub = None;
+                        *sub_sel = None;
+                    }
 
                     crate::widgets::AimAction::Hold => {}
                 }
@@ -6017,7 +6423,7 @@ impl Render for CanvasView {
 
         // 引擎 ui_requests：先消费命令留下的 UI 请求（切标签 / 开面板），再同步 Dev Mode。
 
-        self.sync_ui_requests(cx);
+        self.sync_ui_requests(window, cx);
 
         self.sync_present();
 
@@ -6617,6 +7023,9 @@ impl Render for CanvasView {
 
                     this.mods = e.modifiers;
 
+                    // 指针落到画布上：键盘框选 / 点选光标结束（egui `canvas/input.rs::end_keyboard_box`）。
+                    this.app.clear_keyboard_box();
+
                     let pos = this.local(e.position);
 
                     this.pointer = Some(pos);
@@ -6965,6 +7374,9 @@ impl Render for CanvasView {
 
                     this.pointer = Some(pos);
 
+                    // 右键也是画布上的指针按下：键盘框选 / 点选结束（egui 同款）。
+                    this.app.clear_keyboard_box();
+
                     this.commit_edits(window, cx);
 
                     if e.modifiers.control || e.modifiers.platform {
@@ -7007,6 +7419,9 @@ impl Render for CanvasView {
                     let pos = this.local(e.position);
 
                     this.pointer = Some(pos);
+
+                    // 中键平移同样结束键盘框选（egui 对任意指针按下都清）。
+                    this.app.clear_keyboard_box();
 
                     if let Ok(ds) = this.app.session.ds() {
                         this.pan = Some((pos, ds.view.cx, ds.view.cy));
@@ -7056,6 +7471,23 @@ impl Render for CanvasView {
                     cx.notify();
 
                     return;
+                }
+
+                // 右键菜单（含 Shift+F10 / Menu 打开的）先拿键盘：Up/Down 移动高亮、
+                // Enter 执行、Escape 关闭。弹层/对话框开着的其它按键也不进框选状态机，
+                // 否则 Escape 会先清掉框而不是关弹层（CodeRabbit PR#33）。
+                let key = canonical_key(&e.keystroke.key);
+                if this.popup_context_key(&key, cx) {
+                    cx.stop_propagation();
+                    return;
+                }
+                if !this.popup_owns_keyboard() && (this.app.live_key_box().is_some() || this.app.pick.is_some()) {
+                    let m = e.keystroke.modifiers;
+                    if key_pick(&mut this.app, &key, &m) || key_box_key(&mut this.app, &key, &m) {
+                        cx.notify();
+                        cx.stop_propagation();
+                        return;
+                    }
                 }
 
                 // ── Motion 时间轴快捷键（egui timeline.rs:1093-1158）──
@@ -8126,7 +8558,7 @@ impl Render for CanvasView {
                     els.push(card);
                 }
 
-                Popup::Context { pos, items, open_sub, .. } => {
+                Popup::Context { pos, items, open_sub, sel, sub_sel, .. } => {
                     // Clamp against the window's right/bottom edge (egui's `constrain(true)`). The
 
                     // point is canvas-local; convert to window coords from the *current* canvas
@@ -8160,9 +8592,10 @@ impl Render for CanvasView {
 
                         std::rc::Rc::new(move |row: usize, _w: &mut Window, cx: &mut App| {
                             me.update(cx, |cv, cx| {
-                                if let Some(Popup::Context { open_sub, .. }) = &mut cv.popup {
+                                if let Some(Popup::Context { open_sub, sub_sel, .. }) = &mut cv.popup {
                                     if *open_sub != Some(row) {
                                         *open_sub = Some(row);
+                                        *sub_sel = None;
 
                                         cx.notify();
                                     }
@@ -8187,13 +8620,15 @@ impl Render for CanvasView {
                         })
                     };
 
-                    els.push(menu_card::card(
+                    els.push(menu_card::card_selected(
                         x,
                         y,
                         menu_card::Width::Min(w),
                         context_menu::ROW_H,
                         items,
                         *open_sub,
+                        *sel,
+                        *sub_sel,
                         pick,
                         on_sub,
                         on_hover,
@@ -8395,6 +8830,7 @@ impl Render for CanvasView {
                         false,
                         None,
                         palette_sel,
+                        None,
                         x,
                         y + 40.0,
                         w,
@@ -8877,6 +9313,9 @@ impl Render for CanvasView {
                     && matches!(id, "edit.undo" | "edit.redo")
                     && run_binding(&mut this.app, id)
                 {
+                    // Keyboard-issued UI requests must belong to the window that handled the key;
+                    // otherwise a second window can render first and consume them (CodeRabbit PR#33).
+                    this.stamp_ui_requests();
                     cx.notify();
                     cx.stop_propagation();
                 }
@@ -8885,14 +9324,34 @@ impl Render for CanvasView {
                 this.bind_window_document(window, true, cx);
                 let accel = e.keystroke.modifiers.platform || e.keystroke.modifiers.control;
 
+                // 右键菜单先拿键盘；弹层开着时框选让路（Escape 先关弹层，方向键不动背后的框）。
+                let key = canonical_key(&e.keystroke.key);
+                if this.popup_context_key(&key, cx) {
+                    cx.stop_propagation();
+                    return;
+                }
+                // 键盘框选 / 点选先于一切：焦点被右栏（属性输入框、列表行）拿走时，
+                // 画布子树的 `on_key_down` 收不到按键，框选中途点一下右栏就再也动不了。
+                // 这里在根节点兜底，和画布子树共用同一份状态机，输入框先把按键吃掉的不受影响。
+                if !this.popup_owns_keyboard() && (this.app.live_key_box().is_some() || this.app.pick.is_some()) {
+                    let m = e.keystroke.modifiers;
+                    if key_pick(&mut this.app, &key, &m) || key_box_key(&mut this.app, &key, &m) {
+                        cx.notify();
+                        cx.stop_propagation();
+                        return;
+                    }
+                }
+
                 // 撤销 / 重做必须在根节点兜底：GPUI 的按键沿**焦点链**派发，而整套命令快捷键
                 // 挂在画布元素上，只有焦点在画布子树时才收得到。右栏属性框、对话框输入框、
                 // 内联改名框一旦拿到焦点（这些操作本来就会把焦点吸进输入框），Cmd+Z 就再也
                 // 到不了引擎 —— 表现正是「改了属性 / 提交了对话框 / 改名之后撤销没反应」，
                 // 而画布上的拖拽（焦点没跑）却正常。这里只补 `edit.undo` / `edit.redo` 两个
                 // id，其余快捷键仍按原样只在画布子树里生效，避免抢走输入框的按键。
+                // 键盘框选的入口（`select.area`，Ctrl+Space / F8）、收起图层（Alt+L）和右键菜单
+                // （Shift+F10）也挂在这里：它们不属于文本编辑，右栏拿焦点时也应该能用。
                 // 引擎正在做画布文字编辑时不接管：那种情况由画布子树的 text_keys 处理。
-                if this.app.session.ds().is_ok_and(|d| d.text_edit.is_none()) {
+                if !this.popup_owns_keyboard() && this.app.session.ds().is_ok_and(|d| d.text_edit.is_none()) {
                     let held = figcraft_engine::keymap::Mods {
                         shift: e.keystroke.modifiers.shift,
                         alt: e.keystroke.modifiers.alt,
@@ -8907,9 +9366,19 @@ impl Render for CanvasView {
                     )
                     .map(|b| b.id);
                     if let Some(id) = binding
-                        && matches!(id, "edit.undo" | "edit.redo" | "view.nextRegion" | "view.previousRegion")
+                        && matches!(
+                            id,
+                            "edit.undo"
+                                | "edit.redo"
+                                | "view.nextRegion"
+                                | "view.previousRegion"
+                                | "select.area"
+                                | "layers.collapseAll"
+                                | "view.contextMenu"
+                        )
                         && run_binding(&mut this.app, id)
                     {
+                        this.stamp_ui_requests();
                         cx.notify();
                         cx.stop_propagation();
                         return;
