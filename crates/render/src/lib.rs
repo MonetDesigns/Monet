@@ -56,6 +56,49 @@ pub fn has_export_material_hook() -> bool {
     EXPORT_MATERIAL_HOOK.get().is_some()
 }
 
+/// The interface's GPU renderer for **animated export frames** (the desktop app installs it with
+/// the `gpu` feature). It draws a frame whose whole subtree the GPU scene can express faithfully;
+/// `None` means "not expressible", and the export uses the CPU raster for the whole animation.
+pub type ExportFrameRender = dyn Fn(&Document, &[NodeId], &View) -> Option<Pixmap> + Send + Sync;
+/// Whether the GPU renderer can draw this frame's subtree at all (checked before an export starts,
+/// so one animation never mixes GPU and CPU frames and flickers on anti-aliased edges).
+pub type ExportFrameSupport = dyn Fn(&Document, &[NodeId], &View) -> bool + Send + Sync;
+
+struct ExportFrameHooks {
+    render: std::sync::Arc<ExportFrameRender>,
+    supports: std::sync::Arc<ExportFrameSupport>,
+}
+
+static EXPORT_FRAME_HOOK: std::sync::OnceLock<ExportFrameHooks> = std::sync::OnceLock::new();
+
+/// Install the GPU renderer for animated export frames (once; later calls are ignored).
+pub fn set_export_frame_hook(render: std::sync::Arc<ExportFrameRender>, supports: std::sync::Arc<ExportFrameSupport>) {
+    let _ = EXPORT_FRAME_HOOK.set(ExportFrameHooks { render, supports });
+}
+
+/// Whether a GPU frame renderer is installed (the desktop app does; tests and the CLI do not).
+pub fn has_export_frame_hook() -> bool {
+    EXPORT_FRAME_HOOK.get().is_some()
+}
+
+/// Whether the installed GPU renderer can draw `ids` in `view` faithfully. `false` without a hook.
+pub fn export_frame_gpu_supported(doc: &Document, ids: &[NodeId], view: &View) -> bool {
+    EXPORT_FRAME_HOOK.get().is_some_and(|h| (h.supports)(doc, ids, view))
+}
+
+/// Renders one animated-export frame: the GPU hook when installed and the frame is expressible,
+/// else the CPU raster (see [`render_nodes_into`]).
+pub fn render_frame_for_export(doc: &Document, ids: &[NodeId], view: &View) -> Option<Pixmap> {
+    if let Some(h) = EXPORT_FRAME_HOOK.get()
+        && let Some(pix) = (h.render)(doc, ids, view)
+    {
+        return Some(pix);
+    }
+    let mut pix = Pixmap::new(view.width, view.height)?;
+    render_nodes_into(doc, ids, view, &mut pix);
+    Some(pix)
+}
+
 /// Which part of a page to draw, and how big.
 #[derive(Clone, Debug)]
 pub struct View {
@@ -690,6 +733,16 @@ fn area_at(
     nodes_into(doc, ids, &view, &mut pix, time, under.as_ref(), shade);
     Some(pix)
 }
+/// Wrap **premultiplied** RGBA8 bytes (row-major, `w*h*4`) as a [`Pixmap`], which stores the same
+/// layout. Out-of-range sizes or a wrong byte count give `None`. Exposed for the GPU export hook.
+pub fn pixmap_from_premultiplied_rgba(data: Vec<u8>, width: u32, height: u32) -> Option<Pixmap> {
+    let size = tiny_skia::IntSize::from_wh(width, height)?;
+    if data.len() != width as usize * height as usize * 4 {
+        return None;
+    }
+    Pixmap::from_vec(data, size)
+}
+
 /// Un-premultiply into straight RGBA8 bytes.
 pub fn to_rgba8(p: &Pixmap) -> Vec<u8> {
     let mut out = Vec::with_capacity(p.data().len());

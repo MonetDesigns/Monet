@@ -106,7 +106,7 @@ pub(super) fn export(s: &mut Session, p: &Value) -> Result<Value> {
         let anim_format = crate::cmd::motion_export::AnimFormat::parse(format.ext())
             .ok_or_else(|| bad(cmd, format!("unsupported Motion format {}", format.label())))?;
         let scale = crate::cmd::motion_export::scale_for(doc, node, setting.size);
-        let out = crate::cmd::motion_export::encode_animation(doc, node, anim_format, scale, setting.fps, setting.quality(), 9)?;
+        let out = crate::cmd::motion_export::encode_animation(doc, node, anim_format, scale, setting.fps, setting.quality(), 10)?;
         let mut value = match string(p, "path") {
             Some(path) => {
                 write(&path, &out.bytes)?;

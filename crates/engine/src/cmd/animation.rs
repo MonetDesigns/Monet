@@ -118,7 +118,7 @@ pub(crate) fn specs() -> Vec<CommandSpec> {
         spec!(
             "motion.export",
             "Export motion animation",
-            "{id?, format?: gif|webm|mp4|png|zip|png-zip (default gif), fps?, scale?, quality? (webm 1-100 / mp4 CRF mapped from it, default 85), speed? (webm 0-10, default 9)} → {format, label, data (base64), frames, fps, width, height, loop}. Renders a frame's own timeline frame by frame with the CPU renderer and encodes it as a GIF, an AV1 WebM, an H.264 MP4, or a zip of PNG frames. Encoding lives in figcraft-motion-codec; MP4 uses craft-video + craft-media. No document write, no undo.",
+            "{id?, format?: gif|webm|mp4|png|zip|png-zip (default gif), fps?, scale?, quality? (webm 1-100 / mp4 CRF mapped from it, default 85), speed? (webm 0-10, default 10)} → {format, label, data (base64), frames, fps, width, height, loop}. Renders a frame's own timeline frame by frame with the CPU renderer and encodes it as a GIF, an AV1 WebM, an H.264 MP4, or a zip of PNG frames. Encoding lives in figcraft-motion-codec; MP4 uses craft-video + craft-media. No document write, no undo.",
             false,
             |s: &mut Session, p: &Value| super::motion_export::run(s, p)
         ),
