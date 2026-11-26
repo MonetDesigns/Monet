@@ -1,10 +1,10 @@
 [Desktop Entry]
 Type=Application
-Name=FigCraft
+Name=Monet
 GenericName=Interface Design Tool
 Comment=Design and prototype user interfaces
-Exec=figcraft %U
-TryExec=figcraft
+Exec=monet %U
+TryExec=monet
 Icon=app.monet.design
 Terminal=false
 StartupNotify=true

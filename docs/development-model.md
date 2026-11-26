@@ -83,11 +83,13 @@ commit counts and `git merge` are meaningless. Sync is content-level:
 
 ## Release
 
-`apps/monet` is the only release target. The reference shells are excluded from the workspace and
-must not be packaged. Until the packaging scripts finish their brand migration (`figcraft` ids are
-still in `packaging/`), the release workflow is manual (`workflow_dispatch`) and every run is a dry
-run that produces a draft; a release is not announced from this repository until that dry run
-passes.
+`apps/monet` is the only desktop release target. `packaging/` builds `-p monet` and names Linux,
+macOS and Windows artifacts `monet-*`; the reference shells are excluded from the workspace and
+must not be packaged. The web front-end, headless CLI and collaboration server are still the
+upstream `figcraft-*` crates and stay disabled in `release.yml` (`has-web`, `has-server`,
+`has-freebsd` are false). The release workflow remains manual (`workflow_dispatch`) until one
+end-to-end dry run installs and starts a `monet` package; only then is the `release` branch
+trigger re-enabled.
 
 ## Metrics
 
@@ -96,7 +98,7 @@ passes.
 | Upstream lag | Days between the upstream commit in `upstream.toml` and today | ≤ 14 |
 | Parity evidence | Share of `done` rows in the parity plan backed by a contract | 100% |
 | Gate health | `cargo xtask ci` result; entries in `docs/known-failures.md` | Green / fixed list |
-| Deliverable | Can `main` produce an installable Monet package? | Dry run first; `Yes` once `packaging/` drops the `figcraft` ids |
+| Deliverable | Can `main` produce an installable Monet package? | Dry run first; `Yes` once a desktop `monet` package installs and starts |
 | Sync cost | Files that differ from the mirror per sync | Explainable, trending down |
 
 ## Divergence register

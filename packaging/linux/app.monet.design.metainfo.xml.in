@@ -5,14 +5,14 @@
   <id>app.monet.design</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT OR Apache-2.0</project_license>
-  <name>FigCraft</name>
+  <name>Monet</name>
   <summary>Design and prototype user interfaces</summary>
-  <developer id="ai.storyteller">
-    <name>Learning Machines LLC</name>
+  <developer id="design.monet">
+    <name>Monet maintainers</name>
   </developer>
   <description>
     <p>
-      FigCraft is an open-source, native interface design and prototyping tool. Lay out screens
+      Monet is an open-source, native interface design and prototyping tool. Lay out screens
       on an infinite canvas with frames, auto layout and constraints, build reusable components
       and variants, and link screens into clickable prototypes.
     </p>
@@ -28,10 +28,10 @@
   <launchable type="desktop-id">app.monet.design.desktop</launchable>
   <icon type="stock">app.monet.design</icon>
   <!-- Only url types known to appstream 0.15 (Ubuntu 22.04, where CI validates): no vcs-browser. -->
-  <url type="homepage">https://getartcraft.com/apps/figcraft</url>
-  <url type="bugtracker">https://github.com/storytold/figcraft/issues</url>
-  <url type="help">https://github.com/storytold/figcraft</url>
-  <url type="contact">https://discord.gg/artcraft</url>
+  <url type="homepage">https://github.com/MonetDesigns/Monet</url>
+  <url type="bugtracker">https://github.com/MonetDesigns/Monet/issues</url>
+  <url type="help">https://github.com/MonetDesigns/Monet</url>
+  <url type="contact">https://github.com/MonetDesigns/Monet/discussions</url>
   <categories>
     <!-- Freedesktop registered categories only ("Design" isn't one; the .desktop file says X-Design). -->
     <category>Graphics</category>
@@ -56,7 +56,7 @@
     <control>pointing</control>
   </supports>
   <provides>
-    <binary>figcraft</binary>
+    <binary>monet</binary>
     <mediatype>application/x-figcraft</mediatype>
     <mediatype>application/x-sketch</mediatype>
   </provides>

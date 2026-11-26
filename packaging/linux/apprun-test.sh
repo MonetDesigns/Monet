@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Smoke test for packaging/linux/AppRun: the AppImage's desktop integration writes
 # and refreshes the host .desktop entry and icons, is idempotent, honours the opt-out
-# and an unwritable HOME, and always launches the app; `cli` runs figcraft-cli instead.
+# and an unwritable HOME, and always launches the app; `cli` runs monet-cli instead.
 #
 # Runs in seconds with no build (CI: .github/workflows/packaging-lint.yml).
 set -euo pipefail
@@ -14,16 +14,16 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 # Fake AppDir with the real AppRun, .desktop template, icons, and a stub binary.
-APPDIR="$TMP/FigCraft.AppDir"
+APPDIR="$TMP/Monet.AppDir"
 mkdir -p "$APPDIR/usr/bin"
 install -Dm755 "$HERE/AppRun" "$APPDIR/AppRun"
 install -Dm644 "$HERE/$APP_ID.desktop" "$APPDIR/usr/share/applications/$APP_ID.desktop"
 mkdir -p "$APPDIR/usr/share/icons"
 cp -R "$ROOT/assets/app-icon/hicolor" "$APPDIR/usr/share/icons/"
-printf '#!/bin/sh\necho "stub: $*"\n' >"$APPDIR/usr/bin/figcraft"
-chmod +x "$APPDIR/usr/bin/figcraft"
+printf '#!/bin/sh\necho "stub: $*"\n' >"$APPDIR/usr/bin/monet"
+chmod +x "$APPDIR/usr/bin/monet"
 
-APPIMAGE="$TMP/figcraft test.AppImage" # spaces on purpose: Exec must stay quoted
+APPIMAGE="$TMP/monet test.AppImage" # spaces on purpose: Exec must stay quoted
 : >"$APPIMAGE"
 export APPIMAGE
 export HOME="$TMP/home"
@@ -73,7 +73,7 @@ grep -Fxq "Exec=\"$(readlink -f "$APPIMAGE")\" %U" "$DESKTOP" || fail "Exec not 
 
 # 6. Opt-out installs nothing.
 rm -rf "$XDG_DATA_HOME"
-FIGCRAFT_NO_DESKTOP_INTEGRATION=1 "$APPDIR/AppRun" >/dev/null || fail "opt-out launch exited non-zero"
+MONET_NO_DESKTOP_INTEGRATION=1 "$APPDIR/AppRun" >/dev/null || fail "opt-out launch exited non-zero"
 [[ ! -e "$XDG_DATA_HOME" ]] || fail "opt-out still integrated"
 
 # 7. An unwritable data dir never blocks the launch.
@@ -95,12 +95,12 @@ out="$(APPIMAGE="$odd" "$APPDIR/AppRun" x)" || fail "launch with an odd path exi
 [[ "$out" = "stub: x" ]] || fail "odd path: $out"
 [[ ! -e "$XDG_DATA_HOME" ]] || fail "integrated an AppImage path that needs escaping"
 
-# 10. `cli <args>` runs figcraft-cli with the remaining arguments and integrates nothing.
+# 10. `cli <args>` runs monet-cli with the remaining arguments and integrates nothing.
 rm -rf "$XDG_DATA_HOME"
-out="$("$APPDIR/AppRun" cli mcp --attach 7979 2>&1)" && fail "cli ran without figcraft-cli in the AppDir"
-[[ "$out" = "figcraft: this AppImage was built without figcraft-cli" ]] || fail "missing cli: $out"
-printf '#!/bin/sh\necho "cli stub: $*"\n' >"$APPDIR/usr/bin/figcraft-cli"
-chmod +x "$APPDIR/usr/bin/figcraft-cli"
+out="$("$APPDIR/AppRun" cli mcp --attach 7979 2>&1)" && fail "cli ran without monet-cli in the AppDir"
+[[ "$out" = "monet: this AppImage was built without monet-cli" ]] || fail "missing cli: $out"
+printf '#!/bin/sh\necho "cli stub: $*"\n' >"$APPDIR/usr/bin/monet-cli"
+chmod +x "$APPDIR/usr/bin/monet-cli"
 out="$("$APPDIR/AppRun" cli mcp --attach 7979)" || fail "cli launch exited non-zero"
 [[ "$out" = "cli stub: mcp --attach 7979" ]] || fail "cli arguments not forwarded: $out"
 out="$("$APPDIR/AppRun" cli)" || fail "bare cli launch exited non-zero"

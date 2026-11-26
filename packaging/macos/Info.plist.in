@@ -7,11 +7,11 @@
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <key>CFBundleDisplayName</key>
-  <string>FigCraft</string>
+  <string>Monet</string>
   <key>CFBundleName</key>
-  <string>FigCraft</string>
+  <string>Monet</string>
   <key>CFBundleExecutable</key>
-  <string>FigCraft</string>
+  <string>Monet</string>
   <key>CFBundleIdentifier</key>
   <string>app.monet.design</string>
   <key>CFBundleInfoDictionaryVersion</key>
@@ -24,12 +24,12 @@
   <string>@SHORT_VERSION@</string>
   <key>CFBundleVersion</key>
   <string>@SHORT_VERSION@</string>
-  <key>FigCraftVersion</key>
+  <key>MonetVersion</key>
   <string>@VERSION@</string>
-  <key>FigCraftBuildCommit</key>
+  <key>MonetBuildCommit</key>
   <string>@BUILD_SHA@</string>
   <key>CFBundleIconFile</key>
-  <string>FigCraft</string>
+  <string>Monet</string>
   <key>LSApplicationCategoryType</key>
   <string>public.app-category.graphics-design</string>
   <!-- Must match MACOSX_DEPLOYMENT_TARGET in package.sh. Big Sur is the first release on
@@ -43,23 +43,23 @@
   <key>NSRequiresAquaSystemAppearance</key>
   <false/>
   <key>NSHumanReadableCopyright</key>
-  <string>Copyright © the FigCraft authors. MIT OR Apache-2.0.</string>
+  <string>Copyright © the Monet authors. MIT OR Apache-2.0.</string>
 
-  <!-- FigCraft's own format. -->
+  <!-- Monet's own format. -->
   <key>UTExportedTypeDeclarations</key>
   <array>
     <dict>
       <key>UTTypeIdentifier</key>
       <string>app.monet.design.document</string>
       <key>UTTypeDescription</key>
-      <string>FigCraft Document</string>
+      <string>Monet Document</string>
       <key>UTTypeConformsTo</key>
       <array>
         <string>public.data</string>
         <string>public.content</string>
       </array>
       <key>UTTypeIconFile</key>
-      <string>FigCraft</string>
+      <string>Monet</string>
       <key>UTTypeTagSpecification</key>
       <dict>
         <key>public.filename-extension</key>
@@ -70,7 +70,7 @@
     </dict>
   </array>
 
-  <!-- Other apps' formats FigCraft opens, declared by their public type identifiers so Open With
+  <!-- Other apps' formats Monet opens, declared by their public type identifiers so Open With
        knows them on a Mac without that app installed. -->
   <key>UTImportedTypeDeclarations</key>
   <array>
@@ -92,7 +92,7 @@
     </dict>
   </array>
 
-  <!-- figcraft://join?... live session invite links open FigCraft. -->
+  <!-- figcraft:// invite links open Monet (the parser still expects this scheme). -->
   <key>CFBundleURLTypes</key>
   <array>
     <dict>
@@ -109,13 +109,13 @@
   <array>
     <dict>
       <key>CFBundleTypeName</key>
-      <string>FigCraft Document</string>
+      <string>Monet Document</string>
       <key>CFBundleTypeRole</key>
       <string>Editor</string>
       <key>LSHandlerRank</key>
       <string>Owner</string>
       <key>CFBundleTypeIconFile</key>
-      <string>FigCraft</string>
+      <string>Monet</string>
       <key>LSItemContentTypes</key>
       <array><string>app.monet.design.document</string></array>
     </dict>

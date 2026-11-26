@@ -3,15 +3,13 @@
 #
 # Exports:
 #   ROOT                  workspace root
-#   VERSION               [workspace.package] version from Cargo.toml (override: FIGCRAFT_VERSION)
+#   VERSION               [workspace.package] version from Cargo.toml (override: MONET_VERSION)
 #   DIST                  output directory for release artifacts (default: $ROOT/dist/release)
-#   FIGCRAFT_BUILD_SHA    git commit baked into the binaries (apps/figcraft/build.rs)
-#   FIGCRAFT_BUILD_DATE   UTC build date, YYYY-MM-DD
+#   MONET_BUILD_SHA       git commit for builds that record it
+#   MONET_BUILD_DATE      UTC build date, YYYY-MM-DD
 #   CARGO_TARGET_DIR      cargo's target dir (default: $ROOT/target)
 # Sets (not exported):
-#   BINS                  the binaries to build and ship: figcraft, plus figcraft-cli when the
-#                         workspace has apps/figcraft-cli
-#   HAS_CLI               1 when figcraft-cli is part of the build, else 0
+#   BINS                  the binaries to build and ship: monet
 #   CARGO_PKGS            `-p <bin>` arguments for cargo build
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -27,7 +25,7 @@ workspace_version() {
   return $?
 }
 
-VERSION="${FIGCRAFT_VERSION:-$(workspace_version)}"
+VERSION="${MONET_VERSION:-${FIGCRAFT_VERSION:-$(workspace_version)}}"
 if [[ -z "$VERSION" ]]; then
   echo "error: could not read [workspace.package] version from $ROOT/Cargo.toml" >&2
   exit 1
@@ -38,28 +36,26 @@ DIST="${DIST:-$ROOT/dist/release}"
 mkdir -p "$DIST"
 export DIST
 
-if [[ -z "${FIGCRAFT_BUILD_SHA:-}" ]]; then
-  FIGCRAFT_BUILD_SHA="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)"
+if [[ -z "${MONET_BUILD_SHA:-}" ]]; then
+  MONET_BUILD_SHA="${FIGCRAFT_BUILD_SHA:-$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)}"
 fi
-export FIGCRAFT_BUILD_SHA
-export FIGCRAFT_BUILD_DATE="${FIGCRAFT_BUILD_DATE:-$(date -u +%Y-%m-%d)}"
+export MONET_BUILD_SHA
+# Legacy crates (the reference shells, the CLI and the server) still read the FIGCRAFT_ names.
+export FIGCRAFT_BUILD_SHA="$MONET_BUILD_SHA"
+export MONET_BUILD_DATE="${MONET_BUILD_DATE:-${FIGCRAFT_BUILD_DATE:-$(date -u +%Y-%m-%d)}}"
+export FIGCRAFT_BUILD_DATE="$MONET_BUILD_DATE"
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
 
-# The headless CLI ships next to the app once apps/figcraft-cli exists.
-BINS=(figcraft)
-HAS_CLI=0
-if [[ -f "$ROOT/apps/figcraft-cli/Cargo.toml" ]]; then
-  BINS+=(figcraft-cli)
-  HAS_CLI=1
-fi
+# The desktop app is the only release target until the CLI, server and web front-end carry their
+# own Monet names. No package format stages a figcraft-cli binary.
+BINS=(monet)
 CARGO_PKGS=()
 for _bin in "${BINS[@]}"; do CARGO_PKGS+=(-p "$_bin"); done
 unset _bin
 
-# The binary used for a `--version` smoke test: the CLI when shipped, else the app (which answers
-# --version before opening a window).
+# The binary used for a `--version` smoke test.
 smoke_bin() {
-  if [[ "$HAS_CLI" = 1 ]]; then echo figcraft-cli; else echo figcraft; fi
+  echo monet
   return 0
 }
 

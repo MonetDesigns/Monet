@@ -5,6 +5,10 @@
 //! session and the `--control <port>` server; this binary adds the command-line surface the
 //! packaging and automation docs refer to.
 
+// A released Monet opens a window, not a console; debug builds keep stderr/stdout attached so
+// `cargo run -p monet -- --version` and panics stay readable.
+#![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
+
 fn main() {
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {

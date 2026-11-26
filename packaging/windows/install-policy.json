@@ -1,13 +1,13 @@
 {
-  "id": "figcraft",
-  "name": "FigCraft",
+  "id": "monet",
+  "name": "Monet",
   "upgradeCode": "7F8B9827-D065-41B7-A514-2A454B21F484",
   "sources": [
-    "figcraft.wxs"
+    "monet.wxs"
   ],
   "icon": "assets/app-icon/monet.ico",
   "localization": [
-    "figcraft.en-us.wxl"
+    "monet.en-us.wxl"
   ],
   "extensions": [
     "UI",
@@ -15,109 +15,108 @@
   ],
   "payloads": [
     "NOTICE",
-    "figcraft-cli.exe",
-    "figcraft.exe"
+    "monet.exe"
   ],
   "registry": [
     [
       "-1",
-      "Software\\Classes\\Figcraft.Image\\shell\\open\\command",
+      "Software\\Classes\\Monet.Image\\shell\\open\\command",
       "",
-      "\"[#FigcraftExe]\" \"%1\""
+      "\"[#MonetExe]\" \"%1\""
     ],
     [
       "-1",
       "Software\\Classes\\.svg\\OpenWithProgids",
-      "Figcraft.Image",
+      "Monet.Image",
       ""
     ],
     [
       "-1",
       "Software\\Classes\\.png\\OpenWithProgids",
-      "Figcraft.Image",
+      "Monet.Image",
       ""
     ],
     [
       "-1",
       "Software\\Classes\\.jpg\\OpenWithProgids",
-      "Figcraft.Image",
+      "Monet.Image",
       ""
     ],
     [
       "-1",
       "Software\\Classes\\.jpeg\\OpenWithProgids",
-      "Figcraft.Image",
+      "Monet.Image",
       ""
     ],
     [
       "-1",
-      "Software\\Classes\\Figcraft.Sketch\\shell\\open\\command",
+      "Software\\Classes\\Monet.Sketch\\shell\\open\\command",
       "",
-      "\"[#FigcraftExe]\" \"%1\""
+      "\"[#MonetExe]\" \"%1\""
     ],
     [
       "-1",
       "Software\\Classes\\.sketch\\OpenWithProgids",
-      "Figcraft.Sketch",
+      "Monet.Sketch",
       ""
     ],
     [
       "-1",
-      "Software\\Classes\\Applications\\figcraft.exe",
+      "Software\\Classes\\Applications\\monet.exe",
       "FriendlyAppName",
-      "FigCraft"
+      "Monet"
     ],
     [
       "-1",
-      "Software\\Classes\\Applications\\figcraft.exe\\shell\\open\\command",
+      "Software\\Classes\\Applications\\monet.exe\\shell\\open\\command",
       "",
-      "\"[#FigcraftExe]\" \"%1\""
+      "\"[#MonetExe]\" \"%1\""
     ],
     [
       "-1",
-      "Software\\Classes\\Applications\\figcraft.exe\\SupportedTypes",
+      "Software\\Classes\\Applications\\monet.exe\\SupportedTypes",
       ".figcraft",
       ""
     ],
     [
       "-1",
-      "Software\\Classes\\Applications\\figcraft.exe\\SupportedTypes",
+      "Software\\Classes\\Applications\\monet.exe\\SupportedTypes",
       ".svg",
       ""
     ],
     [
       "-1",
-      "Software\\Classes\\Applications\\figcraft.exe\\SupportedTypes",
+      "Software\\Classes\\Applications\\monet.exe\\SupportedTypes",
       ".png",
       ""
     ],
     [
       "-1",
-      "Software\\Classes\\Applications\\figcraft.exe\\SupportedTypes",
+      "Software\\Classes\\Applications\\monet.exe\\SupportedTypes",
       ".jpg",
       ""
     ],
     [
       "-1",
-      "Software\\Classes\\Applications\\figcraft.exe\\SupportedTypes",
+      "Software\\Classes\\Applications\\monet.exe\\SupportedTypes",
       ".jpeg",
       ""
     ],
     [
       "-1",
-      "Software\\Classes\\Applications\\figcraft.exe\\SupportedTypes",
+      "Software\\Classes\\Applications\\monet.exe\\SupportedTypes",
       ".sketch",
       ""
     ],
     [
       "-1",
-      "Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\figcraft.exe",
+      "Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\monet.exe",
       "",
-      "[#FigcraftExe]"
+      "[#MonetExe]"
     ],
     [
       "-1",
-      "Software\\FigCraft",
+      "Software\\Monet",
       "InstallDir",
       "[INSTALLFOLDER]"
     ]

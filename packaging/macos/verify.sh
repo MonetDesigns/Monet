@@ -1,10 +1,7 @@
 #!/usr/bin/env bash
-# Check the macOS release artifacts exactly as users download them:
+# Check the macOS release artifact exactly as users download it:
 #
-#   $DIST/figcraft-<version>-macos-<arch>.dmg       signed, notarized, ticket stapled
-#   $DIST/figcraft-cli-<version>-macos-<arch>.zip   (when apps/figcraft-cli exists) unpacked here; the binary inside must be
-#                                                    Developer ID signed with the hardened runtime,
-#                                                    timestamped and notarized
+#   $DIST/monet-<version>-macos-<arch>.dmg   signed, notarized, ticket stapled
 #
 # Usage: packaging/macos/verify.sh [--arch universal|aarch64|x86_64]
 #
@@ -13,11 +10,6 @@
 # check is strict and a failure exits non-zero. Without them (local ad-hoc builds, or a release run
 # whose secrets are missing) only the signature's integrity is checked and the rest is a warning,
 # matching package.sh. Nothing here reads or prints a secret's value; it only tests whether one is set.
-#
-# A bare Mach-O can't carry a stapled notarization ticket (only .app, .dmg and .pkg can), so for the
-# CLI Gatekeeper looks the ticket up online the first time a quarantined copy runs. `spctl --assess
-# --type install` does that same online lookup here, which is how this script proves the CLI was
-# notarized.
 set -euo pipefail
 # shellcheck source=../env.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
@@ -26,19 +18,16 @@ ARCH=universal
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --arch) ARCH="$2"; shift 2 ;;
-    -h | --help) sed -n '2,20p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,16p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 case "$ARCH" in
-  universal) WANT_ARCHS="x86_64 arm64" ;;
-  aarch64) WANT_ARCHS="arm64" ;;
-  x86_64) WANT_ARCHS="x86_64" ;;
+  universal | aarch64 | x86_64) ;;
   *) echo "unknown --arch $ARCH" >&2; exit 2 ;;
 esac
 
-DMG="$DIST/figcraft-$VERSION-macos-$ARCH.dmg"
-CLI_ZIP="$DIST/figcraft-cli-$VERSION-macos-$ARCH.zip"
+DMG="$DIST/monet-$VERSION-macos-$ARCH.dmg"
 IDENTITY="${MACOS_SIGN_IDENTITY:--}"
 STRICT=0
 if [[ "$IDENTITY" != "-" ]] && [[ -n "${APPLE_ID:-}" ]] && [[ -n "${APPLE_PASSWORD:-}" ]] && [[ -n "${APPLE_TEAM_ID:-}" ]]; then
@@ -70,61 +59,13 @@ assess() {
   return 1
 }
 
-FILES=("$DMG")
-if [[ "$HAS_CLI" = 1 ]]; then FILES+=("$CLI_ZIP"); fi
-for f in "${FILES[@]}"; do
-  if [[ ! -f "$f" ]]; then
-    echo "error: missing $f" >&2
-    exit 1
-  fi
-done
-
-WORK="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/figcraft-verify.XXXXXX")"
-trap 'rm -rf "$WORK"' EXIT
-
-# ---- CLI zip (when apps/figcraft-cli exists) ----------------------------------------------------
-if [[ "$HAS_CLI" = 1 ]]; then
-  echo "==> $(basename "$CLI_ZIP")"
-  ditto -x -k "$CLI_ZIP" "$WORK/cli"
-  CLI="$WORK/cli/figcraft-cli-$VERSION-macos-$ARCH/figcraft-cli"
-  if [[ ! -x "$CLI" ]]; then
-    echo "error: $(basename "$CLI_ZIP") has no executable figcraft-cli-$VERSION-macos-$ARCH/figcraft-cli" >&2
-    exit 1
-  fi
-
-  archs="$(lipo -archs "$CLI")"
-  for a in $WANT_ARCHS; do
-    case " $archs " in
-      *" $a "*) ;;
-      *) echo "error: figcraft-cli lacks $a (has: $archs)" >&2; exit 1 ;;
-    esac
-  done
-
-  # Integrity first: this must hold even for ad-hoc builds.
-  codesign --verify --strict --verbose=2 "$CLI"
-  details="$(codesign -d --verbose=2 "$CLI" 2>&1)"
-  printf '%s\n' "$details" | grep -E '^(Identifier|Format|CodeDirectory|Authority|Timestamp|TeamIdentifier)[= ]' || true
-
-  printf '%s\n' "$details" | grep -Eq '^CodeDirectory .*flags=0x[0-9a-f]+\([^)]*runtime' \
-    || fail "figcraft-cli is not signed with the hardened runtime"
-  printf '%s\n' "$details" | grep -q '^Authority=Developer ID Application:' \
-    || fail "figcraft-cli is not signed with a Developer ID Application identity"
-  printf '%s\n' "$details" | grep -q '^Timestamp=' \
-    || fail "figcraft-cli signature has no secure timestamp"
-  if [[ -n "${APPLE_TEAM_ID:-}" ]]; then
-    printf '%s\n' "$details" | grep -qx "TeamIdentifier=$APPLE_TEAM_ID" \
-      || fail "figcraft-cli is signed by a different team"
-  fi
-  if gk="$(assess --assess --type install -vv "$CLI")"; then
-    printf '%s\n' "$gk"
-    printf '%s\n' "$gk" | grep -q 'source=Notarized Developer ID' \
-      || fail "Gatekeeper accepts figcraft-cli but not as notarized"
-  else
-    printf '%s\n' "$gk"
-    fail "Gatekeeper rejects figcraft-cli (not notarized?)"
-  fi
-  "$CLI" --version
+if [[ ! -f "$DMG" ]]; then
+  echo "error: missing $DMG" >&2
+  exit 1
 fi
+
+WORK="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/monet-verify.XXXXXX")"
+trap 'rm -rf "$WORK"' EXIT
 
 # ---- DMG ---------------------------------------------------------------------------------------
 echo "==> $(basename "$DMG")"
@@ -147,7 +88,5 @@ else
 fi
 echo "==> verified: $result"
 if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
-  names="\`$(basename "$DMG")\`"
-  if [[ "$HAS_CLI" = 1 ]]; then names="$names, \`$(basename "$CLI_ZIP")\`"; fi
-  echo "- macOS $names: $result" >>"$GITHUB_STEP_SUMMARY"
+  echo "- macOS \`$(basename "$DMG")\`: $result" >>"$GITHUB_STEP_SUMMARY"
 fi
