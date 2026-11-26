@@ -372,7 +372,8 @@ pub fn scope_of(doc: &Document, selection: &[NodeId], page: NodeId) -> NodeId {
 }
 
 /// The selected scope's timeline settings, clamped. A frame with no entry of its own inherits
-/// its page's (the lookup lives in `Document::timeline_settings_for`, shared with export).
+/// its page's, an instance its main component's (the lookup lives in
+/// `Document::timeline_settings_for`, shared with export).
 pub fn settings_of(doc: &Document, scope: NodeId) -> TimelineSettings {
     doc.timeline_settings_for(scope).sanitized()
 }
