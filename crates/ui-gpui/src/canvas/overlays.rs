@@ -515,8 +515,10 @@ pub(super) fn overlays(
         }
         let (a, b) = (te.caret.min(te.anchor), te.caret.max(te.anchor));
         if a != b && preedit.is_none() {
+            // 和普通输入框用同一套选区色：暗色主题 22% 白，亮色主题 22% 黑。
+            let selection_colour = if t.dark { Color32::from_white_alpha(56) } else { Color32::from_black_alpha(56) };
             for q in text.selection(app, a, b) {
-                painter.add(Shape::convex_polygon(q.to_vec(), accent.gamma_multiply(0.3), Stroke::NONE));
+                painter.add(Shape::convex_polygon(q.to_vec(), selection_colour, Stroke::NONE));
             }
         }
         if let Some((_, (mark_start, mark_end), _)) = preedit.as_ref() {
@@ -537,7 +539,8 @@ pub(super) fn overlays(
             }
         }
         let caret = preedit.as_ref().map(|(_, _, cursor)| *cursor).unwrap_or(te.caret);
-        painter.line_segment(text.caret(app, caret, zoom), stroke(t.text, 1.0));
+        // 光标色跟普通输入框一致，用强调色而不是正文墨色。
+        painter.line_segment(text.caret(app, caret, zoom), stroke(t.accent, 1.0));
     }
 
     // ── 智能参考线与测量标注（标签避开尺寸标签）。
@@ -804,6 +807,57 @@ mod size_pill_tests {
         let (long, _) = pill_rect("1000 × 1000", pos2(0.0, 0.0), Align2::CENTER_TOP, 6.0);
         assert!(long.width() > short.width() + 20.0, "{} vs {}", long.width(), short.width());
         assert_eq!(short.height(), long.height()); // 上下边距固定 2
+    }
+}
+
+#[cfg(test)]
+mod text_edit_colour_tests {
+    use super::*;
+    use crate::app::{CanvasApp, sample_doc};
+    use crate::canvas::painter::Op;
+    use figcraft_engine::textedit;
+
+    /// 画布文字编辑的选区/光标必须和普通输入框同一套颜色，
+    /// 不能再用画布强调色和正文墨色。
+    #[test]
+    fn text_selection_and_caret_match_the_input_field_colours() {
+        let mut app = CanvasApp::new(sample_doc());
+
+        app.canvas.rect = Rect { min: pos2(0.0, 0.0), max: pos2(800.0, 600.0) };
+
+        let v = app.session.execute("text.create", &serde_json::json!({"text": "Hello 世界", "x": 100.0, "y": 100.0})).expect("create text");
+        let id: NodeId = serde_json::from_value(v["id"].clone()).expect("text id");
+
+        if let Ok(ds) = app.session.ds_mut()
+            && let Some(NodeKind::Text(t)) = ds.doc_mut().node_mut(id).map(|n| &mut n.kind)
+        {
+            t.style.font_family = "MiSans".into();
+        }
+
+        textedit::begin(&mut app.session, id, Some(0), false).expect("begin");
+        textedit::set_caret(&mut app.session, 5, true).expect("select");
+
+        let doc = app.session.ds().expect("session").doc.clone();
+        let Some(text) = crate::canvas::outline::TextOnScreen::of(&doc, id) else { return };
+        if text.layout.glyphs.is_empty() {
+            return; // no fonts installed: geometry is not testable
+        }
+
+        let t = Tokens::dark();
+        let mut painter = Painter::new(app.canvas.rect);
+        let _ = overlays(&app, &mut painter, &t, doc, None);
+
+        let selection = painter.ops.iter().find_map(|op| match op {
+            Op::Poly { fill, .. } if fill.a() > 0 => Some(*fill),
+            _ => None,
+        });
+        assert_eq!(selection, Some(Color32::from_white_alpha(56)), "dark theme selection must be 22% white like the input field");
+
+        let caret = painter.ops.iter().find_map(|op| match op {
+            Op::Line { stroke, .. } if stroke.width <= 1.0 && stroke.color == t.accent => Some(stroke.color),
+            _ => None,
+        });
+        assert_eq!(caret, Some(t.accent), "caret must use the same accent as the input field");
     }
 }
 
