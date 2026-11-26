@@ -35,6 +35,7 @@ pub const NODE_KEYS: &[&str] = &[
     "devStatus",
     "effects",
     "exports",
+    "exposedInstance",
     "fills",
     "flows",
     "fontFamily",
@@ -77,6 +78,7 @@ pub const NODE_KEYS: &[&str] = &[
     "overrides",
     "pluginData",
     "pointCount",
+    "propertyReferences",
     "rotation",
     "sectionContentsHidden",
     "segments",
@@ -101,6 +103,7 @@ pub const NODE_KEYS: &[&str] = &[
     "textPath",
     "textStyleRanges",
     "type",
+    "variableModes",
     "vertices",
     "visible",
     "width",
@@ -370,6 +373,15 @@ fn dev_props(doc: &Document, n: &Node, o: &mut serde_json::Map<String, Value>, o
     }
     if !n.bound.is_empty() {
         insert_prop(o, options, "boundVariables", || json!(n.bound));
+    }
+    if !n.var_modes.is_empty() {
+        insert_prop(o, options, "variableModes", || json!(n.var_modes));
+    }
+    if !n.prop_refs.is_empty() {
+        insert_prop(o, options, "propertyReferences", || json!(n.prop_refs));
+    }
+    if n.exposed {
+        insert_prop(o, options, "exposedInstance", || json!(true));
     }
     if !n.overrides.is_empty() {
         insert_prop(o, options, "overrides", || json!(n.overrides));

@@ -505,3 +505,28 @@ fn node_get_uses_options_but_keeps_its_existing_depth_and_selection() {
     assert_eq!(s.selection(), selection);
     assert_eq!(s.undo_depth(), history);
 }
+
+/// A frame's variable modes, a layer's component property bindings and an exposed nested instance
+/// are reported.
+#[test]
+fn modes_property_bindings_and_exposed_instances_are_read() {
+    let mut s = Session::new();
+    s.execute("file.new", &json!({})).unwrap();
+    let c = s.execute("variable.createCollection", &json!({"name": "Theme", "modes": ["Light", "Dark"]})).unwrap();
+    let frame = s.execute("node.create", &json!({"type": "frame", "width": 100, "height": 100})).unwrap()["id"].clone();
+    s.execute("variable.setMode", &json!({"ids": [frame.clone()], "collection": c["id"], "mode": "Dark"})).unwrap();
+    let modes = s.execute("node.get", &json!({"id": frame})).unwrap()["variableModes"].clone();
+    assert_eq!(modes.as_object().map(|m| m.len()), Some(1), "{modes}");
+    let card = s.execute("node.create", &json!({"type": "frame", "name": "Card", "width": 100, "height": 50})).unwrap()["id"].clone();
+    let title = s.execute("node.create", &json!({"type": "text", "parent": card.clone(), "text": "Title"})).unwrap()["id"].clone();
+    let main = s.execute("component.create", &json!({"ids": [card]})).unwrap()["id"].clone();
+    s.execute("component.addProperty", &json!({"id": main.clone(), "name": "Label", "type": "text", "layer": title.clone()})).unwrap();
+    let refs = s.execute("node.get", &json!({"id": title})).unwrap()["propertyReferences"].clone();
+    assert!(refs.as_object().is_some_and(|r| r.values().any(|v| v.as_str().is_some_and(|p| p.starts_with("Label")))), "{refs}");
+    let tag = s.execute("node.create", &json!({"type": "frame", "name": "Tag", "x": 300, "width": 40, "height": 20})).unwrap()["id"].clone();
+    let tag_main = s.execute("component.create", &json!({"ids": [tag]})).unwrap()["id"].clone();
+    let nested = s.execute("instance.create", &json!({"component": tag_main})).unwrap()["id"].clone();
+    s.execute("node.reparent", &json!({"ids": [nested.clone()], "parent": main})).unwrap();
+    s.execute("component.exposeInstance", &json!({"id": nested.clone()})).unwrap();
+    assert_eq!(s.execute("node.get", &json!({"id": nested})).unwrap()["exposedInstance"], true);
+}
