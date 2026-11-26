@@ -9299,6 +9299,9 @@ impl Render for CanvasView {
                     && matches!(id, "edit.undo" | "edit.redo")
                     && run_binding(&mut this.app, id)
                 {
+                    // Keyboard-issued UI requests must belong to the window that handled the key;
+                    // otherwise a second window can render first and consume them (CodeRabbit PR#33).
+                    this.stamp_ui_requests();
                     cx.notify();
                     cx.stop_propagation();
                 }
@@ -9363,6 +9366,7 @@ impl Render for CanvasView {
                         )
                         && run_binding(&mut this.app, id)
                     {
+                        this.stamp_ui_requests();
                         cx.notify();
                         cx.stop_propagation();
                         return;
