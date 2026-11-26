@@ -503,20 +503,41 @@ pub(super) fn overlays(
         }
     }
 
-    // ── 文字编辑：光标与选中。
+    // ── 文字编辑：光标、选中，以及输入法组合（preedit）的下划线与组合光标。
+    // 组合中的文字还没进文档，用引擎给的「组合文档」排版，光标/选区才不会错位。
+    let preedit = figcraft_engine::textedit::preedit_doc(&app.session);
+    let edoc: &Document = preedit.as_ref().map(|(d, _, _)| d).unwrap_or(&doc);
     if let Some(te) = ds.text_edit.clone()
-        && let Some(text) = super::outline::TextOnScreen::of(&doc, te.id)
+        && let Some(text) = super::outline::TextOnScreen::of(edoc, te.id)
     {
-        if let Some(q) = node_quad(app, &doc, te.id) {
+        if let Some(q) = node_quad(app, edoc, te.id) {
             quad(painter, q, stroke(accent, 1.0));
         }
         let (a, b) = (te.caret.min(te.anchor), te.caret.max(te.anchor));
-        if a != b {
+        if a != b && preedit.is_none() {
             for q in text.selection(app, a, b) {
                 painter.add(Shape::convex_polygon(q.to_vec(), accent.gamma_multiply(0.3), Stroke::NONE));
             }
         }
-        painter.line_segment(text.caret(app, te.caret, zoom), stroke(t.text, 1.0));
+        if let Some((_, (mark_start, mark_end), _)) = preedit.as_ref() {
+            for r in text.layout.selection_rects(*mark_start, *mark_end) {
+                // 下划线画在基线下方三分之一行高处，只覆盖组合中的字符。
+                let Some(line) = text.layout.lines.iter().find(|l| (l.top - r.y0).abs() < 1e-6) else { continue };
+                let x1 = text
+                    .layout
+                    .glyphs
+                    .get(line.glyph_start..line.glyph_end)
+                    .unwrap_or(&[])
+                    .iter()
+                    .filter(|g| g.char_end > g.char_start && g.char_start >= *mark_start && g.char_end <= *mark_end)
+                    .map(|g| g.x + g.advance)
+                    .fold(r.x0, f64::max);
+                let y = line.baseline + (line.top + line.height - line.baseline) * 0.35;
+                painter.line_segment([text.at(app, r.x0, y), text.at(app, x1, y)], stroke(t.text, 1.0));
+            }
+        }
+        let caret = preedit.as_ref().map(|(_, _, cursor)| *cursor).unwrap_or(te.caret);
+        painter.line_segment(text.caret(app, caret, zoom), stroke(t.text, 1.0));
     }
 
     // ── 智能参考线与测量标注（标签避开尺寸标签）。

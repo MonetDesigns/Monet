@@ -6300,13 +6300,6 @@ impl Render for CanvasView {
 
         let ime_focus = self.focus.clone();
 
-        // CodeRabbit PR#11: don't yank focus back to the canvas on every paint while a text edit is
-        // active — that made the Actions search field (and right-panel editors) unusable. Only
-        // reclaim when no other editor holds the keyboard; handle_input below still registers the
-        // IME handler each frame so composition keeps working once the canvas owns focus.
-        let palette_editor = self.palette_field.read(cx).edit();
-        let other_editor_focused = palette_editor.read(cx).is_active(window);
-
         let ime_entity = cx.entity();
 
         // Motion 播放中：画布必须每帧续帧，否则 `advance()` 只推进一帧就停（播放按钮点了不走）。
@@ -6350,13 +6343,16 @@ impl Render for CanvasView {
                     // `Window::handle_input` 只在 `focus_handle.is_focused()` 时才真的登记
                     // `PlatformInputHandler`，没登记的话 `WM_CHAR` 与键盘的 `key_char` 派发都会
                     // 在 `with_input_handler(..).take()?` 处被静默丢弃 —— 表现就是「双击文字
-                    // 进得了编辑态、光标也在闪，但一个字符都打不进去」。编辑文字期间画布本来就
-                    // 该独占键盘（和 egui 那边文本编辑态一致），所以这里补一次聚焦兜底。
-                    if !ime_focus.is_focused(window) && !other_editor_focused {
+                    // 进得了编辑态、光标也在闪，但一个字符都打不进去」。编辑文字期间画布本来
+                    // 该独占键盘，但**不能**把焦点从右栏输入框手里抢回来：点进数字框后画布每帧
+                    // 重新聚焦，别的输入框就全都收不到输入。只有窗口没有任何焦点时才补聚焦。
+                    if !ime_focus.is_focused(window) && window.focused(cx).is_none() {
                         window.focus(&ime_focus);
                     }
 
-                    window.handle_input(&ime_focus, ElementInputHandler::new(b, ime_entity.clone()), cx);
+                    if ime_focus.is_focused(window) {
+                        window.handle_input(&ime_focus, ElementInputHandler::new(b, ime_entity.clone()), cx);
+                    }
                 }
 
                 let p = Painter { clip: Rect::NOTHING, ops: ops.clone(), labels: Vec::new() };
@@ -6632,13 +6628,17 @@ impl Render for CanvasView {
                             now.duration_since(at) <= Duration::from_millis(DOUBLE_CLICK_MS) && (pos - p).length() <= DOUBLE_CLICK_SLOP
                         });
 
-                        this.last_down = Some((now, pos));
-
                         if double {
+                            // 双击已经消费掉这两下：不清掉计时，下一次单击会被继续当成
+                            // 三击（引擎只选词/选行），光标就永远点不过去。
+                            this.last_down = None;
+
                             this.dragging = false;
 
                             this.send(PointerKind::DoubleClick, pos, &e.modifiers);
                         } else {
+                            this.last_down = Some((now, pos));
+
                             this.dragging = true;
 
                             this.send(PointerKind::Down, pos, &e.modifiers);
@@ -7203,8 +7203,9 @@ impl Render for CanvasView {
                 }
 
                 // 正在编辑文字：按键给引擎的文本编辑（照搬 `shortcuts.rs::text_keys` 的按键名）。
-
-                if this.app.session.ds().is_ok_and(|d| d.text_edit.is_some()) {
+                // 只有画布自己拿着焦点时才接管：点右栏输入框后焦点已经移走，若还在这里
+                // 把每个键都塞给画布，其它输入框就会全部「打不进去」。
+                if this.focus.is_focused(window) && this.app.session.ds().is_ok_and(|d| d.text_edit.is_some()) {
                     let m = e.keystroke.modifiers;
                     let cmd = m.platform || m.control;
 
@@ -9746,29 +9747,50 @@ impl EntityInputHandler for CanvasView {
     }
 
     fn bounds_for_range(&mut self, _: Range<usize>, element_bounds: Bounds<Pixels>, _: &mut Window, _: &mut Context<Self>) -> Option<Bounds<Pixels>> {
-        // 候选窗定位：优先给文字层屏幕矩形，否则退回画布矩形。
+        // 候选窗定位：给**光标矩形**，不是整个文字层。平台按这个矩形放候选窗，
+        // 给图层框会把候选窗丢到文字左上角。
+        //
+        // `app.to_screen` 返回画布局部坐标（`canvas.rect` 原点恒为 0），而这里要的是
+        // 窗口坐标；`element_bounds.origin` 就是画布在窗口里的原点（左导轨 + 面板 +
+        // 标题栏）。少了这一步，候选窗会整体偏到画布左上角。
 
         let ds = self.app.session.ds().ok()?;
 
         let te = ds.text_edit.as_ref()?;
 
-        match ds.doc.world_bounds(te.id) {
-            Some(b) => {
-                let min = self.app.to_screen(b.x0, b.y0);
+        // 组合中用「组合文档」排版：候选窗要跟着 preedit 光标走，而不是停在组合起点。
+        let preedit = textedit::preedit_doc(&self.app.session);
+        let doc = preedit.as_ref().map(|(d, _, _)| d).unwrap_or(&ds.doc);
+        let Some(text) = canvas::outline::TextOnScreen::of(doc, te.id) else { return Some(element_bounds) };
 
-                let max = self.app.to_screen(b.x1, b.y1);
+        let index = preedit.as_ref().map(|(_, _, cursor)| *cursor).unwrap_or(te.caret);
 
-                Some(Bounds::from_corners(Point::new(px(min.x), px(min.y)), Point::new(px(max.x), px(max.y))))
-            }
-
-            None => Some(element_bounds),
-        }
+        Some(text.caret_bounds(&self.app, index.min(text.chars), ds.view.zoom, element_bounds.origin))
     }
 
-    fn character_index_for_point(&mut self, _: Point<Pixels>, _: &mut Window, _: &mut Context<Self>) -> Option<usize> {
-        // 没有字形级命中：返回 None，平台沿用当前 caret（点选定位交给引擎的 pointer 事件）。
+    fn character_index_for_point(&mut self, point: Point<Pixels>, _: &mut Window, _: &mut Context<Self>) -> Option<usize> {
+        // 平台问「这个屏幕点对应第几个 UTF-16 码元」：走文字排版的字形命中，
+        // 和引擎 `text_index_at` 同一条规则；组合中把索引映射回 preedit 的合成文本。
+        //
+        // `point` 是窗口坐标，`to_page` 吃的是画布局部坐标，先减掉画布原点。
 
-        None
+        let ds = self.app.session.ds().ok()?;
+
+        let te = ds.text_edit.as_ref()?;
+
+        let preedit = textedit::preedit_doc(&self.app.session);
+        let doc = preedit.as_ref().map(|(d, _, _)| d).unwrap_or(&ds.doc);
+        let text = canvas::outline::TextOnScreen::of(doc, te.id)?;
+
+        let (ox, oy) = self.dock().canvas_origin();
+        let local = pos2(f32::from(point.x) - ox, f32::from(point.y) - oy);
+        let page = self.app.to_page(local);
+
+        let index = text.index_at(page).min(text.chars);
+
+        let c = composed(&self.app)?;
+
+        Some(char_to_utf16(&c.text, index.min(c.text.chars().count())))
     }
 }
 
@@ -9957,6 +9979,81 @@ mod ime_tests {
         let v = app.session.execute("text.create", &serde_json::json!({"text": "Hello", "x": 10.0, "y": 10.0})).expect("create text");
 
         serde_json::from_value(v["id"].clone()).expect("text id")
+    }
+
+    #[test]
+
+    fn ime_caret_bounds_include_the_canvas_window_origin() {
+        let mut app = CanvasApp::new(sample_doc());
+
+        let id = text_id(&mut app);
+
+        // 单元测试没有布局阶段，画布矩形默认是空的（min=inf），先给一个真实矩形，
+        // 否则 `to_screen` 全是 inf，光标矩形没法验证。
+
+        app.canvas.rect = Rect { min: pos2(0.0, 0.0), max: pos2(800.0, 600.0) };
+
+        // 测试机不一定装了默认字体：换成应用实际使用的 MiSans，排版才有字形/行高。
+
+        if let Ok(ds) = app.session.ds_mut()
+            && let Some(NodeKind::Text(t)) = ds.doc_mut().node_mut(id).map(|n| &mut n.kind)
+        {
+            t.style.font_family = "MiSans".into();
+        }
+
+        textedit::begin(&mut app.session, id, Some(3), false).expect("begin");
+
+        let ds = app.session.ds().expect("session");
+
+        let Some(text) = crate::canvas::outline::TextOnScreen::of(&ds.doc, id) else { return };
+
+        // 没装字体时排版没有字形（CI 会设 CRAFT_FONTS_DIR，本地可能没有）：跳过几何断言。
+
+        if text.layout.glyphs.is_empty() {
+            return;
+        }
+
+        let zoom = ds.view.zoom;
+
+        let local = text.caret_bounds(&app, 3, zoom, Point::new(px(0.0), px(0.0)));
+
+        let window = text.caret_bounds(&app, 3, zoom, Point::new(px(240.0), px(40.0)));
+
+        // 画布原点（左导轨 + 面板 + 标题栏）必须原样加到候选窗矩形上；少了这一步，
+        // 候选窗会整体偏到画布左上角（用户 2026-11-26 拼音选词位置错）。
+
+        // `Pixels` is f32: the sum of two screen positions carries float noise.
+        let near = |a: gpui::Pixels, b: f32| (f32::from(a) - b).abs() < 0.01;
+
+        assert!(
+            near(window.origin.x - local.origin.x, 240.0),
+            "candidate box must include the canvas x origin: local={:?} window={:?}",
+            local.origin,
+            window.origin
+        );
+
+        assert!(
+            near(window.origin.y - local.origin.y, 40.0),
+            "candidate box must include the canvas y origin: local={:?} window={:?}",
+            local.origin,
+            window.origin
+        );
+
+        assert_eq!(window.size, local.size, "only the origin shifts, the caret size stays");
+
+        // 候选窗矩形必须贴着光标：宽 1pt、高度是一行字，而不是整个文字层。
+
+        assert!(local.size.width <= px(2.0), "caret box must be a thin line, got {:?}", local.size);
+
+        assert!(local.size.height > px(0.0), "caret box must have a line's height");
+
+        // 从光标矩形的中点反推页面坐标，字形命中应回到同一个字符索引。
+
+        let at = pos2(f32::from(local.origin.x), f32::from(local.origin.y + local.size.height / 2.0));
+
+        let page = app.to_page(at);
+
+        assert_eq!(text.index_at(page), 3, "clicking the caret must map back to the same character");
     }
 
     #[test]
