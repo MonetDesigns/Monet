@@ -540,6 +540,11 @@ pub struct PaneState {
     /// 当前打开的弹出层（菜单 / 取色器）；`None` 表示没打开。render 时画在最上层。
     popup: Option<Popup>,
 
+    /// 本窗口的取色器是否启动了画布吸管（`edit.pickColor { apply: false }`）。吸管状态
+    /// `tool.pick_only` / `tool.picked` 是会话级共享的，关闭别的窗口的菜单/取色器不能把它
+    /// 清掉；只有发起吸管的那个颜色弹窗关闭时才丢弃待处理取样。
+    color_pick_pending: bool,
+
     /// 变量编辑器**独立于 `popup`**（egui 的 `app.ui.variables`：不是 dialog，与主菜单等并存）。
     /// 关掉时只把 `variables_open` 置 false、**保留实体**，这样 Full/Floating、窗口位置、
     /// 选中行、分组折叠都能跨开关记住；再点按钮直接复用，不重建 `WindowState`。
@@ -1193,6 +1198,8 @@ impl CanvasView {
             last_col: 0.0,
 
             popup: None,
+
+            color_pick_pending: false,
 
             variables_editor: None,
 
@@ -3002,6 +3009,12 @@ impl CanvasView {
 
                 let params = panels::cmd_params(&ids, c.params);
 
+                // Popup commands bypass `run_command` and go straight to `session.execute`; mark
+                // the owning window here as well.
+                if c.id == "edit.pickColor" && params.get("apply").and_then(serde_json::Value::as_bool) == Some(false) {
+                    self.color_pick_pending = true;
+                }
+
                 // Motion export renders and encodes every frame. Running it on the UI thread froze
                 // the whole window for the duration of the encode. Defer it out of this borrow and
                 // run it on a worker with a cloned document; the save dialog is still native and
@@ -3686,6 +3699,13 @@ impl CanvasView {
     /// 跑一条命令（工具栏与右键菜单共用）：`ui-egui` 里是 `app.run(id, params)`。
 
     fn run_command(&mut self, id: &str, params: serde_json::Value, cx: &mut Context<Self>) {
+        // The colour picker's eyedropper only samples (`apply: false`). Remember that this
+        // window's picker owns the session-wide pending sample so another window closing its
+        // menu cannot discard it.
+        if id == "edit.pickColor" && params.get("apply").and_then(serde_json::Value::as_bool) == Some(false) {
+            self.color_pick_pending = true;
+        }
+
         // 打开 / 新建 / 关闭文件后，动画面板默认收起：Motion 是设计文件的编辑模式，不是常驻栏。
 
         // （egui `FigApp::new` 的 `motion_open: false`；用户 2026-11-10：「打开任何东西的时候
@@ -5743,10 +5763,15 @@ impl CanvasView {
         self.tool_flyout = None;
 
         // 取色器关闭后，已采样但还没交给 paint 的颜色没有去处：丢弃它，并让仍在取色模式的
-        // 工具回到 Move（对齐参考实现 colorpicker::show 的 picker=None 分支）。
-        if self.app.session.tool.picked.take().is_some() || self.app.session.tool.pick_only {
-            self.app.session.tool.pick_only = false;
-            self.run_command("tool.move", serde_json::json!({}), cx);
+        // 工具回到 Move（对齐参考实现 colorpicker::show 的 picker=None 分支）。吸管状态是
+        // 会话级共享的，所以只能由**本窗口发起吸管的颜色弹窗**清理：别的窗口关菜单/取色器
+        // 时不能把这里正在采样的 pick_only 清掉。
+        let closing_color = matches!(&self.popup, Some(Popup::Window(w)) if w.kind() == popovers::WindowKind::Color);
+        if closing_color && std::mem::take(&mut self.color_pick_pending) {
+            if self.app.session.tool.picked.take().is_some() || self.app.session.tool.pick_only {
+                self.app.session.tool.pick_only = false;
+                self.run_command("tool.move", serde_json::json!({}), cx);
+            }
         }
 
         // 变量编辑器独立于 popup：关闭主菜单/取色器等不影响它，`variables_full` 是会话记忆，
