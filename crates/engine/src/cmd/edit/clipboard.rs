@@ -2,6 +2,7 @@ use super::{
     Affine, BTreeMap, BTreeSet, Document, EngineError, ImageData, Node, NodeId, NodeKind, Result, Session, Value, bad, delete, get, id, json, num,
     ok, req_targets, roots, string, targets, vector_clipboard, z_sorted,
 };
+use figcraft_doc::anim::motion::{AnimProperty, AnimValue, TimelineSettings};
 
 /// The copied form of the selection.
 pub fn copy_to_clipboard(s: &mut Session, cmd: &str, ids: &[NodeId]) -> Result<()> {
@@ -219,6 +220,49 @@ pub(super) fn cut(s: &mut Session, p: &Value) -> Result<Value> {
     delete(s, &json!({"ids": layers}))
 }
 
+/// Where a node's parent sits in page space (identity for a page-level node).
+fn parent_world(doc: &Document, id: NodeId) -> Affine {
+    doc.node(id).and_then(|n| n.parent).map(|p| doc.world_transform(p)).unwrap_or(Affine::IDENTITY)
+}
+
+/// A pasted root moves from its old parent's space into a new one: its **own** Position
+/// keyframes are parent-local, so without the same placement transform the animation snaps
+/// back to where the original was — often outside the destination frame, where the timeline
+/// looks empty. Children keep their parent, so only the root needs this.
+///
+/// Translation only: a rotated/scaled placement changes the layer's base rotation/scale too,
+/// and shifting only X/Y would leave those tracks inconsistent, so those keep the old values.
+fn rebase_position(node: &mut Node, place: Affine) {
+    let [a, b, c, d, e, f] = place.as_coeffs();
+    let translated = (a - 1.0).abs() < 1e-6 && b.abs() < 1e-6 && c.abs() < 1e-6 && (d - 1.0).abs() < 1e-6;
+    if !translated || (e.abs() < 1e-9 && f.abs() < 1e-9) {
+        return;
+    }
+    let Some(track) = node.motion.track_mut(AnimProperty::Position) else { return };
+    for key in &mut track.keys {
+        if let AnimValue::Vec2(v) = &mut key.value {
+            v.x += e;
+            v.y += f;
+        }
+    }
+}
+
+/// Keep a copied frame's own timeline settings with its copy. `duplicate_into` already does
+/// this; paste only cloned the nodes, so the pasted frame silently used the destination
+/// page's duration instead — long animations then fell past the timeline's right edge.
+fn copy_timelines(doc: &mut Document, source: Option<&Document>, copy_local: bool, map: &BTreeMap<NodeId, NodeId>) {
+    for (old, new) in map {
+        let settings = if copy_local {
+            doc.timelines.get(old).copied().or_else(|| source.and_then(|s| s.timelines.get(old).copied()))
+        } else {
+            source.and_then(|s| s.timelines.get(old).copied())
+        };
+        if let Some(settings) = settings {
+            doc.timelines.insert(*new, settings.sanitized());
+        }
+    }
+}
+
 /// Paste the clipboard under `parent` with the copied top-left moved to `at` (page coords).
 pub fn paste_into(s: &mut Session, parent: NodeId, at: Option<(f64, f64)>) -> Result<Vec<NodeId>> {
     let clip = s.clipboard.clone();
@@ -246,8 +290,13 @@ pub fn paste_into(s: &mut Session, parent: NodeId, at: Option<(f64, f64)>) -> Re
             && let Some(n) = nodes.first().filter(|n| matches!(n.kind, NodeKind::Component { .. }))
             && doc.node(*root).is_some_and(|n| matches!(n.kind, NodeKind::Component { .. }))
         {
+            let old_parent = parent_world(doc, *root);
             let instance = crate::components::create_instance(doc, *root, parent, 0.0, 0.0)?;
-            doc.get_mut(instance)?.transform = doc.world_transform(parent).inverse() * shift * n.transform;
+            let place = doc.world_transform(parent).inverse() * shift;
+            doc.get_mut(instance)?.transform = place * n.transform;
+            if let Some(inst) = doc.node_mut(instance) {
+                rebase_position(inst, place * old_parent);
+            }
             out.push(instance);
             continue;
         }
@@ -258,11 +307,49 @@ pub fn paste_into(s: &mut Session, parent: NodeId, at: Option<(f64, f64)>) -> Re
         let mut nodes = nodes.clone();
         let section = nodes.first().is_some_and(|r| matches!(r.kind, NodeKind::Section { .. }));
         let into = if section && !doc.takes_sections(parent) { page } else { parent };
+        let old_parent = clip.source.as_deref().map(|d| parent_world(d, *root)).unwrap_or(Affine::IDENTITY);
+        let place = doc.world_transform(into).inverse() * shift;
         if let Some(r) = nodes.first_mut() {
-            r.transform = doc.world_transform(into).inverse() * shift * r.transform;
+            r.transform = place * r.transform;
+            rebase_position(r, place * old_parent);
         }
         out.push(doc.paste_nodes(&nodes, &map, *root, into, None)?);
+        copy_timelines(doc, clip.source.as_deref(), copy_local, &map);
         all.extend(map);
+    }
+    // A pasted animation can be longer than the destination frame's timeline. The timeline
+    // maps time to x, so its bar then starts past the right edge and the layer looks like it
+    // has no animation (and its clips paint over the shaded past-duration area). Grow the
+    // scope the pasted layers will be shown in — never shrink it — so the copy is visible
+    // where it was pasted, the manual "set the frame's duration" workaround done for the user.
+    // Group animated descendants by the frame that contains them: a section root can hold
+    // several frames, and each frame's clock must cover its own contents rather than stretching
+    // only the page. Layers outside any frame (groups, page-level layers) share the page scope.
+    let mut scopes: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
+    for root in &out {
+        for id in doc.subtree(*root) {
+            let scope = doc.top_level_frame(id).or_else(|| doc.page_of(id)).unwrap_or(id);
+            scopes.entry(scope).or_default().push(id);
+        }
+    }
+    for (scope, ids) in scopes {
+        // An instance follows its main's clock and must not get an instance-owned entry:
+        // `timeline_settings_for` would then stop forwarding later main duration/fps/loop
+        // changes. There is no unambiguous destination to extend here, so leave the main alone.
+        if doc.node(scope).is_some_and(|n| matches!(n.kind, NodeKind::Instance { .. })) {
+            continue;
+        }
+        let mut settings = doc.timeline_settings_for(scope).sanitized();
+        let mut end = settings.duration_ms;
+        for id in &ids {
+            if let Some((_, hi)) = doc.node(*id).and_then(|n| n.motion.span_ms(settings.duration_ms)) {
+                end = end.max(hi);
+            }
+        }
+        if end > settings.duration_ms {
+            settings.duration_ms = end.clamp(1, TimelineSettings::MAX_DURATION_MS);
+            doc.timelines.insert(scope, settings);
+        }
     }
     // Board connectors pasted with what they join join the pasted copies.
     let originals: Vec<(NodeId, figcraft_doc::BoardItem)> =
