@@ -545,11 +545,6 @@ pub struct PaneState {
     /// 当前打开的弹出层（菜单 / 取色器）；`None` 表示没打开。render 时画在最上层。
     popup: Option<Popup>,
 
-    /// 本窗口的取色器是否启动了画布吸管（`edit.pickColor { apply: false }`）。吸管状态
-    /// `tool.pick_only` / `tool.picked` 是会话级共享的，关闭别的窗口的菜单/取色器不能把它
-    /// 清掉；只有发起吸管的那个颜色弹窗关闭时才丢弃待处理取样。
-    color_pick_pending: bool,
-
     /// 变量编辑器**独立于 `popup`**（egui 的 `app.ui.variables`：不是 dialog，与主菜单等并存）。
     /// 关掉时只把 `variables_open` 置 false、**保留实体**，这样 Full/Floating、窗口位置、
     /// 选中行、分组折叠都能跨开关记住；再点按钮直接复用，不重建 `WindowState`。
@@ -772,6 +767,11 @@ pub struct CanvasView {
     panes: std::collections::HashMap<u64, PaneState>,
     pane_wid: u64,
 
+    /// 最近一次启动画布吸管的窗口（`edit.pickColor`）。`tool.pick_only` / `tool.picked` 是
+    /// 会话级共享的，所以关闭其它窗口的菜单/取色器不能清掉；关掉**这个**窗口的颜色弹窗时，
+    /// 才丢弃它发起的待处理取样。它不属于 `PaneState`，新窗口 clone 不会继承。
+    pick_owner: Option<u64>,
+
     /// 控制通道的请求队列（`--control <port>` 时由 [`control_server`] 往里塞）。
     control_queue: control::Queue,
 
@@ -782,6 +782,23 @@ pub struct CanvasView {
 /// OS 窗口句柄 → 登记的窗口 id（还没登记的窗口当作主窗口 0）。
 fn window_id_of(windows: &windows::Windows, window: &Window) -> u64 {
     windows.id_for(window.window_handle().window_id())
+}
+
+/// `edit.pickColor` ran in `wid`: that window now owns the session-wide eyedropper state. A later
+/// request from another window replaces the owner, so an older picker closing cannot cancel it.
+fn note_pick_owner(owner: &mut Option<u64>, wid: u64) {
+    *owner = Some(wid);
+}
+
+/// Closing a colour popup in `wid`: clear only if this window owns the active eyedropper. Returns
+/// whether the shared `tool.picked` / `tool.pick_only` should be discarded.
+fn take_pick_owner_on_close(owner: &mut Option<u64>, wid: u64) -> bool {
+    if *owner == Some(wid) {
+        *owner = None;
+        true
+    } else {
+        false
+    }
 }
 
 impl CanvasView {
@@ -1209,8 +1226,6 @@ impl CanvasView {
 
             popup: None,
 
-            color_pick_pending: false,
-
             variables_editor: None,
 
             variables_open: false,
@@ -1351,6 +1366,8 @@ impl CanvasView {
             windows: std::rc::Rc::new(std::cell::RefCell::new(windows::Windows::default())),
             panes: std::collections::HashMap::new(),
             pane_wid: 0,
+
+            pick_owner: None,
 
             control_queue: Arc::new(std::sync::Mutex::new(Vec::new())),
 
@@ -3051,9 +3068,9 @@ impl CanvasView {
                 let params = panels::cmd_params(&ids, c.params);
 
                 // Popup commands bypass `run_command` and go straight to `session.execute`; mark
-                // the owning window here as well.
-                if c.id == "edit.pickColor" && params.get("apply").and_then(serde_json::Value::as_bool) == Some(false) {
-                    self.color_pick_pending = true;
+                // the window that owns the eyedropper here as well.
+                if c.id == "edit.pickColor" {
+                    note_pick_owner(&mut self.pick_owner, self.pane_wid);
                 }
 
                 // 命令前的 uid 快照：成功后用 uid-diff 把新文档登记到发起窗口（见 adopt_opened_doc）。
@@ -3731,11 +3748,11 @@ impl CanvasView {
     /// 跑一条命令（工具栏与右键菜单共用）：`ui-egui` 里是 `app.run(id, params)`。
 
     fn run_command(&mut self, id: &str, params: serde_json::Value, cx: &mut Context<Self>) {
-        // The colour picker's eyedropper only samples (`apply: false`). Remember that this
-        // window's picker owns the session-wide pending sample so another window closing its
-        // menu cannot discard it.
-        if id == "edit.pickColor" && params.get("apply").and_then(serde_json::Value::as_bool) == Some(false) {
-            self.color_pick_pending = true;
+        // The colour picker's eyedropper and direct pick command both use the session-wide
+        // sampling state; remember which window asked for it so another window closing its menu
+        // cannot discard the sample.
+        if id == "edit.pickColor" {
+            note_pick_owner(&mut self.pick_owner, self.pane_wid);
         }
 
         // 打开 / 新建 / 关闭文件后，动画面板默认收起：Motion 是设计文件的编辑模式，不是常驻栏。
@@ -5729,10 +5746,10 @@ impl CanvasView {
 
         // 取色器关闭后，已采样但还没交给 paint 的颜色没有去处：丢弃它，并让仍在取色模式的
         // 工具回到 Move（对齐参考实现 colorpicker::show 的 picker=None 分支）。吸管状态是
-        // 会话级共享的，所以只能由**本窗口发起吸管的颜色弹窗**清理：别的窗口关菜单/取色器
+        // 会话级共享的，所以只能由**最近一次发起吸管的窗口**清理：别的窗口关菜单/取色器
         // 时不能把这里正在采样的 pick_only 清掉。
         let closing_color = matches!(&self.popup, Some(Popup::Window(w)) if w.kind() == popovers::WindowKind::Color);
-        if closing_color && std::mem::take(&mut self.color_pick_pending) {
+        if closing_color && take_pick_owner_on_close(&mut self.pick_owner, self.pane_wid) {
             if self.app.session.tool.picked.take().is_some() || self.app.session.tool.pick_only {
                 self.app.session.tool.pick_only = false;
                 self.run_command("tool.move", serde_json::json!({}), cx);
@@ -10789,6 +10806,35 @@ mod keyboard_audit_tests {
         }
         eprintln!("[audit] ok={ok} broken={}\n{}", broken.len(), broken.join("\n"));
         assert!(broken.is_empty(), "{} bindings broken", broken.len());
+    }
+}
+
+#[cfg(test)]
+mod color_pick_owner_tests {
+    use super::{note_pick_owner, take_pick_owner_on_close};
+
+    #[test]
+    fn a_newer_eyedropper_request_replaces_the_previous_owner() {
+        let mut owner = None;
+        note_pick_owner(&mut owner, 1); // window A samples
+        note_pick_owner(&mut owner, 2); // window B samples later
+
+        assert!(!take_pick_owner_on_close(&mut owner, 1), "A's older picker must not cancel B's sampling");
+        assert_eq!(owner, Some(2));
+
+        assert!(take_pick_owner_on_close(&mut owner, 2), "B owns the active sample");
+        assert_eq!(owner, None);
+    }
+
+    #[test]
+    fn a_new_window_does_not_inherit_the_active_owner() {
+        let mut owner = None;
+        note_pick_owner(&mut owner, 1); // window A samples
+
+        // `enter_pane` clones PaneState, but ownership lives on CanvasView; a popup closed by the
+        // freshly opened window B must still leave A's sampling alone.
+        assert!(!take_pick_owner_on_close(&mut owner, 2));
+        assert_eq!(owner, Some(1), "B never owned the sample");
     }
 }
 
