@@ -321,6 +321,28 @@ pub struct EditOverlay {
     pub anchor: Option<usize>,
 }
 
+/// A shape's straight-corner skeleton with the layer's corner radii written into its points, or
+/// `None` when the shape has no corner-radius semantics (ellipse, line, boolean, …).
+///
+/// Converting a rounded rectangle to a vector keeps the corners editable as point data instead of
+/// baking the rounded curves into the path (用户 2026-11-25)：`drawn_network` 会按顶点 radius
+/// 还原出同样的圆角，`vector.edit.cornerRadius` 也能继续调。
+pub fn semantic_network(n: &figcraft_doc::Node) -> Option<VectorNetwork> {
+    if !matches!(n.kind, NodeKind::Rectangle) || !n.corners.radii.iter().any(|r| *r > 0.0) {
+        return None;
+    }
+    // 直角矩形路径从左上角开始，四个顶点的顺序与 `radii`（[左上, 右上, 右下, 左下]）一致。
+    let sharp = figcraft_geom::rounded_rect(n.width, n.height, [0.0; 4], 0.0);
+    let mut net = VectorNetwork::from_path(&sharp);
+    if net.vertices.len() != 4 {
+        return None;
+    }
+    for (v, r) in net.vertices.iter_mut().zip(n.corners.radii) {
+        v.radius = r;
+    }
+    Some(net)
+}
+
 /// Convert a shape to an editable vector (keeps paints, transform and look).
 pub fn ensure_vector(doc: &mut Document, id: NodeId) -> Result<()> {
     let n = doc.get(id)?.clone();
@@ -331,7 +353,11 @@ pub fn ensure_vector(doc: &mut Document, id: NodeId) -> Result<()> {
         return Err(EngineError::Other(format!("{} layers can't be edited as vectors", n.kind.label())));
     }
     let (path, rule) = figcraft_render::node_outline(doc, &n).ok_or_else(|| EngineError::Other("no outline".into()))?;
-    let mut net = VectorNetwork::from_path(&path);
+    // 带圆角的矩形走「直角骨架 + 顶点圆角」，其余形状仍从已绘制的路径反推。
+    let (mut net, keep_smoothing) = match semantic_network(&n) {
+        Some(m) => (m, n.corners.smoothing),
+        None => (VectorNetwork::from_path(&path), 0.0),
+    };
     if matches!(n.kind, NodeKind::Line) {
         net.regions.clear();
     }
@@ -346,7 +372,8 @@ pub fn ensure_vector(doc: &mut Document, id: NodeId) -> Result<()> {
     if matches!(n.kind, NodeKind::Line) {
         node.stroke.align = StrokeAlign::Center;
     }
-    node.corners = Corners::default();
+    // 圆角已经搬到顶点上：层的 radii 清零，但 smoothing 要留给 `drawn_network` 还原圆角造型。
+    node.corners = Corners { radii: [0.0; 4], smoothing: keep_smoothing };
     refit(doc, id)?;
     Ok(())
 }

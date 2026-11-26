@@ -271,7 +271,7 @@ pub(crate) fn render(
     let body = match kind {
         ExtraKind::Shortcuts => shortcuts_body(state, cmds, cx),
         ExtraKind::Versions => versions_body(app, cmds, state, root, cx),
-        ExtraKind::DevCompare { id, version } => compare_body(app, cmds, state, *id, version.as_deref()),
+        ExtraKind::DevCompare { id, version } => compare_body(app, cmds, state, *id, version.as_deref(), root),
         // 「+」打开的临时页（`new_active`）用 Figma 桌面首页的样子：居中分类 + 搜索 + 最近文件。
         // 「+」打开的临时页（`new_active`）用 参考编辑器 桌面首页的样子：居中分类 + 搜索 + 最近文件。
         ExtraKind::Home => crate::home::body(app, cmds, state, root, new_page),
@@ -503,7 +503,7 @@ fn versions_body(
     cx: &mut App,
 ) -> Div {
     let t = tokens();
-    let Ok(ds) = app.session.ds() else { return note("No document open.") };
+    let Ok(ds) = app.session.ds() else { return note(tr("No document open.")) };
 
     // 打开 / 收起「保存新版本」表单。
     let vt = state.ver_form.clone();
@@ -601,7 +601,7 @@ fn versions_body(
     }
 
     if ds.versions.is_empty() {
-        return div().w_full().child(sec.child(field_row_full(note("No saved versions yet. Save a version to mark a point you can come back to."))));
+        return div().w_full().child(sec.child(field_row_full(note(tr("No saved versions yet. Save a version to mark a point you can come back to.")))));
     }
 
     for v in ds.versions.iter().rev() {
@@ -802,13 +802,20 @@ fn layer_boxes(
     out
 }
 
-fn compare_body(app: &CanvasApp, cmds: &Cmds, state: &ExtraState, id: Option<figcraft_doc::NodeId>, version: Option<&str>) -> Div {
+fn compare_body(
+    app: &CanvasApp,
+    cmds: &Cmds,
+    state: &ExtraState,
+    id: Option<figcraft_doc::NodeId>,
+    version: Option<&str>,
+    root: Option<Entity<crate::CanvasView>>,
+) -> Div {
     let t = tokens();
-    let Ok(ds) = app.session.ds() else { return note("No document open.") };
+    let Ok(ds) = app.session.ds() else { return note(tr("No document open.")) };
     let doc = &ds.doc;
     let target = id.or_else(|| ds.selection.first().copied()).or_else(|| ds.focused());
     let Some(id) = target else {
-        return note("Select a frame or section marked ready for dev to compare it.");
+        return note(tr("Select a frame or section marked ready for dev to compare it."));
     };
     // 版本：面板内选中的优先（ExtraState），否则打开时带进来的。
     let chosen = state.dev_version.borrow().clone().or_else(|| version.map(str::to_string));
@@ -834,19 +841,47 @@ fn compare_body(app: &CanvasApp, cmds: &Cmds, state: &ExtraState, id: Option<fig
 
     // 控制行：Compare with + 并排/叠加切换。
     let opts: Vec<Option<String>> = std::iter::once(None).chain(ds.versions.iter().map(|v| Some(v.id.clone()))).collect();
-    let cur_idx = opts.iter().position(|o| o == &chosen).unwrap_or(0);
     let cur_name = chosen
         .as_ref()
         .and_then(|v| ds.versions.iter().find(|x| &x.id == v).map(|x| x.name.clone()))
         .unwrap_or_else(|| tr("When marked ready").into());
     let vstate = state.dev_version.clone();
     let vwake = cmds.clone();
-    let mut version_dd = Dropdown::new(SharedString::from(cur_name), 200.0, None).fill();
-    version_dd = version_dd.on_click(move |_anchor, _window, _cx| {
-        let next = (cur_idx + 1) % opts.len().max(1);
-        *vstate.borrow_mut() = opts[next].clone();
-        vwake.wake();
-    });
+    // Names line up with `opts` (index 0 = "When marked ready", then the saved versions).
+    let labels: Vec<String> = opts
+        .iter()
+        .map(|o| {
+            o.as_ref()
+                .and_then(|v| ds.versions.iter().find(|x| &x.id == v).map(|x| x.name.clone()))
+                .unwrap_or_else(|| tr("When marked ready").into())
+        })
+        .collect();
+    let menu: Vec<MenuRow> = labels.iter().enumerate().map(|(i, l)| MenuRow::row(l.clone()).key(i.to_string())).collect();
+    let anchor_key = "dev-compare:version".to_string();
+    let anchor_handle = crate::widgets::dropdown::menu_anchor(&anchor_key);
+    let mut version_dd = Dropdown::new(SharedString::from(cur_name), 200.0, None).fill().menu(anchor_key);
+    if let Some(root) = root.clone() {
+        let opts = opts.clone();
+        let menu = menu.clone();
+        let vstate = vstate.clone();
+        let vwake = vwake.clone();
+        version_dd = version_dd.on_click(move |anchor, _window, cx: &mut App| {
+            let opts = opts.clone();
+            let vstate = vstate.clone();
+            let vwake = vwake.clone();
+            let on_pick = Rc::new(move |key: &str, _w: &mut Window, _cx: &mut App| {
+                if let Some(v) = key.parse::<usize>().ok().and_then(|i| opts.get(i)) {
+                    *vstate.borrow_mut() = v.clone();
+                    vwake.wake();
+                }
+            });
+            let anchor_handle = anchor_handle.clone();
+            let menu = menu.clone();
+            root.update(cx, move |cv, cx| {
+                cv.open_dropdown_menu(Some(anchor_handle), anchor, Some(200.0), menu, on_pick, cx);
+            });
+        });
+    }
     let mstate = state.dev_mode.clone();
     let mwake = cmds.clone();
     let mode_label = match *mstate.borrow() {
@@ -1034,7 +1069,7 @@ pub(crate) fn assets_body(
     _cx: &mut App,
 ) -> Div {
     let t = tokens();
-    let Ok(ds) = app.session.ds() else { return note("No document open.") };
+    let Ok(ds) = app.session.ds() else { return note(tr("No document open.")) };
     let doc = &ds.doc;
     let q = state.assets_query.borrow().clone();
 

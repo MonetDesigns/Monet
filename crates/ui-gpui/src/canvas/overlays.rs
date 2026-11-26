@@ -421,8 +421,10 @@ pub(super) fn overlays(
         }
     }
 
-    // ── 框选框。
-    if let Some([x0, y0, x1, y1]) = ov.marquee {
+    // ── 框选框（鼠标拖拽的引擎 overlay，或 Alt+Space/F8 的键盘选择框）。
+    // 两者互斥：键盘框打开时优先画它（上游 `FigApp::ui.key_box`）。
+    let box_rect = app.key_box.or(ov.marquee);
+    if let Some([x0, y0, x1, y1]) = box_rect {
         let r = Rect::from_two_pos(app.to_screen(x0, y0), app.to_screen(x1, y1));
         painter.rect_filled(r, CornerRadius::ZERO, accent.gamma_multiply(0.1));
         painter.rect_stroke(r, CornerRadius::ZERO, stroke(accent, 1.0), StrokeKind::Inside);

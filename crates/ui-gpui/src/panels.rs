@@ -10,7 +10,7 @@ use crate::canvas::geom::Color32;
 use crate::inline_input::InlineInput;
 use crate::widgets::menu::MenuRow;
 use crate::widgets::{
-    Icon, IconButton, PanelSection, SectionHeader, SectionHeaderVariant, Segmented, Slot, TextEdit, TextField, field_row, field_row_full,
+    Icon, IconButton, PanelSection, SectionHeader, SectionHeaderVariant, Segmented, Slot, TextEdit, TextField, Dropdown, field_row, field_row_full,
     field_row_h, pt, rgba, sublabel_row, sublabel_row2, tokens,
 };
 use figcraft_color::BlendMode;
@@ -704,6 +704,17 @@ pub(crate) struct RightFields {
     inspect_lang: std::rc::Rc<std::cell::RefCell<usize>>,
     inspect_fmt: std::rc::Rc<std::cell::RefCell<usize>>,
     inspect_rem: std::rc::Rc<std::cell::RefCell<bool>>,
+    /// `annotation.new` request: focus the "new annotation" field of this layer once it is built.
+    note_focus_id: std::rc::Rc<std::cell::RefCell<Option<figcraft_doc::NodeId>>>,
+    /// The field entity `annotations` handed over for that focus request (taken by `right_panel`).
+    note_focus_edit: std::rc::Rc<std::cell::RefCell<Option<Entity<TextEdit>>>>,
+    /// Component Playground: the target the values belong to (reset when the selection changes),
+    /// the values the user is trying, the last built result and its cache key, and one text field
+    /// per text property (kept across frames so typing/caret survive).
+    playground_target: std::rc::Rc<std::cell::RefCell<Option<figcraft_doc::NodeId>>>,
+    playground_values: std::rc::Rc<std::cell::RefCell<serde_json::Map<String, Value>>>,
+    playground_cache: std::rc::Rc<std::cell::RefCell<Option<(String, right::data::PlaygroundData)>>>,
+    playground_edits: std::rc::Rc<std::cell::RefCell<std::collections::HashMap<String, Entity<TextEdit>>>>,
     /// Prototype 面板里展开编辑的那条交互：`(节点, 行下标)`；`None` = 都没展开。
     /// 带节点是因为画布上的原型连线/手柄也能打开编辑器，切选后同一下标不该串行。
     proto_open: std::rc::Rc<std::cell::RefCell<Option<(figcraft_doc::NodeId, usize)>>>,
@@ -768,8 +779,6 @@ pub(crate) struct RightFields {
     corner_br: Entity<TextField>,
     /// 「独立圆角」展开开关（egui `right.rs` 的 `Id::new("indep_corners")` 临时标记）。
     corners_individual: std::rc::Rc<std::cell::RefCell<bool>>,
-    /// Whether the constraints row under X/Y is revealed.
-    constraints_open: std::rc::Rc<std::cell::RefCell<bool>>,
     /// 描边逐边权重 T/R/B/L（`strokeTopWeight` … `strokeLeftWeight`）。选「Custom」后展开，
     /// 对应 egui `paints.rs::stroke` 的 `common(doc, sel, |n| n.stroke.sides)` 那两行输入框。
     stroke_side_t: Entity<TextField>,
@@ -1246,14 +1255,38 @@ impl RightFields {
                         None => params[key] = v,
                     };
                     if c.string_value {
-                        if let Some(mut paint) = c.paint_color.clone() {
+                        if c.cmd == "page.setBackground" && c.key == "color" {
+                            // 改页面底色时不要顺手把不透明度重置成 100：6 位 hex 输入沿用
+                            // 旧 alpha，8 位 hex 输入则以输入里的 alpha 为准。
+                            let base = params
+                                .get("color")
+                                .and_then(Value::as_str)
+                                .and_then(figcraft_color::Color::from_hex)
+                                .unwrap_or(figcraft_color::Color::WHITE);
+                            let input = text.trim();
+                            if let Some(color) = figcraft_color::Color::from_hex(input) {
+                                let digits = input.trim_start_matches('#').chars().filter(|c| c.is_ascii_hexdigit()).count();
+                                let alpha = if digits == 6 { base.a } else { color.a };
+                                params["color"] = Value::String(color.with_alpha(alpha).to_css_hex());
+                            }
+                        } else if let Some(mut paint) = c.paint_color.clone() {
                             paint["color"] = Value::String(text.trim().to_string());
                             params["paint"] = paint;
                         } else {
                             put(&mut params, c.key, Value::String(text.trim().to_string()));
                         }
                     } else if let Ok(v) = text.trim().trim_end_matches('%').trim().parse::<f64>() {
-                        if let Some(mut paint) = c.paint.clone() {
+                        if c.cmd == "page.setBackground" && c.key == "opacity" {
+                            // 页面背景的不透明度是颜色的一部分：引擎 `page.setBackground`
+                            // 只读 `color`（`crates/engine/src/cmd/page.rs`），所以把固定
+                            // 底色参数的 alpha 换掉后提交 8 位 hex（`#RRGGBBAA`）。
+                            let base = params
+                                .get("color")
+                                .and_then(Value::as_str)
+                                .and_then(figcraft_color::Color::from_hex)
+                                .unwrap_or(figcraft_color::Color::WHITE);
+                            params["color"] = Value::String(base.with_alpha((v / c.scale) as f32).to_css_hex());
+                        } else if let Some(mut paint) = c.paint.clone() {
                             // egui `selection_colors.rs`: clone the group's paint, change its
                             // opacity, and send the whole object as `paint`.
                             paint["opacity"] = serde_json::json!(v / c.scale);
@@ -1337,6 +1370,12 @@ impl RightFields {
             inspect_lang: std::rc::Rc::new(std::cell::RefCell::new(0usize)),
             inspect_fmt: std::rc::Rc::new(std::cell::RefCell::new(0usize)),
             inspect_rem: std::rc::Rc::new(std::cell::RefCell::new(false)),
+            note_focus_id: std::rc::Rc::new(std::cell::RefCell::new(None)),
+            note_focus_edit: std::rc::Rc::new(std::cell::RefCell::new(None)),
+            playground_target: std::rc::Rc::new(std::cell::RefCell::new(None)),
+            playground_values: std::rc::Rc::new(std::cell::RefCell::new(serde_json::Map::new())),
+            playground_cache: std::rc::Rc::new(std::cell::RefCell::new(None)),
+            playground_edits: std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new())),
             proto_open: std::rc::Rc::new(std::cell::RefCell::new(None)),
             // WGSL 材质（另一条并行开发线新增的字段）：这里先给可编译的默认值，
             // 参数输入框池由该功能自己按需预建。
@@ -1409,7 +1448,6 @@ impl RightFields {
             corner_bl: nf_corner(cx, "BL", "bottomLeftRadius", &cmds),
             corner_br: nf_corner(cx, "BR", "bottomRightRadius", &cmds),
             corners_individual: std::rc::Rc::new(std::cell::RefCell::new(false)),
-            constraints_open: std::rc::Rc::new(std::cell::RefCell::new(false)),
             // 描边逐边权重：与菜单里 T/R/B/L 四项、展开后 lead 同一族图标。
             stroke_side_t: nf_stroke_side(cx, Icon::PaddingTop, "strokeTopWeight", &cmds, wake),
             stroke_side_r: nf_stroke_side(cx, Icon::PaddingRight, "strokeRightWeight", &cmds, wake),
@@ -1539,7 +1577,6 @@ impl RightFields {
         // scale_ctx / pad 同理保留共享（见上方注释），不重置。
         f.pad_individual = Default::default();
         f.corners_individual = Default::default();
-        f.constraints_open = Default::default();
         f.limit_open = Default::default();
         f.bind_hover = Default::default();
         f.blend_open = Default::default();
@@ -1559,6 +1596,96 @@ impl RightFields {
     /// The canvas view, for opening a menu from a panel control (the comments filter).
     pub(crate) fn root(&self) -> Option<Entity<CanvasView>> {
         self.root.clone()
+    }
+
+    /// `annotation.new`: remember which layer's new-note field should take focus.
+    pub(crate) fn request_note_focus(&self, id: figcraft_doc::NodeId) {
+        *self.note_focus_id.borrow_mut() = Some(id);
+    }
+
+    /// Whether this layer is the pending focus target; consumes the request (once).
+    pub(crate) fn take_note_focus_id(&self, id: figcraft_doc::NodeId) -> bool {
+        let mut slot = self.note_focus_id.borrow_mut();
+        if *slot == Some(id) {
+            *slot = None;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// The field built for that request; `right_panel` focuses it with the real `Window`.
+    pub(crate) fn set_note_focus_edit(&self, edit: Entity<TextEdit>) {
+        *self.note_focus_edit.borrow_mut() = Some(edit);
+    }
+
+    pub(crate) fn take_note_focus_edit(&self) -> Option<Entity<TextEdit>> {
+        self.note_focus_edit.borrow_mut().take()
+    }
+
+    /// Drop a pending `annotation.new` when its target layer no longer exists.
+    pub(crate) fn clear_note_focus(&self) {
+        *self.note_focus_id.borrow_mut() = None;
+        *self.note_focus_edit.borrow_mut() = None;
+    }
+
+    /// The playground values for `target`; a different target clears the tried values (EGUI resets
+    /// its `Playground` when the selection moves to another component).
+    pub(crate) fn playground_values(&self, target: figcraft_doc::NodeId) -> serde_json::Map<String, Value> {
+        let mut owner = self.playground_target.borrow_mut();
+        if *owner != Some(target) {
+            *owner = Some(target);
+            self.playground_values.borrow_mut().clear();
+            *self.playground_cache.borrow_mut() = None;
+        }
+        self.playground_values.borrow().clone()
+    }
+
+    pub(crate) fn set_playground_value(&self, name: String, value: Value) {
+        self.playground_values.borrow_mut().insert(name, value);
+        *self.playground_cache.borrow_mut() = None;
+    }
+
+    pub(crate) fn clear_playground_values(&self) {
+        self.playground_values.borrow_mut().clear();
+        *self.playground_cache.borrow_mut() = None;
+    }
+
+    pub(crate) fn playground_cache(&self, key: &str) -> Option<right::data::PlaygroundData> {
+        self.playground_cache.borrow().as_ref().filter(|(k, _)| k == key).map(|(_, v)| v.clone())
+    }
+
+    pub(crate) fn set_playground_cache(&self, key: String, data: right::data::PlaygroundData) {
+        *self.playground_cache.borrow_mut() = Some((key, data));
+    }
+
+    /// A text property's editor, kept across frames (the playground section is rebuilt each frame).
+    pub(crate) fn playground_edit(&self, cx: &mut App, name: &str, value: &str) -> Entity<TextEdit> {
+        let edit = self
+            .playground_edits
+            .borrow_mut()
+            .entry(name.to_string())
+            .or_insert_with(|| cx.new(|cx| TextEdit::new(cx)))
+            .clone();
+        let values = self.playground_values.clone();
+        let wake = self.cmds.clone();
+        let key = name.to_string();
+        edit.update(cx, |te, _| {
+            if te.value() != value {
+                te.set_value(value);
+            }
+            te.set_on_change(move |text, _w, cx| {
+                values.borrow_mut().insert(key.clone(), Value::String(text.to_string()));
+                // 300 ms 防抖：逐字输入不逐帧 `build + export_preview`，停顿后再刷新预览与代码。
+                let wake = wake.clone();
+                cx.spawn(async move |_, _| {
+                    smol::Timer::after(std::time::Duration::from_millis(300)).await;
+                    wake.wake();
+                })
+                .detach();
+            });
+        });
+        edit
     }
 
     /// A3: the Comments panel's local state.
@@ -1714,6 +1841,15 @@ impl RightFields {
             last[slot] = Some(value.to_string());
         }
         self.row_editors[slot].clone()
+    }
+
+    /// 实例内部的层不能改位置：X/Y/W/H/Rotation 的文本字段逐帧切只读。
+    /// 分段按钮 / 图标按钮没有 disabled API，由调用点去掉回调并降透明度。
+    pub(crate) fn set_position_readonly(&self, cx: &mut App, readonly: bool) {
+        let fields = [&self.x, &self.y, &self.w, &self.h, &self.rotation];
+        for e in fields {
+            e.update(cx, |tf, _| tf.set_readonly(readonly));
+        }
     }
 
     /// Push the selected nodes' common values into the cached fields (selection → panel).
@@ -2460,11 +2596,15 @@ pub(crate) fn right_panel(
         body = body.child(s).child(sep());
     }
     // ── Position / Scale / Points ───────────────────────────────────────────────
-    // 矢量编辑选了顶点或线段时，点面板**替换** Position（egui `design`：`match vector_edit
+    // 矢量编辑激活时，点面板**替换** Position（egui `design`：`match vector_edit
     // { Some(ve) => vector_panel::points(...), None => { … position … } }`）。
+    // 注意门槛是「正在编辑矢量」而不是「已选中点」：刚进入矢量编辑、还没点任何点时，
+    // 参考实现照样画 Points 面板（`Point` + `Select points…`），Position 整块让位。
+    // `points_selected` 仍单独用来抑制 Arc / Star 与 Auto layout（无点时 layout 照常显示）。
+    let vector_active = data.vector.is_some();
     let points_selected = data.vector.as_ref().is_some_and(|v| v.has_selection);
     body = body
-        .child(if points_selected {
+        .child(if vector_active {
             right::sections::vector_points(f, data, cx, &mut n)
         } else if data.scale.is_some() {
             right::sections::scale(f, data, cx)
@@ -2472,12 +2612,21 @@ pub(crate) fn right_panel(
             // `position_fields`: Alignment captions sit above the 32 pt field track; the six icons are
             // two three-cell segments; each fills one field column of the unified grid (no fixed
             // width — they flow with the columns, so they stay aligned with the X/Y rows below).
+            // 实例内部的层拿不到自己的位置：X/Y/W/H/Rotation/约束整块只读（参考实现用
+            // `add_enabled_ui(!nested)` 包住 `position_fields`）。这里逐帧把字段设成只读，
+            // 并把没有 disabled API 的分段按钮换成「无回调 + 降透明度」。
+            f.set_position_readonly(cx, data.position_readonly);
             let bar = |items: &[(Icon, &'static str)], base: usize| {
                 let cmds = f.cmds.clone();
-                Segmented::icons(items).on_pick(move |i: usize, _w: &mut Window, _cx: &mut App| {
-                    const NAMES: [&str; 6] = ["align.left", "align.hcenter", "align.right", "align.top", "align.vcenter", "align.bottom"];
-                    cmds.push(Cmd { id: NAMES[(base + i).min(5)], params: None });
-                })
+                let seg = Segmented::icons(items);
+                if data.position_readonly {
+                    seg
+                } else {
+                    seg.on_pick(move |i: usize, _w: &mut Window, _cx: &mut App| {
+                        const NAMES: [&str; 6] = ["align.left", "align.hcenter", "align.right", "align.top", "align.vcenter", "align.bottom"];
+                        cmds.push(Cmd { id: NAMES[(base + i).min(5)], params: None });
+                    })
+                }
             };
             let h = bar(
                 &[(Icon::AlignLeft, tr("Align left")), (Icon::AlignHCenter, tr("Align horizontal centers")), (Icon::AlignRight, tr("Align right"))],
@@ -2491,6 +2640,9 @@ pub(crate) fn right_panel(
             // 少于 3 个图层时这个按钮**根本不画**，不是画出来再禁用。此前这里无条件显示，
             // 是「按钮什么时候显示 / 什么时候隐藏没接好」最直白的一处。
             let distribute_btn = visibility::distribute(&sel).then(|| {
+                if data.position_readonly {
+                    return div().opacity(0.45).child(IconButton::new(Icon::DistributeH).size(24.0)).into_any_element();
+                }
                 let dist_cmds = f.cmds.clone();
                 let dist_root = f.root.clone();
                 // 照抄 `Dropdown`：.menu(key) + on_click_at 收按钮真实矩形。
@@ -2516,21 +2668,32 @@ pub(crate) fn right_panel(
             // `rotate_row`: the three 24 pt cells under "Rotation" (`position_fields`'s
             // `widgets::segmented`): Rotate 90° / Flip H / Flip V — each a `object.*` command.
             let rot_cmds = f.cmds.clone();
-            let rotate =
-                Segmented::icons(&[(Icon::Rotate, tr("Rotate 90° right")), (Icon::FlipH, tr("Flip horizontal")), (Icon::FlipV, tr("Flip vertical"))])
-                    .on_pick(move |i: usize, _w: &mut Window, _cx: &mut App| {
+            let rotate = {
+                let seg = Segmented::icons(&[(Icon::Rotate, tr("Rotate 90° right")), (Icon::FlipH, tr("Flip horizontal")), (Icon::FlipV, tr("Flip vertical"))]);
+                if data.position_readonly {
+                    seg
+                } else {
+                    seg.on_pick(move |i: usize, _w: &mut Window, _cx: &mut App| {
                         const C: [&str; 3] = ["object.rotateRight", "object.flipH", "object.flipV"];
                         rot_cmds.push(Cmd { id: C[i.min(2)], params: None });
-                    });
+                    })
+                }
+            };
             // egui `right.rs::position_row`: children of an auto layout frame can ignore the
             // layout (absolute position). The command / active state are the same, but the
             // button lives in the Position section's header slot, not in the X/Y field row.
             let absolute_btn = data.parent_al.then(|| {
                 let abs_cmds = f.cmds.clone();
                 let on = data.absolute.unwrap_or(false);
-                IconButton::new(Icon::AbsolutePosition).size(24.0).active(on).on_click(move |_e, _w, _cx| {
-                    abs_cmds.push(Cmd { id: "node.set", params: Some(serde_json::json!({ "props": { "absolute": !on } })) });
-                })
+                let btn = IconButton::new(Icon::AbsolutePosition).size(24.0).active(on);
+                if data.position_readonly {
+                    div().opacity(0.45).child(btn).into_any_element()
+                } else {
+                    btn.on_click(move |_e, _w, _cx| {
+                        abs_cmds.push(Cmd { id: "node.set", params: Some(serde_json::json!({ "props": { "absolute": !on } })) });
+                    })
+                    .into_any_element()
+                }
             });
             // One trailing slot, so both optional header buttons share it.
             let has_pos_trail = distribute_btn.is_some() || absolute_btn.is_some();
@@ -2541,16 +2704,6 @@ pub(crate) fn right_panel(
             if let Some(b) = absolute_btn {
                 pos_trail = pos_trail.child(b);
             }
-            let constraints_open = *f.constraints_open.borrow();
-            let constraints_toggle = {
-                let flag = f.constraints_open.clone();
-                let wake = f.cmds.clone();
-                IconButton::new(Icon::LayoutGrid).size(24.0).active(constraints_open).on_click(move |_e, _w, _cx| {
-                    let next = !*flag.borrow();
-                    *flag.borrow_mut() = next;
-                    wake.wake();
-                })
-            };
             let mut pos_sec = PanelSection::new(tr("Position"));
             if has_pos_trail {
                 pos_sec = pos_sec.header_trail(pos_trail);
@@ -2559,17 +2712,24 @@ pub(crate) fn right_panel(
             // 它只在 can_align 时出现：空选区或页面上的孤层没有对齐目标，两组图标与 caption
             // 整行都不画。`data.can_align` 由引擎同名函数算出。
             if data.can_align {
+                let h_el = if data.position_readonly { h.build().opacity(0.45).into_any_element() } else { h.into_any_element() };
+                let v_el = if data.position_readonly { v.build().opacity(0.45).into_any_element() } else { v.into_any_element() };
                 pos_sec = pos_sec
                     .child(sublabel_row(tr("Alignment")))
-                    .child(field_row(vec![h.into_any_element(), v.into_any_element()], Vec::<IconButton>::new()));
+                    .child(field_row(vec![h_el, v_el], Vec::<IconButton>::new()));
             }
+            // 参考实现把 Constraints 挂在 Rotation 之后，**没有展开按钮**：只要 `in_frame`
+            // （frame 子层、父级无 auto layout 或自身 absolute）就画出来。旧实现用一颗
+            // `LayoutGrid` 切换按钮先折叠，等于默认把约束藏起来，与本轮对齐目标相反。
             pos_sec = pos_sec.child(sublabel_row(tr("Position"))).child(field_row(
                 vec![f.x.clone().into_any_element(), f.y.clone().into_any_element()],
-                // 约束只在 frame 子层（父级无 auto layout 或自身 absolute）时出现：
-                // 展开按钮与下面的约束节共用同一个 in_frame 门槛（参考实现
-                // `right.rs::position_fields` 的 `if in_frame { … }`），两者不能分家。
-                if data.in_frame { vec![constraints_toggle] } else { Vec::<IconButton>::new() },
+                Vec::<IconButton>::new(),
             ));
+            // 顺序照参考实现 `position_fields`：align → X/Y → rotation → constraints。
+            let rot_el = if data.position_readonly { rotate.build().opacity(0.45).into_any_element() } else { rotate.into_any_element() };
+            let pos_sec = pos_sec
+                .child(sublabel_row(tr("Rotation")))
+                .child(field_row(vec![f.rotation.clone().into_any_element(), rot_el], Vec::<IconButton>::new()));
 
             // ── Constraints（egui `right.rs::position_fields`：仅 frame 子层、自身无自动布局或为
             // absolute 时才显示；`in_frame` 的逻辑与 egui `common` 后的 `all(...)` 完全一致）。──
@@ -2577,7 +2737,7 @@ pub(crate) fn right_panel(
             // 选中即 `node.set {"props":{"constraints":{"horizontal"/"vertical":v}}}`（等价于 egui 的
             // `app.set_props(&ids, json!({"constraints":{"horizontal": v}}))`，`node.set` 由 Cmd 通道附带
             // 选区 ids 执行）。`None` = Mixed，下拉显示 "Mixed"。
-            let pos_sec = if constraints_open && data.in_frame {
+            let pos_sec = if data.in_frame {
                 let pretty_h = |v: Option<&'static str>| -> &'static str {
                     match v {
                         Some("leftRight") => tr("Left & right"),
@@ -2606,7 +2766,18 @@ pub(crate) fn right_panel(
                     (tr("Center").into(), "node.set", serde_json::json!({ "props": { "constraints": { "vertical": "center" } } })),
                     (tr("Scale").into(), "node.set", serde_json::json!({ "props": { "constraints": { "vertical": "scale" } } })),
                 ];
-                pos_sec.child(sublabel_row(tr("Constraints"))).child(crate::widgets::field_row_h(
+                // 只读时换成没有菜单的 Dropdown（`add_enabled_ui` 的等价：控件还在，点了没反应）。
+                let h_dd = if data.position_readonly {
+                    Dropdown::new(pretty_h(data.constraints_h), col, Some(crate::widgets::dropdown::DropLead::Icon(Icon::DistributeH))).fill()
+                } else {
+                    right::sections::pick_dropdown_lead(f, pretty_h(data.constraints_h), col, h_opts, Some(Icon::DistributeH))
+                };
+                let v_dd = if data.position_readonly {
+                    Dropdown::new(pretty_v(data.constraints_v), col, Some(crate::widgets::dropdown::DropLead::Icon(Icon::AlignTop))).fill()
+                } else {
+                    right::sections::pick_dropdown_lead(f, pretty_v(data.constraints_v), col, v_opts, Some(Icon::AlignTop))
+                };
+                let body = pos_sec.child(sublabel_row(tr("Constraints"))).child(crate::widgets::field_row_h(
                     vec![
                         div()
                             .w_full()
@@ -2614,20 +2785,19 @@ pub(crate) fn right_panel(
                             .flex_col()
                             .h_full()
                             .gap(pt(8.0))
-                            .child(right::sections::pick_dropdown_lead(f, pretty_h(data.constraints_h), col, h_opts, Some(Icon::DistributeH)))
-                            .child(right::sections::pick_dropdown_lead(f, pretty_v(data.constraints_v), col, v_opts, Some(Icon::AlignTop)))
+                            .child(h_dd)
+                            .child(v_dd)
                             .into_any_element(),
                         right::sections::constraint_graphic(f, data),
                     ],
                     Vec::<IconButton>::new(),
                     56.0,
-                ))
+                ));
+                body
             } else {
                 pos_sec
             };
             pos_sec
-                .child(sublabel_row(tr("Rotation")))
-                .child(field_row(vec![f.rotation.clone().into_any_element(), rotate.into_any_element()], Vec::<IconButton>::new()))
         })
         .child(sep())
         // ── Auto layout（egui `layout_panel.rs::layout_section` / `direction` / `spacing` / `alignment`）──
@@ -2640,12 +2810,12 @@ pub(crate) fn right_panel(
         .child(sep());
 
     // ── Arc：仅当全部选中都是 Ellipse（原版 `arc_section` 返回 false 就不画） ──────
-    if sel.all_ellipse && !points_selected {
+    if sel.all_ellipse && !vector_active {
         body = body.child(arc_section(f)).child(sep());
     }
 
     // ── Star：仅当全部选中都是 Polygon/Star（原版 `points_section`） ──────────────
-    if sel.all_points && !points_selected {
+    if sel.all_points && !vector_active {
         body = body.child(star_section(f)).child(sep());
     }
 
@@ -2685,6 +2855,10 @@ pub(crate) fn right_panel(
     }
 
     // ── Export（egui `export_panel.rs::setting_row`）──────────────────────────────
+    // `annotation.new`: the field was built this frame; focusing needs the real window.
+    if let Some(edit) = f.take_note_focus_edit() {
+        edit.update(cx, |te, _| te.focus_editor(window));
+    }
     wrap(body.child(export_sec))
 }
 
@@ -2743,9 +2917,14 @@ pub(crate) fn auto_layout_section(
             LayoutDir::None => None,
         };
         let dir_cmds = f.cmds.clone();
+        // 参考实现 `layout_panel.rs::direction`：`if let Some(Some(l)) = &al { ui.add_enabled_ui(!in_instance, direction) }`
+        // ——实例内部的层不能改主组件的排版方向，按钮仍在，但点了没反应（无 disabled API → 去回调 + 降透明度）。
         let dir = Segmented::icons(&[(Icon::LayoutV, tr("Vertical")), (Icon::LayoutH, tr("Horizontal")), (Icon::LayoutGrid, tr("Grid"))])
-            .active(active)
-            .on_pick(move |i: usize, _w: &mut Window, _cx: &mut App| {
+            .active(active);
+        let dir = if sel.in_instance {
+            dir
+        } else {
+            dir.on_pick(move |i: usize, _w: &mut Window, _cx: &mut App| {
                 let m = match i {
                     0 => "vertical",
                     1 => "horizontal",
@@ -2753,8 +2932,10 @@ pub(crate) fn auto_layout_section(
                     _ => return,
                 };
                 dir_cmds.push(Cmd { id: "node.set", params: Some(serde_json::json!({ "props": { "layout": m } })) });
-            });
-        sec = sec.child(sublabel_row(tr("Layout"))).child(field_row_full(dir));
+            })
+        };
+        let dir_el = if sel.in_instance { dir.build().opacity(0.45).into_any_element() } else { dir.into_any_element() };
+        sec = sec.child(sublabel_row(tr("Layout"))).child(field_row_full(dir_el));
     }
 
     if with_dimensions {

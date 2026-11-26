@@ -485,10 +485,23 @@ impl Document {
 
     /// Timeline settings of an animation scope: a page, or a top-level frame inside one.
     /// A frame with no entry of its own falls back to its containing page's settings, then to
-    /// defaults. Export (`Animation::new`) already uses this exact chain; the motion editor reads
+    /// defaults. An **instance** has no clock of its own in Figma: it shows the main's
+    /// animation as one read-only track, so an instance without an explicit entry follows its
+    /// main component (whose page is the fallback) instead of the page it happens to sit on.
+    /// Export (`Animation::new`) already uses this exact chain; the motion editor reads
     /// through here too, so the timeline it edits is the one export produces.
     pub fn timeline_settings_for(&self, scope: NodeId) -> crate::anim::motion::TimelineSettings {
-        self.timelines.get(&scope).or_else(|| self.page_of(scope).and_then(|p| self.timelines.get(&p))).copied().unwrap_or_default()
+        let mut at = scope;
+        for _ in 0..64 {
+            if let Some(settings) = self.timelines.get(&at) {
+                return *settings;
+            }
+            match self.node(at).map(|n| &n.kind) {
+                Some(NodeKind::Instance { component, .. }) => at = *component,
+                _ => break,
+            }
+        }
+        self.page_of(at).or_else(|| self.page_of(scope)).and_then(|p| self.timelines.get(&p)).copied().unwrap_or_default()
     }
 
     pub fn first_page(&self) -> Option<NodeId> {

@@ -17,7 +17,7 @@ use crate::panels::{Cmd, RightFields, RowEditCtx};
 use crate::widgets::{Dropdown, Icon, IconButton, MenuRow, PanelSection, SectionHeaderVariant, field_row, field_row_full, pt, rgba, tokens};
 use figcraft_i18n::tr;
 use figcraft_i18n::tr_noop;
-use gpui::{App, Div, IntoElement, SharedString, div, prelude::*, px};
+use gpui::{App, Div, IntoElement, MouseButton, SharedString, div, prelude::*, px};
 use serde_json::{Value, json};
 use std::rc::Rc;
 
@@ -96,7 +96,7 @@ pub(crate) fn categories(f: &RightFields, d: &PanelData, cx: &mut App, n: &mut u
     sec = sec.child(field_row_full(local_dropdown(f, picks[filter].0.clone().into(), 0.0, picks, f.dev_cat_filter.clone())));
 
     if d.dev.categories.is_empty() {
-        return sec.child(field_row_full(note("No categories yet. Add one to group annotations.")));
+        return sec.child(field_row_full(note(tr("No categories yet. Add one to group annotations."))));
     }
     sec = sec.child(field_row_full(sublabel(tr("Categories"))));
     for c in &d.dev.categories {
@@ -150,7 +150,10 @@ fn category_name(existing: &[super::data::CategoryRow]) -> String {
 
 /// 有选中：这一层的注记，每条就地可改、可换分类、可钉属性（egui `annotations_section`）。
 pub(crate) fn annotations(f: &RightFields, d: &PanelData, cx: &mut App, n: &mut usize) -> Option<PanelSection> {
-    let node = d.dev.node?;
+    let Some(node) = d.dev.node else {
+        f.clear_note_focus();
+        return None;
+    };
     let empty = d.dev.annotations.is_empty();
     let mut sec = PanelSection::new(tr("Annotations")).variant(if empty { SectionHeaderVariant::Dim } else { SectionHeaderVariant::Normal });
     for a in &d.dev.annotations {
@@ -176,7 +179,7 @@ pub(crate) fn annotations(f: &RightFields, d: &PanelData, cx: &mut App, n: &mut 
         sec = sec.child(field_row_full(div().w_full().child(edit)));
         // 钉住的属性（只读，值随图层变）。
         for p in &a.pins {
-            sec = sec.child(field_row_full(pin_row(p)));
+            sec = sec.child(field_row_full(pin_row(f, p)));
         }
         // 钉更多 / 取消钉住。
         if !a.pin_menu.is_empty() {
@@ -203,6 +206,10 @@ pub(crate) fn annotations(f: &RightFields, d: &PanelData, cx: &mut App, n: &mut 
             },
         );
         edit.update(cx, |te, _| te.set_placeholder(tr("Add an annotation for developers")));
+        // `annotation.new` (Shift+T / tool.annotation): focus the new note field once it's built.
+        if f.take_note_focus_id(node) {
+            f.set_note_focus_edit(edit.clone());
+        }
         sec = sec.child(field_row_full(div().w_full().child(edit)));
     }
     Some(sec)
@@ -234,8 +241,8 @@ fn annotation_head(f: &RightFields, a: &AnnotationRow, node: figcraft_doc::NodeI
         .child(del)
 }
 
-/// 钉住属性的一行：标签 | 值（可带色块）。
-fn pin_row(p: &InspectRow) -> Div {
+/// 钉住属性的一行：标签 | 值（可带色块）。点一行复制值，与主属性表同一语义（egui `prop_row`）。
+fn pin_row(f: &RightFields, p: &InspectRow) -> Div {
     let t = tokens();
     let mut value = div().flex().flex_row().items_center().gap(pt(6.0)).flex_1().min_w(px(0.0));
     if let Some(hex) = &p.color
@@ -244,14 +251,24 @@ fn pin_row(p: &InspectRow) -> Div {
         value = value.child(crate::widgets::swatch(figcraft_color::Paint::solid(c), 12.0));
     }
     value = value.child(div().text_size(pt(11.0)).text_color(rgba(t.text)).child(SharedString::from(p.value.clone())));
-    div()
+    let row = div()
         .flex()
         .flex_row()
         .items_center()
         .gap(pt(6.0))
         .w_full()
         .child(div().w(px(88.0)).flex_none().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(p.label.clone())))
-        .child(value)
+        .child(value);
+    let root = f.root();
+    let value = p.value.clone();
+    let copy_value = p.value.clone();
+    row.cursor_pointer().on_mouse_down(MouseButton::Left, move |_e, _w, cx: &mut App| {
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(value.clone()));
+        let text = figcraft_i18n::trf("Copied {value}", &[("value", &copy_value)]);
+        if let Some(root) = root.clone() {
+            root.update(cx, |cv, cx| cv.toast(text.clone(), cx));
+        }
+    })
 }
 
 // ───────────────────────────────────────────────────────────────────────────────────────────────

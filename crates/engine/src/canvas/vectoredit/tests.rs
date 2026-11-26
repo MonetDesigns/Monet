@@ -679,3 +679,32 @@ fn fill_traces_stroke(s: &Session, id: NodeId, why: &str) {
     }
     assert!((length(&fill) - length(&stroke)).abs() < 1e-3, "{why}: fill {} and stroke {} trace the same outline", length(&fill), length(&stroke));
 }
+
+/// 带圆角的矩形转矢量时，圆角要变成顶点的 `radius` 数据，而不是烘焙成曲线：转换后
+/// `vector.edit.cornerRadius` 还能继续调，绘制结果不变（用户 2026-11-25）。
+#[test]
+fn entering_vector_edit_keeps_a_rounded_rectangles_corner_radii_on_its_points() {
+    use figcraft_geom::Shape;
+    let mut s = Session::new();
+    let id = crate::params::id_of(&ex(&mut s, "shape.rectangle", json!({"x": 0, "y": 0, "width": 100, "height": 100}))["id"]).unwrap();
+    {
+        let n = s.doc_mut().unwrap().get_mut(id).unwrap();
+        n.corners.radii = [20.0; 4];
+        n.corners.smoothing = 0.6;
+    }
+    let outline_area = |s: &Session| figcraft_render::node_outline(s.doc().unwrap(), s.doc().unwrap().node(id).unwrap()).unwrap().0.area().abs();
+    let before = outline_area(&s);
+    ensure_vector(s.doc_mut().unwrap(), id).unwrap();
+    let n = s.doc().unwrap().node(id).unwrap().clone();
+    let NodeKind::Vector { network } = &n.kind else { panic!("expected a vector") };
+    assert_eq!(network.vertices.len(), 4, "a rounded rectangle keeps four points, not a curve per corner");
+    assert!(network.vertices.iter().all(|v| (v.radius - 20.0).abs() < 1e-9), "each point carries its corner radius: {:?}", network.vertices.iter().map(|v| v.radius).collect::<Vec<_>>());
+    assert!((n.corners.smoothing - 0.6).abs() < 1e-9, "the layer keeps its smoothing for the points to draw with");
+    let after = outline_area(&s);
+    assert!((after - before).abs() < 0.5, "the outline stays the same: {after} vs {before}");
+    // 转换后仍可继续调圆角。
+    begin(&mut s, id).unwrap();
+    ex(&mut s, "vector.edit.cornerRadius", json!({"radius": 5.0, "vertices": [0, 1, 2, 3]}));
+    let NodeKind::Vector { network } = &s.doc().unwrap().node(id).unwrap().kind else { panic!() };
+    assert!(network.vertices.iter().all(|v| (v.radius - 5.0).abs() < 1e-9), "corner radius stays editable");
+}

@@ -183,17 +183,22 @@ fn outline_network(doc: &Document, n: &Node) -> Option<VectorNetwork> {
     let net = match &n.kind {
         NodeKind::Vector { network } => network.clone(),
         k if k.is_shape() || matches!(k, NodeKind::BooleanOp { .. }) => {
-            let (path, rule) = figcraft_render::node_outline(doc, n)?;
-            let mut net = VectorNetwork::from_path(&path);
-            if matches!(n.kind, NodeKind::Line) {
-                net.regions.clear();
-            }
-            if rule == figcraft_render::FillRule::EvenOdd {
-                for r in &mut net.regions {
-                    r.winding = figcraft_doc::WindingRule::EvenOdd;
+            // 带圆角的矩形：用「直角骨架 + 顶点圆角」，粘贴进矢量后圆角数据不丢（用户 2026-11-25）。
+            if let Some(m) = crate::canvas::vectoredit::semantic_network(n) {
+                m
+            } else {
+                let (path, rule) = figcraft_render::node_outline(doc, n)?;
+                let mut net = VectorNetwork::from_path(&path);
+                if matches!(n.kind, NodeKind::Line) {
+                    net.regions.clear();
                 }
+                if rule == figcraft_render::FillRule::EvenOdd {
+                    for r in &mut net.regions {
+                        r.winding = figcraft_doc::WindingRule::EvenOdd;
+                    }
+                }
+                net
             }
-            net
         }
         _ => return None,
     };

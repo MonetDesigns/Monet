@@ -444,6 +444,8 @@ mod live_signal_tests;
 #[cfg(test)]
 mod live_tests;
 #[cfg(test)]
+mod lock_behaviour_tests;
+#[cfg(test)]
 mod marquee_behaviour_tests;
 #[cfg(test)]
 mod mask_tests;
@@ -491,6 +493,8 @@ mod paint_tests;
 mod panels_behaviour_tests;
 #[cfg(test)]
 mod paste_missing_image_tests;
+#[cfg(test)]
+mod paste_motion_tests;
 #[cfg(test)]
 mod paste_sibling_tests;
 #[cfg(test)]
@@ -563,6 +567,8 @@ mod rotation_origin_tests;
 mod save_disk_changes_tests;
 #[cfg(test)]
 mod save_format_tests;
+#[cfg(test)]
+mod scale_bound_values_tests;
 #[cfg(test)]
 mod scale_tool_tests;
 #[cfg(test)]

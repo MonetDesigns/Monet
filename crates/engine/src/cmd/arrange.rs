@@ -406,9 +406,17 @@ fn turn_pivot(s: &Session, ids: &[NodeId]) -> Result<Option<Point>> {
     Ok(ds.moved_origin().filter(|_| ds.selection == ids).or_else(|| ds.doc.bounds_of(&roots(&ds.doc, ids)).map(|b| b.center())))
 }
 
+/// The range an instance's scale factor stays in (the same range `.fig` files allow).
+pub(crate) const MIN_SCALE_FACTOR: f64 = 1e-3;
+pub(crate) const MAX_SCALE_FACTOR: f64 = 1e3;
+
 /// Scale a node and everything in it uniformly (the Scale tool): sizes and positions (whatever
 /// the children's constraints), strokes, effects, radii, auto layout spacing, min/max sizes,
 /// layout grids, ruler guides, tiled images and text sizes.
+///
+/// Variable-bound lengths follow the incumbent (#2090): an instance multiplies its scale factor and
+/// keeps its bindings, which draw at the variable's value times the factor; any other layer not
+/// inside an instance keeps the scaled value and drops the binding of each length it scaled.
 pub fn scale_node(doc: &mut Document, id: NodeId, k: f64) -> Result<()> {
     let k = if k.is_finite() && k > 0.0 { k } else { return Ok(()) };
     let sub = doc.subtree(id);
@@ -417,6 +425,26 @@ pub fn scale_node(doc: &mut Document, id: NodeId, k: f64) -> Result<()> {
     // changed with an ancestor's size for what constraints give, so the next rebuild of the
     // instance would put them back at their main's size (#922).
     let in_instance: Vec<bool> = sub.iter().enumerate().map(|(depth, i)| depth > 0 && crate::components::inside_instance(doc, *i)).collect();
+    let nested: Vec<bool> = sub.iter().map(|i| crate::components::inside_instance(doc, *i)).collect();
+    // An instance inside another instance of the subtree is covered by the outer factor through
+    // `scale_of`'s product (#2090); only an instance with no instance above it, up to `id`, takes k.
+    let covered: Vec<bool> = sub
+        .iter()
+        .map(|i| {
+            if *i == id {
+                return false;
+            }
+            for a in doc.ancestors(*i) {
+                if doc.node(a).is_some_and(|n| matches!(n.kind, NodeKind::Instance { .. })) {
+                    return true;
+                }
+                if a == id {
+                    break;
+                }
+            }
+            false
+        })
+        .collect();
     let tiles = |paints: &mut Vec<figcraft_color::Paint>| {
         for p in paints {
             if let figcraft_color::PaintKind::Image(img) = &mut p.kind
@@ -429,6 +457,13 @@ pub fn scale_node(doc: &mut Document, id: NodeId, k: f64) -> Result<()> {
     for (depth, i) in sub.iter().enumerate() {
         let n = doc.get_mut(*i)?;
         let (w0, h0, t0) = (n.width, n.height, n.transform);
+        if matches!(n.kind, NodeKind::Instance { .. }) {
+            if !covered.get(depth).copied().unwrap_or(false) {
+                n.scale_factor = (n.scale_factor * k).clamp(MIN_SCALE_FACTOR, MAX_SCALE_FACTOR);
+            }
+        } else if !nested.get(depth).copied().unwrap_or(false) && !n.bound.is_empty() {
+            n.bound.retain(|field, _| !super::styles::LENGTH_FIELDS.contains(&field.as_str()));
+        }
         tiles(&mut n.fills);
         tiles(&mut n.strokes);
         let cl = &mut n.child_layout;

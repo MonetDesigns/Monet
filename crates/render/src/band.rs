@@ -5,34 +5,59 @@
 //! 于是看着像一条白细线。画在子层之前，子层的边缘就是和带子混色，边界只有一次合成。
 //!
 //! 坐标一律是**页面坐标**；图案周期/线宽也按页面单位给，调用方自己用 zoom 换算成屏幕像素。
+//! 光栅化前先把 `page_xf` 在 f64 里乘完（见 `dev`）：页面坐标可以很大，f32 在 1e6 就已经
+//! 步进 1/16 页面单位，斜线宽度会被量化掉。
 
-use figcraft_geom::{Rect, Shape};
+use figcraft_geom::{Affine, Point, Rect};
 use tiny_skia::{FillRule, Paint, Path, PathBuilder, Pixmap};
 
 use crate::Band;
-use crate::draw::{ts_path, ts_transform};
+
+/// A page point in the pixmap's device space, computed in f64 and only rounded when it reaches
+/// `tiny_skia`. Going through `page_xf` **before** narrowing is what keeps a band at 1e6 page
+/// units apart from the same band at the origin: a float32 path at 1e6 already steps by 0.0625
+/// page units, which is wider than a hairline at 400%.
+fn dev(xf: Affine, p: [f64; 2]) -> (f32, f32) {
+    let q = xf * Point::new(p[0], p[1]);
+    (q.x as f32, q.y as f32)
+}
 
 /// 铺一块带子：底色 + 斜线。
-pub(crate) fn paint(page_xf: figcraft_geom::Affine, pix: &mut Pixmap, b: &Band) {
+pub(crate) fn paint(page_xf: Affine, pix: &mut Pixmap, b: &Band) {
     let r = Rect::new(b.rect[0], b.rect[1], b.rect[2], b.rect[3]);
     if !(r.width() > 0.0 && r.height() > 0.0 && r.x0.is_finite() && r.y0.is_finite() && r.x1.is_finite() && r.y1.is_finite()) {
         return;
     }
-    if b.fill[3] > 0
-        && let Some(tp) = ts_path(&r.to_path(0.1))
-    {
-        fill_path(pix, &tp, b.fill, page_xf);
+    if b.fill[3] > 0 {
+        let quad = [[r.x0, r.y0], [r.x1, r.y0], [r.x1, r.y1], [r.x0, r.y1]];
+        fill_page_poly(pix, &quad, b.fill, page_xf);
     }
     if let Some(s) = &b.stripe {
         stripes(page_xf, pix, r, s);
     }
 }
 
-fn fill_path(pix: &mut Pixmap, path: &Path, rgba: [u8; 4], page_xf: figcraft_geom::Affine) {
+fn fill_path(pix: &mut Pixmap, path: &Path, rgba: [u8; 4]) {
     let mut paint = Paint::default();
     paint.set_color_rgba8(rgba[0], rgba[1], rgba[2], rgba[3]);
     paint.anti_alias = true;
-    pix.fill_path(path, &paint, FillRule::Winding, ts_transform(page_xf), None);
+    pix.fill_path(path, &paint, FillRule::Winding, tiny_skia::Transform::identity(), None);
+}
+
+/// Fill a page-space polygon whose points go through `page_xf` in f64 first.
+fn fill_page_poly(pix: &mut Pixmap, pts: &[[f64; 2]], rgba: [u8; 4], page_xf: Affine) {
+    let Some((first, rest)) = pts.split_first() else { return };
+    let mut b = PathBuilder::new();
+    let (x, y) = dev(page_xf, *first);
+    b.move_to(x, y);
+    for p in rest {
+        let (x, y) = dev(page_xf, *p);
+        b.line_to(x, y);
+    }
+    b.close();
+    if let Some(path) = b.finish() {
+        fill_path(pix, &path, rgba);
+    }
 }
 
 /// 45°/135° 斜线：线心 `x + y = n·period + (ox+oy)`（m>0）或 `y - x = n·period - (ox-oy)`（m<0），
@@ -54,22 +79,9 @@ fn stripes(page_xf: figcraft_geom::Affine, pix: &mut Pixmap, r: Rect, s: &crate:
     while c <= hi + reach && guard < 4096 {
         guard += 1;
         if let Some(poly) = stripe_polygon(s.m, c + off, half, r) {
-            fill_poly(pix, &poly, s.color, page_xf);
+            fill_page_poly(pix, &poly, s.color, page_xf);
         }
         c += period;
-    }
-}
-
-fn fill_poly(pix: &mut Pixmap, pts: &[[f64; 2]], rgba: [u8; 4], page_xf: figcraft_geom::Affine) {
-    let Some((first, rest)) = pts.split_first() else { return };
-    let mut b = PathBuilder::new();
-    b.move_to(first[0] as f32, first[1] as f32);
-    for p in rest {
-        b.line_to(p[0] as f32, p[1] as f32);
-    }
-    b.close();
-    if let Some(path) = b.finish() {
-        fill_path(pix, &path, rgba, page_xf);
     }
 }
 
@@ -163,6 +175,32 @@ mod tests {
         assert!(stripe_polygon(-1.0, -1000.0, 1.0, r).is_none());
         let corner = stripe_polygon(1.0, r.x0 + r.y0, 1.0, r).expect("a sliver at the corner");
         assert_eq!(corner.len(), 3);
+    }
+
+    /// 同一块带子画在原点附近和画在 1e9 页面单位外，像素要一样。旧实现在页面坐标里建 f32
+    /// 路径（1e9 处 f32 的步长已是 64 页面单位），带子会整块塌掉或错位；现在先把 `page_xf`
+    /// 乘完再收窄到 f32，远处只影响坐标大小、不影响形状。
+    #[test]
+    fn a_band_far_from_the_origin_draws_the_same_pixels() {
+        const PERIOD: f64 = 8.485_281_374_238_571;
+        // 平移量取周期一半的整数倍，斜线的相位才和原点那块一致。
+        let d = (1e9 / (PERIOD / 2.0)).round() * (PERIOD / 2.0);
+        let band = |o: f64| Band {
+            owner: figcraft_doc::NodeId(1),
+            rect: [o + 10.0, o + 20.0, o + 90.0, o + 44.0],
+            fill: [255, 0, 0, 40],
+            stripe: Some(crate::Stripe { m: 1.0, color: [0, 0, 255, 150], period: PERIOD, width: 2.0, origin: [o, o] }),
+        };
+        let ink = |o: f64| {
+            let mut pix = Pixmap::new(100, 64).expect("pixmap");
+            paint(Affine::translate((-o, -o)), &mut pix, &band(o));
+            pix.data().chunks_exact(4).map(|p| u32::from(p[3])).sum::<u32>()
+        };
+        let near = ink(0.0);
+        let far = ink(d);
+        assert!(near > 0, "the near band is hatched");
+        let ratio = f64::from(far) / f64::from(near);
+        assert!((ratio - 1.0).abs() < 0.02, "far {far} vs near {near} (ratio {ratio:.4})");
     }
 
     /// 空带/离谱参数不画、不炸。

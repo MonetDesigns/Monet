@@ -36,6 +36,9 @@ figcraft-engine = { path = "crates/engine" }
 figcraft-mcp = { path = "crates/mcp" }
 figcraft-collab-net = { path = "crates/collab-net" }
 figcraft-plugin = { path = "crates/plugin" }
+# Figma plugin compatibility (manifest.json, ids, the property table, the calls a proxy write makes).
+# It depends on neither the engine nor a JavaScript engine: a backend crate plugs into it.
+figcraft-plugin-figma = { path = "crates/plugin-figma" }
 figcraft-i18n = { path = "crates/i18n" }
 figcraft-abr = { path = "crates/abr" }
 figcraft-devices = { path = "crates/devices" }
@@ -87,6 +90,9 @@ thiserror = "2"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
+# The JavaScript engine behind Figma-compatible plugins (crates/plugin-figma-quickjs): QuickJS,
+# compiled from source, one realm per plugin session.
+rquickjs = "0.14"
 regex = "1.13"
 log = "0.4"
 same-file = "1.0.6"

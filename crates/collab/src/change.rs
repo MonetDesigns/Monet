@@ -168,6 +168,7 @@ node_props! {
     Styles => styles,
     Bound => bound,
     VarModes => var_modes,
+    ScaleFactor => scale_factor,
     BoolOp => bool_op,
     ConstrainProportions => constrain_proportions,
     Source => source,

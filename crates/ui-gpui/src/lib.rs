@@ -27,6 +27,9 @@
 //! 文字用 GPUI 文本元素（矢量、清晰）。
 
 mod app;
+mod dev_gate;
+#[cfg(test)]
+mod devmode_tests;
 
 /// A21：键盘区域导航（F6 / Shift+F6 / Escape / 方向键 + 焦点环）。
 mod a11y;
@@ -314,7 +317,145 @@ pub(crate) fn run_binding(app: &mut CanvasApp, id: &str) -> bool {
         // 钢笔还没闭合时 Delete 是「删掉上一个锚点」（原文同一分支）。
         "edit.delete" if app.session.tool.pen.is_some() => app.session.pen_finish().is_ok(),
 
+        // Enter 选了形状/框架工具时在视图中心放置一个（上游 `run_binding` 的
+        // `select.children if draws_shape`）。Dev Mode 不放置，仍按原样选子层。
+        "select.children" if app.session.tool.tool.draws_shape() && !app.session.tool.dev_mode => {
+            app.session.execute("tool.place", &serde_json::json!({})).is_ok()
+        }
+
         _ => app.session.execute(id, &serde_json::json!({})).is_ok(),
+    }
+}
+
+/// 方向键的分派：照搬 `ui-egui/src/shortcuts.rs::key_event` 里那段**硬编码**的按键处理
+/// （约 :483-522）。上游把它写在 UI 层、不走 `keymap` 的 `k()` 绑定表；GPUI 之前只移植了
+/// `keymap::lookup`，所以画布上选中图层后按方向键什么都不发生（用户 2026-11-26 实测）。
+///
+/// 顺序与上游一致：形状工具十字线 → 无选区平移 → Dev Mode 拒绝 → Cmd+Alt 旋转 →
+/// Cmd 改尺寸 → 普通移动。返回 `true` 表示这次按键已被消费。
+pub(crate) fn arrow_key(app: &mut CanvasApp, key: &str, m: &Modifiers) -> bool {
+    let (dx, dy) = match key {
+        "left" | "ArrowLeft" => (-1.0, 0.0),
+        "right" | "ArrowRight" => (1.0, 0.0),
+        "up" | "ArrowUp" => (0.0, -1.0),
+        "down" | "ArrowDown" => (0.0, 1.0),
+        _ => return false,
+    };
+    let cmd = m.platform || m.control;
+    let sel = app.session.selection();
+    let dev = app.session.tool.dev_mode;
+
+    // 形状/框架工具已选、没有选区：方向键移动视图中心的放置十字线（Enter 放置）。
+    if sel.is_empty() && app.session.tool.tool.draws_shape() && !dev && !cmd && !m.alt {
+        let _ = app.session.execute("tool.crosshair", &serde_json::json!({"dx": dx, "dy": dy, "big": m.shift}));
+        return true;
+    }
+    // 没有选区：方向键平移视图。
+    if sel.is_empty() {
+        let _ = app.session.execute("view.pan", &serde_json::json!({"dx": dx, "dy": dy, "big": m.shift}));
+        return true;
+    }
+    // Dev Mode 不移动任何东西（上游 `dev_mode_refuses` 会提示；这里先只消费按键）。
+    if dev {
+        return true;
+    }
+    // Cmd/Ctrl+Alt：绕旋转原点转 1°（Shift 15°）。矢量编辑模式下不转图层。
+    if cmd && m.alt {
+        if app.session.ds().is_ok_and(|d| d.vector_edit.is_some()) {
+            return true;
+        }
+        let step = if m.shift { 15.0 } else { 1.0 };
+        let origin = app.session.ds().ok().and_then(|d| d.origin_point());
+        let _ = app.session.execute(
+            "transform.rotate",
+            &serde_json::json!({
+                "degrees": if dx + dy < 0.0 { -step } else { step },
+                "cx": origin.map(|o| o.x),
+                "cy": origin.map(|o| o.y),
+            }),
+        );
+        return true;
+    }
+    // Cmd/Ctrl：按 nudge 的量改尺寸（右/下变大，左/上变小）。
+    if cmd {
+        let _ = app.session.execute("transform.nudgeSize", &serde_json::json!({"dw": dx, "dh": dy, "big": m.shift}));
+        return true;
+    }
+    // 普通方向键：移动选中的图层（Shift 是大步）。
+    let _ = app.session.execute("transform.nudge", &serde_json::json!({"dx": dx, "dy": dy, "big": m.shift}));
+    true
+}
+
+/// 数字键的第一个数字与第二个数字之间允许的间隔（上游 `shortcuts.rs::OPACITY_CHAIN_SECS`）。
+const OPACITY_CHAIN_SECS: f64 = 0.6;
+
+/// 单个数字键 → 0..=9（上游 `shortcuts.rs::digit`）。
+fn digit(key: &str) -> Option<u32> {
+    let mut chars = key.chars();
+    let d = chars.next()?.to_digit(10)?;
+    chars.next().is_none().then_some(d)
+}
+
+/// 数字键设置选中图层的不透明度：一位数是十位百分比（0 → 100%），`OPACITY_CHAIN_SECS` 内的
+/// 第二位凑成精确值。照搬 `ui-egui/src/shortcuts.rs::opacity_digit`。返回是否消费。
+pub(crate) fn opacity_key(app: &mut CanvasApp, key: &str, now: f64) -> bool {
+    let Some(d) = digit(key) else { return false };
+    if !app.session.prefs.number_keys_opacity || app.session.selection().is_empty() {
+        return false;
+    }
+    // Dev Mode 不设不透明度（上游 `dev_mode_refuses` 会提示；这里只消费按键）。
+    if app.session.tool.dev_mode {
+        return true;
+    }
+    let first = app.opacity_digit.take().filter(|(_, t)| now - t <= OPACITY_CHAIN_SECS).map(|(d, _)| d);
+    let digits = match first {
+        Some(f) => format!("{f}{d}"),
+        None => {
+            app.opacity_digit = Some((d, now));
+            d.to_string()
+        }
+    };
+    let _ = app.session.execute("object.opacityKeys", &serde_json::json!({"digits": digits}));
+    true
+}
+
+/// 键盘选择框激活时的按键（上游 `shortcuts.rs::key_box`）：方向键移动/改大小、Enter 选中、
+/// Escape 取消。返回 `true` 表示这次按键已被消费。框本身画在 `canvas::overlays` 里。
+pub(crate) fn key_box_key(app: &mut CanvasApp, key: &str, m: &Modifiers) -> bool {
+    let Some(mut b) = app.key_box else { return false };
+    let size = m.shift || m.platform || m.control;
+    let step = if (m.shift && (m.platform || m.control)) { 50.0 } else { 10.0 } / app.session.ds().map_or(1.0, |d| d.view.zoom.max(1e-6));
+    let (dx, dy) = match key {
+        "left" | "ArrowLeft" => (-step, 0.0),
+        "right" | "ArrowRight" => (step, 0.0),
+        "up" | "ArrowUp" => (0.0, -step),
+        "down" | "ArrowDown" => (0.0, step),
+        _ => (0.0, 0.0),
+    };
+    if (dx, dy) != (0.0, 0.0) {
+        if !size {
+            b[0] += dx;
+            b[1] += dy;
+        }
+        b[2] += dx;
+        b[3] += dy;
+        app.key_box = Some(b);
+        return true;
+    }
+    match key {
+        "enter" | "Enter" => {
+            app.key_box = None;
+            let _ = app.session.execute(
+                "select.area",
+                &serde_json::json!({"x": b[0], "y": b[1], "width": b[2] - b[0], "height": b[3] - b[1], "add": m.shift, "deep": m.platform || m.control}),
+            );
+            true
+        }
+        "escape" | "Escape" => {
+            app.key_box = None;
+            true
+        }
+        _ => false,
     }
 }
 
@@ -1634,8 +1775,20 @@ impl CanvasView {
 
         let mut d = panels::right::data::read(&ds.doc, &ds.selection, page, self.fields.dev_ready_filter());
 
+        // 文本范围填充（egui `paints.rs::range_fill`）：编辑态选区来自 session，文档快照来自 ds。
+        let text_range = figcraft_engine::textedit::selected_range(&self.app.session);
+        d.selected_text_range = text_range;
+        d.range_fill = panels::right::data::read_range_fill(&ds.doc, &ds.selection, text_range);
+
         // 参考实现 `Id::new(("selection_colors_open", ds.uid))`：展开态按文档 uid 分档。
         d.doc_uid = ds.uid;
+
+        // Status 的两个上下文只有 `DocState` 知道：是否正在专注该层，以及最新保存版本。
+        // 单选用；多选保持 None（EGUI 的 Status 节也只给单选的 Focus/Compare）。
+        if let Some(section) = d.section.as_mut() {
+            section.focused = ds.selection.len() == 1 && ds.focused() == ds.selection.first().copied();
+            section.newest_version = if section.changed { None } else { ds.versions.last().map(|v| v.id.clone()) };
+        }
 
         // 右键 Paste 行的可见性：从会话剪贴板取快照，渲染期只读 PanelData，避免在非 renderer
         // 的测试帧里 `root.read()` 与 `CanvasView::update()` 重入。
@@ -1683,6 +1836,40 @@ impl CanvasView {
 
         d.frame_tool = self.app.session.tool.tool == figcraft_engine::tools::ToolId::Frame;
 
+        // Read-only plugin commands for Inspect (Developer Mode). A write plugin could edit the
+        // document, so it is not listed here even though the Plugins menu can run it in Design.
+        d.plugins = self
+            .app
+            .session
+            .prefs
+            .plugins
+            .iter()
+            .filter(|p| matches!(p.manifest.permissions.access, figcraft_engine::plugins::Access::Read))
+            .flat_map(|p| {
+                let mut rows: Vec<panels::right::data::PluginRunRow> = p
+                    .manifest
+                    .commands
+                    .iter()
+                    .map(|c| panels::right::data::PluginRunRow {
+                        plugin: p.manifest.id.clone(),
+                        plugin_name: p.manifest.name.clone(),
+                        command: c.id.clone(),
+                        label: if c.label.is_empty() { c.id.clone() } else { c.label.clone() },
+                    })
+                    .collect();
+                // A manifest without commands still gets the implicit `run` entry.
+                if rows.is_empty() {
+                    rows.push(panels::right::data::PluginRunRow {
+                        plugin: p.manifest.id.clone(),
+                        plugin_name: p.manifest.name.clone(),
+                        command: "run".into(),
+                        label: p.manifest.name.clone(),
+                    });
+                }
+                rows
+            })
+            .collect();
+
         // Inspect 标签（Dev Mode）：属性分组 + 生成的代码，按当前语言 / 颜色格式 / rem 计算。
 
         if !ds.selection.is_empty() {
@@ -1697,6 +1884,41 @@ impl CanvasView {
             let fmt = ColorFormat::ALL.get(fi).copied().unwrap_or_default();
 
             d.inspect = Some(panels::right::data::read_inspect(&ds.doc, &ds.selection, lang, fmt, rem, ds.revision));
+
+            // Component Playground (EGUI `dev_mode.rs::playground_section`): the values only change
+            // this copy's preview/code, never the document. Cached by document revision + values +
+            // language so a frame does not rebuild a whole Session for an unchanged playground.
+            if let Some(target) = ds.selection.first().copied()
+                && figcraft_engine::playground::component_of(&ds.doc, target).is_some()
+            {
+                let values = self.fields.playground_values(target);
+                let key = format!(
+                    "{}:{}:{}:{}:{}",
+                    ds.uid,
+                    ds.revision,
+                    target.0,
+                    serde_json::to_string(&values).unwrap_or_default(),
+                    lang.id()
+                );
+                let mut played = self.fields.playground_cache(&key);
+                if played.is_none() {
+                    let mut tried = values.clone();
+                    played = panels::right::data::read_playground(&ds.doc, target, &tried, lang, ds.revision);
+                    // A property renamed/removed since the last try: drop the stale values and retry
+                    // with defaults, exactly like EGUI's `build(...).or_else(clear + build)`.
+                    if played.is_none() && !tried.is_empty() {
+                        tried.clear();
+                        played = panels::right::data::read_playground(&ds.doc, target, &tried, lang, ds.revision);
+                        if played.is_some() {
+                            self.fields.clear_playground_values();
+                        }
+                    }
+                    if let Some(p) = &played {
+                        self.fields.set_playground_cache(key, p.clone());
+                    }
+                }
+                d.playground = played;
+            }
         }
 
         // 矢量编辑：选中的点驱动 Points 节（替换 Position / Auto layout / Arc / Star）。
@@ -1949,11 +2171,49 @@ impl CanvasView {
                     continue;
                 }
 
+                // `tool.annotation` with a selected layer: switch to Inspect and focus that layer's
+                // "new annotation" field (egui `dev_mode.rs` focuses the note editor). A repeated
+                // request while already in Inspect must not toggle the tab away.
+                "annotation.new" => {
+                    if let Some(id) = r.data.get("id").and_then(figcraft_engine::params::id_of) {
+                        self.fields.set_right_tab(2);
+                        self.fields.request_note_focus(id);
+                    }
+                    cx.notify();
+                    continue;
+                }
+
                 "canvas.renameLabel" => {
                     if let Some(id) = r.data.get("id").and_then(figcraft_engine::params::id_of) {
                         self.begin_inline_rename(vec![id], InlineRenameTarget::Label, cx);
                     }
 
+                    continue;
+                }
+
+                // `select.area` 无参时由引擎发这个请求：开一个键盘选择框（上游
+                // `commands.rs:241 start_key_box`）。已有框时再按 Alt+Space 转拾取模式。
+                "selectArea" => {
+                    if self.app.key_box.take().is_some() {
+                        // 上游第二次触发转 pick select；GPUI 的拾取模式尚未实现，先取消框。
+                        self.toast(tr("Selection box cancelled"), cx);
+                    } else if let Ok(ds) = self.app.session.ds() {
+                        let zoom = ds.view.zoom.max(1e-6);
+                        let around = ds.selection.iter().filter_map(|i| ds.doc.world_bounds(*i)).reduce(|a, b| a.union(b));
+                        let r = match around {
+                            Some(r) => r.inflate(8.0 / zoom, 8.0 / zoom),
+                            None => {
+                                let c = self.app.to_page(self.app.canvas.rect.center());
+                                figcraft_geom::Rect::new(c.x - 100.0 / zoom, c.y - 75.0 / zoom, c.x + 100.0 / zoom, c.y + 75.0 / zoom)
+                            }
+                        };
+                        self.app.key_box = Some([r.x0, r.y0, r.x1, r.y1]);
+                        self.toast(
+                            tr("Selection box: arrows move it, Shift+arrows size it, Enter selects, Escape cancels"),
+                            cx,
+                        );
+                    }
+                    cx.notify();
                     continue;
                 }
 
@@ -3011,6 +3271,12 @@ impl CanvasView {
             let ids = self.app.session.ds().ok().map(|d| d.selection.clone()).unwrap_or_default();
 
             for c in cmds {
+                // The right panel goes through the same Developer Mode gate as the menus: a
+                // button that would edit the design must not reach the engine (EGUI's
+                // `menus::dev_mode_refuses`, called from every panel).
+                if self.dev_refuses(&c.id, cx) {
+                    continue;
+                }
                 // ⛔ 只能操作**本窗口拥有**的文档：否则第二个窗口能切到 / 关掉第一个窗口的文件
                 // （用户 2026-11-16 实测）。`index` 是 `session.docs` 的下标。
                 if matches!(c.id, "doc.switch" | "file.close")
@@ -3103,18 +3369,23 @@ impl CanvasView {
         let items: Vec<(panels::Prop, f64)> = self.pending.borrow_mut().drain(..).collect();
 
         if !items.is_empty() {
-            let ids = self.app.session.ds().ok().map(|d| d.selection.clone()).unwrap_or_default();
+            // Slider / property-row edits reach the engine through this queue, not `run_command`.
+            if self.dev_refuses("node.set", cx) {
+                // Drop the edits; the panel rebuilds from the document next frame.
+            } else {
+                let ids = self.app.session.ds().ok().map(|d| d.selection.clone()).unwrap_or_default();
 
-            if !ids.is_empty() {
-                for (prop, v) in items {
-                    let mut props = serde_json::Map::new();
+                if !ids.is_empty() {
+                    for (prop, v) in items {
+                        let mut props = serde_json::Map::new();
 
-                    props.insert(prop.key().to_string(), serde_json::json!(prop.map(v)));
+                        props.insert(prop.key().to_string(), serde_json::json!(prop.map(v)));
 
-                    let _ = self.app.session.execute("node.set", &serde_json::json!({"ids": ids, "props": props}));
+                        let _ = self.app.session.execute("node.set", &serde_json::json!({"ids": ids, "props": props}));
+                    }
+
+                    cx.notify();
                 }
-
-                cx.notify();
             }
         }
 
@@ -3605,7 +3876,7 @@ impl CanvasView {
 
     /// `min_width = None` 表示「宽度就取按钮真实宽度」；`Some(w)` 只作为不得更窄的下限。
 
-    fn open_dropdown_menu(
+    pub(crate) fn open_dropdown_menu(
         &mut self,
 
         anchor: Option<crate::widgets::dropdown::MenuAnchor>,
@@ -3711,6 +3982,12 @@ impl CanvasView {
     /// 跑一条命令（工具栏与右键菜单共用）：`ui-egui` 里是 `app.run(id, params)`。
 
     fn run_command(&mut self, id: &str, params: serde_json::Value, cx: &mut Context<Self>) {
+        // Developer Mode refuses design edits from every entry (menus, toolbar, context menu,
+        // dialogs, the layers panel). The engine owns the allow-list; the toast explains why.
+        if self.dev_refuses(id, cx) {
+            return;
+        }
+
         // 打开 / 新建 / 关闭文件后，动画面板默认收起：Motion 是设计文件的编辑模式，不是常驻栏。
 
         // （egui `FigApp::new` 的 `motion_open: false`；用户 2026-11-10：「打开任何东西的时候
@@ -3906,6 +4183,16 @@ impl CanvasView {
         .detach();
 
         cx.notify();
+    }
+
+    /// Developer Mode's single refusal gate: the policy lives in the engine, the toast lives here.
+    /// Every command entry (menus, toolbar, context menu, right panel, shortcuts) calls this.
+    fn dev_refuses(&mut self, id: &str, cx: &mut Context<Self>) -> bool {
+        if !dev_gate::refuses(&self.app, id) {
+            return false;
+        }
+        self.toast(dev_gate::message(), cx);
+        true
     }
 
     /// 跑一条命令；失败时把引擎的原话弹出来（egui 的 `app.run` + `show_error`）。
@@ -5039,6 +5326,9 @@ impl CanvasView {
 
         // A19：带 "…" 的菜单命令先要输入。直接 execute 会用默认参数静默导出 / 查找，
         // 界面上什么都不会出现；先开通用对话框，由它的按钮带字段值提交同一条命令。
+        if self.dev_refuses(cmd, cx) {
+            return;
+        }
 
         if let Some(kind) = dialogs::menu_action(cmd) {
             self.open_dialog(kind, &params, cx);
@@ -5728,6 +6018,9 @@ impl CanvasView {
     /// 应用混合模式（egui `paints.rs` 的 `set_props {"blend": label}`）。
 
     fn apply_blend(&mut self, label: &str, cx: &mut Context<Self>) {
+        if self.dev_refuses("node.set", cx) {
+            return;
+        }
         let ids = self.app.session.ds().ok().map(|d| d.selection.clone()).unwrap_or_default();
 
         if !ids.is_empty() {
@@ -5746,6 +6039,9 @@ impl CanvasView {
     /// 应用填充色（egui `paints.rs` 的 `node.set {"fill": "#RRGGBB"}`）。
 
     fn apply_fill(&mut self, color: Color32, cx: &mut Context<Self>) {
+        if self.dev_refuses("node.set", cx) {
+            return;
+        }
         let ids = self.app.session.ds().ok().map(|d| d.selection.clone()).unwrap_or_default();
 
         if !ids.is_empty() {
@@ -5764,6 +6060,9 @@ impl CanvasView {
     /// 应用描边色（egui `paints.rs` 的 `node.set {"stroke": "#RRGGBB"}`，与 `apply_fill` 同构）。
 
     fn apply_stroke(&mut self, color: Color32, cx: &mut Context<Self>) {
+        if self.dev_refuses("node.set", cx) {
+            return;
+        }
         let ids = self.app.session.ds().ok().map(|d| d.selection.clone()).unwrap_or_default();
 
         if !ids.is_empty() {
@@ -6945,6 +7244,29 @@ impl Render for CanvasView {
                 this.bind_window_document(window, true, cx);
                 this.mods = e.keystroke.modifiers;
 
+                // Escape：先取消多选间距的拖拽（上游 `key_event` 的
+                // `selection_spacing::cancel`，排在裁剪之前）。
+                if e.keystroke.key.as_str() == "escape" && canvas::selection_spacing::cancel(&mut this.app) {
+                    cx.notify();
+                    cx.stop_propagation();
+                    return;
+                }
+
+                // Enter / Escape：退出裁剪模式（上游 `key_event`；裁剪本身已经应用）。
+                if matches!(e.keystroke.key.as_str(), "escape" | "enter") && this.app.crop.take().is_some() {
+                    cx.notify();
+                    cx.stop_propagation();
+                    return;
+                }
+
+                // 键盘选择框激活：方向键移动/改大小、Enter 选中、Escape 取消（上游
+                // `shortcuts.rs::key_box`）。必须早于 arrow_key，否则框的方向键会去移动图层。
+                if key_box_key(&mut this.app, &canonical_key(&e.keystroke.key), &e.keystroke.modifiers) {
+                    cx.notify();
+                    cx.stop_propagation();
+                    return;
+                }
+
                 // 取色器渐变：选中某个断点时 Delete / Backspace 删除它（至少保留 2 个）。
                 if matches!(e.keystroke.key.as_str(), "delete" | "backspace")
                     && let Some(Popup::Window(w)) = this.popup.as_mut()
@@ -7373,15 +7695,63 @@ impl Render for CanvasView {
                 )
                 .map(|b| b.id);
 
-                if let Some(id) = binding
-                    && run_binding(&mut this.app, id)
-                {
-                    cx.notify();
-                    // CodeRabbit PR#20/#22/#23: the root handler has the same keymap fallback;
-                    // without stopping propagation a handled canvas shortcut (undo/redo, delete…)
-                    // runs twice.
+                if let Some(id) = binding {
+                    // Editing shortcuts (Delete, Ctrl+V, tool keys) are refused in Developer
+                    // Mode before they reach the engine, with the same reason as the menus.
+                    if this.dev_refuses(id, cx) {
+                        cx.stop_propagation();
+                        return;
+                    }
+                    if run_binding(&mut this.app, id) {
+                        cx.notify();
+                        // CodeRabbit PR#20/#22/#23: the root handler has the same keymap fallback;
+                        // without stopping propagation a handled canvas shortcut (undo/redo, delete…)
+                        // runs twice.
+                        cx.stop_propagation();
+                        return;
+                    }
+                }
+
+                // Dev Mode refuses canvas nudge / opacity keys with the same reason as the menus.
+                // `arrow_key` / `opacity_key` already swallow them; this adds the toast the EGUI
+                // gate shows (`menus::dev_mode_refuses`).
+                let arrow = matches!(key.as_str(), "left" | "right" | "up" | "down");
+                if this.app.dev_inspect && !this.app.session.selection().is_empty() && arrow {
+                    this.toast(dev_gate::message(), cx);
                     cx.stop_propagation();
                     return;
+                }
+                if this.app.dev_inspect
+                    && this.app.session.prefs.number_keys_opacity
+                    && !this.app.session.selection().is_empty()
+                    && digit(&key).is_some()
+                    && !e.keystroke.modifiers.shift
+                    && !e.keystroke.modifiers.platform
+                    && !e.keystroke.modifiers.control
+                    && !e.keystroke.modifiers.alt
+                {
+                    this.toast(dev_gate::message(), cx);
+                    cx.stop_propagation();
+                    return;
+                }
+
+                // 方向键：上游 `key_event` 里硬编码的那段（nudge / nudgeSize / rotate / pan /
+                // crosshair）。它不在 `keymap` 的 `k()` 表里，所以必须在这里显式兜住。
+                if arrow_key(&mut this.app, &key, &e.keystroke.modifiers) {
+                    cx.notify();
+                    cx.stop_propagation();
+                    return;
+                }
+
+                // 数字键设置不透明度（上游 `key_event` 末尾的 `opacity_digit`，不带修饰键）。
+                let m = e.keystroke.modifiers;
+                if !m.shift && !m.platform && !m.control && !m.alt {
+                    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
+                    if opacity_key(&mut this.app, &key, now) {
+                        cx.notify();
+                        cx.stop_propagation();
+                        return;
+                    }
                 }
 
                 match e.keystroke.key.as_str() {
@@ -8874,6 +9244,22 @@ impl Render for CanvasView {
                 }
 
                 if this.fields.local_style_key(&e.keystroke.key, accel, window, cx) {
+                    cx.stop_propagation();
+                    return;
+                }
+
+                // 方向键兜底：GPUI 的按键沿**焦点链**派发，画布子树的 `on_key_down` 只在焦点
+                // 落在画布上时收得到。改完属性、提交对话框、点过右栏列表行之后焦点常在右栏，
+                // 方向键就到不了画布分支（用户 2026-11-26 实测「选中组件按方向键不动」）。
+                // 这里补一条与画布分支相同的分派：
+                // - 焦点在画布时，画布分支已消费并 `stop_propagation`，这里收不到，不会重复；
+                // - 焦点在文本输入框时，输入框处理方向键并停止冒泡，这里也收不到；
+                // - 对话框打开、正在编辑文字、或处于 a11y 区域导航（上面已处理）时不接管。
+                if this.dialog.is_none()
+                    && this.app.session.ds().is_ok_and(|d| d.text_edit.is_none())
+                    && arrow_key(&mut this.app, &canonical_key(&e.keystroke.key), &e.keystroke.modifiers)
+                {
+                    cx.notify();
                     cx.stop_propagation();
                     return;
                 }

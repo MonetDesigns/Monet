@@ -211,6 +211,11 @@ pub fn input(
     alt: bool,
     shift: bool,
 ) -> bool {
+    // Developer Mode inspects: no spacing / reorder gesture may start (EGUI hides these handles).
+    if app.session.tool.dev_mode {
+        cancel(app);
+        return false;
+    }
     if let Some(mut drag) = app.selection_spacing.drag.clone() {
         let same =
             app.session.ds().is_ok_and(|ds| ds.uid == drag.uid && ds.page == drag.page && ds.selection == drag.ids && ds.interaction.is_some());
@@ -362,6 +367,9 @@ mod tests {
 
 /// 画重排环与间距手柄（原文 `draw`）。
 pub fn draw(app: &mut CanvasApp, painter: &mut Painter) {
+    if app.session.tool.dev_mode {
+        return;
+    }
     let dragging = app.selection_spacing.drag.is_some();
     if !available(app) && !dragging {
         return;

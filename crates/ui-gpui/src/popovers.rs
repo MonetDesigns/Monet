@@ -2271,7 +2271,13 @@ impl WindowState {
     }
 
     /// 字体选择窗：列表每项显示字体名，并用该字体自身渲染（名字即预览）。
-    pub(crate) fn font_picker(cmds: Cmds, cx: &mut App, current: Option<&str>, anchor: Point<Pixels>) -> Self {
+    pub(crate) fn font_picker(
+        cmds: Cmds,
+        cx: &mut App,
+        current: Option<&str>,
+        anchor: Point<Pixels>,
+        ids: Option<Vec<figcraft_doc::NodeId>>,
+    ) -> Self {
         let mut w = Self::base(WindowKind::FontPicker, tr("Font family"), cmds, Open::Anchor(anchor));
         // Figma `typePanel.fontFamily.fontPickerWindow`：宽 `15rem`(=240)，窗口背景是
         // `var(--color-bg)`（**面板色**，不是菜单色），body 内联高度 429px、内边距 0。
@@ -2284,7 +2290,10 @@ impl WindowState {
         w.rows = figcraft_text::family_names()
             .into_iter()
             .map(|fam| {
-                let params = json!({ "props": { "fontFamily": fam.clone() } });
+                let mut params = json!({ "props": { "fontFamily": fam.clone() } });
+                if let Some(ids) = &ids {
+                    params["ids"] = json!(ids);
+                }
                 let mut row = Row::new(fam.clone(), "node.set", params).font_family(fam.clone());
                 if Some(fam.as_str()) == current {
                     row = row.trail("✓");
@@ -2296,7 +2305,7 @@ impl WindowState {
         w
     }
 
-    /// 正文：标题在通用窗口头部，这里只有一条滑条（右侧百分比数值由 `Slider` 自己画）。
+    /// 正文：标题在通用窗口头部，这里一条滑条 + 右侧 iOS 快捷值（egui `paints.rs` 的 0.6）。
     fn corner_smoothing_body(&self) -> AnyElement {
         let value = self.smoothing.as_ref().map(|c| c.get()).unwrap_or(0.0);
         let cell = self.smoothing.clone();
@@ -2308,7 +2317,32 @@ impl WindowState {
             }
             cmds.push(Cmd { id: "node.set", params: Some(json!({ "props": { "cornerSmoothing": v } })) });
         });
-        popover_body().child(slider.render()).into_any_element()
+        // iOS 按钮写入 Figma 的 iOS 图标平滑常量 0.6（egui `paints.rs` 的 `iOS`）。
+        let ios_cell = self.smoothing.clone();
+        let ios_cmds = self.cmds.clone();
+        let ios = div()
+            .id("corner-smoothing-ios")
+            .h(px(24.0))
+            .px(px(8.0))
+            .flex_none()
+            .rounded(px(5.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_pointer()
+            .text_size(pt(11.0))
+            .text_color(rgba(crate::widgets::tokens().text))
+            .hover(|s| s.bg(rgba(crate::widgets::tokens().hover)))
+            .child("iOS")
+            .on_mouse_down(gpui::MouseButton::Left, move |_e, _w, _cx| {
+                if let Some(c) = &ios_cell {
+                    c.set(0.6);
+                }
+                ios_cmds.push(Cmd { id: "node.set", params: Some(json!({ "props": { "cornerSmoothing": 0.6 } })) });
+            });
+        popover_body()
+            .child(div().flex().flex_row().items_center().gap(px(8.0)).child(div().flex_1().min_w(px(0.0)).child(slider.render())).child(ios))
+            .into_any_element()
     }
 
     /// 由根视图用**窗口坐标**推进变量窗口的所有拖拽：resize 改 `size`，整卡移动改 `place`。

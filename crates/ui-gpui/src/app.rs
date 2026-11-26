@@ -61,6 +61,12 @@ pub struct CanvasApp {
     pub(crate) connect: crate::canvas::board_connect::State,
     /// 图片裁剪模式的目标层与 fill 序号；`image.crop` UI 请求写入，画布叠加层据此画裁剪标记。
     pub crop: Option<(figcraft_doc::NodeId, usize)>,
+    /// 数字键设置不透明度时的第一个数字与时间戳（`OPACITY_CHAIN_SECS` 内按第二键凑两位）。
+    /// 上游 `FigApp::ui.opacity_digit`。
+    pub opacity_digit: Option<(u32, f64)>,
+    /// 键盘框选（Alt+Space / F8 / Ctrl+Space → `select.area` 无参请求）的框，页面坐标；
+    /// 上游 `FigApp::ui.key_box`。方向键移动/改大小、Enter 选中、Escape 取消、Tab 转拾取。
+    pub key_box: Option<[f64; 4]>,
     /// 本帧画布要显示的文档（Motion 求值后的预览）；None = 源文档。
     /// 由 `CanvasView::sync_motion` 每帧设置，渲染请求与叠加层都读它，
     /// 这样 `ds.doc` 在一帧内不再被临时替换，引擎 / 撤销 / 命中 / 右栏始终看到源文档。
@@ -92,6 +98,8 @@ impl CanvasApp {
             proto: crate::canvas::proto_canvas::State::default(),
             connect: crate::canvas::board_connect::State::default(),
             crop: None,
+            opacity_digit: None,
+            key_box: None,
             display_doc: None,
         };
         // 预选一个自动布局容器：启动即可见 hatch（紧贴轮廓 + padding 蓝斜线 + spacing 粉斜线），

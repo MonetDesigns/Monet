@@ -135,6 +135,26 @@ fn properties_section(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut 
     // header 画，这里**没有** description 输入框（之前我塞了一个在 Properties 上面，是错的）。
     let t = tokens();
     let sec = PanelSection::new(c.title);
+    // egui `component_panel.rs::description_ui`：组件 / 组件集自己的描述可编辑，提交
+    // `node.set {description}`。GPUI 的 `TextEdit` 没有多行输入，这里用单行字段（失焦提交）。
+    let owner = c.main_id.unwrap_or(NodeId(0));
+    let desc = f.row_field(
+        cx,
+        slot(n),
+        &c.description,
+        RowEditCtx {
+            cmd: "node.set",
+            params: json!({ "id": owner.0 }),
+            key: "description",
+            scale: 1.0,
+            string_value: true,
+            paint: None,
+            nest: Some("props"),
+            nest_key: None,
+            paint_color: None,
+        },
+    );
+    let sec = sec.child(sublabel_row(tr("Description"))).child(crate::widgets::block_row(div().w_full().h(px(72.0)).child(desc)));
     let sec = property_rows(f, c, cx, n).into_iter().fold(sec, |s, row| s.child(row));
     // 变体值冲突警告（lizard `variant_conflicts`：同一组合出现多个变体时给黄条）。
     let sec = if c.variant_conflicts.is_empty() {

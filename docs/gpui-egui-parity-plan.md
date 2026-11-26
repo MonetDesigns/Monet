@@ -275,6 +275,18 @@ A16=done
 A1=done
 A2B3A27=done
 A8=done
+DM1=done
+DM2=done
+DM3=done
+DM4=done
+DM5=done
+DM6=done
+DM7=done
+DM8=done
+DM9=done
+DM10=done
+DM11=done
+DM12=done
 -->
 
 **结论（2026-11-16 更新）**：A16 多窗口已落地——不再用弹层冒充窗口，`windows.rs` 用同一个 `Entity<CanvasView>` 作为多个 OS 窗口的根视图，`Session` 因此天然共享，无需重构 475 处 `&mut Session` 调用；引擎的 `window.new` / `window.focus` 请求、标签拖出都已接。第 1 批 6 项现为 **6 项完成**。仍保留的小缺口：各窗口目前显示同一组标签，只是 active 文件各自记住（按窗口过滤标签留待后续）。
