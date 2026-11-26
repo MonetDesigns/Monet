@@ -30,6 +30,8 @@ mod app;
 
 /// A21：键盘区域导航（F6 / Shift+F6 / Escape / 方向键 + 焦点环）。
 mod a11y;
+/// 崩溃兜底：写日志、尽量保存工程、弹出可复制的错误报告窗口（重启 / 关闭）。
+mod crash;
 /// A21：无障碍语义层（从 gpui-pre 0.3.12 / gpui-kit 抄来，适配 GPUI 0.2）。
 /// A16：真正的 OS 多窗口（共享根实体与会话）。
 mod windows;
@@ -5841,6 +5843,8 @@ impl CanvasView {
 
 impl Render for CanvasView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // 崩溃兜底：把当前工程做一份轻量快照，主线程 panic 时据此把工程写回磁盘。
+        crash::capture(&self.app.session);
         // A28：共享会话每帧收取网络事件。引擎约定 UI 每帧调 `live_poll`（presence、远端改动都由它
         // 落地，网络线程的 `live_wake` 只负责叫醒一帧）；不调则画布上的他人光标永远为空。
         self.app.session.live_poll();
@@ -9329,6 +9333,20 @@ const BRUSH_EXTENSIONS: &[&str] = &["abr"];
 /// 应用入口。
 
 pub fn run() {
+    // 崩溃报告进程：以 `--crash-report <日志>` 重新启动的自己。只画报告窗口，不加载工程。
+    if crash::run_reporter_if_requested() {
+        return;
+    }
+    // 主线程（事件循环所在线程）的 panic 才算致命：写日志、尽量存盘、起报告进程。
+    crash::install();
+    // 顶层兜底：事件循环里主线程的 panic 会被 winit 重新抛出到这里（渲染线程的 panic 已被
+    // 它自己的 `catch_unwind` 接住，不会到这）。走到这里说明应用已无法继续，交给崩溃模块。
+    if std::panic::catch_unwind(run_app).is_err() {
+        crash::fatal();
+    }
+}
+
+fn run_app() {
     // 文档文字的量算与渲染都走 `figcraft_text`；它的字体库要显式扫一次系统字体，
 
     // 否则文字宽度会是 0/1px（画出来就是一条竖线）。egui 版在启动时也是这么做的。
@@ -9360,6 +9378,7 @@ pub fn run() {
     // `AppAssets` = 原有 IconAssets + 动态内联 SVG 文字（旋转标尺数字）。
     let app = Application::new().with_assets(crate::canvas::svg_text::AppAssets);
 
+    // 顶层兜底见 [`run`]。
     app.run(move |cx: &mut App| {
         a11y::init(cx);
 
@@ -9465,7 +9484,7 @@ fn dbg_tint<E: gpui::Styled>(el: E, on: bool, color: u32) -> E {
 
 /// on its own (the crate is excluded from the workspace), so it asks the OS directly.
 
-fn system_language() -> Option<String> {
+pub(crate) fn system_language() -> Option<String> {
     use std::sync::OnceLock;
 
     static CACHE: OnceLock<Option<String>> = OnceLock::new();

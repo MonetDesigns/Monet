@@ -50,6 +50,8 @@ figcraft-text = { path = "../text" }
 figcraft-collab-net = { path = "../collab-net" }
 # 把 RGBA 字节包成 GPUI 的 RenderImage。版本对齐 workspace 的 image 0.25。
 image = "0.25"
+# 崩溃日志的时间戳（与 workspace 相同的特性集：只格式化给定时刻，不依赖本地时区数据）。
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 log = "0.4"
 # 引擎命令参数（参考线增删改、视图缩放等）。
 serde_json = "1"
