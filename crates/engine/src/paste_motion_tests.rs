@@ -215,6 +215,44 @@ fn pasting_two_animated_frames_grows_each_scope_by_its_own_end() {
 }
 
 #[test]
+fn pasting_a_section_extends_the_frames_inside_it_not_just_the_page() {
+    let mut s = Session::new();
+    let page = s.doc().unwrap().first_page().unwrap();
+    let (sec, inner, dot) = {
+        let doc = s.doc_mut().unwrap();
+        let sec = doc
+            .create(page, figcraft_doc::NodeKind::Section { contents_hidden: false }, "Section", 0.0, 0.0, 300.0, 300.0)
+            .unwrap();
+        let inner = doc.create(sec, figcraft_doc::NodeKind::Frame, "Inner", 10.0, 10.0, 200.0, 200.0).unwrap();
+        let dot = doc.create(inner, figcraft_doc::NodeKind::Rectangle, "Dot", 10.0, 10.0, 20.0, 20.0).unwrap();
+        (sec, inner, dot)
+    };
+    key(&mut s, dot, 0, 10.0, 10.0);
+    key(&mut s, dot, 1200, 60.0, 10.0);
+    s.doc_mut().unwrap().timelines.insert(inner, settings(400, 30, false));
+
+    copy(&mut s, sec);
+    s.set_selection(vec![]);
+    let pasted = paste(&mut s, json!({}));
+    let doc = s.doc().unwrap();
+    let pasted_frame = doc
+        .subtree(pasted[0])
+        .into_iter()
+        .find(|id| matches!(doc.node(*id).unwrap().kind, figcraft_doc::NodeKind::Frame))
+        .expect("the section brings its frame");
+    assert_eq!(
+        doc.timeline_settings_for(pasted_frame).duration_ms,
+        1200,
+        "the frame inside the pasted section grows to fit its own animation"
+    );
+    assert_eq!(
+        doc.timeline_settings_for(page).duration_ms,
+        2000,
+        "the page clock is not stretched by an animation inside a frame"
+    );
+}
+
+#[test]
 fn pasting_a_top_level_instance_does_not_create_an_instance_timeline() {
     let mut s = Session::new();
     let page = s.doc().unwrap().first_page().unwrap();
