@@ -370,3 +370,35 @@ cargo xtask ci   # fmt + clippy -D warnings + tests + layers + assets + wasm
 | REST：节点级列表去重 | ✅ | ❌ | A3 |
 | `.fig`：`variableConsumptionMap` → 绑定 | ❌（按当前上游代码） | ✅ | B2，可反向上游化 |
 | Scale：实例保留绑定 / 普通层烘值解绑 | ✅ | ❌ | A1 |
+
+## 8. 执行记录（2026-11-26）
+
+在 `sync/variable-binding-2026-11` 上按批次 1-4 落地，基线 `5cfe98448`。
+
+| 批次 | 提交 | 内容 |
+|---|---|---|
+| 1 | `e6d74397a` | REST `individualStrokeWeights` 分边 + 节点级列表去重 |
+| 1 | `68288471d` | 库更新 `prune` 保留样式绑定的变量 |
+| 1 | `507ac0f71` | `variable.duplicate` 精确 id 优先 + 2 条 stored-id 回归 |
+| 2 | `430c6b900` | 文本样式 `fontWeight` 绑定（字段表、scope、应用、互斥） |
+| 2 | `21a6c1661` | CSS 导出把仅样式绑定的字重视为无单位 |
+| 3 | `36a36f894` | 并发 UI 提交一并带入了本批的 doc/collab/styles/components 改动（`scale_factor`、`LENGTH_FIELDS`、`scale_of`、`bake_scale`、`bake_stale_scales`） |
+| 3 | `99750c19a` | `scale_fits` 越界拒绝、因子 1 早退、拖拽停在最后一个可用因子 |
+| 4 | `bc2cd57ad` | Dev Mode `node.get` 读 `variableModes` / `propertyReferences` / `exposedInstance` |
+
+验证（`CARGO_INCREMENTAL=0`，`-j 2`，D 盘 target）：
+
+- `cargo test -p figcraft-format proto_variable`：10/10
+- `cargo test -p figcraft-engine --lib library_variables`：11/11
+- `cargo test -p figcraft-engine --lib style_vars`：12/12
+- `cargo test -p figcraft-engine --lib variables_editor`：11/11
+- `cargo test -p figcraft-engine --lib scale`：62/62（含 `scale_bound_values_tests` 14/14）
+- `cargo test -p figcraft-engine --lib modes_property_bindings`：1/1
+- `cargo test -p figcraft-engine --lib variables`：106 通过，1 失败（`fonts::tests::lists_families_of_layers_ranges_styles_and_variables_once_each`，字体族去重/环境，未涉及变量绑定，未修）
+
+留待拍板 / 后续：
+
+1. **C1**：`.fig` 仍未读写 `scale_factor`（跟随上游现状：导入不烘焙因子，导出不带）。JSON 存档的因子往返已有测试覆盖；若产品要求 `.fig` 往返，另开一项。
+2. **C4**：GPUI 仍无 `style.bind` 入口，文本样式字重绑定面板未做；egui 侧入口已在。因 GPUI 右栏正在并发改动，本期不动，避免冲突。
+3. **A9**：上游 `variables_io_tests` 的 slot 测试（P3）未移植。
+
