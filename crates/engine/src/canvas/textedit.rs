@@ -740,11 +740,17 @@ pub fn preedit(s: &mut Session, text: &str, cursor: Option<usize>) -> Result<()>
         })?;
     }
     let n = text.chars().count();
+    let next = (n > 0).then(|| Preedit { text, cursor: cursor.unwrap_or(n).min(n) });
+    // IME 常会用同样的 composition 再刷一帧；内容没变就不要改 revision，
+    // 否则调用方按 revision 缓存组合文档时每次都要重新分配整份文档。
+    let changed = s.ds().ok().and_then(|ds| ds.text_edit.as_ref().and_then(|te| te.preedit.clone())) != next;
     let ds = s.ds_mut()?;
     if let Some(te) = ds.text_edit.as_mut() {
-        te.preedit = (n > 0).then(|| Preedit { text, cursor: cursor.unwrap_or(n).min(n) });
+        te.preedit = next;
     }
-    ds.revision += 1;
+    if changed {
+        ds.revision += 1;
+    }
     Ok(())
 }
 

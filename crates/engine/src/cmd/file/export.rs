@@ -71,7 +71,7 @@ pub fn export_bytes_with(doc: &Document, ids: &[NodeId], setting: &ExportSetting
 /// profile; the clipboard wants sRGB).
 pub fn copy_png(doc: &Document, ids: &[NodeId]) -> Option<figcraft_render::Pixmap> {
     let area = export_area(doc, ids, &ExportSetting::default())?;
-    figcraft_render::render_area(doc, &crate::cmd::edit::z_sorted(doc, ids), area, 2.0)
+    figcraft_render::render_area_for_export(doc, &crate::cmd::edit::z_sorted(doc, ids), area, 2.0)
 }
 
 pub(super) fn export(s: &mut Session, p: &Value) -> Result<Value> {
@@ -101,6 +101,25 @@ pub(super) fn export(s: &mut Session, p: &Value) -> Result<Value> {
         None => num_or(p, "scale", 1.0).clamp(0.01, ExportSize::MAX_SCALE),
     };
     let format = setting.format;
+    if format.is_animation() {
+        let node = *ids.first().ok_or_else(|| EngineError::Disabled(cmd.into(), "nothing to export".into()))?;
+        let anim_format = crate::cmd::motion_export::AnimFormat::parse(format.ext())
+            .ok_or_else(|| bad(cmd, format!("unsupported Motion format {}", format.label())))?;
+        let scale = crate::cmd::motion_export::scale_for(doc, node, setting.size);
+        let out = crate::cmd::motion_export::encode_animation(doc, node, anim_format, scale, setting.fps, setting.quality(), 9)?;
+        let mut value = match string(p, "path") {
+            Some(path) => {
+                write(&path, &out.bytes)?;
+                json!({"path": path, "bytes": out.bytes.len(), "format": out.ext})
+            }
+            None => json!({"format": out.ext, "data": base64::engine::general_purpose::STANDARD.encode(&out.bytes)}),
+        };
+        value["frames"] = json!(out.frames);
+        value["fps"] = json!(out.fps);
+        value["width"] = json!(out.width);
+        value["height"] = json!(out.height);
+        return Ok(value);
+    }
     let (bytes, warnings) = export_file(doc, &ids, &setting, scale)?;
     let mut out = match string(p, "path") {
         Some(path) => {
@@ -180,6 +199,12 @@ pub(in crate::cmd) fn export_setting(cmd: &str, mut e: ExportSetting, p: &Value)
     }
     if let Some(q) = quality_param(cmd, p)? {
         e.quality = q;
+    }
+    if let Some(v) = get(p, "fps") {
+        if !v.is_null() {
+            let fps = f64_of(v).filter(|f| f.is_finite() && f.fract() == 0.0 && (0.0..=120.0).contains(f));
+            e.fps = fps.ok_or_else(|| bad(cmd, "fps: a whole number from 0 (Auto) to 120"))? as u32;
+        }
     }
     e.print = print_param(cmd, p, e.print)?;
     for (key, slot) in [
@@ -356,7 +381,15 @@ pub(super) fn export_layers(s: &mut Session, p: &Value) -> Result<Value> {
             ..job.setting.clone()
         };
         let scale = export_scale(doc, &[job.id], &setting);
-        let (bytes, warnings) = export_file(doc, &[job.id], &setting, scale)?;
+        let (bytes, warnings) = if setting.format.is_animation() {
+            let anim_format = crate::cmd::motion_export::AnimFormat::parse(setting.format.ext())
+                .ok_or_else(|| bad(cmd, format!("unsupported Motion format {}", setting.format.label())))?;
+            let anim_scale = crate::cmd::motion_export::scale_for(doc, job.id, setting.size);
+            let out = crate::cmd::motion_export::encode_animation(doc, job.id, anim_format, anim_scale, setting.fps, setting.quality(), 9)?;
+            (out.bytes, Vec::new())
+        } else {
+            export_file(doc, &[job.id], &setting, scale)?
+        };
         let mut f = json!({"name": job.file, "id": job.id, "bytes": bytes.len()});
         if setting.format == ExportFormat::VectorDrawable {
             f["warnings"] = json!(warnings);

@@ -1419,19 +1419,49 @@ pub enum ExportFormat {
     Webp,
     /// Android Vector Drawable (an `.xml` drawable resource).
     VectorDrawable,
+    /// Animated GIF (Motion).
+    Gif,
+    /// AV1 in a WebM container (Motion).
+    Webm,
+    /// A zip of numbered PNG frames (Motion).
+    PngZip,
+    /// H.264 in an MP4 container (Motion).
+    Mp4,
 }
 
 impl ExportFormat {
-    /// Every format, in the order the export menus list them.
+    /// The still formats, in the order the asset export menus list them.
     pub const ALL: [ExportFormat; 6] =
         [ExportFormat::Png, ExportFormat::Jpg, ExportFormat::Svg, ExportFormat::Pdf, ExportFormat::Webp, ExportFormat::VectorDrawable];
 
-    /// Pixel formats (their size depends on the export scale).
+    /// Every format a layer's Export section can add, still images first and Motion formats last.
+    /// The `+` in the Export section adds a normal row; changing that row's format to one of the
+    /// last four makes the same Export button export the selected node's animation.
+    pub const WITH_ANIMATION: [ExportFormat; 10] = [
+        ExportFormat::Png,
+        ExportFormat::Jpg,
+        ExportFormat::Svg,
+        ExportFormat::Pdf,
+        ExportFormat::Webp,
+        ExportFormat::VectorDrawable,
+        ExportFormat::Gif,
+        ExportFormat::Webm,
+        ExportFormat::PngZip,
+        ExportFormat::Mp4,
+    ];
+
+    /// Pixel still formats (their size depends on the export scale).
     pub fn is_raster(self) -> bool {
         matches!(self, ExportFormat::Png | ExportFormat::Jpg | ExportFormat::Webp)
     }
 
-    /// The name menus show ("PNG", "WebP").
+    /// Frame-by-frame Motion formats. Their output is produced by `motion.export`, not the still
+    /// image encoder, and `PngZip` is a `.zip` of PNG frames rather than a single `.png`.
+    pub fn is_animation(self) -> bool {
+        matches!(self, ExportFormat::Gif | ExportFormat::Webm | ExportFormat::PngZip | ExportFormat::Mp4)
+    }
+
+    /// The name menus show ("PNG", "WebP", "PNG frames").
     pub fn label(self) -> &'static str {
         match self {
             ExportFormat::Png => "PNG",
@@ -1440,6 +1470,10 @@ impl ExportFormat {
             ExportFormat::Pdf => "PDF",
             ExportFormat::Webp => "WebP",
             ExportFormat::VectorDrawable => "XML",
+            ExportFormat::Gif => "GIF",
+            ExportFormat::Webm => "WebM",
+            ExportFormat::PngZip => "PNG frames",
+            ExportFormat::Mp4 => "MP4",
         }
     }
 
@@ -1456,6 +1490,10 @@ impl ExportFormat {
             ExportFormat::Pdf => "pdf",
             ExportFormat::Webp => "webp",
             ExportFormat::VectorDrawable => "xml",
+            ExportFormat::Gif => "gif",
+            ExportFormat::Webm => "webm",
+            ExportFormat::PngZip => "zip",
+            ExportFormat::Mp4 => "mp4",
         }
     }
     pub fn from_ext(s: &str) -> Option<Self> {
@@ -1466,6 +1504,10 @@ impl ExportFormat {
             "pdf" => Some(ExportFormat::Pdf),
             "webp" => Some(ExportFormat::Webp),
             "xml" | "vd" | "vectordrawable" => Some(ExportFormat::VectorDrawable),
+            "gif" => Some(ExportFormat::Gif),
+            "webm" | "av1" => Some(ExportFormat::Webm),
+            "zip" | "png-zip" | "pngzip" => Some(ExportFormat::PngZip),
+            "mp4" | "h264" => Some(ExportFormat::Mp4),
             _ => None,
         }
     }
@@ -1645,6 +1687,9 @@ pub struct ExportSetting {
     /// JPG: the encoder's quality, 1 (smallest file) to 100 (see [`ExportSetting::quality`]).
     #[serde(skip_serializing_if = "is_default_quality")]
     pub quality: u8,
+    /// Motion formats: frames per second, 0 = the timeline's own rate (`Auto`).
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub fps: u32,
 }
 
 /// The color profile an export setting writes PNG, JPG and WebP files in.
@@ -1738,8 +1783,13 @@ impl Default for ExportSetting {
             vd_compat: VdCompat::BestEffort,
             color_profile: ExportColorProfile::SameAsFile,
             quality: ExportSetting::DEFAULT_QUALITY,
+            fps: 0,
         }
     }
+}
+
+fn is_zero_u32(n: &u32) -> bool {
+    *n == 0
 }
 
 fn is_true(b: &bool) -> bool {
@@ -1780,7 +1830,9 @@ impl ExportSetting {
     pub fn file_suffix(&self) -> String {
         match self.size {
             _ if !self.suffix.is_empty() => self.suffix.clone(),
-            ExportSize::Scale { value } if (value - 1.0).abs() > 1e-9 && self.format.is_raster() => format!("@{}", self.size.label()),
+            ExportSize::Scale { value } if (value - 1.0).abs() > 1e-9 && (self.format.is_raster() || self.format.is_animation()) => {
+                format!("@{}", self.size.label())
+            }
             _ => String::new(),
         }
     }

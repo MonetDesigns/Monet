@@ -648,31 +648,6 @@ pub(crate) fn spec(kind: Kind, data: &Value) -> Spec {
                 .field(preset("SVG", "svg", 1.0))
                 .field(preset("PDF", "pdf", 1.0))
                 .field(preset("Vector Drawable", "vectordrawable", 1.0))
-                // The MP4 backend existed in the engine but never appeared in the export dialog.
-                // These rows go through `motion.export`, whose base64 result the existing
-                // `deliver_download` path already saves with the native save dialog.
-                .field(Field::Section { title: tr("Animation (selected layer's timeline)") })
-                .field(Field::Action {
-                    label: SharedString::from("MP4 (H.264) · 60 fps"),
-                    id: "motion.export",
-                    params: json!({"format": "mp4", "fps": 60, "scale": 2.0}),
-                })
-                .field(Field::Action {
-                    label: SharedString::from("GIF · 30 fps"),
-                    id: "motion.export",
-                    params: json!({"format": "gif", "fps": 30, "scale": 2.0}),
-                })
-                .field(Field::Action {
-                    label: SharedString::from("WebM (AV1) · 60 fps"),
-                    id: "motion.export",
-                    params: json!({"format": "webm", "fps": 60, "scale": 2.0}),
-                })
-                .field(Field::Action {
-                    label: SharedString::from("PNG sequence · 60 fps"),
-                    id: "motion.export",
-                    params: json!({"format": "png", "fps": 60, "scale": 2.0}),
-                })
-                .field(Field::Note { text: tr("Animation export renders the selected frame's timeline; choose a frame with keyframes.").to_string() })
                 .field(Field::Section { title: tr("PDF print options") })
                 .field(Field::Preview { label: tr("Nothing to preview: select a layer first.") })
                 .field(Field::Section { title: tr("The whole file") })
@@ -1813,6 +1788,11 @@ mod tests {
             .collect();
         assert!(presets.iter().any(|p| p == "PNG @2x") && presets.iter().any(|p| p == ".fig (experimental)"), "{presets:?}");
         assert!(presets.len() >= 8, "all the original presets are listed");
+        // 动画不再有单独的对话框/按钮：它是右栏 Export 行里的一个普通格式（GIF/WebM/PNG frames/MP4）。
+        assert!(!export.fields.iter().any(|f| matches!(
+            f,
+            Field::Action { id, .. } if id.starts_with("motion.export")
+        )));
         let prefs = spec(Kind::Preferences, &json!({}));
         assert!(prefs.buttons.iter().any(|b| matches!(&b.action, Action::SubmitFields { id: "pref.nudge", .. })));
         assert!(prefs.fields.iter().any(|f| matches!(

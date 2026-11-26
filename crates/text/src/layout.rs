@@ -79,6 +79,10 @@ pub struct Line {
     pub top: f64,
     pub height: f64,
     pub baseline: f64,
+    /// Font ascent at this line's size (without the leading `height` adds).
+    pub ascent: f64,
+    /// Font descent at this line's size (without the leading `height` adds).
+    pub descent: f64,
     pub width: f64,
     pub x: f64,
     /// The line ends a paragraph (hard break or end of text).
@@ -1443,6 +1447,8 @@ pub fn layout(text: &TextData, box_width: Option<f64>, box_height: Option<f64>) 
             top: y,
             height: lh,
             baseline,
+            ascent: asc,
+            descent: desc,
             width: width + line_indent - hang_l - hang_r,
             x: 0.0,
             para_end: *para_end,

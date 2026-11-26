@@ -2358,11 +2358,11 @@ checksum = "b97b65636e5b9ef369943878ac74335ba1c55c1cb6adbf1e2c293c624248d693"
 
 [[package]]
 name = "figcraft-abr"
-version = "0.15.0"
+version = "2648.15.0"
 
 [[package]]
 name = "figcraft-cli"
-version = "0.15.0"
+version = "2648.15.0"
 dependencies = [
  "clap",
  "clap_complete",
@@ -2380,7 +2380,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-collab"
-version = "0.15.0"
+version = "2648.15.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -2398,7 +2398,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-collab-net"
-version = "0.15.0"
+version = "2648.15.0"
 dependencies = [
  "base64 0.22.1",
  "figcraft-collab",
@@ -2421,7 +2421,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-color"
-version = "0.15.0"
+version = "2648.15.0"
 dependencies = [
  "kurbo 0.13.1",
  "serde",
@@ -2430,7 +2430,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-devices"
-version = "0.15.0"
+version = "2648.15.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2438,7 +2438,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-doc"
-version = "0.15.0"
+version = "2648.15.0"
 dependencies = [
  "figcraft-color",
  "figcraft-geom",
@@ -2451,7 +2451,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-engine"
-version = "0.15.0"
+version = "2648.15.0"
 dependencies = [
  "base64 0.22.1",
  "craft-docpath",
@@ -2489,7 +2489,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-format"
-version = "0.15.0"
+version = "2648.15.0"
 dependencies = [
  "craft-figcraft-format",
  "craft-image-codecs",
@@ -2512,7 +2512,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-geom"
-version = "0.15.0"
+version = "2648.15.0"
 dependencies = [
  "kurbo 0.13.1",
  "serde",
@@ -2520,7 +2520,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-i18n"
-version = "0.15.0"
+version = "2648.15.0"
 dependencies = [
  "figcraft-doc",
  "figcraft-engine",
@@ -2531,7 +2531,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-layout"
-version = "0.15.0"
+version = "2648.15.0"
 dependencies = [
  "figcraft-doc",
  "figcraft-geom",
@@ -2539,7 +2539,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-mcp"
-version = "0.15.0"
+version = "2648.15.0"
 dependencies = [
  "base64 0.22.1",
  "figcraft-collab-net",
@@ -2555,7 +2555,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-motion-codec"
-version = "0.15.0"
+version = "2648.15.0"
 dependencies = [
  "craft-media",
  "craft-video",
@@ -2566,7 +2566,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-pathops"
-version = "0.15.0"
+version = "2648.15.0"
 dependencies = [
  "figcraft-doc",
  "figcraft-geom",
@@ -2575,7 +2575,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-pdf"
-version = "0.15.0"
+version = "2648.15.0"
 dependencies = [
  "craft-pdf",
  "figcraft-color",
@@ -2593,7 +2593,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-plugin"
-version = "0.15.0"
+version = "2648.15.0"
 dependencies = [
  "figcraft-color",
  "serde",
@@ -2606,7 +2606,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-render"
-version = "0.15.0"
+version = "2648.15.0"
 dependencies = [
  "craft-gif",
  "craft-image-codecs",
@@ -2628,7 +2628,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-server"
-version = "0.15.0"
+version = "2648.15.0"
 dependencies = [
  "chrono",
  "crc32fast",
@@ -2653,7 +2653,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-svg"
-version = "0.15.0"
+version = "2648.15.0"
 dependencies = [
  "base64 0.22.1",
  "craft-svg",
@@ -2671,7 +2671,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-text"
-version = "0.15.0"
+version = "2648.15.0"
 dependencies = [
  "core-text 22.0.0",
  "craft-font-catalog",
@@ -2691,7 +2691,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-ui-gpui"
-version = "0.11.2"
+version = "2648.15.0"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -2725,7 +2725,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-vectordrawable"
-version = "0.15.0"
+version = "2648.15.0"
 dependencies = [
  "craft-vectordrawable",
  "figcraft-color",
@@ -9370,7 +9370,7 @@ checksum = "9440ea3e5aeabb0ac63af70daf835274065238cdd0cec83418f417eae38bacee"
 
 [[package]]
 name = "xtask"
-version = "0.15.0"
+version = "2648.15.0"
 dependencies = [
  "figcraft-engine",
  "serde_json",

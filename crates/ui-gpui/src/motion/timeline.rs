@@ -666,6 +666,12 @@ fn build(
 
     // The rest of the header controls. Export (egui L267-268) is a no-op button there, so it maps
     // to `HitKind::Export` (does nothing) — NOT `Clear`, which would wipe the user's selection.
+    //
+    // The ruler is registered before these buttons, not after: it spans the same band and its
+    // right end covers Export and Close. Registering it last made `hit_at` (reverse scan) return
+    // Seek, so clicking Export only moved the playhead and the animation export never opened.
+    let ruler = Rect::from_min_max(pos2(track_x, 0.0), pos2(track_right, HEADER_H));
+    hits.push(Hit { rect: ruler, kind: HitKind::Seek });
     let controls: [(Rect, HitKind, Icon); 5] = [
         (at(38.0, 22.0, 24.0), HitKind::AddKeyAtPlayhead, Icon::Instance),
         (at(160.0, 22.0, 24.0), HitKind::Loop, if settings.looping { Icon::LinkOn } else { Icon::LinkOff }),
@@ -703,7 +709,6 @@ fn build(
 
     // ── ruler (egui L321-362): the RIGHT half of the SAME header band ────────
     let ruler = Rect::from_min_max(pos2(track_x, 0.0), pos2(track_right, HEADER_H));
-    hits.push(Hit { rect: ruler, kind: HitKind::Seek });
     let dur_ms = settings.duration_ms.max(1) as f64;
     let step = tick_step(dur_ms).max(1.0);
     let step_u = step as u32;
@@ -1525,6 +1530,20 @@ mod tests {
         ui.selection.insert(SelItem::Layer(g.id));
         let (_, _, hits, _) = build(&g.doc, &ui, &[g.id], g.doc.pages[0], g.width, 309.0, g.settings, hover);
         hits
+    }
+
+    /// 回归：时间轴右上角的导出按钮和关闭按钮必须压过整条 ruler 的 seek 命中。
+    /// 之前 ruler 最后注册，`hit_at` 反向扫描先命中 Seek，点导出只会移动播放头，
+    /// Export 对话框永远不打开。
+    #[test]
+    fn export_button_wins_over_the_header_ruler() {
+        reset_drag_state();
+        let g = geom();
+        let hits = build_hits(&g, None);
+        let at_export = hit_at(&hits, pos2(g.width - 46.0, HEADER_H / 2.0)).map(|h| h.kind);
+        assert!(matches!(at_export, Some(HitKind::Export)), "右上角导出按钮必须命中 Export，实得 {at_export:?}");
+        let at_ruler = hit_at(&hits, pos2(g.width - 120.0, HEADER_H / 2.0)).map(|h| h.kind);
+        assert!(matches!(at_ruler, Some(HitKind::Seek)), "ruler 空白处仍然要能 seek，实得 {at_ruler:?}");
     }
 
     /// 回归：整行「选轨道 / 清空」的命中**不能**压住关键帧和 segment。

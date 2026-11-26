@@ -384,3 +384,72 @@ fn copy_as_png_svg_and_code() {
     let css = crate::codegen::code_for(doc, a, crate::codegen::CodeLang::Css);
     assert!(css.contains("background: #FF0000;"), "Copy as CSS is the layer's CSS from Inspect");
 }
+
+#[test]
+fn animation_is_a_normal_export_row_with_a_png_zip() {
+    use figcraft_doc::anim::motion::{AnimProperty, AnimValue, Ease, TimelineSettings};
+
+    let mut s = Session::new();
+    let f = frame(&mut s, 0.0, 0.0, 420.0, 320.0, true);
+    name(&mut s, f, "Motion Card");
+    let child = rect(&mut s, 20.0, 20.0, 120.0, 80.0, "#3366FF", Some(f));
+    {
+        let n = s.doc_mut().unwrap().node_mut(child).unwrap();
+        let tr = n.motion.ensure_track(AnimProperty::Opacity);
+        tr.set_key(0, AnimValue::Scalar(0.0), None);
+        tr.set_key(500, AnimValue::Scalar(1.0), Some(Ease::Linear));
+    }
+    s.doc_mut().unwrap().timelines.insert(f, TimelineSettings { duration_ms: 500, fps: 10, looping: true });
+
+    ex(&mut s, "export.add", json!({"ids": [f]}));
+    ex(&mut s, "export.update", json!({"ids": [f], "index": 0, "format": "zip", "fps": 10, "size": "1x", "suffix": "-frames"}));
+
+    let r = ex(&mut s, "file.exportLayers", json!({"ids": [f]}));
+    let files = r["files"].as_array().unwrap();
+    assert_eq!(files.len(), 1, "one normal row = one file");
+    assert_eq!(files[0]["name"], "Motion Card-frames.zip", "PNG frames is a .zip, not a single .png");
+    let data = base64::engine::general_purpose::STANDARD.decode(files[0]["data"].as_str().unwrap()).unwrap();
+    assert_eq!(&data[0..2], b"PK", "a real zip");
+    let mut zs = zip::ZipArchive::new(std::io::Cursor::new(data)).unwrap();
+    assert_eq!(zs.len(), 5, "500 ms at 10 fps is 5 looping frames");
+    use std::io::Read as _;
+    let mut first_png = Vec::new();
+    {
+        let mut first = zs.by_index(0).unwrap();
+        assert_eq!(first.name(), "Motion Card_0001.png");
+        first.read_to_end(&mut first_png).unwrap();
+    }
+    let mut last_png = Vec::new();
+    {
+        let mut last = zs.by_index(4).unwrap();
+        last.read_to_end(&mut last_png).unwrap();
+    }
+    assert_eq!(png_size(&first_png), (420, 320), "the frame subtree is rendered at the frame's 420x320 bounds");
+    assert_ne!(first_png, last_png, "the child's Opacity keyframes are baked into the frame subtree");
+    assert!(crate::cmd::motion_export::Animation::new(s.doc().unwrap(), f, 1.0).is_some_and(|a| a.is_animated()));
+}
+
+#[test]
+fn mp4_pads_odd_animation_bounds_to_an_even_picture() {
+    use figcraft_doc::anim::motion::{AnimProperty, AnimValue, Ease, TimelineSettings};
+
+    let mut s = Session::new();
+    // 111×117 is deliberately odd: H.264 4:2:0 rejects odd width/height.
+    let f = frame(&mut s, 0.0, 0.0, 111.0, 117.0, true);
+    name(&mut s, f, "Odd Card");
+    let child = rect(&mut s, 10.0, 10.0, 40.0, 40.0, "#FF8800", Some(f));
+    {
+        let n = s.doc_mut().unwrap().node_mut(child).unwrap();
+        let tr = n.motion.ensure_track(AnimProperty::Opacity);
+        tr.set_key(0, AnimValue::Scalar(0.0), None);
+        tr.set_key(500, AnimValue::Scalar(1.0), Some(Ease::Linear));
+    }
+    s.doc_mut().unwrap().timelines.insert(f, TimelineSettings { duration_ms: 500, fps: 10, looping: true });
+
+    ex(&mut s, "export.add", json!({"ids": [f], "setting": {"format": "mp4", "fps": 10, "size": "1x"}}));
+    let r = ex(&mut s, "file.exportLayers", json!({"ids": [f]}));
+    let files = r["files"].as_array().unwrap();
+    assert_eq!(files[0]["name"], "Odd Card.mp4");
+    let data = base64::engine::general_purpose::STANDARD.decode(files[0]["data"].as_str().unwrap()).unwrap();
+    assert!(data.len() > 8 && &data[4..8] == b"ftyp", "a real MP4 container");
+}

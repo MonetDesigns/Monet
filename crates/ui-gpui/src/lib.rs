@@ -95,6 +95,11 @@ pub mod wgsl_runner;
 #[cfg(feature = "gpu")]
 mod shade_gpu;
 
+/// 栅格导出用的 GPU 材质通道（`--features gpu`）：PNG/JPG/WebP 导出与画布共用同一份
+/// `ShadeBoard` + shader registry，玻璃不会在导出时退回灰块。
+#[cfg(feature = "gpu")]
+mod export_gpu;
+
 mod main_menu;
 
 /// 点锚定的菜单卡片：右键菜单与工具栏飞出菜单共用的一套行模型。
@@ -752,6 +757,11 @@ pub struct CanvasView {
     /// 键盘焦点（空格平移、Z 缩放工具要收键盘事件）。
     focus: FocusHandle,
 
+    /// 画布文字光标闪烁：按编辑会话重置，节奏与普通输入框共用 `caret::BLINK`。
+    caret_session: Option<u64>,
+    caret_started: Option<Instant>,
+    caret_ticker_started: bool,
+
     /// A21：F6 / Shift+F6 的区域键盘导航状态（焦点环 + 方向键移动选区）。
     a11y: a11y::KeyboardNav,
 
@@ -1331,6 +1341,10 @@ impl CanvasView {
             panel_wake: panel_wake.clone(),
 
             focus: cx.focus_handle(),
+
+            caret_session: None,
+            caret_started: None,
+            caret_ticker_started: false,
 
             a11y: a11y::KeyboardNav::default(),
 
@@ -2206,14 +2220,41 @@ impl CanvasView {
     /// A19：打开一个通用对话框。菜单命令与引擎 `ui_requests` 都走这一个入口，
     /// 所有对话框共用 `DialogState` 的壳 / 网格 / 控件 / 命令队列 / 关闭行为。
     fn open_dialog(&mut self, kind: dialogs::Kind, data: &serde_json::Value, cx: &mut Context<Self>) {
-        // A19 SaveAs: a native "Save as…" picker (like egui's `pick_file`), not a fake path field.
+        // A19 SaveAs: a native "Save as…" picker. It must be asynchronous: `rfd::FileDialog`
+        // pumps a nested Win32 message loop, and from a GPUI effect that re-enters the borrowed
+        // view (`RefCell already borrowed`) and can abort the process. This is the same rule the
+        // export download path already follows.
         if kind == dialogs::Kind::SaveAs {
-            if let Some(path) = rfd::FileDialog::new().set_file_name("Untitled.figcraft").add_filter(tr("Monet"), &["figcraft"]).save_file() {
-                let _ = self.app.session.execute("file.saveAs", &serde_json::json!({ "path": path.to_string_lossy() }));
-            }
-            if matches!(self.popup, Some(Popup::MainMenu(_))) {
-                self.close_popup(cx);
-            }
+            self.close_popup(cx);
+            let suggested = self
+                .app
+                .session
+                .ds()
+                .ok()
+                .map(|d| {
+                    let name = d.doc.name.replace('/', "-").replace('\\', "-").replace(':', "-");
+                    if name.to_ascii_lowercase().ends_with(".figcraft") { name } else { format!("{name}.figcraft") }
+                })
+                .unwrap_or_else(|| "Untitled.figcraft".into());
+            let this = cx.entity().downgrade();
+            cx.spawn(async move |this, cx| {
+                let Some(file) = rfd::AsyncFileDialog::new()
+                    .set_file_name(&suggested)
+                    .add_filter(tr("Monet"), &["figcraft"])
+                    .save_file()
+                    .await
+                else {
+                    return;
+                };
+                let path = file.path().to_string_lossy().to_string();
+                let _ = this.update(cx, |view, cx| {
+                    if let Err(e) = view.app.session.execute("file.saveAs", &serde_json::json!({ "path": path })) {
+                        view.toast(e.to_string(), cx);
+                    }
+                    cx.notify();
+                });
+            })
+            .detach();
             cx.notify();
             return;
         }
@@ -3015,19 +3056,6 @@ impl CanvasView {
                     self.color_pick_pending = true;
                 }
 
-                // Motion export renders and encodes every frame. Running it on the UI thread froze
-                // the whole window for the duration of the encode. Defer it out of this borrow and
-                // run it on a worker with a cloned document; the save dialog is still native and
-                // happens before the worker starts.
-                if c.id == "motion.export" {
-                    let params = params.clone();
-                    let this = cx.entity().downgrade();
-                    cx.defer(move |cx| {
-                        let _ = this.update(cx, |view, cx| view.start_motion_export(params, cx));
-                    });
-                    continue;
-                }
-
                 // 命令前的 uid 快照：成功后用 uid-diff 把新文档登记到发起窗口（见 adopt_opened_doc）。
                 let docs_before: Vec<u64> = self.app.session.docs.iter().map(|d| d.uid).collect();
 
@@ -3055,6 +3083,10 @@ impl CanvasView {
 
                         if std::env::var_os("FC_DEBUG_CMDS").is_some() {
                             eprintln!("[panel cmd] {} {} -> {}", c.id, params, e);
+                        }
+                        // 导出按钮失败要让用户看见原因（例如给静态层加了 GIF 行），而不是像死按钮。
+                        if c.id.starts_with("file.export") || c.id == "motion.export" {
+                            self.toast(e.to_string(), cx);
                         }
                     }
                 }
@@ -3968,73 +4000,6 @@ impl CanvasView {
             self.stamp_ui_requests();
             cx.notify();
         }
-    }
-
-    /// Animated exports are potentially long (hundreds of frames + H.264/AV1). The save picker
-    /// and the encoder both stay off the UI thread: a synchronous native dialog pumps its own
-    /// message loop and freezes GPUI (and can re-enter the borrowed entity). Hand a cloned
-    /// document to a worker that calls the same `motion.export` engine command the CLI / control
-    /// channel use, so there is one encoder path.
-    fn start_motion_export(&mut self, params: serde_json::Value, cx: &mut Context<Self>) {
-        use base64::Engine as _;
-
-        let ext = params.get("format").and_then(serde_json::Value::as_str).unwrap_or("mp4").to_string();
-        let doc_name = self.app.session.ds().ok().map(|d| d.doc.name.clone()).unwrap_or_else(|| "animation".into());
-        let default_name = format!("{doc_name}.{ext}");
-        let this = cx.entity().downgrade();
-        cx.spawn(async move |this, cx| {
-            let Some(file) = rfd::AsyncFileDialog::new()
-                .set_title(tr("Export animation"))
-                .set_file_name(&default_name)
-                .add_filter(ext.to_uppercase(), &[ext.as_str()])
-                .save_file()
-                .await
-            else {
-                return;
-            };
-            let path = file.path().to_path_buf();
-            let _ = this.update(cx, |view, cx| view.toast(tr("Exporting animation…"), cx));
-            // Re-read the document after the picker returns so the export reflects edits made
-            // while the dialog was open.
-            let doc = match this.update(cx, |view, _| view.app.session.doc().ok().cloned()) {
-                Ok(Some(doc)) => doc,
-                Ok(None) => return,
-                Err(_) => return,
-            };
-            let (tx, rx) = smol::channel::bounded::<std::result::Result<serde_json::Value, String>>(1);
-            let thread_params = params.clone();
-            let spawned = std::thread::Builder::new().name("figcraft-motion-export".into()).spawn(move || {
-                let mut session = figcraft_engine::Session::with_document(doc);
-                let result = session.execute("motion.export", &thread_params).map_err(|e| e.to_string());
-                let _ = tx.send_blocking(result);
-            });
-            if spawned.is_err() {
-                let _ = this.update(cx, |view, cx| view.toast(tr("Could not start the animation export"), cx));
-                return;
-            }
-            let Ok(result) = rx.recv().await else { return };
-            let _ = this.update(cx, |view, cx| {
-                let result = match result {
-                    Ok(v) => v,
-                    Err(e) => {
-                        view.toast(e, cx);
-                        return;
-                    }
-                };
-                let Some(data) = result.get("data").and_then(serde_json::Value::as_str) else {
-                    view.toast(tr("The animation export returned no data"), cx);
-                    return;
-                };
-                let Some(bytes) = base64::engine::general_purpose::STANDARD.decode(data).ok() else {
-                    view.toast(tr("The animation export returned invalid data"), cx);
-                    return;
-                };
-                if let Err(e) = std::fs::write(&path, bytes) {
-                    view.toast(e.to_string(), cx);
-                }
-            });
-        })
-        .detach();
     }
 
     /// A23：导出结果落盘。引擎在没有 `path` 时把内容以 base64 `data` 返回（egui 侧交给
@@ -6280,6 +6245,39 @@ impl Render for CanvasView {
         });
 
         // 正在改名的画布标签：这一帧不要再画旧名字。输入框是透明的，旧字会从底下透出来，
+        // 画布文字光标的闪烁节奏与普通输入框共用一套：按编辑会话重置起点，
+        // 一个视图只起一次定时器，靠 `cx.notify()` 让下一帧重画。
+        let edit_session = self.app.session.ds().ok().and_then(|ds| ds.text_edit.as_ref().map(|te| te.editing_session));
+        if edit_session != self.caret_session {
+            self.caret_session = edit_session;
+            self.caret_started = edit_session.map(|_| Instant::now());
+            self.caret_ticker_started = false;
+        }
+        if edit_session.is_some() && !self.caret_ticker_started {
+            self.caret_ticker_started = true;
+            cx.spawn(async move |this, cx: &mut gpui::AsyncApp| {
+                loop {
+                    cx.background_executor().timer(crate::widgets::input::caret::BLINK).await;
+                    let editing = this
+                        .update(cx, |view, cx| {
+                            let editing = view.app.session.ds().is_ok_and(|ds| ds.text_edit.is_some());
+                            if editing {
+                                cx.notify();
+                            }
+                            editing
+                        })
+                        .unwrap_or(false);
+                    if !editing {
+                        break;
+                    }
+                }
+            })
+            .detach();
+        }
+        self.app.text_caret_visible = edit_session.is_some()
+            && self.focus.is_focused(window)
+            && crate::widgets::input::caret::visible_since(self.caret_started, Instant::now());
+
         // 名字变短时还会露出旧后缀。几何（`label_rename_rect`）不受影响。
         let renaming_label = self.inline_rename.as_ref().filter(|r| r.target == InlineRenameTarget::Label).and_then(|r| r.ids.first().copied());
         let CanvasOutput { image, overview, live, painter, bg, in_flight, retired } =
@@ -6376,13 +6374,6 @@ impl Render for CanvasView {
 
         let ime_focus = self.focus.clone();
 
-        // CodeRabbit PR#11: don't yank focus back to the canvas on every paint while a text edit is
-        // active — that made the Actions search field (and right-panel editors) unusable. Only
-        // reclaim when no other editor holds the keyboard; handle_input below still registers the
-        // IME handler each frame so composition keeps working once the canvas owns focus.
-        let palette_editor = self.palette_field.read(cx).edit();
-        let other_editor_focused = palette_editor.read(cx).is_active(window);
-
         let ime_entity = cx.entity();
 
         // Motion 播放中：画布必须每帧续帧，否则 `advance()` 只推进一帧就停（播放按钮点了不走）。
@@ -6426,13 +6417,16 @@ impl Render for CanvasView {
                     // `Window::handle_input` 只在 `focus_handle.is_focused()` 时才真的登记
                     // `PlatformInputHandler`，没登记的话 `WM_CHAR` 与键盘的 `key_char` 派发都会
                     // 在 `with_input_handler(..).take()?` 处被静默丢弃 —— 表现就是「双击文字
-                    // 进得了编辑态、光标也在闪，但一个字符都打不进去」。编辑文字期间画布本来就
-                    // 该独占键盘（和 egui 那边文本编辑态一致），所以这里补一次聚焦兜底。
-                    if !ime_focus.is_focused(window) && !other_editor_focused {
+                    // 进得了编辑态、光标也在闪，但一个字符都打不进去」。编辑文字期间画布本来
+                    // 该独占键盘，但**不能**把焦点从右栏输入框手里抢回来：点进数字框后画布每帧
+                    // 重新聚焦，别的输入框就全都收不到输入。只有窗口没有任何焦点时才补聚焦。
+                    if !ime_focus.is_focused(window) && window.focused(cx).is_none() {
                         window.focus(&ime_focus);
                     }
 
-                    window.handle_input(&ime_focus, ElementInputHandler::new(b, ime_entity.clone()), cx);
+                    if ime_focus.is_focused(window) {
+                        window.handle_input(&ime_focus, ElementInputHandler::new(b, ime_entity.clone()), cx);
+                    }
                 }
 
                 let p = Painter { clip: Rect::NOTHING, ops: ops.clone(), labels: Vec::new() };
@@ -6708,13 +6702,17 @@ impl Render for CanvasView {
                             now.duration_since(at) <= Duration::from_millis(DOUBLE_CLICK_MS) && (pos - p).length() <= DOUBLE_CLICK_SLOP
                         });
 
-                        this.last_down = Some((now, pos));
-
                         if double {
+                            // 双击已经消费掉这两下：不清掉计时，下一次单击会被继续当成
+                            // 三击（引擎只选词/选行），光标就永远点不过去。
+                            this.last_down = None;
+
                             this.dragging = false;
 
                             this.send(PointerKind::DoubleClick, pos, &e.modifiers);
                         } else {
+                            this.last_down = Some((now, pos));
+
                             this.dragging = true;
 
                             this.send(PointerKind::Down, pos, &e.modifiers);
@@ -7279,8 +7277,9 @@ impl Render for CanvasView {
                 }
 
                 // 正在编辑文字：按键给引擎的文本编辑（照搬 `shortcuts.rs::text_keys` 的按键名）。
-
-                if this.app.session.ds().is_ok_and(|d| d.text_edit.is_some()) {
+                // 只有画布自己拿着焦点时才接管：点右栏输入框后焦点已经移走，若还在这里
+                // 把每个键都塞给画布，其它输入框就会全部「打不进去」。
+                if this.focus.is_focused(window) && this.app.session.ds().is_ok_and(|d| d.text_edit.is_some()) {
                     let m = e.keystroke.modifiers;
                     let cmd = m.platform || m.control;
 
@@ -9442,7 +9441,24 @@ pub fn run() {
     app.run(move |cx: &mut App| {
         a11y::init(cx);
 
-        let bounds = Bounds::centered(None, size(px(1280.0), px(860.0)), cx);
+        // Fit the nominal 1280×860 window inside the display bounds. GPUI 0.2's
+        // `Bounds::centered` does not clamp, so on a 150% display a fixed 860 pt logical height
+        // becomes 1290 physical pixels and the bottom of the window is off-screen; and forcing
+        // DPI-unaware to fit it only makes the whole UI blurry. The extra margins keep the OS
+        // resize border and taskbar from clipping the window.
+        let desired = size(px(1280.0), px(860.0));
+        let bounds = cx
+            .primary_display()
+            .map(|display| {
+                // GPUI 0.2 exposes `bounds()` (not `visible_bounds()`).
+                let screen = display.bounds();
+                let cap = size(
+                    (screen.size.width - px(24.0)).max(px(800.0)),
+                    (screen.size.height - px(64.0)).max(px(480.0)),
+                );
+                Bounds::centered_at(screen.center(), desired.min(&cap))
+            })
+            .unwrap_or_else(|| Bounds::centered(None, desired, cx));
 
         // kit `TitleBar::window_options()` 的等价物：声明窗口标题栏区域
         // （appears_transparent = true → Windows hide_title_bar = true，系统不画默认标题栏）。
@@ -9807,30 +9823,57 @@ impl EntityInputHandler for CanvasView {
         let _ = textedit::preedit(&mut self.app.session, new_text, Some(cursor));
     }
 
-    fn bounds_for_range(&mut self, _: Range<usize>, element_bounds: Bounds<Pixels>, _: &mut Window, _: &mut Context<Self>) -> Option<Bounds<Pixels>> {
-        // 候选窗定位：优先给文字层屏幕矩形，否则退回画布矩形。
+    fn bounds_for_range(&mut self, _: Range<usize>, element_bounds: Bounds<Pixels>, window: &mut Window, cx: &mut Context<Self>) -> Option<Bounds<Pixels>> {
+        // 候选窗定位：给**光标矩形**，不是整个文字层。平台按这个矩形放候选窗，
+        // 给图层框会把候选窗丢到文字左上角。
+        //
+        // `app.to_screen` 返回画布局部坐标（`canvas.rect` 原点恒为 0），而这里要的是
+        // 窗口坐标；`element_bounds.origin` 就是画布在窗口里的原点（左导轨 + 面板 +
+        // 标题栏）。少了这一步，候选窗会整体偏到画布左上角。
+
+        // IME 回调是事件：先绑定请求窗口，别读到另一个窗口的会话/面板。
+        self.bind_window_document(window, true, cx);
 
         let ds = self.app.session.ds().ok()?;
 
         let te = ds.text_edit.as_ref()?;
 
-        match ds.doc.world_bounds(te.id) {
-            Some(b) => {
-                let min = self.app.to_screen(b.x0, b.y0);
+        // 组合中用「组合文档」排版：候选窗要跟着 preedit 光标走，而不是停在组合起点。
+        let preedit = textedit::preedit_doc(&self.app.session);
+        let doc = preedit.as_ref().map(|(d, _, _)| d).unwrap_or(&ds.doc);
+        let Some(text) = canvas::outline::TextOnScreen::of(doc, te.id) else { return Some(element_bounds) };
 
-                let max = self.app.to_screen(b.x1, b.y1);
+        let index = preedit.as_ref().map(|(_, _, cursor)| *cursor).unwrap_or(te.caret);
 
-                Some(Bounds::from_corners(Point::new(px(min.x), px(min.y)), Point::new(px(max.x), px(max.y))))
-            }
-
-            None => Some(element_bounds),
-        }
+        Some(text.caret_bounds(&self.app, index.min(text.chars), ds.view.zoom, element_bounds.origin))
     }
 
-    fn character_index_for_point(&mut self, _: Point<Pixels>, _: &mut Window, _: &mut Context<Self>) -> Option<usize> {
-        // 没有字形级命中：返回 None，平台沿用当前 caret（点选定位交给引擎的 pointer 事件）。
+    fn character_index_for_point(&mut self, point: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) -> Option<usize> {
+        // 平台问「这个屏幕点对应第几个 UTF-16 码元」：走文字排版的字形命中，
+        // 和引擎 `text_index_at` 同一条规则；组合中把索引映射回 preedit 的合成文本。
+        //
+        // `point` 是窗口坐标，`to_page` 吃的是画布局部坐标，先减掉画布原点。
 
-        None
+        // 同上：IME 命中也必须绑定发起窗口，避免跨窗口读到别人的会话与 dock。
+        self.bind_window_document(window, true, cx);
+
+        let ds = self.app.session.ds().ok()?;
+
+        let te = ds.text_edit.as_ref()?;
+
+        let preedit = textedit::preedit_doc(&self.app.session);
+        let doc = preedit.as_ref().map(|(d, _, _)| d).unwrap_or(&ds.doc);
+        let text = canvas::outline::TextOnScreen::of(doc, te.id)?;
+
+        let (ox, oy) = self.dock().canvas_origin();
+        let local = pos2(f32::from(point.x) - ox, f32::from(point.y) - oy);
+        let page = self.app.to_page(local);
+
+        let index = text.index_at(page).min(text.chars);
+
+        let c = composed(&self.app)?;
+
+        Some(char_to_utf16(&c.text, index.min(c.text.chars().count())))
     }
 }
 
@@ -10019,6 +10062,81 @@ mod ime_tests {
         let v = app.session.execute("text.create", &serde_json::json!({"text": "Hello", "x": 10.0, "y": 10.0})).expect("create text");
 
         serde_json::from_value(v["id"].clone()).expect("text id")
+    }
+
+    #[test]
+
+    fn ime_caret_bounds_include_the_canvas_window_origin() {
+        let mut app = CanvasApp::new(sample_doc());
+
+        let id = text_id(&mut app);
+
+        // 单元测试没有布局阶段，画布矩形默认是空的（min=inf），先给一个真实矩形，
+        // 否则 `to_screen` 全是 inf，光标矩形没法验证。
+
+        app.canvas.rect = Rect { min: pos2(0.0, 0.0), max: pos2(800.0, 600.0) };
+
+        // 测试机不一定装了默认字体：换成应用实际使用的 MiSans，排版才有字形/行高。
+
+        if let Ok(ds) = app.session.ds_mut()
+            && let Some(NodeKind::Text(t)) = ds.doc_mut().node_mut(id).map(|n| &mut n.kind)
+        {
+            t.style.font_family = "MiSans".into();
+        }
+
+        textedit::begin(&mut app.session, id, Some(3), false).expect("begin");
+
+        let ds = app.session.ds().expect("session");
+
+        let Some(text) = crate::canvas::outline::TextOnScreen::of(&ds.doc, id) else { return };
+
+        // 没装字体时排版没有字形（CI 会设 CRAFT_FONTS_DIR，本地可能没有）：跳过几何断言。
+
+        if text.layout.glyphs.is_empty() {
+            return;
+        }
+
+        let zoom = ds.view.zoom;
+
+        let local = text.caret_bounds(&app, 3, zoom, Point::new(px(0.0), px(0.0)));
+
+        let window = text.caret_bounds(&app, 3, zoom, Point::new(px(240.0), px(40.0)));
+
+        // 画布原点（左导轨 + 面板 + 标题栏）必须原样加到候选窗矩形上；少了这一步，
+        // 候选窗会整体偏到画布左上角（用户 2026-11-26 拼音选词位置错）。
+
+        // `Pixels` is f32: the sum of two screen positions carries float noise.
+        let near = |a: gpui::Pixels, b: f32| (f32::from(a) - b).abs() < 0.01;
+
+        assert!(
+            near(window.origin.x - local.origin.x, 240.0),
+            "candidate box must include the canvas x origin: local={:?} window={:?}",
+            local.origin,
+            window.origin
+        );
+
+        assert!(
+            near(window.origin.y - local.origin.y, 40.0),
+            "candidate box must include the canvas y origin: local={:?} window={:?}",
+            local.origin,
+            window.origin
+        );
+
+        assert_eq!(window.size, local.size, "only the origin shifts, the caret size stays");
+
+        // 候选窗矩形必须贴着光标：宽 1pt、高度是一行字，而不是整个文字层。
+
+        assert!(local.size.width <= px(2.0), "caret box must be a thin line, got {:?}", local.size);
+
+        assert!(local.size.height > px(0.0), "caret box must have a line's height");
+
+        // 从光标矩形的中点反推页面坐标，字形命中应回到同一个字符索引。
+
+        let at = pos2(f32::from(local.origin.x), f32::from(local.origin.y + local.size.height / 2.0));
+
+        let page = app.to_page(at);
+
+        assert_eq!(text.index_at(page), 3, "clicking the caret must map back to the same character");
     }
 
     #[test]

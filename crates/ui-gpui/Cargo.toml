@@ -1,11 +1,11 @@
 [package]
 name = "figcraft-ui-gpui"
-version = "0.11.2"
+version = "2648.15.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.95"
-repository = "https://github.com/storytold/figcraft"
-description = "Monet UI layer on GPUI (draft scaffold — not yet wired into the apps)"
+repository = "https://github.com/MonetDesigns/Monet"
+description = "Monet UI layer on GPUI"
 
 # NOTE: this crate is intentionally listed in the workspace root `exclude` so it does NOT
 # participate in the default `crates/*` build. Remove it from `exclude` once it compiles and
@@ -15,9 +15,10 @@ description = "Monet UI layer on GPUI (draft scaffold — not yet wired into the
 # `figcraft_render::render_view` 直接产出，GPUI 只负责显示，证明迁移"只动外层"。
 
 [features]
-default = []
-# GPU 渲染后端（docs/migration-egui-to-gpui.md §18 的第 1、2 步）。默认关闭，
-# 打开后才有 `gpu` 模块；主渲染路径仍是 tiny-skia（CPU），两条路可对比。
+default = ["gpu"]
+# GPU 渲染后端（docs/migration-egui-to-gpui.md §18 的第 1、2 步）。默认开启：外置 WGSL
+# 材质、栅格导出和预览都走同一条 GPU 通道；CPU 画布仍是 tiny-skia，两条路可对比。
+# 无 GPU 的构建/CI 用 `--no-default-features` 显式关掉。
 gpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck"]
 # 只在跑单元测试时手动启用：cargo test -p figcraft-ui-gpui --lib --features test-support。
 # ⚠️ 绝不能放进 [dev-dependencies]：examples 也使用 dev-dependencies，Cargo 会把 gpui 的
