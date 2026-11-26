@@ -9040,6 +9040,8 @@ impl Render for CanvasView {
                 // 到不了引擎 —— 表现正是「改了属性 / 提交了对话框 / 改名之后撤销没反应」，
                 // 而画布上的拖拽（焦点没跑）却正常。这里只补 `edit.undo` / `edit.redo` 两个
                 // id，其余快捷键仍按原样只在画布子树里生效，避免抢走输入框的按键。
+                // 键盘框选的入口（`select.area`，Ctrl+Space / F8）、收起图层（Alt+L）和右键菜单
+                // （Shift+F10）也挂在这里：它们不属于文本编辑，右栏拿焦点时也应该能用。
                 // 引擎正在做画布文字编辑时不接管：那种情况由画布子树的 text_keys 处理。
                 if this.app.session.ds().is_ok_and(|d| d.text_edit.is_none()) {
                     let held = figcraft_engine::keymap::Mods {
@@ -9056,7 +9058,16 @@ impl Render for CanvasView {
                     )
                     .map(|b| b.id);
                     if let Some(id) = binding
-                        && matches!(id, "edit.undo" | "edit.redo" | "view.nextRegion" | "view.previousRegion")
+                        && matches!(
+                            id,
+                            "edit.undo"
+                                | "edit.redo"
+                                | "view.nextRegion"
+                                | "view.previousRegion"
+                                | "select.area"
+                                | "layers.collapseAll"
+                                | "view.contextMenu"
+                        )
                         && run_binding(&mut this.app, id)
                     {
                         cx.notify();
