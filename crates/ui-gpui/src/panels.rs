@@ -529,6 +529,11 @@ pub(crate) struct PanelSel {
     pub all_points: bool,
     pub has_text: bool,
     pub all_frame: bool,
+    /// 所有选中都是可容纳 auto layout 的容器：frame-like 或 Group（egui
+    /// `layout_panel.rs::layout_containers`）。`layout.add` 的 `+` 只看这个，不看 `all_frame`。
+    pub all_layout_container: bool,
+    /// 所有选中都是 Star（决定 Star 节标题与 Ratio 字段；纯 Polygon 时标题为 Polygon）。
+    pub all_stars: bool,
     /// Whether every selected node has auto layout (mirrors egui `has_al`).
     pub has_al: bool,
     /// The common layout direction (`None` when not all in auto layout, or values differ → "Mixed").
@@ -600,13 +605,13 @@ pub(crate) mod visibility {
     }
 
     /// egui `layout_panel.rs::layout_section` 的 `btns`：
-    /// `in_instance` → 空；`frames && !has_al` → `+`；`has_al` → `−`；其余 → 空。
+    /// `in_instance` → 空；`layout_containers && !has_al` → `+`；`has_al` → `−`；其余 → 空。
     /// 返回该显示的命令 id（`None` = 这个按钮根本不该出现）。
     pub fn layout_header(sel: &PanelSel) -> Option<&'static str> {
         if sel.in_instance {
             return None;
         }
-        if sel.all_frame && !sel.has_al {
+        if sel.all_layout_container && !sel.has_al {
             return Some("layout.add");
         }
         if sel.has_al {
@@ -1694,7 +1699,7 @@ impl RightFields {
                 values.borrow_mut().insert(key.clone(), Value::String(text.to_string()));
                 // 300 ms 防抖：逐字输入不逐帧 `build + export_preview`，停顿后再刷新预览与代码。
                 let wake = wake.clone();
-                cx.spawn(async move |_, _| {
+                cx.spawn(async move |_| {
                     smol::Timer::after(std::time::Duration::from_millis(300)).await;
                     wake.wake();
                 })
@@ -2832,7 +2837,7 @@ pub(crate) fn right_panel(
 
     // ── Star：仅当全部选中都是 Polygon/Star（原版 `points_section`） ──────────────
     if sel.all_points && !vector_active {
-        body = body.child(star_section(f)).child(sep());
+        body = body.child(star_section(f, sel.all_stars)).child(sep());
     }
 
     body = body
@@ -2881,13 +2886,27 @@ pub(crate) fn right_panel(
 /// Arc 段（仅椭圆）：起始角 / 扫过角 / 内径比例。设计面板与 Motion 右栏共用。
 pub(crate) fn arc_section(f: &RightFields) -> PanelSection {
     PanelSection::new(tr("Arc"))
+        .child(sublabel_row2(tr("Start"), tr("Sweep")))
         .child(field_row(vec![f.arc_start.clone(), f.arc_sweep.clone()], Vec::<IconButton>::new()))
+        .child(sublabel_row(tr("Ratio")))
         .child(field_row(vec![f.arc_ratio.clone()], Vec::<IconButton>::new()))
 }
 
-/// Star 段（仅多边形 / 星形）：角数 / 内径比例。设计面板与 Motion 右栏共用。
-pub(crate) fn star_section(f: &RightFields) -> PanelSection {
-    PanelSection::new(tr("Star")).child(field_row(vec![f.star_points.clone(), f.star_ratio.clone()], Vec::<IconButton>::new()))
+/// Star / Polygon 段：角数；星形另有内径比例。上游 `points_section` 在纯 Polygon 时
+/// 标题写 Polygon、且不画 Ratio。
+pub(crate) fn star_section(f: &RightFields, all_stars: bool) -> PanelSection {
+    let title = if all_stars { tr("Star") } else { tr("Polygon") };
+    let mut sec = PanelSection::new(title);
+    if all_stars {
+        sec = sec
+            .child(sublabel_row2(tr("Count"), tr("Ratio")))
+            .child(field_row(vec![f.star_points.clone(), f.star_ratio.clone()], Vec::<IconButton>::new()));
+    } else {
+        sec = sec
+            .child(sublabel_row(tr("Count")))
+            .child(field_row(vec![f.star_points.clone()], Vec::<IconButton>::new()));
+    }
+    sec
 }
 
 /// Auto layout 段（egui `layout_panel.rs`）：方向 / 尺寸 / 对齐+间距 / 内边距 / 网格轨道。
@@ -3585,16 +3604,21 @@ mod visibility_tests {
     #[test]
     fn layout_header_button_follows_egui_visibility() {
         // egui `layout_panel.rs::layout_section` 的 `btns` 规则（严格对齐源码）：
-        // `in_instance` → 无按钮；`frames && !has_al` → `+`；`has_al` → `−`；
-        // 其余（含普通非 frame 图层）→ 无按钮。
+        // `in_instance` → 无按钮；`layout_containers && !has_al` → `+`；`has_al` → `−`；
+        // 其余（含普通非容器图层）→ 无按钮。
         let mut s = PanelSel::default();
-        assert_eq!(visibility::layout_header(&s), None, "a non-frame without auto layout shows no button (matches egui)");
+        assert_eq!(visibility::layout_header(&s), None, "a non-container without auto layout shows no button (matches egui)");
         s.all_frame = true;
-        assert_eq!(visibility::layout_header(&s), Some("layout.add"), "frames without auto layout show +");
+        assert_eq!(visibility::layout_header(&s), None, "all_frame alone no longer gates the +; the container flag does");
+        s.all_layout_container = true;
+        assert_eq!(visibility::layout_header(&s), Some("layout.add"), "frames and groups without auto layout show +");
         s.has_al = true;
         assert_eq!(visibility::layout_header(&s), Some("layout.remove"), "auto layout shows -");
         s.in_instance = true;
         assert_eq!(visibility::layout_header(&s), None, "an instance takes its layout from the main: no button");
+        let mut g = PanelSel { all_layout_container: true, ..PanelSel::default() };
+        g.all_frame = false;
+        assert_eq!(visibility::layout_header(&g), Some("layout.add"), "a Group is a layout container too");
     }
 
     /// 端到端：验证引擎 `layout.add` / `layout.remove` 在真实选区上确实加上 / 去掉自动布局。

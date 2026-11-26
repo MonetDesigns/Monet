@@ -1681,6 +1681,11 @@ impl CanvasView {
 
             all_frame: !nodes.is_empty() && nodes.iter().all(|n| n.kind.is_frame_like()),
 
+            all_layout_container: !nodes.is_empty()
+                && nodes.iter().all(|n| n.kind.is_frame_like() || matches!(n.kind, NodeKind::Group)),
+
+            all_stars: !nodes.is_empty() && nodes.iter().all(|n| matches!(n.kind, NodeKind::Star { .. })),
+
             has_al,
 
             layout_dir,

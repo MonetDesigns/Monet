@@ -119,7 +119,7 @@ impl CanvasView {
             before.push(crate::panels::arc_section(&self.fields).into_any_element());
         }
         if sel.all_points {
-            before.push(crate::panels::star_section(&self.fields).into_any_element());
+            before.push(crate::panels::star_section(&self.fields, sel.all_stars).into_any_element());
         }
         if let Some(m) = crate::panels::right::sections::variable_modes(&self.fields, &data, 0.0) {
             before.push(m.into_any_element());

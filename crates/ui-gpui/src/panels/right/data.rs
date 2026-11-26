@@ -1741,6 +1741,8 @@ pub struct HeaderData {
     pub is_text: bool,
     /// 单选 Component / ComponentSet（参考实现 `header` 开头的组件专属分支）。
     pub is_component: bool,
+    /// 单选组件是 ComponentSet（决定标题图标；否则用 Component 图标）。
+    pub is_component_set: bool,
     /// 单选形状（参考实现 `edit_id` → `vector.edit.begin`）。
     pub is_shape: bool,
     /// 布尔组当前运算（参考实现 `booleans::shown_op`）：决定布尔按钮图标与菜单勾选项。
@@ -2439,6 +2441,7 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
         is_group: ids.iter().all(|i| doc.node(*i).is_some_and(|n| matches!(n.kind, figcraft_doc::NodeKind::Group))),
         is_text,
         is_component,
+        is_component_set: ids.len() == 1 && first.is_some_and(|n| matches!(n.kind, NodeKind::ComponentSet { .. })),
         is_shape,
         bool_op: figcraft_engine::booleans::shown_op(doc, ids),
         count: ids.len(),

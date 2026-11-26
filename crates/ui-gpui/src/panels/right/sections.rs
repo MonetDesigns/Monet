@@ -1649,12 +1649,19 @@ pub(crate) fn paints(
     } else {
         Vec::new()
     };
-    // 空 / Mixed（多选混合，`list == None`）：**只有置灰头部**——不写提示文字、不给 body、
-    // 也就没有 `PanelSection` 那 12 pt 底边距。`+` 图标照旧可点，功能没少。
-    let Some(rows) = list.filter(|v| !v.is_empty()) else {
-        return Section::empty(title, context_header_row(f, icons, 160.0, header_entries));
+    // egui `paints.rs`: `None` 是多选混合 → 头部下补一行 “Click + to replace mixed content”；
+    // `Some(vec![])` 是空列表 → 只有置灰头部（不写提示、不给 body）。
+    let header = context_header_row(f, icons, 160.0, header_entries);
+    let rows = match list {
+        None => {
+            return Section::Full(PanelSection::new(title).header_trail(header).child(field_row_full(
+                div().text_size(pt(11.0)).text_color(rgba(tokens().text_secondary)).child(tr("Click + to replace mixed content")),
+            )));
+        }
+        Some(rows) if rows.is_empty() => return Section::empty(title, header),
+        Some(rows) => rows,
     };
-    let mut sec = PanelSection::new(title).header_trail(context_header_row(f, icons, 160.0, header_entries));
+    let mut sec = PanelSection::new(title).header_trail(header);
     // egui `paints.rs`：header 之后、paint 行之前先画链接样式的 chip（`style_picker::chip`）。
     if let Some(chip) = style_chip(f, d.style_chips[if fills { 0 } else { 1 }].as_ref(), if fills { "fill" } else { "stroke" }) {
         sec = sec.child(chip);
@@ -4177,8 +4184,30 @@ pub(crate) fn header(f: &RightFields, d: &PanelData, col: f32) -> Option<gpui::D
     };
     let a = visibility::header_actions(&sel);
 
-    // ── 左：类型名 / 类型下拉 ─────────────────────────────────────────────────────
-    let lead: gpui::AnyElement = if a.type_menu {
+    // ── 左：类型名 / 类型下拉 / 组件名 ───────────────────────────────────────────────
+    let lead: gpui::AnyElement = if h.is_component {
+        // 单选 Component / ComponentSet（egui `named_component`）：图标 + 图层名，
+        // 类型（Component / Component set）不再当标题。
+        let icon = if h.is_component_set { Icon::ComponentSet } else { Icon::Component };
+        div()
+            .pl(pt(8.0))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(pt(6.0))
+            .child(crate::widgets::icon::paint_in_slot(icon, 14.0, Some(rgba(t.component))))
+            .child(
+                div()
+                    .min_w(px(0.0))
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_size(pt(13.0))
+                    .font_weight(crate::panels::UI_FONT_REGULAR)
+                    .text_color(rgba(t.text))
+                    .child(SharedString::from(h.layer_name.clone())),
+            )
+            .into_any_element()
+    } else if a.type_menu {
         // `kind_items`: 勾选项点了什么都不做，只有转换成另一种才推命令。
         let mut rows = vec![
             HeadRow::check(tr("Frame"), if h.is_frame { "" } else { "object.convertToFrame" }, json!({}), h.is_frame),
@@ -4312,7 +4341,7 @@ pub(crate) fn header(f: &RightFields, d: &PanelData, col: f32) -> Option<gpui::D
             .gap(pt(4.0))
             .pl(pt(8.0))
             .pr(pt(8.0))
-            .child(div().flex_none().w(pt(86.0)).flex().items_center().child(lead))
+            .child(div().flex_none().w(if h.is_component { pt(200.0) } else { pt(86.0) }).flex().items_center().child(lead))
             .child(div().flex().flex_row().items_center().gap(pt(4.0)).children(actions)),
     )
 }
@@ -5168,47 +5197,6 @@ pub(crate) fn ls_paste_name(names: &[(String, String)], src: &str) -> String {
     (2..).map(|k| named(&format!("{base} {k}"))).find(|n| !taken(n)).unwrap_or(first)
 }
 
-/// 类型分组标题栏的 `+`：弹出「建哪种样式」菜单（egui `local_styles` 的头部 `+`）。
-fn local_styles_add_button(f: &RightFields, d: &PanelData) -> gpui::AnyElement {
-    // (菜单标题, style.create 的 type, 默认名) —— 与 egui `StyleSlot::{title,create_type,default_name}` 对齐。
-    // 必须是 `static`：菜单回调会逃出本函数，借本地数组会活不过函数体。
-    static ITEMS: &[(&str, &str, &str)] = &[
-        ("Text styles", "text", "Text"),
-        ("Color styles", "paint", "Color"),
-        ("Effect styles", "effect", "Effect"),
-        ("Grid styles", "grid", "Grid"),
-    ];
-    // 每个类型的 `style.create` 参数先算好（含默认 `value`，见 `ls_create_params`）：
-    // 菜单回调是 `Fn`，不能在里面重新借 `d`。
-    let create_params: Vec<Value> = ITEMS.iter().map(|(_, ctype, _)| ls_create_params(d, ctype, "")).collect();
-    let root = f.root.clone();
-    let cmds = f.cmds.clone();
-    // 照抄 `Dropdown`：.menu(key) + on_click_at 收按钮真实矩形。
-    let key = "local-styles-add";
-    let anchor = crate::widgets::dropdown::menu_anchor(key);
-    let btn = IconButton::new(Icon::Plus).size(24.0).menu(key).on_click_at(move |rect, _window, cx: &mut App| {
-        let rows: Vec<MenuRow> = ITEMS.iter().map(|r| MenuRow::row(r.0)).collect();
-        let Some(root) = root.clone() else { return };
-        let cmds = cmds.clone();
-        let create_params = create_params.clone();
-        let anchor = anchor.clone();
-        root.update(cx, move |cv, cx| {
-            cv.open_menu_fit(
-                anchor,
-                rect,
-                rows,
-                Rc::new(move |label: &str, _w, _cx| {
-                    if let Some(i) = ITEMS.iter().position(|r| r.0 == label) {
-                        cmds.push(Cmd { id: "style.create", params: Some(create_params[i].clone()) });
-                    }
-                }),
-                cx,
-            );
-        });
-    });
-    btn.into_any_element()
-}
-
 /// Page 节「Local styles」里的一行（egui `style_picker::local_styles` 的 Style 行，1:1）：
 /// 左侧徽标 16×16 —— paint 用圆形色板、text 用 "Ag" + 右侧 "32/Auto" 预览、effect/grid 用类型图标；
 /// 整行悬停高亮（圆角 t.hover 块，与行同高、内缩 8px）、左键把样式应用到选区、右键 Duplicate / Delete；
@@ -5643,9 +5631,8 @@ pub(crate) fn page(f: &RightFields, d: &PanelData, row_w: f32, n: &mut usize, wi
     // 整张列表作为一个 free block：24 pt 行、8/16/16 分组间距、圆形色板、整行拖动排序
     // 都由 `local_styles_block` 按 `LS_*` 自己排版，不套统一网格的 32 pt 行 / 24 pt trailing 列。
     // 分组顺序与 egui `StyleSlot` 一致：Text / Fill(Color) / Effect / Grid。
-    let styles_sec = PanelSection::new(tr("Styles"))
+    let styles_sec = PanelSection::new(tr("Local styles"))
         .variant(if p.local_styles == 0 { SectionHeaderVariant::Dim } else { SectionHeaderVariant::Normal })
-        .header_trail(icon_row(vec![local_styles_add_button(f, d)]))
         .child(block_row(local_styles_block(f, d, window, cx)));
     out.push(styles_sec);
 
