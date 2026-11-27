@@ -2323,7 +2323,12 @@ impl CanvasView {
                 "comment.new" => {
                     let mut data = r.data.clone();
                     data["anchor"] = serde_json::json!(true);
-                    if let Ok(page) = self.app.session.page() {
+                    // The engine now records the page at click time. Keep it instead of asking
+                    // the session again: a page switch before this request drains must not move
+                    // the comment to the new page.
+                    if data.get("page").is_none()
+                        && let Ok(page) = self.app.session.page()
+                    {
                         data["page"] = serde_json::json!(page.0);
                     }
                     self.open_dialog(dialogs::Kind::Comment, &data, cx);
@@ -3164,7 +3169,9 @@ impl CanvasView {
             }
         }
         if let Some(scale) = present::take_scale_choice() {
-            self.present_view.scale = scale;
+            if !self.present.as_ref().is_some_and(|st| st.preview) {
+                self.present_view.scale = scale;
+            }
             if let Some(st) = self.present.as_mut() {
                 st.scale = scale;
                 st.scale_open = false;
@@ -3208,11 +3215,15 @@ impl CanvasView {
                 5 => st.comments = !st.comments,
                 6 => {
                     st.inspect = !st.inspect;
-                    self.present_view.inspect = st.inspect;
+                    if !st.preview {
+                        self.present_view.inspect = st.inspect;
+                    }
                 }
                 7 => {
                     st.hide_ui = !st.hide_ui;
-                    self.present_view.hide_ui = st.hide_ui;
+                    if !st.preview {
+                        self.present_view.hide_ui = st.hide_ui;
+                    }
                 }
                 20 => {
                     // 外链确认条：Open link（记住「不再提示」）。
@@ -3264,11 +3275,15 @@ impl CanvasView {
             present::tick_input(&mut st, now);
             // Keep `present_view` in step with the running player, like egui's chrome: a later
             // partial `present.options` request must not restore a scale the user picked with Z.
-            self.present_view.scale = st.scale;
-            self.present_view.device_frame = st.device_frame;
-            self.present_view.hotspot_hints = st.hints;
-            self.present_view.inspect = st.inspect;
-            self.present_view.hide_ui = st.hide_ui;
+            // A floating preview keeps its own defaults; its values must not overwrite the
+            // options saved for the next real presentation.
+            if !st.preview {
+                self.present_view.scale = st.scale;
+                self.present_view.device_frame = st.device_frame;
+                self.present_view.hotspot_hints = st.hints;
+                self.present_view.inspect = st.inspect;
+                self.present_view.hide_ui = st.hide_ui;
+            }
             st.tick(now);
             // 本帧点到的 widget：插件回调在帧后跑（eGUI `click_widgets`）。
             if let Some(e) = st.click_widgets(&self.app.session) {
