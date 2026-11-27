@@ -15,19 +15,20 @@
 //! | uniform layer blur over one opaque SDF box fill | progressive blurs, and layers with children, strokes or clips |
 //! | uniform background blur over one SDF box with one fill (the frame is resolved and blurred in place) | background blur over children, strokes, clips, group opacity, and glass |
 //! | text: glyph and decoration outlines from `figcraft_text`, solid fills and strokes per run | colour glyphs (emoji, COLR) |
+//! | mono noise over one SDF box fill, hashed exactly as the CPU | duo/multi noise, and noise over children, strokes, clips, groups or other effects |
 //! | node opacity, visibility, ancestor clipping rectangles | rounded or rotated clips, variable-bound fills |
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use figcraft_color::{BlendMode, GradientKind as DocGradientKind, Paint as DocPaint, PaintKind};
-use figcraft_doc::{Document, EffectKind, Node, NodeId, NodeKind, StrokeAlign};
+use figcraft_doc::{Document, EffectKind, Node, NodeId, NodeKind, NoiseMode, StrokeAlign};
 use figcraft_geom::{Affine, BezPath, Point};
 
 use crate::geometry;
 use crate::scene::{
-    BackdropNode, Clip, GradientKind, LayerBlurNode, MAX_STOPS, MeshNode, Paint, Rgba, Scene, ShadowNode, ShapeKind, ShapeNode, Stop, Viewport,
-    is_similarity,
+    BackdropNode, Clip, GradientKind, LayerBlurNode, MAX_STOPS, MeshNode, NoiseNode, Paint, Rgba, Scene, ShadowNode, ShapeKind, ShapeNode, Stop,
+    Viewport, is_similarity,
 };
 
 /// The deepest subtree walked; a document that nests deeper is a broken file and a fallback.
@@ -106,9 +107,18 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, sce
         .filter_map(|e| if let EffectKind::BackgroundBlur(b) = &e.kind { Some(b) } else { None })
         .filter(|b| b.max_radius() > 0.0)
         .collect();
+    let noises: Vec<&figcraft_doc::Noise> =
+        n.effects.iter().filter(|e| e.visible).filter_map(|e| if let EffectKind::Noise(nz) = &e.kind { Some(nz) } else { None }).collect();
     if n.effects.iter().any(|e| {
         e.visible
-            && !matches!(e.kind, EffectKind::DropShadow(_) | EffectKind::InnerShadow(_) | EffectKind::LayerBlur(_) | EffectKind::BackgroundBlur(_))
+            && !matches!(
+                e.kind,
+                EffectKind::DropShadow(_)
+                    | EffectKind::InnerShadow(_)
+                    | EffectKind::LayerBlur(_)
+                    | EffectKind::BackgroundBlur(_)
+                    | EffectKind::Noise(_)
+            )
     }) {
         scene.unsupported("effect", format!("`{}` has a visible effect this build cannot draw", n.name));
     }
@@ -175,6 +185,17 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, sce
             emit_sdf_fills(n, shape, m, w, h, clip, scene);
         } else if n.fills.iter().any(|f| f.visible) {
             emit_path_fills(doc, n, m, clip, scene);
+        }
+    }
+
+    // A mono grain layer rides on the node's own fill, after it and before shadows/children/strokes
+    // (the CPU's layer noise sees the layer's content). It is only accepted on a one-fill SDF box.
+    if !noises.is_empty() {
+        match shape {
+            Some(shape) if can_noise(n, &noises, clip) => {
+                emit_noise(id, n, &noises[0], shape, m, w, h, clip, scene);
+            }
+            _ => scene.unsupported("effect", format!("`{}` carries a noise effect this build cannot draw", n.name)),
         }
     }
 
@@ -446,6 +467,70 @@ fn backdrop(
     });
 }
 
+/// Whether this node's noise is the CPU's mono grain over exactly its own SDF box fill: one mono
+/// noise, no children, no stroke, no clip, full node opacity, one plain solid fill, and no other
+/// effect (the grains ride on the layer's content alpha, which is just that fill).
+fn can_noise(n: &Node, noises: &[&figcraft_doc::Noise], clip: Clip) -> bool {
+    let [noise] = noises else {
+        return false;
+    };
+    if !matches!(noise.mode, NoiseMode::Mono) || !noise.density.is_finite() || !matches!(noise.blend, BlendMode::Normal) {
+        return false;
+    }
+    if !n.children.is_empty() || n.clip || !clip.is_none() || n.has_visible_stroke() || n.opacity < 0.999 {
+        return false;
+    }
+    if !matches!(n.blend, BlendMode::Normal) {
+        return false;
+    }
+    if n.effects.iter().filter(|e| e.visible).count() != 1 {
+        return false;
+    }
+    let mut fills = n.fills.iter().filter(|f| f.visible);
+    let Some(fill) = fills.next() else {
+        return false;
+    };
+    if fills.next().is_some() || !matches!(fill.blend, BlendMode::Normal) {
+        return false;
+    }
+    fill.solid_color().is_some_and(|c| c.a.is_finite())
+}
+
+/// The alpha of the one visible solid fill, including the fill's own opacity and the node's.
+fn noise_fill_alpha(n: &Node) -> f32 {
+    let Some(fill) = n.fills.iter().find(|f| f.visible) else {
+        return 0.0;
+    };
+    // `solid_color()` already folds the paint's opacity; the node's opacity is the only other factor
+    // (the grain is only accepted at `n.opacity = 1`, but keep the expression honest).
+    let Some(color) = fill.solid_color() else {
+        return 0.0;
+    };
+    (color.a * n.opacity.clamp(0.0, 1.0)).clamp(0.0, 1.0) as f32
+}
+
+/// Emit the CPU's mono grain: one full-screen quad masked by the node's box, hashed per document
+/// cell. The layer alpha under each grain is the fill's own alpha; the renderer reproduces the CPU's
+/// 64-bit cell hash in WGSL, so the pattern lands on the same pixels.
+fn emit_noise(id: NodeId, n: &Node, noise: &figcraft_doc::Noise, shape: ShapeKind, m: Affine, w: f64, h: f64, clip: Clip, scene: &mut Scene) {
+    let density = (noise.density as f32).clamp(0.0, 1.0);
+    if density <= 0.0 {
+        return;
+    }
+    let (gx, gy) = noise.grain();
+    scene.push_noise(NoiseNode {
+        mat: crate::scene::matrix(m),
+        size: [w as f32, h as f32],
+        shape,
+        clip,
+        seed: id.0 as u32,
+        density,
+        cell: [(gx * 2.0) as f32, (gy * 2.0) as f32],
+        color: Rgba::from_color(noise.color),
+        fill_alpha: noise_fill_alpha(n),
+    });
+}
+
 /// Whether this node's backdrop effect is one uniform blur over an SDF box whose layer is just its
 /// own fill (no children, no layer blur on top, no clip, no group opacity). The CPU paints the
 /// blurred backdrop into the layer first, so the node's fills, shadows and strokes go over it.
@@ -684,7 +769,11 @@ fn map_point(m: Affine, x: f64, y: f64) -> (f64, f64) {
 fn meshes(scene: &Scene) -> impl Iterator<Item = &MeshNode> {
     scene.items.iter().filter_map(|item| match item {
         crate::scene::Item::Mesh(mesh) => Some(mesh),
-        crate::scene::Item::Shape(_) | crate::scene::Item::Shadow(_) | crate::scene::Item::Blur(_) | crate::scene::Item::Backdrop(_) => None,
+        crate::scene::Item::Shape(_)
+        | crate::scene::Item::Shadow(_)
+        | crate::scene::Item::Blur(_)
+        | crate::scene::Item::Backdrop(_)
+        | crate::scene::Item::Noise(_) => None,
     })
 }
 
@@ -943,6 +1032,38 @@ mod tests {
         }
         let scene = build(&doc, page, &view());
         assert!(!scene.is_supported(), "the layer's children are part of what the CPU shows over the backdrop");
+        assert!(scene.unsupported_features().iter().any(|u| u.feature == "effect"));
+    }
+
+    #[test]
+    fn a_mono_noise_rides_on_one_fill() {
+        let mut doc = Document::default();
+        let page = doc.pages[0];
+        let rect = doc.create(page, NodeKind::Rectangle, "Grain", 10.0, 10.0, 60.0, 40.0).expect("rect");
+        if let Ok(n) = doc.get_mut(rect) {
+            n.fills = vec![DocPaint::solid(Color::new(0.2, 0.6, 0.3, 1.0))];
+            n.effects = vec![figcraft_doc::Effect { kind: EffectKind::Noise(figcraft_doc::Noise::default()), visible: true }];
+        }
+        let scene = build(&doc, page, &view());
+        assert!(scene.is_supported(), "{:?}", scene.unsupported_features());
+        assert_eq!(scene.noise_count(), 1);
+        assert!(matches!(scene.items.first(), Some(crate::scene::Item::Shape(_))), "the fill paints first");
+        assert!(matches!(scene.items.get(1), Some(crate::scene::Item::Noise(_))), "the grain rides on it");
+    }
+
+    #[test]
+    fn a_duo_noise_falls_back() {
+        let mut doc = Document::default();
+        let page = doc.pages[0];
+        let rect = doc.create(page, NodeKind::Rectangle, "Grain", 10.0, 10.0, 60.0, 40.0).expect("rect");
+        if let Ok(n) = doc.get_mut(rect) {
+            n.fills = vec![DocPaint::solid(Color::new(0.2, 0.6, 0.3, 1.0))];
+            let mut noise = figcraft_doc::Noise::default();
+            noise.mode = NoiseMode::Duo;
+            n.effects = vec![figcraft_doc::Effect { kind: EffectKind::Noise(noise), visible: true }];
+        }
+        let scene = build(&doc, page, &view());
+        assert!(!scene.is_supported(), "two-colour grains are not this shader's input");
         assert!(scene.unsupported_features().iter().any(|u| u.feature == "effect"));
     }
 }

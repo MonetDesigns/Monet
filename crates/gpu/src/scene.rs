@@ -227,8 +227,27 @@ pub struct BackdropNode {
     pub clip: Clip,
 }
 
-/// One thing to draw, in painter's order: an SDF shape, a tessellated path, a shadow, a layer blur or
-/// a background blur.
+/// A mono grain layer: `density` of the cells of `cell` (document units) show `color` over the
+/// node's own fill, at the fill's alpha (the CPU's `grain::noise`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct NoiseNode {
+    pub mat: [f32; 6],
+    pub size: [f32; 2],
+    pub shape: ShapeKind,
+    pub clip: Clip,
+    /// The node id the CPU hashes cells with.
+    pub seed: u32,
+    pub density: f32,
+    /// Cell size in document units (the CPU's twice the grain size).
+    pub cell: [f32; 2],
+    /// The grain colour, straight sRGB.
+    pub color: Rgba,
+    /// The fill's alpha (paint × node opacity): the layer alpha the grains ride on.
+    pub fill_alpha: f32,
+}
+
+/// One thing to draw, in painter's order: an SDF shape, a tessellated path, a shadow, a layer blur,
+/// a background blur or a mono grain layer.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Item {
     Shape(ShapeNode),
@@ -236,6 +255,7 @@ pub enum Item {
     Shadow(ShadowNode),
     Blur(LayerBlurNode),
     Backdrop(BackdropNode),
+    Noise(NoiseNode),
 }
 
 /// A feature this milestone cannot draw. Its presence sends the **whole frame** to the CPU.
@@ -289,11 +309,16 @@ impl Scene {
         self.items.push(Item::Backdrop(backdrop));
     }
 
+    /// A mono grain layer over the node's fill.
+    pub fn push_noise(&mut self, noise: NoiseNode) {
+        self.items.push(Item::Noise(noise));
+    }
+
     /// The SDF shapes, in draw order (tests and the log use this; the renderer walks `items`).
     pub fn shapes(&self) -> impl Iterator<Item = &ShapeNode> {
         self.items.iter().filter_map(|item| match item {
             Item::Shape(shape) => Some(shape),
-            Item::Mesh(_) | Item::Shadow(_) | Item::Blur(_) | Item::Backdrop(_) => None,
+            Item::Mesh(_) | Item::Shadow(_) | Item::Blur(_) | Item::Backdrop(_) | Item::Noise(_) => None,
         })
     }
 
@@ -314,6 +339,10 @@ impl Scene {
 
     pub fn backdrop_count(&self) -> usize {
         self.items.iter().filter(|item| matches!(item, Item::Backdrop(_))).count()
+    }
+
+    pub fn noise_count(&self) -> usize {
+        self.items.iter().filter(|item| matches!(item, Item::Noise(_))).count()
     }
 
     /// Record a feature this frame uses that this milestone cannot draw.

@@ -133,6 +133,8 @@ enum Cmd {
     /// A blurred backdrop: instance `first` of the instance buffer, blurred with `sigma` device pixels,
     /// drawn in the box's place before the node's own content.
     Backdrop { first: u32, sigma: f32 },
+    /// Mono grain over instance `n` of the frame's noise plans.
+    Noise(usize),
 }
 
 /// One shadow to draw: its silhouette (one instance), the blur radius in device pixels, the tint and
@@ -180,6 +182,30 @@ struct ShadowResources {
     /// The blurred texture + shape mask + tint + clip (inner shadow).
     inner_bind: Option<wgpu::BindGroup>,
     tint: wgpu::Buffer,
+}
+
+/// One mono grain layer: the instance that masks it, the CPU's cell hash seed and size, the share of
+/// cells drawn, and the grain colour/alpha over the fill.
+struct NoisePlan {
+    first: u32,
+    seed: u32,
+    density: f32,
+    fill_alpha: f32,
+    cell: [f32; 2],
+    color: Rgba,
+}
+
+/// Uniforms for [`NoisePlan`]; 48 bytes, every vec4/vec2 at its natural alignment.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+struct NoiseParams {
+    seed: u32,
+    density: f32,
+    fill_alpha: f32,
+    _pad0: f32,
+    cell: [f32; 2],
+    _pad1: [f32; 2],
+    color: [f32; 4],
 }
 
 /// A background blur's chain: the resolved frame (in place of the shadow's silhouette), two ping-pong
@@ -246,6 +272,7 @@ pub struct Renderer {
     shadow_pipeline: wgpu::RenderPipeline,
     inner_pipeline: wgpu::RenderPipeline,
     backdrop_pipeline: wgpu::RenderPipeline,
+    noise_pipeline: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
     globals: wgpu::Buffer,
     bind_globals: wgpu::BindGroup,
@@ -254,6 +281,7 @@ pub struct Renderer {
     shadow_layout: wgpu::BindGroupLayout,
     inner_layout: wgpu::BindGroupLayout,
     backdrop_layout: wgpu::BindGroupLayout,
+    noise_layout: wgpu::BindGroupLayout,
     instances: Option<(wgpu::Buffer, wgpu::BindGroup, u64)>,
     mesh_verts: Option<(wgpu::Buffer, u64)>,
     mesh_indices: Option<(wgpu::Buffer, u64)>,
@@ -327,6 +355,10 @@ impl Renderer {
         let backdrop_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("figcraft-gpu-backdrop"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/backdrop.wgsl").into()),
+        });
+        let noise_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("figcraft-gpu-noise"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/noise.wgsl").into()),
         });
 
         let globals_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -449,6 +481,15 @@ impl Renderer {
                 count: None,
             }],
         });
+        let noise_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("noise"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+                count: None,
+            }],
+        });
         let shape_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("shape"),
             bind_group_layouts: &[Some(&globals_layout), Some(&instances_layout)],
@@ -532,6 +573,11 @@ impl Renderer {
         let backdrop_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("backdrop"),
             bind_group_layouts: &[Some(&backdrop_layout), Some(&instances_layout)],
+            immediate_size: 0,
+        });
+        let noise_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("noise"),
+            bind_group_layouts: &[Some(&noise_layout), Some(&instances_layout)],
             immediate_size: 0,
         });
         let single_state = |b: Option<wgpu::BlendState>| wgpu::ColorTargetState {
@@ -625,6 +671,27 @@ impl Renderer {
             multiview_mask: None,
             cache: None,
         });
+        let noise_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("noise"),
+            layout: Some(&noise_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &noise_shader,
+                entry_point: Some("vs"),
+                buffers: &[],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &noise_shader,
+                entry_point: Some("fs"),
+                targets: &[Some(single_state(blend()))],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState { count: SAMPLES, mask: !0, alpha_to_coverage_enabled: false },
+            multiview_mask: None,
+            cache: None,
+        });
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("shadow"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -657,6 +724,7 @@ impl Renderer {
             shadow_pipeline,
             inner_pipeline,
             backdrop_pipeline,
+            noise_pipeline,
             sampler,
             globals,
             bind_globals,
@@ -665,6 +733,7 @@ impl Renderer {
             shadow_layout,
             inner_layout,
             backdrop_layout,
+            noise_layout,
             instances: None,
             mesh_verts: None,
             mesh_indices: None,
@@ -794,6 +863,32 @@ impl Renderer {
         })
     }
 
+    /// One grain layer's uniforms. There is nothing offscreen: the shader hashes and masks in place.
+    fn noise_resources(&self, plan: &NoisePlan) -> (wgpu::Buffer, wgpu::BindGroup) {
+        let params = NoiseParams {
+            seed: plan.seed,
+            density: plan.density,
+            fill_alpha: plan.fill_alpha,
+            _pad0: 0.0,
+            cell: plan.cell,
+            _pad1: [0.0; 2],
+            color: [plan.color.r, plan.color.g, plan.color.b, plan.color.a],
+        };
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("noise params"),
+            size: std::mem::size_of::<NoiseParams>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&buffer, 0, bytemuck::bytes_of(&params));
+        let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("noise"),
+            layout: &self.noise_layout,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() }],
+        });
+        (buffer, bind)
+    }
+
     /// The blur chain for one background blur: the resolved frame as the source, then six box passes.
     fn backdrop_resources(&self, width: u32, height: u32, sigma: f32, source: &wgpu::TextureView) -> Option<BackdropResources> {
         use wgpu::TextureUsages as U;
@@ -871,6 +966,7 @@ impl Renderer {
         let mut shadow_instances: Vec<GpuInstance> = Vec::new();
         let mut cover_instances: Vec<GpuInstance> = Vec::new();
         let mut shadow_plans: Vec<ShadowPlan> = Vec::new();
+        let mut noise_plans: Vec<NoisePlan> = Vec::new();
         let mut verts: Vec<GpuMeshVertex> = Vec::new();
         let mut indices: Vec<u32> = Vec::new();
         let mut cmds: Vec<Cmd> = Vec::new();
@@ -979,6 +1075,33 @@ impl Renderer {
                     batch = instances.len();
                     cmds.push(Cmd::Backdrop { first, sigma: backdrop.sigma });
                 }
+                Item::Noise(noise) => {
+                    if instances.len() > batch {
+                        cmds.push(Cmd::Shapes { first: batch as u32, count: (instances.len() - batch) as u32 });
+                    }
+                    // The noise quad reads the node's box and clip from the instance buffer: one white
+                    // instance, never drawn by the shape pipeline.
+                    let caster = ShapeNode {
+                        mat: noise.mat,
+                        size: noise.size,
+                        shape: noise.shape,
+                        paint: Paint::Solid(Rgba::new(1.0, 1.0, 1.0, 1.0)),
+                        clip: noise.clip,
+                        opacity: 1.0,
+                    };
+                    let first = instances.len() as u32;
+                    instances.push(GpuInstance::of(&caster));
+                    batch = instances.len();
+                    cmds.push(Cmd::Noise(noise_plans.len()));
+                    noise_plans.push(NoisePlan {
+                        first,
+                        seed: noise.seed,
+                        density: noise.density,
+                        fill_alpha: noise.fill_alpha,
+                        cell: noise.cell,
+                        color: noise.color,
+                    });
+                }
             }
         }
         if instances.len() > batch {
@@ -1054,6 +1177,7 @@ impl Renderer {
             .map(|plan| self.shadow_resources(w, h, plan))
             .collect::<Option<Vec<_>>>()
             .ok_or_else(|| RenderError::Device("the shadow targets were not created".into()))?;
+        let noise_binds: Vec<(wgpu::Buffer, wgpu::BindGroup)> = noise_plans.iter().map(|plan| self.noise_resources(plan)).collect();
 
         // Mesh buffers: one vertex buffer and one index buffer for the whole frame.
         if !verts.is_empty() {
@@ -1329,6 +1453,20 @@ impl Renderer {
                     }
                     // Handled above, because it splits the pass.
                     Cmd::Backdrop { .. } => {}
+                    Cmd::Noise(index) => {
+                        let Some((_, noise_bind)) = noise_binds.get(index) else {
+                            continue;
+                        };
+                        let Some(plan) = noise_plans.get(index) else {
+                            continue;
+                        };
+                        pass.set_pipeline(&self.noise_pipeline);
+                        pass.set_bind_group(0, noise_bind, &[]);
+                        pass.set_bind_group(1, bind, &[]);
+                        pass.draw(0..3, plan.first..plan.first + 1);
+                        bound_shapes = false;
+                        bound_mesh = false;
+                    }
                 }
             }
         }

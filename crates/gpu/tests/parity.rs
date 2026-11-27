@@ -452,6 +452,60 @@ fn a_background_blur_matches_the_cpu_blur() {
 }
 
 #[test]
+fn mono_noise_matches_the_cpu() {
+    let mut doc = Document::default();
+    let page = doc.pages[0];
+    transparent_page(&mut doc, page);
+    let mut paint = Paint::solid(Color::new(0.15, 0.65, 0.35, 1.0));
+    // A fill opacity below one: `solid_color()` folds it into the layer alpha the grain rides on.
+    paint.opacity = 0.6;
+    let card = rect(&mut doc, page, "Grain", 30.0, 30.0, 140.0, 120.0, 10.0, paint);
+    if let Ok(n) = doc.get_mut(card) {
+        n.effects = vec![figcraft_doc::Effect {
+            kind: figcraft_doc::EffectKind::Noise(figcraft_doc::Noise {
+                size: 1.2,
+                density: 0.55,
+                color: Color::new(0.05, 0.02, 0.0, 0.35),
+                ..Default::default()
+            }),
+            visible: true,
+        }];
+    }
+
+    let scene = doc_scene::build(&doc, page, &viewport());
+    assert!(scene.is_supported(), "mono noise must stay on the GPU path: {:?}", scene.unsupported_features());
+    assert_eq!(scene.noise_count(), 1);
+    assert_eq!(scene.shapes().count(), 1, "the grain rides on the node's own fill");
+
+    let cpu = cpu_pixels(&doc, page);
+    let Some(gpu) = gpu_pixels(&doc, page) else {
+        eprintln!("SKIP: no adapter");
+        return;
+    };
+    let tol = Tolerance { per_channel: 3, max_bad_ratio: 0.02 };
+    let report = compare_interiors(&cpu, &gpu, SIZE as usize, SIZE as usize, tol).expect("comparable");
+    assert!(report.passes(tol), "{}", report.summary());
+
+    // Both sides actually drew grains: count interior pixels that moved away from the solid fill.
+    let fill = [38, 166, 89];
+    let grain_pixels = |bytes: &[u8]| {
+        let mut count = 0usize;
+        for y in 40..140 {
+            for x in 40..160 {
+                let p = pixel(bytes, SIZE as usize, x, y).expect("in bounds");
+                if p[0].abs_diff(fill[0]) > 6 || p[1].abs_diff(fill[1]) > 6 || p[2].abs_diff(fill[2]) > 6 {
+                    count += 1;
+                }
+            }
+        }
+        count
+    };
+    let (cpu_grain, gpu_grain) = (grain_pixels(&cpu), grain_pixels(&gpu));
+    assert!(cpu_grain > 400, "the CPU drew too few grains: {cpu_grain}");
+    assert!(gpu_grain > 400, "the GPU drew too few grains: {gpu_grain}");
+}
+
+#[test]
 fn text_glyphs_match_the_cpu() {
     let mut doc = Document::default();
     let page = doc.pages[0];
