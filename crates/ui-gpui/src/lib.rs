@@ -7838,7 +7838,11 @@ impl Render for CanvasView {
             // 把整段文字做成内联 SVG 后绕自身中心转 -90°，等价于 egui 的
             // `TextShape::with_angle_and_anchor(-π/2, CENTER_CENTER)`。
             if let Some(angle) = l.angle {
-                let key = canvas::svg_text::text_key(&l.text, l.font.size, l.rect.width(), l.rect.height());
+                let weight = match l.font.weight {
+                    canvas::geom::FontWeight::Normal => 305,
+                    canvas::geom::FontWeight::SemiBold | canvas::geom::FontWeight::Bold => 330,
+                };
+                let key = canvas::svg_text::text_key_weighted(&l.text, l.font.size, l.rect.width(), l.rect.height(), weight);
                 let rotated = gpui::svg()
                     .absolute()
                     .left(px(l.rect.min.x))

@@ -3,8 +3,9 @@
 //! 帧名贴在上边缘之上，section 名是左上角内部的 pill；组件/图标用各自的身份色。
 //! `label_edge` 的几何计算与原实现**逐行一致**（含镜像帧保持正向）。
 //!
-//! 差异（GPUI 侧适配）：文字用 GPUI 文本元素渲染，不能像 egui 那样把已画出的图元整体旋转，
-//! 因此旋转帧的标签仍放在几何算出的角点，但保持水平（记为已知限制）。
+//! 差异（GPUI 侧适配）：文字用 GPUI 文本元素渲染；旋转帧的名称、命中区与 section pill
+//! **跟着上边缘一起转**（文字走内联 SVG 旋转，pill 底走圆角多边形），不再保持水平
+//! （2026-11-27）。
 //!
 //! 名称的颜色与位置按 2026-11-22 设计稿（Groups 231 / 232 / 234 / 235）：
 //! 普通帧未选中 / 常态 / 悬停用同一个灰，选中才换成更深一档的强调色；组件 / 组件集一直是
@@ -16,7 +17,7 @@ use figcraft_geom::Point;
 use figcraft_i18n::tr;
 
 use super::geom::*;
-use super::painter::{Painter, text_size};
+use super::painter::{Label, Painter, text_size};
 use super::rulers::status_badge;
 use crate::app::CanvasApp;
 use crate::bidi::{ELLIPSIS, fit_with};
@@ -121,6 +122,10 @@ pub fn status_slot_owner(app: &CanvasApp, doc: &Document, page: NodeId, pos: Pos
         if !n.kind.is_frame_like() || n.is_board_atom() {
             continue;
         }
+        // 旋转帧的名称行随边转，轴对齐的状态槽不再落在它的名称行上。
+        if is_turned(doc, id) {
+            continue;
+        }
         let (x0, y0, x1, _) = screen_bounds(app, doc, id)?;
         let slot = name_slots(x1, y0)[0];
         // 原始名称撞上图标 → 图标已省略，不接 hover 轮廓。
@@ -144,6 +149,9 @@ pub fn slot_at(app: &CanvasApp, doc: &Document, page: NodeId, sel: &[NodeId], po
     for id in super::rulers::boards(doc, page).into_iter().rev() {
         let Some(n) = doc.node(id) else { continue };
         if !n.kind.is_frame_like() || n.is_board_atom() {
+            continue;
+        }
+        if is_turned(doc, id) {
             continue;
         }
         let Some((x0, y0, x1, y1)) = screen_bounds(app, doc, id) else { continue };
@@ -258,6 +266,12 @@ pub fn label_edge(p00: Pos2, p10: Pos2, p01: Pos2) -> LabelEdge {
     LabelEdge { corner, angle: d.y.atan2(d.x), len }
 }
 
+/// The label of a rotated frame turns with its top edge (2026-11-27): the name, its hit box and
+/// the section pill all follow the edge's angle instead of staying horizontal.
+fn is_turned(doc: &Document, id: NodeId) -> bool {
+    figcraft_geom::rotation_degrees(doc.world_transform(id)).abs() > 1e-3
+}
+
 /// 画 `id`（顶层帧或 section）的标签；返回它在屏幕上的四角（用于命中测试）。
 pub fn draw(app: &CanvasApp, painter: &mut Painter, t: &Tokens, doc: &Document, id: NodeId, selected: bool, renaming: bool) -> Option<[Pos2; 4]> {
     let n = doc.node(id)?;
@@ -270,26 +284,50 @@ pub fn draw(app: &CanvasApp, painter: &mut Painter, t: &Tokens, doc: &Document, 
     let edge = label_edge(p00, at(n.width, 0.0), p01);
     let tl = edge.corner;
     let col = label_ink(app, t, doc, id, selected);
+    // 文字沿边的读取方向 d 与朝外的法线 up（屏幕上边的外侧）。
+    let d = vec2(edge.angle.cos(), edge.angle.sin());
+    let up = vec2(edge.angle.sin(), -edge.angle.cos());
+    let turned = edge.angle.abs() > 1e-3;
 
     let area = if matches!(n.kind, NodeKind::Section { .. }) {
         // section 标题是左上角内部的 pill。
-        let hidden = n.hides_contents();
         let fg = if selected { Color32::WHITE } else { t.text };
         let font = semibold(11.0);
         let shown = fit_with(&n.name, (edge.len - 16.0).clamp(40.0, 480.0), |s| text_size(s, font).x);
-        let galley = painter.layout_no_wrap(shown, font, fg);
-        let r = Rect::from_min_size(tl, galley.size() + vec2(16.0, 8.0));
-        painter.rect_filled(r, CornerRadius::same(4), if selected { t.accent } else { t.hover });
-        // 改名期间不画旧名字（内联输入框是透明的），pill 与矩形照旧。
-        if !renaming {
-            painter.galley(r.min + vec2(8.0, 4.0), galley, fg);
+        let galley = painter.layout_no_wrap(shown.clone(), font, fg);
+        let size = galley.size() + vec2(16.0, 8.0);
+        let center = tl + d * (size.x * 0.5) - up * (size.y * 0.5);
+        if turned {
+            painter.rounded_quad_filled(center, d, -up, size, 4.0, if selected { t.accent } else { t.hover });
+            if !renaming {
+                painter.labels.push(Label {
+                    rect: Rect::from_center_size(center, galley.size()),
+                    text: shown,
+                    font,
+                    color: fg,
+                    align: Align2::CENTER_CENTER,
+                    angle: Some(edge.angle),
+                    pill: None,
+                });
+            }
+            let corners = [
+                center + d * (size.x * 0.5) + up * (size.y * 0.5),
+                center - d * (size.x * 0.5) + up * (size.y * 0.5),
+                center - d * (size.x * 0.5) - up * (size.y * 0.5),
+                center + d * (size.x * 0.5) - up * (size.y * 0.5),
+            ];
+            [corners[3], corners[2], corners[1], corners[0]]
+        } else {
+            let r = Rect::from_min_size(tl, size);
+            painter.rect_filled(r, CornerRadius::same(4), if selected { t.accent } else { t.hover });
+            // 改名期间不画旧名字（内联输入框是透明的），pill 与矩形照旧。
+            if !renaming {
+                painter.galley(r.min + vec2(8.0, 4.0), galley, fg);
+            }
+            status_badge(painter, n, pos2(r.max.x + 6.0, r.center().y));
+            quad_of(r)
         }
-        status_badge(painter, n, pos2(r.max.x + 6.0, r.center().y));
-        let _ = hidden;
-        r
     } else {
-        let x = tl.x;
-        // 名字画在帧上边缘之上：文字框底边距上边缘 `LABEL_GAP`。
         let font = regular(11.0);
         // 组件 / 组件集的名字前面带「❖ 」（设计稿）；改名时只显示原名（内联输入框自己不带前缀）。
         let label = if matches!(n.kind, NodeKind::Component { .. } | NodeKind::ComponentSet { .. }) {
@@ -298,24 +336,34 @@ pub fn draw(app: &CanvasApp, painter: &mut Painter, t: &Tokens, doc: &Document, 
             n.name.clone()
         };
         // 宽度不设下限（`fit_with` 内部只夹到 1pt），长名字可以一路缩到只剩省略号。
-        let max_w = (edge.len - (x - tl.x)).max(1.0);
+        let max_w = edge.len.max(1.0);
         let shown = fit_with(&label, max_w, |s| text_size(s, font).x);
         // 用**原始文字**判断：撞上图标就省略图标（名称照常画）。
-        let name_collides = screen_bounds(app, doc, id).is_some_and(|(_, y0, x1, _)| name_hits_status(doc, id, x, x1, y0));
-        let galley = painter.layout_no_wrap(shown, font, col);
+        let name_collides = !turned && screen_bounds(app, doc, id).is_some_and(|(_, y0, x1, _)| name_hits_status(doc, id, tl.x, x1, y0));
+        let galley = painter.layout_no_wrap(shown.clone(), font, col);
         let size = galley.size();
-        let end = x + size.x;
-        let top = tl.y - LABEL_GAP - size.y;
-        // 命中区 = 文字框本身（顶边 = 文字顶，底边 = 上边缘上方 `LABEL_GAP`），
-        // 重命名框直接用这个顶边，所以两态永远重合。
-        let label_rect = Rect::from_min_max(pos2(tl.x, top), pos2(end, tl.y - LABEL_GAP));
+        let bottom = tl + up * LABEL_GAP;
+        let top = bottom + up * size.y;
+        let end = top + d * size.x;
+        // 命中区 = 文字框本身（顶边 = 文字顶，底边 = 上边缘上方 `LABEL_GAP`）。
+        let corners = [top, end, end - up * size.y, bottom];
         // 同上：几何（`area`）仍按 galley 量出来的宽度算，只是不落笔。
-        if !renaming {
-            painter.galley(pos2(x, top), galley, col);
+        if turned {
+            painter.labels.push(Label {
+                rect: Rect::from_center_size(bottom + d * (size.x * 0.5) + up * (size.y * 0.5), size),
+                text: shown,
+                font,
+                color: col,
+                align: Align2::CENTER_CENTER,
+                angle: Some(edge.angle),
+                pill: None,
+            });
+        } else if !renaming {
+            painter.galley(pos2(tl.x, tl.y - LABEL_GAP - size.y), galley, col);
         }
         // 名称行右侧的状态按钮：**原始名称文字撞上它就整个省略**（不画、不接点击、
         // 不参与 hover 轮廓）；短名称则照常显示。判断用的是未截断的文字宽度。
-        if let Some((x0, y0, x1, y1)) = screen_bounds(app, doc, id) {
+        if !turned && let Some((x0, y0, x1, y1)) = screen_bounds(app, doc, id) {
             if !name_collides {
                 let slot = name_slots(x1, y0)[0];
                 if !n.dev_status.is_none() {
@@ -324,7 +372,7 @@ pub fn draw(app: &CanvasApp, painter: &mut Painter, t: &Tokens, doc: &Document, 
                 }
             }
         }
-        label_rect
+        corners
     };
     if n.hides_contents() {
         let height = (p01 - p00).length();
@@ -333,7 +381,11 @@ pub fn draw(app: &CanvasApp, painter: &mut Painter, t: &Tokens, doc: &Document, 
             painter.text(center, Align2::CENTER_CENTER, tr("Contents hidden"), regular(11.0), t.text_tertiary);
         }
     }
-    Some([area.min, pos2(area.max.x, area.min.y), area.max, pos2(area.min.x, area.max.y)])
+    Some(area)
+}
+
+fn quad_of(r: Rect) -> [Pos2; 4] {
+    [r.min, pos2(r.max.x, r.min.y), r.max, pos2(r.min.x, r.max.y)]
 }
 
 #[cfg(test)]
