@@ -1897,58 +1897,26 @@ pub(crate) fn paints(
 // Effects —— `effects.rs::effects`
 // ───────────────────────────────────────────────────────────────────────────────────────────────
 
-/// WGSL 材质下拉行 + 选中文件的参数输入框，并入 Effects section 的统一网格。
-/// 已绑定 WGSL 材质时，在 Effects 节内就地画：
-/// * 一行**和普通效果行同款的下拉**：显示当前材质名，点开列固定目录里每个 `.wgsl`（就地换材质）
-///   以及一条「None」（解绑）；行尾仍是 24 pt 的 `−`（与 effect 行删除键同位置）。
-/// * 该 shader 扫描出的参数，逐项画成「左边独立名称 + 右边数值输入框」（名称不再塞进输入框）。
-///
-/// 未绑定材质时返回空 `Vec`，Effects 节就是原来的样子（零回归）——选择入口在 `+` 菜单里也有
-/// 一份，所以不绑定也能加材质；绑定后这里多一个可换材质的下拉。
+/// 外置 WGSL 材质行：和内置效果行分开呈现（「External WGSL」小标题 + 一条材质行）。
+/// 点这一行弹出独立的材质设置窗；材质切换与参数编辑都在窗里，不在右栏就地展开。
 fn wgsl_material_rows(f: &RightFields, d: &PanelData, col: f32, cx: &mut App) -> Vec<crate::widgets::FieldRow> {
     let Some(path) = d.wgsl.path.as_deref() else { return Vec::new() };
     let name = std::path::Path::new(path).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string());
-
-    let mut out = Vec::new();
-    // 下拉：与 `+` 菜单同源（每次现扫固定目录），选中即 `node.set` 换绑定；末尾 `None` 解绑。
-    // 这样外置材质和普通效果一样，行首就是一个下拉，而不是一段只能看的纯文本。
-    let mut items: Vec<(String, &'static str, Value)> = crate::wgsl_material::scan_material_dir()
-        .iter()
-        .map(|wf| {
-            let p = wf.path.to_string_lossy().into_owned();
-            (wf.name.clone(), "node.set", crate::wgsl_material::write_binding_params(Some(&crate::wgsl_material::binding_for(&p))))
-        })
-        .collect();
-    if items.is_empty() {
-        // 目录里没有文件（或目录不存在）：下拉至少保留当前这一条，不让它变成一个空菜单。
-        items.push((name.clone(), "node.set", crate::wgsl_material::write_binding_params(Some(&crate::wgsl_material::binding_for(path)))));
-    }
-    items.push((tr("None").to_string(), "node.set", crate::wgsl_material::write_binding_params(None)));
-    let dd = pick_dropdown(f, name, col, items);
-    let minus = icon_cmd(Icon::Minus, "node.set", crate::wgsl_material::write_binding_params(None), f, false);
-    out.push(field_row_full_trailing(dd, vec![minus]));
-
-    // 该 shader 的参数在下面就地展开：名称是**输入框前面的独立文本**，值才进输入框。
-    let specs = crate::wgsl_material::params_for(path);
-    if specs.is_empty() {
-        return out;
-    }
-    out.push(sublabel_row(tr("WGSL Material Parameters")));
     let binding = crate::wgsl_material::WgslMaterialBinding { path: path.to_string(), params: d.wgsl.params.clone() };
-    for (slot, spec) in specs.iter().take(crate::panels::WGSL_PARAM_FIELDS).enumerate() {
-        let value = d.wgsl.params.get(&spec.field).copied().unwrap_or(spec.default);
-        let field = f.wgsl_param_field(cx, slot, spec, value, &binding);
-        let label = div()
-            .flex_1()
-            .min_w(px(0.0))
-            .overflow_hidden()
-            .whitespace_nowrap()
-            .text_size(pt(crate::widgets::TEXT_PT))
-            .text_color(rgba(tokens().text_secondary))
-            .child(spec.label.clone());
-        out.push(field_row(vec![label.into_any_element(), field.into_any_element()], Vec::<gpui::AnyElement>::new()));
-    }
-    out
+
+    let popups = f.popups();
+    let cmds = f.cmds.clone();
+    let label = SharedString::from(name.clone());
+    let dd = Dropdown::new(label, col, None).fill().on_click(move |bounds, _window, cx: &mut App| {
+        let name = name.clone();
+        let binding = binding.clone();
+        let cmds = cmds.clone();
+        open_detached_with(popups.clone(), "wgsl-material-settings", Some(bounds.origin.y), cx, move |anchor, cx| {
+            crate::popovers::WindowState::wgsl_material(cmds.clone(), cx, anchor, SharedString::from(name.clone()), binding.clone())
+        });
+    });
+    let minus = icon_cmd(Icon::Minus, "node.set", crate::wgsl_material::write_binding_params(None), f, false);
+    vec![sublabel_row(tr("External WGSL")), field_row_full_trailing(dd, vec![minus])]
 }
 
 /// Effects 标题栏的 `+`：点开是一个「添加效果」菜单 —— 先列 7 种内置效果（`effect.add`），
@@ -2627,6 +2595,26 @@ pub(crate) fn grids(f: &RightFields, d: &PanelData, col: f32, n: &mut usize, cx:
 // Export —— `export_panel.rs::section` / `setting_row`
 // ───────────────────────────────────────────────────────────────────────────────────────────────
 
+/// 导出行的后缀输入框：`row_field` 是裸 `TextEdit`（无壳、无边框），这里套一个和
+/// `TextField` 同款的 24 pt 外壳（field 底色 + 1 px 边框 + 5 pt 圆角），让它看起来、
+/// 点起来都像右栏其它带边框输入框。
+fn boxed_row_input(edit: impl IntoElement) -> gpui::AnyElement {
+    let t = tokens();
+    div()
+        .flex_1()
+        .min_w(px(0.0))
+        .h(pt(crate::widgets::FIELD_H))
+        .flex()
+        .items_center()
+        .rounded(pt(crate::widgets::RADIUS))
+        .border_1()
+        .border_color(rgba(t.border))
+        .bg(rgba(t.field))
+        .pl(pt(6.0))
+        .child(div().flex_1().min_w(px(0.0)).h_full().child(edit))
+        .into_any_element()
+}
+
 pub(crate) fn export(f: &RightFields, d: &PanelData, col: f32, n: &mut usize, cx: &mut App, _motion: bool) -> Section {
     // egui `export_panel.rs::section`: `mixed = shared.is_none() && sel.len() > 1`。
     // mixed 时 `+` 是「整体替换成一条默认设置」（set_props exports），不是 export.add。
@@ -2650,6 +2638,13 @@ pub(crate) fn export(f: &RightFields, d: &PanelData, col: f32, n: &mut usize, cx
     // collapses to an empty section.
     let rows = d.exports.clone().filter(|v| !v.is_empty()).unwrap_or_default();
     let has_rows = !rows.is_empty();
+    // 页面导出只列静态图片格式；图层导出仍可以是 GIF / WebM / PNG frames / MP4。
+    let format_list: &[figcraft_doc::ExportFormat] =
+        if page_mode { &figcraft_doc::ExportFormat::ALL } else { &figcraft_doc::ExportFormat::WITH_ANIMATION };
+    // 整页还没有任何 ExportSetting 时，先画一条「可编辑的默认行」；改动任一字段会通过
+    // `export.add` 把这条设置真正写进页面节点，下一帧就变成普通的已存行。这样页面导出
+    // 不是只有一颗 PNG 按钮，而是和其他导出项一样能选尺寸 / 后缀 / 全部图片格式。
+    let synthetic_page_row = page_mode && !has_rows;
     if !has_rows && !page_mode {
         return Section::empty(tr("Export"), plus);
     }
@@ -2665,8 +2660,9 @@ pub(crate) fn export(f: &RightFields, d: &PanelData, col: f32, n: &mut usize, cx
             //
             // Animation is not a second panel: GIF / WebM / PNG frames / MP4 are normal formats
             // in this row. `+` adds another row and `-` removes it, exactly like PNG or SVG.
-            let formats: Vec<(String, &'static str, Value)> = figcraft_doc::ExportFormat::WITH_ANIMATION
-                .into_iter()
+            let formats: Vec<(String, &'static str, Value)> = format_list
+                .iter()
+                .copied()
                 .map(|f| (f.label().to_string(), "export.update", with_ids(json!({ "index": index, "format": f.ext() }))))
                 .collect();
             let mut sizes: Vec<(String, &'static str, Value)> = Vec::new();
@@ -2708,7 +2704,7 @@ pub(crate) fn export(f: &RightFields, d: &PanelData, col: f32, n: &mut usize, cx
             suffix.update(cx, |te, _| te.set_placeholder(tr("Suffix")));
             let mut fields: Vec<gpui::AnyElement> = Vec::new();
             fields.push(pick_dropdown(f, row.size.clone(), col, sizes).into_any_element());
-            fields.push(div().flex_1().min_w(px(0.0)).h_full().child(suffix).into_any_element());
+            fields.push(boxed_row_input(suffix));
             fields.push(pick_dropdown(f, row.format_label, col, formats).into_any_element());
             // Frame rate lives in the row's Dots popup (with the format's other settings),
             // not as a fourth column: the row stays the normal scale | suffix | format layout.
@@ -2726,6 +2722,63 @@ pub(crate) fn export(f: &RightFields, d: &PanelData, col: f32, n: &mut usize, cx
             });
             sec = sec.child(field_row(fields, vec![dots, minus]));
         }
+    } else if synthetic_page_row {
+        // 页面节点还没有 ExportSetting：画一条默认行（1x / 空后缀 / PNG）。任何一次编辑都先
+        // `export.add` 把完整 setting 写进页面，之后这一行就从 `d.exports` 正常读回。
+        let suffix = f.row_field(
+            cx,
+            slot(n),
+            "",
+            RowEditCtx {
+                cmd: "export.add",
+                params: with_ids(json!({ "setting": { "size": "1x", "format": "png" } })),
+                key: "suffix",
+                scale: 1.0,
+                string_value: true,
+                paint: None,
+                nest: Some("setting"),
+                nest_key: None,
+                map: None,
+                paint_color: None,
+            },
+        );
+        suffix.update(cx, |te, _| te.set_placeholder(tr("Suffix")));
+
+        let mut sizes: Vec<(String, &'static str, Value)> = Vec::new();
+        for v in figcraft_doc::ExportSize::SCALES.iter() {
+            let label = figcraft_doc::ExportSize::Scale { value: *v }.label();
+            sizes.push((
+                label.clone(),
+                "export.add",
+                with_ids(json!({ "setting": { "size": label, "format": "png" } })),
+            ));
+        }
+        for s in ["512w", "512h"] {
+            sizes.push((
+                s.to_string(),
+                "export.add",
+                with_ids(json!({ "setting": { "size": s, "format": "png" } })),
+            ));
+        }
+        let formats: Vec<(String, &'static str, Value)> = format_list
+            .iter()
+            .copied()
+            .map(|format| {
+                (
+                    format.label().to_string(),
+                    "export.add",
+                    with_ids(json!({ "setting": { "size": "1x", "format": format.ext() } })),
+                )
+            })
+            .collect();
+        sec = sec.child(field_row(
+            vec![
+                pick_dropdown(f, "1x".to_string(), col, sizes).into_any_element(),
+                boxed_row_input(suffix),
+                pick_dropdown(f, "PNG".to_string(), col, formats).into_any_element(),
+            ],
+            Vec::<gpui::AnyElement>::new(),
+        ));
     }
 
     // ② Preview（egui `export_panel::preview`）：折叠行 + 120 pt 预览框。
@@ -4676,22 +4729,9 @@ fn local_styles_block(f: &RightFields, d: &PanelData, window: &mut Window, cx: &
         }
     }
     root = root.children(rows);
-    // 行下面那段空白：点一下取消选中。它只占列表剩余高度，不覆盖任何行，
-    // 所以点行不会误清选中（用户 2026-11-15）。
-    {
-        let ui_blank = ui.clone();
-        let wake_blank = wake.clone();
-        // CodeRabbit PR#24: a nonzero minimum so a short list still leaves a clickable blank
-        // area; flex_1 alone collapses to zero inside a content-sized PanelSection body.
-        root = root.child(div().flex_1().min_h(px(120.0)).on_mouse_down(MouseButton::Left, move |_e, _, _cx| {
-            let mut st = ui_blank.borrow_mut();
-            let had = st.sel.take().is_some() || st.sel_folder.take().is_some();
-            drop(st);
-            if had {
-                wake_blank.wake();
-            }
-        }));
-    }
+    // ⛔ 这里不再补「列表下面那段空白点击区」。它原来用 `min_h(px(120.0))` 保证短列表也有
+    // 可点的空白，但在按内容定高的父容器里，这 120 pt 会直接把 Local styles 节撑高 ——
+    // 用户 2026-11-27：有样式项时高度应当跟着内容走。取消选中改由点击行本身 / Escape 处理。
     // 容器在窗口里的原点：prepaint 写入，下一帧的事件把指针换算成相对坐标。
     let ui_o = ui.clone();
     root = root.child(
@@ -5554,7 +5594,7 @@ fn page_open_variables_button(f: &RightFields, d: &PanelData, count: usize) -> g
     dd.into_any_element()
 }
 
-pub(crate) fn page(f: &RightFields, d: &PanelData, row_w: f32, n: &mut usize, window: &mut Window, cx: &mut App) -> Vec<PanelSection> {
+pub(crate) fn page(f: &RightFields, d: &PanelData, row_w: f32, n: &mut usize, window: &mut Window, cx: &mut App) -> Vec<Section> {
     let Some(p) = d.page.as_ref() else { return Vec::new() };
     let mut sec = PanelSection::new(tr("Page"));
     let hex_slot = slot(n);
@@ -5613,45 +5653,45 @@ pub(crate) fn page(f: &RightFields, d: &PanelData, row_w: f32, n: &mut usize, wi
         crate::popovers::PaintPickerExtras::default(),
     );
     sec = sec.child(field_row_full(crate::popovers::with_button_bounds(cf, swatch_hit)));
-    let mut out = vec![sec];
+    let mut out = vec![Section::Full(sec)];
 
     // ② Variable modes（egui `page_variable_modes`，页面自己的模式；Auto = 集合默认模式）。
     if !p.variable_modes.is_empty() {
-        out.push(variable_modes_rows(f, &p.variable_modes, row_w));
+        out.push(Section::Full(variable_modes_rows(f, &p.variable_modes, row_w)));
     }
 
     // ③ Color profile（egui keeps this as local UI state and opens a dialog; GPUI 用
     // `file.colorProfile` 命令；`node.set {"colorProfile": …}` 不是节点属性）。
     let profiles: Vec<(String, &'static str, Value)> =
         figcraft_color::ColorProfile::ALL.iter().map(|cp| (cp.label().to_string(), "file.colorProfile", json!({ "profile": cp.id() }))).collect();
-    out.push(PanelSection::new(tr("Color profile")).child(field_row_full(pick_dropdown(f, p.profile.clone(), row_w, profiles))));
+    out.push(Section::Full(
+        PanelSection::new(tr("Color profile")).child(field_row_full(pick_dropdown(f, p.profile.clone(), row_w, profiles))),
+    ));
 
     // ④ Local variables（egui：空集合标题置灰；下拉打开变量编辑器）。
-    out.push(
+    out.push(Section::Full(
         PanelSection::new(tr("Local variables"))
             .variant(if p.local_variables == 0 { SectionHeaderVariant::Dim } else { SectionHeaderVariant::Normal })
             .child(field_row_full(page_open_variables_button(f, d, p.local_variables))),
-    );
+    ));
 
     // ⑤ Local styles（egui `style_picker::local_styles`）──────────────────────────────────
     // 整张列表作为一个 free block：24 pt 行、8/16/16 分组间距、圆形色板、整行拖动排序
     // 都由 `local_styles_block` 按 `LS_*` 自己排版，不套统一网格的 32 pt 行 / 24 pt trailing 列。
     // 分组顺序与 egui `StyleSlot` 一致：Text / Fill(Color) / Effect / Grid。
-    let styles_sec = PanelSection::new(tr("Local styles"))
-        .variant(if p.local_styles == 0 { SectionHeaderVariant::Dim } else { SectionHeaderVariant::Normal })
-        .child(block_row(local_styles_block(f, d, window, cx)));
+    // 空态必须走 `Section::Empty`：`PanelSection` 的 body 恒定带 12 pt 底距（FROZEN），
+    // 哪怕没有一行也会把这一节撑到 40 + 12；裸 `SectionHeader` 才是精确的 40 pt。
+    let styles_sec = if p.local_styles == 0 {
+        Section::Empty(SectionHeader::new(tr("Local styles")).variant(SectionHeaderVariant::Dim))
+    } else {
+        Section::Full(PanelSection::new(tr("Local styles")).child(block_row(local_styles_block(f, d, window, cx))))
+    };
     out.push(styles_sec);
 
     // ── ③ Export（egui `export_panel::page_section`）──────────────────────────────────────
-    // 本地样式之后就是「把整页导出为一个 PNG」；按钮与 Design 区的底部导出共用 `wide_button`。
-    // ids 传页面子层：`file.export` 收到显式 ids 就按这些层合成一张图，缺省（空页面）引擎同样
-    // 会退回到页面子层，所以这里不需要特判。
-    out.push(PanelSection::new(tr("Export")).child(field_row_full(wide_button(
-        f,
-        tr("Export page as PNG").into(),
-        "file.export",
-        json!({ "ids": p.export_ids, "format": "png" }),
-    ))));
+    // 与图层导出共用同一条 Export 节：尺寸 / 后缀 / 格式 / `+` / 预览 / 导出按钮都在。
+    // 页面模式只列静态图片格式（PNG/JPG/SVG/PDF/WebP/XML）；选中图层时仍保留 Motion 格式。
+    out.push(export(f, d, row_w, n, cx, false));
     out
 }
 
