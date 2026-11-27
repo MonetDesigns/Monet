@@ -1251,15 +1251,17 @@ C2、C3（文案规范待全面对齐）。
 | DM11 | Connect to code | `inspect.rs::connect_section` | ✅ |
 | DM12 | 只读插件命令 | `inspect.rs::plugin_section`、`data.rs::PluginRunRow` | ✅ |
 | P1-6 | 面板级测试 / 契约 | `dev_gate` 3 条、`devmode_tests` 6 条、`parity_contract` DM1–DM12 | 策略层与源码契约已接；GPUI 交互点击用例待补 |
-| P2-1 | 引擎 CSS/Tailwind 同步 | `codegen/css.rs`、`codegen/tailwind.rs` | 🟢 逐段 `text-wrap` 与 mobile `max-width` 保留已对齐；剩余 `codegen.rs` 为格式/anim 差异，html/code_connect/devinspect 为本地有意扩展；未编译验证 |
+| P2-1 | 引擎 CSS/Tailwind 同步 | `codegen/css.rs`、`codegen/tailwind.rs` | ✅ 逐段 `text-wrap` 与 mobile `max-width` 保留已对齐；剩余 `codegen.rs` 为格式/anim 差异，html/code_connect/devinspect 为本地有意扩展；`cargo check` 通过 |
 | P2-2 | Motion 出码入口 | `codegen::motion_code_for`、`InspectData::motion_code`、`inspect.rs::motion_section` | ✅ Code 节按 css/swiftui/compose 显示动画块，无动画不显示 |
-| P2-3 | 面板快照缓存 | `lib.rs::panel_data`、`panels/right/data.rs::read_with_dev` | 🟢 Dev 节按 `(uid, revision, page, selection, ready_filter)` 缓存；未编译验证 |
+| P2-3 | 面板快照缓存 | `lib.rs::panel_data`、`panels/right/data.rs::read_with_dev` | ✅ Dev 节按 `(uid, revision, page, selection, ready_filter)` 缓存；`cargo check` 通过，缓存回归未单测 |
 | P2-4 | 资产导出对齐 | `inspect.rs::asset_row` / `export_all` | ✅ 逐项「另存为」+ `file.exportLayers` 多资产已接；格式参数细节待核 |
 | P2-5 | `code_connect` 缓存 | `code_connect.rs::import` | ✅ 同一组件多条 link 只 `describe` 一次 |
 | P2-6 | 多行输入 | `widgets/**` | ⬜ 需单独决策：扩 `TextEdit::multiline` 或把便签/模板改弹层，不在 Dev 面板局部 hack |
 
 **验证**：历史记录：`cargo check -p figcraft-ui-gpui` 曾在 A 盘 target 通过，`dev_gate` / `devmode` 测试曾在
 `--features test-support` 下运行；`parity_contract` 的 `PARITY_CONTRACT_STATUS` 块由 `capabilities()` 从源码派生
-token 双向核对。**2026-11-27 审计时当前 checkout 为 `sync/variable-binding-2026-11`，按项目规则未在功能分支构建；
-P2 与审计补丁待带入本地 `main` 后重新编译验证，本表状态不等于编译通过。**
+token 双向核对。**2026-11-27 复验**：先备份 `main` 与 `sync/variable-binding-2026-11`，在 `main` 的 detach
+worktree 合并 PR head 后 `cargo check -p figcraft-ui-gpui --features test-support` 通过，`devmode` 6/6、
+`dev_gate` 3/3、`parity_contract` 4/4 通过；工作树未在功能分支构建。P2-1 的 codegen golden 与 P2-3 的缓存
+性能回归尚未单独跑。
 
