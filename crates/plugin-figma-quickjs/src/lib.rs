@@ -31,6 +31,10 @@ const PRELUDE: &str = include_str!("prelude.js");
 
 type Shared = Rc<RefCell<Session>>;
 
+fn props_bytes(props: &Map<String, Value>) -> usize {
+    props.iter().map(|(key, value)| key.len() + value.to_string().len()).sum()
+}
+
 /// State shared between the bridge functions and the invocation that is running them.
 struct Session {
     host: Box<dyn Host>,
@@ -69,19 +73,11 @@ impl Session {
         self.host.call(command, params)
     }
 
-    fn pending_len(&self) -> usize {
-        self.pending
-            .values()
-            .flat_map(|props| props.iter())
-            .map(|(key, value)| key.len() + value.to_string().len())
-            .sum()
-    }
-
     fn flush(&mut self, id: u64) -> Result<(), String> {
         let Some(props) = self.pending.remove(&id) else {
             return Ok(());
         };
-        self.pending_bytes = self.pending_len();
+        self.pending_bytes = self.pending_bytes.saturating_sub(props_bytes(&props));
         if props.is_empty() {
             return Ok(());
         }
@@ -350,8 +346,13 @@ fn bridge_set(ctx: &Ctx<'_>, state: Shared, id_text: &str, prop: &str, json: &st
     let mut session = session(ctx, &state)?;
     check_size(ctx, &session.limits, json)?;
     session.tick().map_err(|error| throw(ctx, error))?;
-    session.pending.entry(id).or_default().insert(key.to_string(), value);
-    session.pending_bytes = session.pending_len();
+    let (before, after) = {
+        let entry = session.pending.entry(id).or_default();
+        let before = props_bytes(entry);
+        entry.insert(key.to_string(), value);
+        (before, props_bytes(entry))
+    };
+    session.pending_bytes = session.pending_bytes.saturating_sub(before).saturating_add(after);
     // `pending` values live on the Rust heap, outside `set_memory_limit`. Flush them into
     // engine commands once their aggregate exceeds the per-message cap.
     if session.pending_bytes > session.limits.max_message {
@@ -403,8 +404,9 @@ fn bridge_remove(ctx: &Ctx<'_>, state: Shared, id_text: &str) -> rquickjs::Resul
     let id = node_id(id_text).map_err(|error| throw(ctx, error.to_string()))?;
     let call = ops::remove(id).map_err(|error| throw(ctx, error.to_string()))?;
     let mut session = session(ctx, &state)?;
-    session.pending.remove(&id);
-    session.pending_bytes = session.pending_len();
+    if let Some(props) = session.pending.remove(&id) {
+        session.pending_bytes = session.pending_bytes.saturating_sub(props_bytes(&props));
+    }
     session.call_host(call.command, &call.params).map(|_| ()).map_err(|error| throw(ctx, error))
 }
 
