@@ -774,9 +774,9 @@ impl CanvasView {
                 .justify_end()
                 .on_mouse_down(MouseButton::Left, {
                     let me = me.clone();
-                    move |_e: &MouseDownEvent, _w: &mut Window, cx: &mut App| {
+                    move |_e: &MouseDownEvent, w: &mut Window, cx: &mut App| {
                         me.update(cx, |this: &mut CanvasView, cx: &mut Context<CanvasView>| {
-                            this.layer_toggle_expand(id, cx);
+                            this.layer_toggle_expand(id, w, cx);
                         });
                         // The chevron owns this press: never let the row's selection/drag candidate
                         // claim it too.
@@ -883,7 +883,7 @@ impl CanvasView {
                 .pr(px(40.0))
                 .on_mouse_down(MouseButton::Left, {
                     let me = me.clone();
-                    move |e: &MouseDownEvent, _w: &mut Window, app: &mut App| {
+                    move |e: &MouseDownEvent, w: &mut Window, app: &mut App| {
                         me.update(app, |this: &mut CanvasView, cx: &mut Context<CanvasView>| {
                             // 参考实现 `layers.rs:1142`: a double click starts an inline rename
                             // of this row; a single click still goes through the selection logic.
@@ -892,7 +892,7 @@ impl CanvasView {
                                 // Same as above: this press opens the rename, it is not a click elsewhere.
                                 cx.stop_propagation();
                             } else {
-                                this.layer_on_row_mouse_down(id, e);
+                                this.layer_on_row_mouse_down(id, e, w, cx);
                             }
                         });
                     }
@@ -926,9 +926,9 @@ impl CanvasView {
             // when the pointer is over the type icon or the row's empty space.
             .on_mouse_down(MouseButton::Left, {
                 let me_select = me.clone();
-                move |e: &MouseDownEvent, _w: &mut Window, cx: &mut App| {
+                move |e: &MouseDownEvent, w: &mut Window, cx: &mut App| {
                     me_select.update(cx, |this: &mut CanvasView, cx: &mut Context<CanvasView>| {
-                        this.layer_on_row_mouse_down(id, e);
+                        this.layer_on_row_mouse_down(id, e, w, cx);
                     });
                 }
             })
@@ -1296,15 +1296,23 @@ impl CanvasView {
 
     // ── Events ──────────────────────────────────────────────────────────────────
 
-    fn layer_on_row_mouse_down(&mut self, id: NodeId, e: &MouseDownEvent) {
+    fn layer_on_row_mouse_down(&mut self, id: NodeId, e: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        // Same handoff as a canvas press: commit the active field editors and move GPUI
+        // keyboard focus off the editor before the tree claims it, or the next arrow key
+        // still lands in the field that was being edited.
+        self.commit_edits(window, cx);
+        self.focus.focus(window);
         // Keep the modifiers: on release they decide plain select / toggle / range.
         self.layer_tree.candidate = Some((id, e.position, e.modifiers));
         self.layer_tree.focused = true;
     }
 
-    fn layer_toggle_expand(&mut self, id: NodeId, cx: &mut Context<Self>) {
+    fn layer_toggle_expand(&mut self, id: NodeId, window: &mut Window, cx: &mut Context<Self>) {
         // The chevron stops propagation, so the row's mouse-down never runs. Claim keyboard
         // focus here or the next arrow still moves the canvas selection (CodeRabbit PR#38).
+        // The handoff must also commit/blur the active field editor, like a canvas press.
+        self.commit_edits(window, cx);
+        self.focus.focus(window);
         self.layer_tree.focused = true;
         if self.layer_tree.expanded.contains(&id) {
             self.layer_tree.expanded.remove(&id);
