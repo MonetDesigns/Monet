@@ -205,6 +205,25 @@ fn kind_of(k: figcraft_doc::VariableType) -> VarKind {
     }
 }
 
+/// Toggling one scope checkbox in the details panel: `None` means "all supported properties"
+/// (every scope checked), `Some([])` means hidden from pickers. Turning one off from `None`
+/// removes just that scope; checking one from an empty list starts a single-scope list.
+fn toggle_scope(kind: VarKind, current: Option<&[String]>, scope: &str, on: bool) -> Vec<String> {
+    let supported: Vec<&str> = figcraft_doc::styles::scopes_for(kind.doc_type()).iter().map(|(id, _)| *id).collect();
+    let mut list: Vec<String> = match current {
+        Some(s) => s.to_vec(),
+        None => supported.iter().map(|s| s.to_string()).collect(),
+    };
+    if on {
+        if supported.contains(&scope) && !list.iter().any(|s| s == scope) {
+            list.push(scope.to_string());
+        }
+    } else {
+        list.retain(|s| s != scope);
+    }
+    list
+}
+
 fn cell_of(vars: &figcraft_doc::Variables, val: Option<&figcraft_doc::VariableValue>) -> VarCell {
     use figcraft_doc::VariableValue as V;
     let Some(val) = val else { return VarCell::Empty };
@@ -3809,9 +3828,23 @@ impl VariablesEditor {
                     });
                 }),
         );
-        for scope in row.scopes.clone().unwrap_or_default() {
-            body =
-                body.child(div().pl(pt(16.0)).h(pt(22.0)).flex().items_center().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(scope));
+        for (id, label) in figcraft_doc::styles::scopes_for(row.kind.doc_type()) {
+            let checked = row.scopes.as_ref().is_none_or(|s| s.iter().any(|x| x == id));
+            let current = row.scopes.clone();
+            let cmds = self.cmds.clone();
+            let vid = row.id.clone();
+            let kind = row.kind;
+            let sid = id.to_string();
+            body = body.child(div().pl(pt(16.0)).child(
+                Checkbox::new(gpui::ElementId::Name(format!("d-scope-{}-{}", row.id, id).into()))
+                    .label(tr(label))
+                    .text_xs()
+                    .checked(checked)
+                    .on_change(move |next: &bool, _, _| {
+                        let scopes = toggle_scope(kind, current.as_deref(), &sid, *next);
+                        cmds.push(Cmd { id: "variable.update", params: Some(json!({ "variable": vid, "scopes": scopes })) });
+                    }),
+            ));
         }
         let close_st = st.clone();
         let dismiss: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(move |_, _| {
@@ -3826,7 +3859,7 @@ impl VariablesEditor {
         // 首帧按内容给个估算，之后用 on_measure 回写的实测值（CodeRabbit PR#29）。
         let est_h = st.borrow().details_h.unwrap_or_else(|| {
             let code_rows = row.code.len() as f32 * 40.0;
-            let scope_rows = row.scopes.as_ref().map(|s| s.len() as f32).unwrap_or(0.0) * 22.0;
+            let scope_rows = figcraft_doc::styles::scopes_for(row.kind.doc_type()).len() as f32 * 22.0;
             40.0 + 22.0 + 40.0 + 22.0 + 40.0 + 32.0 + 22.0 + code_rows + 22.0 + 32.0 + scope_rows + 32.0
         });
         let measure_st = st.clone();
@@ -4104,6 +4137,23 @@ mod tests {
         assert!(!items.iter().any(|i| i.label.starts_with("Scope: only")), "{:?}", items.iter().map(|i| &i.label).collect::<Vec<_>>());
         assert!(items.iter().any(|i| i.label == "Scope: hidden from pickers"));
         assert!(items.iter().any(|i| i.label == "Scope: all supported properties"));
+    }
+
+    #[test]
+    fn scope_checkboxes_narrow_and_widen_the_scope_list() {
+        // "All supported properties" starts with every colour scope checked; turning Frame fill
+        // off keeps the rest instead of collapsing to a single scope.
+        let all_off = toggle_scope(VarKind::Color, None, "FRAME_FILL", false);
+        assert_eq!(all_off, ["SHAPE_FILL", "TEXT_FILL", "STROKE_COLOR", "EFFECT_COLOR"]);
+        // From an explicit single scope, checking another appends it.
+        let start = vec!["FRAME_FILL".to_string()];
+        let wider = toggle_scope(VarKind::Color, Some(&start), "STROKE_COLOR", true);
+        assert_eq!(wider, ["FRAME_FILL", "STROKE_COLOR"]);
+        // Unchecking the last scope means hidden from pickers (empty list, not `None`).
+        let last = vec!["FRAME_FILL".to_string()];
+        assert!(toggle_scope(VarKind::Color, Some(&last), "FRAME_FILL", false).is_empty());
+        // Booleans have no scopes at all (egui `booleans_share_no_scope`).
+        assert!(figcraft_doc::styles::scopes_for(figcraft_doc::VariableType::Boolean).is_empty());
     }
 
     fn var_row(id: &str, full_name: &str, inherited: bool) -> VarRow {
