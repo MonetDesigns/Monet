@@ -745,12 +745,12 @@ fn build(
         icons.push((Rect::from_center_size(r.center(), vec2(14.0, 14.0)), icon, t.icon));
         hits.push(Hit { rect: r, kind });
     }
-    // Three playback modes: forward / reverse / loop. Each writes `motion.timeline {mode}`, one
-    // undo step; the active mode is tinted with the accent colour.
+    // Three playback modes: start / end / loop. Targets are 22 px apart, so long labels
+    // ("From start" / "From end") overlap; short labels fit inside the hit rects.
     let current_mode = settings.play_mode();
     for (mode, label, cx) in [
-        (PlayMode::Forward, tr("From start"), 158.0),
-        (PlayMode::Reverse, tr("From end"), 180.0),
+        (PlayMode::Forward, tr("Start"), 158.0),
+        (PlayMode::Reverse, tr("End"), 180.0),
         (PlayMode::Loop, tr("Loop"), 202.0),
     ] {
         let r = at(cx, 20.0, 22.0);

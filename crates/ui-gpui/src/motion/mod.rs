@@ -144,6 +144,9 @@ pub struct MotionUi {
     pub presets_open: bool,
     pub scroll_y: f32,
     pub scrubbing: bool,
+    /// Last play mode observed in the document. Undo/redo can change it while playing; the next
+    /// frame rebases `clock_ms` so it does not keep counting under the old mode.
+    pub mode: Option<motion::PlayMode>,
     pub drag_duration: Option<u32>,
     pub scroll_x: f32,
     /// Horizontal timeline magnification over the fit-to-width scale. `0` means "not touched yet"
@@ -189,6 +192,16 @@ impl MotionUi {
             return false;
         }
         let now = Instant::now();
+        let mode = settings.play_mode();
+        if self.mode.is_some_and(|prev| prev != mode) {
+            // Undo/redo (or another window) changed the stored mode mid-play. The clock counts
+            // up, so reverse must count from the end of the current playhead, not continue the
+            // forward clock.
+            let d = settings.duration_ms as f64;
+            self.clock_ms = if mode == motion::PlayMode::Reverse { (d - self.playhead_ms).max(0.0) } else { self.playhead_ms };
+            self.last_tick = None;
+        }
+        self.mode = Some(mode);
         let dt = self.last_tick.map(|t| now.duration_since(t).as_secs_f64() * 1000.0).unwrap_or(0.0);
         self.last_tick = Some(now);
         self.clock_ms += dt;
@@ -897,6 +910,9 @@ pub fn apply(app: &mut CanvasApp, ui: &mut MotionUi, acts: Vec<Act>) -> bool {
                     // Document state -> engine command, one undo step per mode change. Only move
                     // the playback clock when the write actually landed (read-only sessions reject).
                     let ok = app.session.execute("motion.timeline", &serde_json::json!({ "page": pg.0, "mode": mode.name() })).is_ok();
+                    if ok {
+                        ui.mode = Some(mode);
+                    }
                     if ok && ui.playing {
                         let d = app.session.doc().ok().map(|d| settings_of(d, pg).duration_ms as f64).unwrap_or(0.0);
                         ui.clock_ms = if mode == motion::PlayMode::Reverse { (d - ui.playhead_ms).max(0.0) } else { ui.playhead_ms };
@@ -938,6 +954,11 @@ pub fn apply(app: &mut CanvasApp, ui: &mut MotionUi, acts: Vec<Act>) -> bool {
                 if ui.playing {
                     let settings = doc.as_ref().and_then(|d| page.map(|pg| settings_of(d, pg))).unwrap_or_default();
                     let d = settings.duration_ms as f64;
+                    // The time field accepts values past the end while paused; a reverse start
+                    // from 5000 on a 2000 ms timeline would otherwise wait at 2000 for three
+                    // seconds because `clock_ms` went negative.
+                    ui.playhead_ms = ui.playhead_ms.clamp(0.0, d);
+                    ui.mode = Some(settings.play_mode());
                     match settings.play_mode() {
                         motion::PlayMode::Forward => {
                             if ui.playhead_ms >= d - 0.5 {
@@ -1156,6 +1177,15 @@ pub fn apply(app: &mut CanvasApp, ui: &mut MotionUi, acts: Vec<Act>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_mode_change_while_playing_rebases_the_clock() {
+        let mut ui = MotionUi { playing: true, playhead_ms: 300.0, clock_ms: 300.0, mode: Some(motion::PlayMode::Forward), ..Default::default() };
+        let reverse = figcraft_doc::anim::motion::TimelineSettings { duration_ms: 1000, reverse: true, ..Default::default() };
+        ui.advance(reverse);
+        assert!((ui.clock_ms - 700.0).abs() <= 1.0, "reverse starts counting from the current playhead: {}", ui.clock_ms);
+        assert!((ui.playhead_ms - 300.0).abs() <= 1.0, "the displayed playhead must not jump: {}", ui.playhead_ms);
+    }
 
     #[test]
     fn moving_the_playhead_rebuilds_the_preview_document() {
