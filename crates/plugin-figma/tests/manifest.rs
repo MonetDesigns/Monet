@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used)]
 // A test that can't unwrap can't assert: the workspace lints let tests do it (AGENTS.md › Never crash).
 
-use figcraft_plugin_figma::manifest::{Blocker, DocumentAccess, Manifest, ManifestError, Scope};
+use figcraft_plugin_figma::manifest::{Blocker, DocumentAccess, Manifest, ManifestError, MenuItem, Scope};
 
 const ICON_GRID: &str = r#"{
   "name": "Icon grid",
@@ -34,7 +34,35 @@ fn reads_a_new_style_manifest() {
     assert_eq!(manifest.document_access, DocumentAccess::DynamicPage);
     assert_eq!(manifest.ui.as_deref(), Some("dist/ui.html"));
     assert_eq!(manifest.parameters[0].key, "set");
-    assert_eq!(manifest.menu[0].command, "grid");
+    assert!(matches!(&manifest.menu[0], MenuItem::Command { command, .. } if command == "grid"));
+}
+
+#[test]
+fn menu_accepts_separators_and_nested_submenus() {
+    let json = r#"{
+      "name": "Menus",
+      "id": "1234567890123456789",
+      "api": "1.0.0",
+      "main": "code.js",
+      "editorType": ["figma"],
+      "documentAccess": "dynamic-page",
+      "menu": [
+        {"command": "first", "name": "First"},
+        {"separator": true},
+        {"name": "Shapes", "menu": [
+          {"command": "rect", "name": "Rectangle"},
+          {"separator": true},
+          {"name": "More", "menu": [{"command": "star", "name": "Star"}]}
+        ]}
+      ]
+}"#;
+    let manifest = Manifest::parse(json).unwrap();
+    assert!(matches!(&manifest.menu[0], MenuItem::Command { command, .. } if command == "first"));
+    assert!(matches!(&manifest.menu[1], MenuItem::Separator { separator: true }));
+    let MenuItem::Submenu { name, menu } = &manifest.menu[2] else { panic!("expected a submenu") };
+    assert_eq!(name, "Shapes");
+    assert_eq!(menu.len(), 3);
+    assert!(matches!(&menu[2], MenuItem::Submenu { name, .. } if name == "More"));
 }
 
 #[test]

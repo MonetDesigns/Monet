@@ -26,6 +26,7 @@
 use std::any::Any;
 use std::ffi::OsString;
 use std::fmt::Write as _;
+use std::io::Write as _;
 use std::panic::PanicHookInfo;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -89,6 +90,12 @@ pub(crate) fn install() {
     std::panic::set_hook(Box::new(move |info| {
         // 先保持默认行为（stderr / 控制台里有完整 panic 输出）。
         previous(info);
+        // `engine::guard::run` catches command panics and rolls the document back; the process
+        // continues. Reporting it as fatal would consume `HANDLED` and suppress the report for
+        // a later unrecoverable panic.
+        if figcraft_engine::guard::catching_command_panic() {
+            return;
+        }
         if MAIN.get() != Some(&std::thread::current().id()) {
             return;
         }
@@ -315,6 +322,13 @@ fn write_crash_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
+/// A crash log is a new file in a possibly shared temp directory. `create_new` refuses an
+/// existing path, so a pre-created symlink cannot redirect the write outside the directory.
+fn write_exclusive(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(path)?;
+    file.write_all(bytes)
+}
+
 fn write_log(message: &str, location: &str, thread: &str, saved: &[String], backtrace: &str) -> Option<PathBuf> {
     let mut text = String::new();
     let _ = writeln!(text, "Monet {} — crash report", env!("CARGO_PKG_VERSION"));
@@ -341,8 +355,8 @@ fn write_log(message: &str, location: &str, thread: &str, saved: &[String], back
     if std::fs::create_dir_all(log_dir()).is_ok() && std::fs::write(&primary, text.as_bytes()).is_ok() {
         return Some(primary);
     }
-    let fallback = std::env::temp_dir().join("monet-crash.log");
-    std::fs::write(&fallback, text.as_bytes()).ok().map(|()| fallback)
+    let fallback = std::env::temp_dir().join(format!("monet-crash-{}-{}.log", std::process::id(), timestamp_compact()));
+    write_exclusive(&fallback, text.as_bytes()).ok().map(|()| fallback)
 }
 
 /// 日志上限：backtrace 可能很长，留 8 MiB 足够排查又不至于写爆磁盘。

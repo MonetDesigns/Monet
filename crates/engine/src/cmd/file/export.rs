@@ -385,7 +385,7 @@ pub(super) fn export_layers(s: &mut Session, p: &Value) -> Result<Value> {
             let anim_format = crate::cmd::motion_export::AnimFormat::parse(setting.format.ext())
                 .ok_or_else(|| bad(cmd, format!("unsupported Motion format {}", setting.format.label())))?;
             let anim_scale = crate::cmd::motion_export::scale_for(doc, job.id, setting.size);
-            let out = crate::cmd::motion_export::encode_animation(doc, job.id, anim_format, anim_scale, setting.fps, setting.quality(), 9)?;
+            let out = crate::cmd::motion_export::encode_animation(doc, job.id, anim_format, anim_scale, setting.fps, setting.quality(), 10)?;
             (out.bytes, Vec::new())
         } else {
             export_file(doc, &[job.id], &setting, scale)?

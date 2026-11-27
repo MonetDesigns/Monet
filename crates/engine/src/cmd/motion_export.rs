@@ -14,7 +14,7 @@
 //! MP4 first tries the Windows Media Foundation hardware H.264 encoder and re-renders on the
 //! portable CPU encoder if none is available or a hardware encode fails mid-stream.
 
-use std::sync::mpsc;
+use std::sync::{Arc, Condvar, Mutex, mpsc};
 
 use base64::Engine as _;
 use figcraft_doc::Document;
@@ -39,6 +39,38 @@ const MAX_RENDER_THREADS: usize = 32;
 /// Shared cap on raw RGBA frames queued across all export workers. A 8192² frame is 256 MiB,
 /// so this admits one such frame while allowing dozens of ordinary 1080p frames.
 const MAX_IN_FLIGHT_FRAME_BYTES: usize = 256 * 1024 * 1024;
+
+/// Sliding window shared by export workers and the ordered receiver: `issued` is the next index
+/// a worker may start, `done` is the first index not yet written, and `aborted` wakes every
+/// worker when the sink fails so the thread scope can join instead of deadlocking.
+struct FrameWindow {
+    issued: usize,
+    done: usize,
+    aborted: bool,
+}
+
+fn abort_window(state: &Arc<(Mutex<FrameWindow>, Condvar)>) {
+    let (lock, cvar) = &**state;
+    let mut s = lock.lock().unwrap_or_else(|e| e.into_inner());
+    s.aborted = true;
+    cvar.notify_all();
+}
+
+/// Aborts the window when the ordered receiver unwinds (a `sink` panic), not only on an
+/// explicit `Err`; otherwise a worker waiting on the window keeps the thread scope from
+/// finishing.
+struct AbortOnDrop {
+    state: Arc<(Mutex<FrameWindow>, Condvar)>,
+    armed: bool,
+}
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        if self.armed {
+            abort_window(&self.state);
+        }
+    }
+}
 
 /// How many worker threads a frame-parallel export uses.
 fn render_threads() -> usize {
@@ -246,50 +278,96 @@ impl Animation {
         F: FnMut(usize, figcraft_motion_codec::FrameRgba) -> std::result::Result<(), String>,
     {
         std::thread::scope(|scope| -> std::result::Result<(), String> {
-            // A single shared queue bounds frames in flight across every worker. Counting slots
-            // per worker is not enough at 8192²: one RGBA frame is 256 MiB, so 32 workers × 2
-            // slots could hold 24 GiB before any encoder buffer. The queue capacity comes from
-            // the frame size and a shared byte budget; `threads` frames can also be in progress.
+            // A shared sliding window bounds both queued and reordered frames. Counting slots
+            // per worker is not enough at 8192²: one RGBA frame is 256 MiB. The window is also
+            // what bounds `pending` when frame 0 is slow and later frames arrive first.
             let frame_bytes = (self.size.0 as usize).saturating_mul(self.size.1 as usize).saturating_mul(4).max(1);
             let budget_frames = (MAX_IN_FLIGHT_FRAME_BYTES / frame_bytes).max(1);
-            // At least one slot per worker is required: a later worker can otherwise occupy the
-            // only slot with frame 17 while the receiver waits for frame 0, and no worker can
-            // make progress. Cap the worker count by the byte budget instead of letting the
-            // queue hold one full frame per worker.
-            let workers = threads.min(budget_frames).max(1);
-            let (tx, rx) = mpsc::sync_channel::<(usize, std::result::Result<figcraft_motion_codec::FrameRgba, String>)>(workers);
-            for w in 0..workers {
+            // Keep at most half the byte budget in flight; the other half covers the frame each
+            // worker is currently drawing. At 8192² this degrades to one worker and one frame,
+            // instead of buffering a 24 GiB backlog.
+            let window = (budget_frames / 2).max(1);
+            let workers = threads.min(window).max(1);
+            let state = Arc::new((Mutex::new(FrameWindow { issued: 0, done: 0, aborted: false }), Condvar::new()));
+            let mut abort_guard = AbortOnDrop { state: state.clone(), armed: true };
+            // A bounded channel preallocates `capacity` slots; never allocate more slots than
+            // frames, or a 1×1 export would reserve the whole byte budget in empty slots.
+            let channel = window.min(times.len()).max(1);
+            let (tx, rx) = mpsc::sync_channel::<(usize, std::result::Result<figcraft_motion_codec::FrameRgba, String>)>(channel);
+            for _ in 0..workers {
                 let tx = tx.clone();
-                scope.spawn(move || self.render_worker(times, workers, w, tx));
+                let state = state.clone();
+                scope.spawn(move || self.render_worker(times, tx, state, window));
             }
             // The main thread must drop its sender or `recv` never observes all workers finishing.
             drop(tx);
             let mut pending: std::collections::BTreeMap<usize, figcraft_motion_codec::FrameRgba> = std::collections::BTreeMap::new();
             let mut next = 0;
             while next < times.len() {
-                let (i, frame) = rx.recv().map_err(|_| "a frame failed to render".to_string())?;
-                let frame = frame?;
+                let (i, frame) = match rx.recv() {
+                    Ok(v) => v,
+                    Err(_) => {
+                        abort_window(&state);
+                        return Err("a frame failed to render".to_string());
+                    }
+                };
+                let frame = match frame {
+                    Ok(f) => f,
+                    Err(e) => {
+                        abort_window(&state);
+                        return Err(e);
+                    }
+                };
                 pending.insert(i, frame);
                 while let Some(frame) = pending.remove(&next) {
-                    sink(next, frame)?;
+                    if let Err(e) = sink(next, frame) {
+                        abort_window(&state);
+                        return Err(e);
+                    }
                     next += 1;
                 }
+                // Ordered delivery releases window space for workers still waiting to start.
+                {
+                    let (lock, cvar) = &*state;
+                    let mut s = lock.lock().unwrap_or_else(|e| e.into_inner());
+                    s.done = next;
+                    cvar.notify_all();
+                }
             }
+            abort_guard.armed = false;
             Ok(())
         })
     }
 
-    /// Renders this worker's share of the frames (`start`, `start + threads`, ...) in order.
-    fn render_worker(&self, times: &[f64], threads: usize, start: usize, tx: mpsc::SyncSender<(usize, std::result::Result<figcraft_motion_codec::FrameRgba, String>)>) {
+    /// Draws one frame at a time from the shared window, so a worker cannot run ahead of the
+    /// ordered receiver by more than `window` frame indices.
+    fn render_worker(
+        &self,
+        times: &[f64],
+        tx: mpsc::SyncSender<(usize, std::result::Result<figcraft_motion_codec::FrameRgba, String>)>,
+        state: Arc<(Mutex<FrameWindow>, Condvar)>,
+        window: usize,
+    ) {
         let mut player = MotionPlayer::new(&self.base, self.page);
-        let mut i = start;
-        while i < times.len() {
+        loop {
+            let i = {
+                let (lock, cvar) = &*state;
+                let mut s = lock.lock().unwrap_or_else(|e| e.into_inner());
+                while !s.aborted && s.issued < times.len() && s.issued >= s.done.saturating_add(window) {
+                    s = cvar.wait(s).unwrap_or_else(|e| e.into_inner());
+                }
+                if s.aborted || s.issued >= times.len() {
+                    return;
+                }
+                let i = s.issued;
+                s.issued += 1;
+                i
+            };
             let frame = self.frame_rgba(&mut player, times[i]);
             let failed = frame.is_err();
             if tx.send((i, frame)).is_err() || failed {
-                break;
+                return;
             }
-            i += threads;
         }
     }
 }

@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use figcraft_color::{Color, Paint, PaintKind};
 use figcraft_doc::ParagraphStyle;
 use figcraft_doc::{
-    Collection, CollectionId, Document, Effect, EffectKind, Mode, ModeId, Node, NodeId, NodeKind, Style, StyleId, StyleKind, TextData, TextStyle,
+    Collection, CollectionId, Document, Effect, EffectKind, LetterSpacing, LineHeight, Mode, ModeId, Node, NodeId, NodeKind, Style, StyleId, StyleKind, TextData, TextStyle,
     Variable, VariableId, VariableType, VariableValue, Variables, trim_num,
 };
 use serde_json::{Value, json};
@@ -405,12 +405,14 @@ pub fn apply_style_ref(doc: &mut Document, id: NodeId, field: &str, sid: Option<
         }
         None => None,
     };
+    // The layer draws typography at its instance scale; link the same scaled values the text
+    // will render with, or the next style sync sees a mismatch and unlinks immediately.
+    let k = scale_of(doc, id);
     let n = doc.get_mut(id)?;
     // The style's values replace variables bound to what it sets.
     if let Some(st) = &style {
         n.bound.retain(|k, _| !style_sets(field, &st.kind, k));
-    }
-    match (field, &style) {
+    }    match (field, &style) {
         ("fillStyle", Some(Style { kind: StyleKind::Paint { paints }, id, .. })) => {
             n.fills = paints.clone();
             n.styles.fill = Some(id.clone());
@@ -431,8 +433,10 @@ pub fn apply_style_ref(doc: &mut Document, id: NodeId, field: &str, sid: Option<
             // Every char takes the style's typography (their fills and links stay), and the layer
             // what the style sets at the paragraph level (#1829).
             if let NodeKind::Text(t) = &mut n.kind {
+                let mut drawn = style.clone();
+                scale_text_lengths(&mut drawn, k);
                 let len = t.char_count();
-                t.link_text_style(0, len, style, id);
+                t.link_text_style(0, len, &drawn, id);
                 t.take_paragraph_style(paragraph);
             }
             n.styles.text = Some(id.clone());
@@ -726,10 +730,11 @@ pub fn propagate_style(doc: &mut Document, sid: &str) {
         let Some(n) = doc.node(i) else { continue };
         if let Some((def, paragraph)) = &text_def {
             if n.kind.text().is_some_and(|t| t.links_text_style(sid)) {
-                let def = match doc.style(sid).map(|st| crate::style_vars::kind_for(doc, st, i).into_owned()) {
+                let mut def = match doc.style(sid).map(|st| crate::style_vars::kind_for(doc, st, i).into_owned()) {
                     Some(StyleKind::Text { style, .. }) => style,
                     _ => def.clone(),
                 };
+                scale_text_lengths(&mut def, scale_of(doc, i));
                 if let Ok(n) = doc.get_mut(i)
                     && let NodeKind::Text(t) = &mut n.kind
                 {
@@ -782,10 +787,27 @@ pub fn sync_text_styles(doc: &mut Document, ids: &[NodeId]) {
         let Some(n) = doc.node(id) else { continue };
         let NodeKind::Text(t) = &n.kind else { continue };
         // Styles with bound fields read as this layer sees them.
+        let k = scale_of(doc, id);
         let mut defs = std::borrow::Cow::Borrowed(&defs);
+        if k != 1.0 {
+            // The layer's spans carry the drawn (instance-scaled) lengths; compare every
+            // definition at the same scale, including unbound styles, or a linked style
+            // unlinks itself in a scaled instance.
+            let scaled = defs
+                .iter()
+                .map(|(id, style)| {
+                    let mut style = style.clone();
+                    scale_text_lengths(&mut style, k);
+                    (id.clone(), style)
+                })
+                .collect::<BTreeMap<String, TextStyle>>();
+            defs = std::borrow::Cow::Owned(scaled);
+        }
         for st in &varying {
             if let StyleKind::Text { style, .. } = crate::style_vars::kind_for(doc, st, id).into_owned() {
-                defs.to_mut().insert(st.id.clone(), style);
+                let mut drawn = style;
+                scale_text_lengths(&mut drawn, k);
+                defs.to_mut().insert(st.id.clone(), drawn);
             }
         }
         let mut t2 = t.clone();
@@ -1307,12 +1329,41 @@ pub(crate) const LENGTH_FIELDS: &[&str] = &[
     "paragraphIndent",
 ];
 
+/// Effect fields that are lengths: an instance's scale applies to them just as it does to
+/// `width`/`radius` on the node. Colours and dimensionless glass fields are not included.
+const EFFECT_LENGTH_FIELDS: [&str; 5] = ["offsetX", "offsetY", "radius", "spread", "startRadius"];
+
 /// The scale a layer's lengths are drawn at: the product of the scale factors of the instances it
 /// is or sits in.
-fn scale_of(doc: &Document, id: NodeId) -> f64 {
+pub(crate) fn scale_of(doc: &Document, id: NodeId) -> f64 {
     let factor = |i: NodeId| doc.node(i).filter(|n| matches!(n.kind, NodeKind::Instance { .. })).map_or(1.0, |n| n.scale_factor);
     let k = std::iter::once(id).chain(doc.ancestors(id)).map(factor).product::<f64>();
     if k.is_finite() && k > 0.0 { k } else { 1.0 }
+}
+
+/// Whether `id` sits in an instance strictly below `root`. `bake_scale`'s own subtree is the
+/// converted layer: an enclosing instance outside it still contributes its factor through
+/// `scale_of`, but must not disqualify the converted layer's own children from baking.
+fn inside_instance_below(doc: &Document, id: NodeId, root: NodeId) -> bool {
+    doc.ancestors(id)
+        .into_iter()
+        .take_while(|a| *a != root)
+        .any(|a| doc.node(a).is_some_and(|n| matches!(n.kind, NodeKind::Instance { .. })))
+}
+
+/// A text style's lengths as drawn inside a scaled instance: px values scale, percentages
+/// resolve against the already-scaled font size. The stored style keeps its unscaled numbers.
+pub(crate) fn scale_text_lengths(style: &mut TextStyle, k: f64) {
+    if k == 1.0 {
+        return;
+    }
+    style.font_size *= k;
+    if let LineHeight::Pixels(v) = &mut style.line_height {
+        *v *= k;
+    }
+    if let LetterSpacing::Pixels(v) = &mut style.letter_spacing {
+        *v *= k;
+    }
 }
 
 /// A layer that stops being an instance keeps its lengths as drawn (#2090, measured for Detach):
@@ -1325,7 +1376,7 @@ pub(crate) fn bake_scale(doc: &mut Document, id: NodeId) {
         return;
     }
     for d in doc.subtree(id) {
-        let own = !crate::components::inside_instance(doc, d);
+        let own = !inside_instance_below(doc, d, id);
         let Some(n) = doc.node_mut(d) else { continue };
         if !own {
             continue;
@@ -1333,7 +1384,18 @@ pub(crate) fn bake_scale(doc: &mut Document, id: NodeId) {
         if matches!(n.kind, NodeKind::Instance { .. }) {
             n.scale_factor = (n.scale_factor * k).clamp(super::arrange::MIN_SCALE_FACTOR, super::arrange::MAX_SCALE_FACTOR);
         } else {
-            n.bound.retain(|f, _| !LENGTH_FIELDS.contains(&f.as_str()));
+            n.bound.retain(|f, _| {
+                if LENGTH_FIELDS.contains(&f.as_str()) {
+                    return false;
+                }
+                // Bound effect lengths were written scaled; keeping the binding would shrink
+                // them back to the unscaled variable value on the next refresh.
+                let effect_length = f
+                    .strip_prefix("effects/")
+                    .and_then(|rest| rest.split_once('/'))
+                    .is_some_and(|(_, prop)| EFFECT_LENGTH_FIELDS.contains(&prop));
+                !effect_length
+            });
         }
     }
 }
@@ -1391,7 +1453,15 @@ fn apply_bindings_matching(doc: &mut Document, only: Option<&std::collections::B
                             paint_sets.push((list == BoundList::Fills, i, Some(j), *c));
                         }
                     }
-                    (BoundList::Effects, _) => effect_sets.push((i, prop.to_string(), val)),
+                    (BoundList::Effects, _) => {
+                        let value = match (&val, prop) {
+                            (VariableValue::Number(x), p) if scale != 1.0 && EFFECT_LENGTH_FIELDS.contains(&p) => {
+                                VariableValue::Number(x * scale)
+                            }
+                            _ => val.clone(),
+                        };
+                        effect_sets.push((i, prop.to_string(), value));
+                    }
                     (BoundList::Grids, VariableValue::Number(x)) => grid_sets.push((i, prop.to_string(), *x)),
                     _ => {}
                 }

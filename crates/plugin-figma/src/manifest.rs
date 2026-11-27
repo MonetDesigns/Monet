@@ -224,12 +224,28 @@ pub struct Parameter {
 }
 
 /// An item of the plugin's context menu.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MenuItem {
-    pub command: String,
-    pub name: String,
-    #[serde(default)]
-    pub separator: bool,
+///
+/// Figma allows three JSON shapes in one array: a command item, a separator
+/// (`{"separator":true}`), and a nested submenu (`{"name":"Shapes","menu":[...]}`). A plain
+/// struct requiring `command` and `name` rejected the latter two and made valid plugins fail
+/// to load.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum MenuItem {
+    Command {
+        command: String,
+        name: String,
+        #[serde(default)]
+        separator: bool,
+    },
+    Separator {
+        separator: bool,
+    },
+    Submenu {
+        name: String,
+        #[serde(default)]
+        menu: Vec<MenuItem>,
+    },
 }
 
 /// A relaunch button (`figma.setRelaunchData`).

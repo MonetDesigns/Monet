@@ -222,9 +222,12 @@ pub fn refresh(doc: &mut Document, before: Option<&Document>, only: Option<&BTre
         if let NodeKind::Text(t) = &mut next.kind
             && was.is_none_or(|w| w.kind == n.kind)
         {
+            let scale = crate::cmd::styles::scale_of(doc, id);
             for st in doc.styles.iter().filter(|s| !s.bound.is_empty()) {
                 if let StyleKind::Text { style, .. } = kind_for(doc, st, id).as_ref() {
-                    t.update_text_style(&st.id, style);
+                    let mut drawn = style.clone();
+                    crate::cmd::styles::scale_text_lengths(&mut drawn, scale);
+                    t.update_text_style(&st.id, &drawn);
                 }
             }
         }

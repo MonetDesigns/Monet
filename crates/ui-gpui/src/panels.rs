@@ -556,10 +556,14 @@ pub(crate) const WGSL_PARAM_FIELDS: usize = 12;
 ///
 /// 0..[`PROTO_EDITOR_SLOT`] 归右栏正文，之后归交互详情浮窗：浮窗和右栏正文同一帧画进
 /// 两棵树，同一个编辑器实体不能同时出现在两处，槽位必须不相交。
-pub(crate) const ROW_EDITORS: usize = 64;
+pub(crate) const ROW_EDITORS: usize = 80;
 
 /// 交互详情浮窗（`panels/right/proto.rs::editor_popover`）专用的槽位起点。
-pub(crate) const PROTO_EDITOR_SLOT: usize = 48;
+///
+/// 正文槽位从 48 扩到 64：23×23 且展开方块 Grid 的 Layout 行会认领到 49 号，
+/// 原来 `slot()` 把 47 之后的请求全夹到 47，两个字段共用同一个编辑器
+/// （CodeRabbit PR#34）。
+pub(crate) const PROTO_EDITOR_SLOT: usize = 64;
 
 #[derive(Clone, Copy, Default)]
 pub(crate) struct PanelSel {

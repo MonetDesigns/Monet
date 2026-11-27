@@ -19,6 +19,14 @@ pub(crate) fn refuses(app: &CanvasApp, id: &str) -> bool {
 /// the engine command itself is allowed; Developer Mode must still refuse a write plugin before
 /// it runs, while read plugins stay runnable (P1-5).
 pub(crate) fn refuses_command(app: &CanvasApp, id: &str, params: &Value) -> bool {
+    // `tool.set` names the real tool in `params`; gate that tool, not the literal suffix `set`
+    // (which no tool admits, so every toolbar pick was refused in Inspect).
+    if id == "tool.set" && app.dev_inspect {
+        return match params.get("tool").and_then(Value::as_str) {
+            Some(tool) => !figcraft_engine::devinspect::dev_mode_allows(&format!("tool.{tool}")),
+            None => true,
+        };
+    }
     if id == "plugin.run" && app.dev_inspect {
         let Some(pid) = params.get("id").and_then(Value::as_str) else { return true };
         return app
@@ -66,6 +74,14 @@ mod tests {
         let app = app_with(false);
         assert!(!refuses(&app, "transform.nudge"));
         assert!(!refuses(&app, "tool.rectangle"));
+    }
+
+    #[test]
+    fn dev_mode_gates_tool_set_by_the_requested_tool() {
+        let app = app_with(true);
+        assert!(!refuses_command(&app, "tool.set", &serde_json::json!({"tool": "hand"})));
+        assert!(refuses_command(&app, "tool.set", &serde_json::json!({"tool": "rectangle"})));
+        assert!(refuses_command(&app, "tool.set", &serde_json::json!({})), "a missing tool cannot be allowed");
     }
 
     #[test]
