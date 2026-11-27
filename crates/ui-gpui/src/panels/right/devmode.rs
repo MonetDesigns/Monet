@@ -203,6 +203,7 @@ pub(crate) fn annotations(f: &RightFields, d: &PanelData, cx: &mut App, n: &mut 
             },
         );
         edit.update(cx, |te, _| te.set_placeholder(tr("Add an annotation for developers")));
+        f.set_new_note_field(node, edit.clone());
         sec = sec.child(field_row_full(div().w_full().child(edit)));
     }
     Some(sec)
