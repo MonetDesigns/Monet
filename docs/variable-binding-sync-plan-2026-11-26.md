@@ -409,6 +409,6 @@ cargo xtask ci   # fmt + clippy -D warnings + tests + layers + assets + wasm
 - 合并 `origin/main`（`599f89187`），解决 6 处冲突：`library.rs`（bake 与时间线复制并存）、`clipboard.rs`/`overlays.rs`/`paste_motion_tests.rs`（取 origin 新版）、`app.rs`（`opacity_digit` 与 `key_box_doc`/`pick` 并存）、`ui-gpui/lib.rs`（`annotation.new` 与 `selectArea`、`layers.collapseAll`/`contextMenu`、Developer Mode 拒绝与取色归属并存）。
 - 合并后发现并修复重复的 `key_box_key` 与 `selectArea` 分支（`c0b2d42dd`）；`cargo check -p figcraft-engine`、`cargo check -p figcraft-ui-gpui` 均通过。
 - 批次 5 上游化草稿：`docs/upstream-variable-binding-proposal.md`。
-- 2026-11-27 续：合并远端 `a369c2853`（Dev Mode 缓存/审计、text-wrap、导出格式等 14 文件）无冲突；`cargo check -p figcraft-ui-gpui` 通过。GPUI 变量面板测试 9/9 通过，并修复批量改 scope 菜单把各类型 scope 取并集的 bug（改为交集）。推送后 head `e95f63154`，PR Ready、`mergeable=clean`，36 commits；CI 已触发，等待结果。
+- 2026-11-27 续：合并远端 `a369c2853`（Dev Mode 缓存/审计、text-wrap、导出格式等 14 文件）无冲突；`cargo check -p figcraft-ui-gpui` 通过。GPUI 变量面板测试 9/9 通过，并修复批量改 scope 菜单把各类型 scope 取并集的 bug（改为交集）。推送后最新 head `0e2c633b`，PR Ready、`mergeable=clean`，38 commits；CI 已触发，等待结果。
 
 
