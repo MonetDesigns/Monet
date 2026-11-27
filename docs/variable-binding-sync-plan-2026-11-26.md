@@ -402,3 +402,11 @@ cargo xtask ci   # fmt + clippy -D warnings + tests + layers + assets + wasm
 2. **C4**：GPUI 仍无 `style.bind` 入口，文本样式字重绑定面板未做；egui 侧入口已在。因 GPUI 右栏正在并发改动，本期不动，避免冲突。
 3. **A9**：上游 `variables_io_tests` 的 slot 测试（P3）未移植。
 
+## 9. PR 与合并（2026-11-27）
+
+- PR [#34](https://github.com/MonetDesigns/Monet/pull/34) 已从 Draft 转为 Ready，base `main`，head `sync/variable-binding-2026-11`。
+- 合并 `origin/main`（`599f89187`），解决 6 处冲突：`library.rs`（bake 与时间线复制并存）、`clipboard.rs`/`overlays.rs`/`paste_motion_tests.rs`（取 origin 新版）、`app.rs`（`opacity_digit` 与 `key_box_doc`/`pick` 并存）、`ui-gpui/lib.rs`（`annotation.new` 与 `selectArea`、`layers.collapseAll`/`contextMenu`、Developer Mode 拒绝与取色归属并存）。
+- 合并后发现并修复重复的 `key_box_key` 与 `selectArea` 分支（`c0b2d42dd`）；`cargo check -p figcraft-engine`、`cargo check -p figcraft-ui-gpui` 均通过。
+- 批次 5 上游化草稿：`docs/upstream-variable-binding-proposal.md`。
+
+
