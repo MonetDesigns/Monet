@@ -8,7 +8,7 @@
 //! | page/frame/group/section/component/instance containers and their fills | icons and slices |
 //! | rectangles (four corner radii, smoothing), full ellipses, arcs and rings, polygons, stars | gradient or image paint on a path/stroke |
 //! | vector networks, booleans, lines — filled and stroked through the CPU's own outlines | images, patterns |
-//! | strokes: weight, align, joins, caps, dashes, per-side weights (via `figcraft-pathops`) | group opacity, other blend modes, masks |
+//! | strokes: weight, align, joins, caps, dashes, per-side weights (via `figcraft-pathops`) | group opacity with more than one child, other blend modes, masks |
 //! | solid, linear/radial/angular/diamond gradients (≤ [`MAX_STOPS`] stops) on SDF shapes | round or noisy effects this build cannot draw |
 //! | drop shadows from an opaque SDF box: offset, blur (box-approximated exactly as the CPU), tint | drop shadows that spread, blend differently, or cast from groups, text or translucent/outlined layers |
 //! | inner shadows from an SDF box: offset, blur, tint, masked to the box | inner shadows that spread or blend differently, and group inner shadows |
@@ -17,7 +17,7 @@
 //! | text: glyph and decoration outlines from `figcraft_text`, solid fills and strokes per run | colour glyphs (emoji, COLR) |
 //! | mono/duo/multi grains over one SDF box fill, hashed exactly as the CPU | grains over children, strokes, clips, groups or other effects |
 //! | texture over one SDF box fill: whole-pixel scatter hashed exactly as the CPU | textures combined with children, strokes, clips, or other effects |
-//! | node opacity, visibility, ancestor clipping rectangles | rounded or rotated clips, variable-bound fills |
+//! | node opacity, single-leaf group opacity, visibility, ancestor clipping rectangles | rounded or rotated clips, variable-bound fills |
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -51,7 +51,7 @@ pub fn build(doc: &Document, page: NodeId, view: &Viewport) -> Scene {
         (c[0] * c[0] + c[1] * c[1]).sqrt()
     };
     for &child in &page_node.children {
-        walk(doc, child, view_xf, scale, Clip::NONE, &mut scene, 0);
+        walk(doc, child, view_xf, scale, Clip::NONE, 1.0, &mut scene, 0);
     }
     scene
 }
@@ -64,8 +64,41 @@ pub fn build_subtree(doc: &Document, id: NodeId, view: &Viewport) -> Scene {
         let c = view_xf.as_coeffs();
         (c[0] * c[0] + c[1] * c[1]).sqrt()
     };
-    walk(doc, id, view_xf, scale, Clip::NONE, &mut scene, 0);
+    walk(doc, id, view_xf, scale, Clip::NONE, 1.0, &mut scene, 0);
     scene
+}
+
+/// Whether a container's opacity can be pushed onto exactly one visible leaf. This is the only
+/// group-opacity shape the current painter's-order pass can make exact: with one leaf there is no
+/// self-overlap to compose before multiplying, and the leaf's own `opacity` already multiplies its
+/// paint alpha. A group with own fill, a stroke, effects, a clip, a mask, a non-normal blend, or more
+/// than one visible leaf keeps the CPU path.
+fn can_group_opacity(doc: &Document, n: &Node) -> bool {
+    if n.fills.iter().any(|f| f.visible) || n.has_visible_stroke() || n.clip || n.is_mask {
+        return false;
+    }
+    if n.effects.iter().any(|e| e.visible) || !matches!(n.blend, BlendMode::Normal | BlendMode::PassThrough) {
+        return false;
+    }
+    let visible: Vec<NodeId> = n.children.iter().copied().filter(|id| doc.node(*id).is_some_and(|child| child.visible)).collect();
+    let [child_id] = visible.as_slice() else {
+        return false;
+    };
+    let Some(child) = doc.node(*child_id) else {
+        return false;
+    };
+    if is_container(&child.kind) || !child.children.is_empty() || child.has_visible_stroke() || child.clip || child.is_mask {
+        return false;
+    }
+    if child.effects.iter().any(|e| e.visible) || !matches!(child.blend, BlendMode::Normal | BlendMode::PassThrough) {
+        return false;
+    }
+    // One paint is what makes the layer→opacity composite equal to painting the leaf at that alpha;
+    // stacked paints would accumulate their own alpha before the group multiplies it.
+    if child.fills.iter().filter(|f| f.visible).count() != 1 {
+        return false;
+    }
+    true
 }
 
 /// Whether a node kind only carries children (and possibly its own box fill).
@@ -82,7 +115,7 @@ fn is_container(kind: &NodeKind) -> bool {
     )
 }
 
-fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, scene: &mut Scene, depth: usize) {
+fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, opacity: f32, scene: &mut Scene, depth: usize) {
     if depth > MAX_DEPTH {
         scene.unsupported("depth", format!("a subtree nests deeper than {MAX_DEPTH}"));
         return;
@@ -132,9 +165,11 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, sce
     if n.is_mask {
         scene.unsupported("mask", format!("`{}` is a mask", n.name));
     }
-    if container && n.opacity < 0.999 {
-        scene.unsupported("group-opacity", format!("`{}` is a group at {} opacity", n.name, n.opacity));
+    if container && n.opacity < 0.999 && !can_group_opacity(doc, n) {
+        scene.unsupported("group-opacity", format!("`{}` is a group at {} opacity that cannot be flattened onto one leaf", n.name, n.opacity));
+        return;
     }
+    let node_opacity = (opacity * n.opacity.clamp(0.0, 1.0)).clamp(0.0, 1.0);
     if n.bound.keys().any(|k| k.starts_with("fills")) {
         scene.unsupported("variable-fill", format!("`{}` has a fill bound to a variable", n.name));
     }
@@ -194,11 +229,11 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, sce
     // glyph outlines instead of its box. A blurred layer already paints the fill, so it replaces it.
     if sized && !blurred && !textured {
         if let NodeKind::Text(_) = n.kind {
-            emit_text(n, m, clip, scene);
+            emit_text(n, m, clip, node_opacity, scene);
         } else if let Some(shape) = shape {
-            emit_sdf_fills(n, shape, m, w, h, clip, scene);
+            emit_sdf_fills(n, shape, m, w, h, clip, node_opacity, scene);
         } else if n.fills.iter().any(|f| f.visible) {
-            emit_path_fills(doc, n, m, clip, scene);
+            emit_path_fills(doc, n, m, clip, node_opacity, scene);
         }
     }
 
@@ -234,14 +269,14 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, sce
     // Boolean children are operands, not layers: the CPU draws the folded result and skips them.
     if !matches!(n.kind, NodeKind::BooleanOp { .. }) {
         for &child in &n.children {
-            walk(doc, child, view_xf, scale, inner, scene, depth + 1);
+            walk(doc, child, view_xf, scale, inner, node_opacity, scene, depth + 1);
         }
     }
 
     // Strokes paint over the node's children, like the CPU. Text strokes follow its glyphs and are
     // part of `emit_text`.
     if n.has_visible_stroke() && !matches!(n.kind, NodeKind::Text(_)) {
-        emit_stroke(doc, n, m, clip, scene);
+        emit_stroke(doc, n, m, clip, node_opacity, scene);
     }
 }
 
@@ -284,7 +319,7 @@ fn sdf_shape(n: &Node, m: &Affine, w: f64, h: f64) -> Option<ShapeKind> {
 }
 
 /// The SDF path: one instance per visible fill, gradients included.
-fn emit_sdf_fills(n: &Node, shape: ShapeKind, m: Affine, w: f64, h: f64, inner: Clip, scene: &mut Scene) {
+fn emit_sdf_fills(n: &Node, shape: ShapeKind, m: Affine, w: f64, h: f64, inner: Clip, opacity: f32, scene: &mut Scene) {
     for (index, fill) in n.fills.iter().enumerate() {
         if !fill.visible {
             continue;
@@ -297,14 +332,7 @@ fn emit_sdf_fills(n: &Node, shape: ShapeKind, m: Affine, w: f64, h: f64, inner: 
             continue;
         };
         if let Some(paint) = paint.normalised() {
-            scene.push(ShapeNode {
-                mat: crate::scene::matrix(m),
-                size: [w as f32, h as f32],
-                shape,
-                paint,
-                clip: inner,
-                opacity: n.opacity.clamp(0.0, 1.0),
-            });
+            scene.push(ShapeNode { mat: crate::scene::matrix(m), size: [w as f32, h as f32], shape, paint, clip: inner, opacity });
         }
     }
 }
@@ -696,7 +724,7 @@ fn can_backdrop(n: &Node, backdrops: &[&figcraft_doc::Blur], layer_blurs: &[&fig
 }
 
 /// The path fallback: tessellate the CPU's own fill outline and paint each visible solid fill.
-fn emit_path_fills(doc: &Document, n: &Node, m: Affine, inner: Clip, scene: &mut Scene) {
+fn emit_path_fills(doc: &Document, n: &Node, m: Affine, inner: Clip, opacity: f32, scene: &mut Scene) {
     // Text fills are glyph outlines: expensive to build and already recorded as unsupported.
     if matches!(n.kind, NodeKind::Text(_) | NodeKind::Icon { .. } | NodeKind::Slice) {
         return;
@@ -719,13 +747,9 @@ fn emit_path_fills(doc: &Document, n: &Node, m: Affine, inner: Clip, scene: &mut
             continue;
         }
         match fill.solid_color() {
-            Some(color) => scene.push_mesh(MeshNode {
-                verts: verts.clone(),
-                indices: indices.clone(),
-                color: Rgba::from_color(color),
-                opacity: n.opacity.clamp(0.0, 1.0),
-                clip: inner,
-            }),
+            Some(color) => {
+                scene.push_mesh(MeshNode { verts: verts.clone(), indices: indices.clone(), color: Rgba::from_color(color), opacity, clip: inner })
+            }
             None => scene.unsupported("gradient-on-path", format!("`{}` fill {index} is a gradient on a path", n.name)),
         }
     }
@@ -733,7 +757,7 @@ fn emit_path_fills(doc: &Document, n: &Node, m: Affine, inner: Clip, scene: &mut
 
 /// The stroke: the CPU's `stroke_fill` outline (align, joins, caps, dashes all baked in), painted
 /// with each visible solid stroke paint.
-fn emit_stroke(doc: &Document, n: &Node, m: Affine, inner: Clip, scene: &mut Scene) {
+fn emit_stroke(doc: &Document, n: &Node, m: Affine, inner: Clip, opacity: f32, scene: &mut Scene) {
     let Some((path, rule)) = geometry::stroke_outline(doc, n) else {
         return;
     };
@@ -751,13 +775,9 @@ fn emit_stroke(doc: &Document, n: &Node, m: Affine, inner: Clip, scene: &mut Sce
             continue;
         }
         match paint.solid_color() {
-            Some(color) => scene.push_mesh(MeshNode {
-                verts: verts.clone(),
-                indices: indices.clone(),
-                color: Rgba::from_color(color),
-                opacity: n.opacity.clamp(0.0, 1.0),
-                clip: inner,
-            }),
+            Some(color) => {
+                scene.push_mesh(MeshNode { verts: verts.clone(), indices: indices.clone(), color: Rgba::from_color(color), opacity, clip: inner })
+            }
             None => scene.unsupported("stroke-paint", format!("`{}` stroke {index} is a gradient or an image", n.name)),
         }
     }
@@ -766,7 +786,7 @@ fn emit_stroke(doc: &Document, n: &Node, m: Affine, inner: Clip, scene: &mut Sce
 /// Text: the CPU's glyph and decoration outlines (`figcraft_text::layout_node`), tessellated like any
 /// other path. Runs keep their own fills; colour glyphs (emoji, COLR layers) are not expressible and
 /// send the frame to the CPU.
-fn emit_text(n: &Node, base: Affine, inner: Clip, scene: &mut Scene) {
+fn emit_text(n: &Node, base: Affine, inner: Clip, opacity: f32, scene: &mut Scene) {
     let Some((layout, dy)) = figcraft_text::layout_node(n) else { return };
     let gxf = base * Affine::translate((0.0, dy));
     let scale = gxf.determinant().abs().sqrt();
@@ -783,13 +803,13 @@ fn emit_text(n: &Node, base: Affine, inner: Clip, scene: &mut Scene) {
     }
     for (style, path) in &by_style {
         let fills = layout.styles.get(*style).and_then(|s| s.fills.as_ref()).unwrap_or(&n.fills);
-        push_path(n, path, figcraft_render::FillRule::Winding, fills, gxf, inner, scene, "text fill", "text-gradient");
+        push_path(n, path, figcraft_render::FillRule::Winding, fills, gxf, inner, opacity, scene, "text fill", "text-gradient");
     }
     if n.has_visible_stroke() {
         let rule = text_stroke_rule(n);
         for path in by_style.values() {
             let area = figcraft_pathops::stroke_outline_of(path, &n.stroke, true, None);
-            push_path(n, &area, rule, &n.strokes, gxf, inner, scene, "text stroke", "text-stroke-paint");
+            push_path(n, &area, rule, &n.strokes, gxf, inner, opacity, scene, "text stroke", "text-stroke-paint");
         }
     }
 }
@@ -811,6 +831,7 @@ fn push_path(
     paints: &[DocPaint],
     m: Affine,
     clip: Clip,
+    opacity: f32,
     scene: &mut Scene,
     what: &str,
     gradient_feature: &'static str,
@@ -829,13 +850,9 @@ fn push_path(
             continue;
         }
         match paint.solid_color() {
-            Some(color) => scene.push_mesh(MeshNode {
-                verts: verts.clone(),
-                indices: indices.clone(),
-                color: Rgba::from_color(color),
-                opacity: n.opacity.clamp(0.0, 1.0),
-                clip,
-            }),
+            Some(color) => {
+                scene.push_mesh(MeshNode { verts: verts.clone(), indices: indices.clone(), color: Rgba::from_color(color), opacity, clip })
+            }
             None => scene.unsupported(gradient_feature, format!("`{}` {what} {index} is a gradient or an image", n.name)),
         }
     }
@@ -1113,6 +1130,62 @@ mod tests {
         let scene = build(&doc, page, &view());
         assert!(!scene.is_supported(), "the spread reaches outside the box");
         assert!(scene.unsupported_features().iter().any(|u| u.feature == "effect"));
+    }
+
+    #[test]
+    fn a_single_child_group_opacity_reaches_the_leaf() {
+        let mut doc = Document::default();
+        let page = doc.pages[0];
+        let group = doc.create(page, NodeKind::Group, "Faded", 40.0, 40.0, 60.0, 40.0).expect("group");
+        let child = doc.create(group, NodeKind::Rectangle, "Card", 0.0, 0.0, 60.0, 40.0).expect("child");
+        if let Ok(n) = doc.get_mut(child) {
+            n.fills = vec![DocPaint::solid(Color::new(0.2, 0.5, 0.8, 1.0))];
+        }
+        if let Ok(n) = doc.get_mut(group) {
+            n.opacity = 0.6;
+        }
+        let scene = build(&doc, page, &view());
+        assert!(scene.is_supported(), "{:?}", scene.unsupported_features());
+        assert_eq!(scene.shapes().count(), 1);
+        let shape = scene.shapes().next().expect("the child shape");
+        assert!((shape.opacity - 0.6).abs() < 1e-4, "the group alpha multiplies into the leaf: {}", shape.opacity);
+    }
+
+    #[test]
+    fn a_multi_child_group_opacity_falls_back() {
+        let mut doc = Document::default();
+        let page = doc.pages[0];
+        let group = doc.create(page, NodeKind::Group, "Stack", 40.0, 40.0, 60.0, 40.0).expect("group");
+        let a = doc.create(group, NodeKind::Rectangle, "A", 0.0, 0.0, 60.0, 40.0).expect("a");
+        let b = doc.create(group, NodeKind::Rectangle, "B", 10.0, 10.0, 40.0, 20.0).expect("b");
+        for id in [a, b] {
+            if let Ok(n) = doc.get_mut(id) {
+                n.fills = vec![DocPaint::solid(Color::new(0.2, 0.5, 0.8, 1.0))];
+            }
+        }
+        if let Ok(n) = doc.get_mut(group) {
+            n.opacity = 0.6;
+        }
+        let scene = build(&doc, page, &view());
+        assert!(!scene.is_supported(), "two leaves can overlap, so a single pass cannot compose the group first");
+        assert!(scene.unsupported_features().iter().any(|u| u.feature == "group-opacity"));
+    }
+
+    #[test]
+    fn a_stacked_fill_child_group_opacity_falls_back() {
+        let mut doc = Document::default();
+        let page = doc.pages[0];
+        let group = doc.create(page, NodeKind::Group, "Faded", 40.0, 40.0, 60.0, 40.0).expect("group");
+        let child = doc.create(group, NodeKind::Rectangle, "Card", 0.0, 0.0, 60.0, 40.0).expect("child");
+        if let Ok(n) = doc.get_mut(child) {
+            n.fills = vec![DocPaint::solid(Color::new(0.2, 0.5, 0.8, 1.0)), DocPaint::solid(Color::new(0.8, 0.3, 0.2, 1.0))];
+        }
+        if let Ok(n) = doc.get_mut(group) {
+            n.opacity = 0.6;
+        }
+        let scene = build(&doc, page, &view());
+        assert!(!scene.is_supported(), "stacked fills accumulate inside the group before its alpha applies");
+        assert!(scene.unsupported_features().iter().any(|u| u.feature == "group-opacity"));
     }
 
     #[test]

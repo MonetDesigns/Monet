@@ -381,6 +381,36 @@ fn two_drop_shadows_on_a_rotated_card_match_the_cpu() {
 }
 
 #[test]
+fn a_single_child_group_opacity_matches_the_cpu() {
+    let mut doc = Document::default();
+    let page = doc.pages[0];
+    transparent_page(&mut doc, page);
+    let group = doc.create(page, figcraft_doc::NodeKind::Group, "Faded", 50.0, 50.0, 100.0, 100.0).expect("group");
+    let card = doc.create(group, figcraft_doc::NodeKind::Rectangle, "Card", 0.0, 0.0, 100.0, 100.0).expect("card");
+    if let Ok(n) = doc.get_mut(card) {
+        n.corners.radii = [12.0; 4];
+        n.fills = vec![Paint::solid(Color::new(0.9, 0.35, 0.15, 1.0))];
+    }
+    if let Ok(n) = doc.get_mut(group) {
+        n.opacity = 0.6;
+    }
+
+    let scene = doc_scene::build(&doc, page, &viewport());
+    assert!(scene.is_supported(), "the single-leaf group must stay on the GPU path: {:?}", scene.unsupported_features());
+    assert_eq!(scene.shapes().count(), 1);
+    assert!((scene.shapes().next().expect("shape").opacity - 0.6).abs() < 1e-4);
+
+    let cpu = cpu_pixels(&doc, page);
+    let Some(gpu) = gpu_pixels(&doc, page) else {
+        eprintln!("SKIP: no adapter");
+        return;
+    };
+    let tol = Tolerance { per_channel: 2, max_bad_ratio: 0.02 };
+    let report = compare_interiors(&cpu, &gpu, SIZE as usize, SIZE as usize, tol).expect("comparable");
+    assert!(report.passes(tol), "{}", report.summary());
+}
+
+#[test]
 fn a_layer_blur_matches_the_cpu_blur() {
     let mut doc = Document::default();
     let page = doc.pages[0];

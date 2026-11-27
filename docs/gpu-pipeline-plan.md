@@ -6,8 +6,8 @@
 > `auto/gpu/cpu` 三档偏好（引擎命令 + Preferences ▸ Rendering）、场景 IR、实例化
 > SDF 图元（圆角矩形/椭圆/多边形/星形）、四类渐变、裁剪、路径填充与描边网格（4× MSAA）、文字字形
 > 网格、离屏剪影 + 六 pass 盒模糊的投影/内阴影/图层模糊、八级加权混合的分级模糊、按段 resolve 的背景
-> 模糊回读、逐 cell 64 位哈希的 Mono/Duo/Multi 颗粒、整像素散射的纹理粗糙边、CPU↔GPU 像素 diff
-> （16 项对照测试），UI 画布已接线并整帧回退。**所有内置效果按产品计划弃用，后续效果转到外置 WGSL，
+> 模糊回读、逐 cell 64 位哈希的 Mono/Duo/Multi 颗粒、整像素散射的纹理粗糙边、单叶组透明度、CPU↔GPU
+> 像素 diff（17 项对照测试），UI 画布已接线并整帧回退。**所有内置效果按产品计划弃用，后续效果转到外置 WGSL，
 > 本分支不再新增或扩展内置效果**；M5–M7 的非效果核心为设计与接口。
 > 日期：2026-11-27
 
@@ -251,7 +251,11 @@ match figcraft_gpu::render::Renderer::global().render(&scene) { Ok(rgba) => …,
 
 ### M5 组合
 
-- 组透明度 / 非 Normal 混合模式 / 蒙版：**离屏层**。组内容画进 `Rgba8UnormSrgb` 层纹理，再以
+- **已落地（过渡子集）**：单叶组透明度。组自身无可见填充/描边/裁剪/蒙版/效果、`Normal` 或
+  `PassThrough`，且恰好一个可见子节点；子节点为叶子、无自己的裁剪/蒙版/效果、`Normal` 或
+  `PassThrough` 时，把组的 `opacity` 乘进子叶的填充、路径填充、描边与文字，不建离屏层。
+  其余任何组透明度整帧回退。子节点须恰好一个可见填充，避免层内多次绘制先叠加 alpha。
+- 完整组透明度 / 非 Normal 混合模式 / 蒙版：**离屏层**。组内容画进 `Rgba8UnormSrgb` 层纹理，再以
   `opacity` + `blend` 合成；蒙版用 stencil（Metal 的 `depthStencil` 等价）或 `mask_type` 对应的
   alpha/outline/luminance 采样。
 - **验收**：`blend` 16 种模式逐项 diff；组透明度与 CPU 的「先合成再乘 alpha」一致；蒙版边缘与

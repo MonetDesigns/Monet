@@ -16,7 +16,8 @@
 //!
 //! See `docs/gpu-pipeline-plan.md` for the staged plan. Stages 1–3 (shapes and paints, paths and
 //! strokes, text) and stage 4's effects are in as transitional implementations; all built-in effects
-//! are planned for deprecation and future effects move to external WGSL, so this branch adds no more. Composition and the export path follow.
+//! are planned for deprecation and future effects move to external WGSL, so this branch adds no more.
+//! Composition (starting with single-leaf group opacity) and the export path follow.
 
 pub mod backend;
 pub mod diff;
