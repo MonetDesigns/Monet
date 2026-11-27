@@ -224,7 +224,7 @@ use gpui::prelude::*;
 use gpui::{
     AnyElement, App, Application, Bounds, Context, ElementInputHandler, Entity, EntityInputHandler, FocusHandle, ImageSource, KeyDownEvent,
     KeyUpEvent, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, ScrollDelta, ScrollWheelEvent,
-    UTF16Selection, WeakEntity, Window, WindowBounds, WindowOptions, div, img, px, size,
+    UTF16Selection, Window, WindowBounds, WindowOptions, div, img, px, size,
 };
 
 use canvas::geom::*;
@@ -10605,17 +10605,18 @@ pub fn run_with_launch(options: LaunchOptions) {
         if let Some(view) = &view {
             if !initial_files.is_empty() {
                 let files = initial_files.clone();
-                let _ = view.update(cx, |this, cx| this.open_files(&files, cx));
+                let _ = view.update(cx, |this, _window, cx| this.open_files(&files, cx));
             }
             if let Some(link) = &join {
                 log::warn!("figcraft:// link received, but the GPUI front-end has no join dialog yet: {link}");
-                let _ = view.update(cx, |this, cx| {
+                let _ = view.update(cx, |this, _window, cx| {
                     this.toast("Invite links are not supported by this GPUI build.", cx);
                 });
             }
 
-            let view_for_urls = view.downgrade();
-            cx.spawn(async move |_this, cx| {
+            // `WindowHandle` is Copy and Send; its `update` returns Err once the window is gone.
+            let view_for_urls = *view;
+            cx.spawn(async move |cx| {
                 while let Ok(urls) = open_url_rx.recv().await {
                     let mut files = Vec::new();
                     let mut invites = Vec::new();
@@ -10626,15 +10627,21 @@ pub fn run_with_launch(options: LaunchOptions) {
                             invites.push(url);
                         }
                     }
-                    let Some(view) = view_for_urls.upgrade() else { break };
                     if !files.is_empty() {
-                        let _ = view.update(cx, |this, cx| this.open_files(&files, cx));
+                        if view_for_urls.update(cx, |this, _window, cx| this.open_files(&files, cx)).is_err() {
+                            break;
+                        }
                     }
                     for link in invites {
                         log::warn!("figcraft:// link received, but the GPUI front-end has no join dialog yet: {link}");
-                        let _ = view.update(cx, |this, cx| {
-                            this.toast("Invite links are not supported by this GPUI build.", cx);
-                        });
+                        if view_for_urls
+                            .update(cx, |this, _window, cx| {
+                                this.toast("Invite links are not supported by this GPUI build.", cx);
+                            })
+                            .is_err()
+                        {
+                            break;
+                        }
                     }
                 }
             })
