@@ -2454,7 +2454,7 @@ mod tests {
         let mut d = doc();
         let page = d.first_page().unwrap();
         let _ = d.create(page, NodeKind::Rectangle, "R", 0.0, 0.0, 5.0, 5.0).unwrap();
-        d.timelines.insert(page, TimelineSettings { duration_ms: 2000, fps: 30, looping: true });
+        d.timelines.insert(page, TimelineSettings { duration_ms: 2000, fps: 30, looping: true, reverse: false });
         let mut p = PresentState::new(page, false);
         p.playing = true;
         p.last = Instant::now() - std::time::Duration::from_millis(120);
@@ -2476,7 +2476,7 @@ mod tests {
         let mut d = Document::new("present-one-shot");
         let page = d.first_page().unwrap();
         let frame = d.create(page, NodeKind::Frame, "Card", 0.0, 0.0, 100.0, 100.0).unwrap();
-        d.timelines.insert(frame, TimelineSettings { duration_ms: 500, fps: 60, looping: false });
+        d.timelines.insert(frame, TimelineSettings { duration_ms: 500, fps: 60, looping: false, reverse: false });
         let mut p = PresentState::new(frame, false);
         p.playing = true;
         // 第一步：小步进，离末帧还远 → 仍要续帧。
@@ -2502,8 +2502,8 @@ mod tests {
         let mut d = Document::new("present-frame");
         let page = d.first_page().unwrap();
         let frame = d.create(page, NodeKind::Frame, "Card", 0.0, 0.0, 100.0, 100.0).unwrap();
-        d.timelines.insert(page, TimelineSettings { duration_ms: 2000, fps: 30, looping: false });
-        d.timelines.insert(frame, TimelineSettings { duration_ms: 500, fps: 60, looping: true });
+        d.timelines.insert(page, TimelineSettings { duration_ms: 2000, fps: 30, looping: false, reverse: false });
+        d.timelines.insert(frame, TimelineSettings { duration_ms: 500, fps: 60, looping: true, reverse: false });
         let mut p = PresentState::new(frame, false);
         p.playing = true;
         p.time_ms = 480.0;
@@ -2619,7 +2619,7 @@ mod tests {
             easing: Easing::EaseOut,
             delay_ms: 0,
         });
-        d.timelines.insert(frame, figcraft_doc::anim::motion::TimelineSettings { duration_ms: 1000, fps: 60, looping: false });
+        d.timelines.insert(frame, figcraft_doc::anim::motion::TimelineSettings { duration_ms: 1000, fps: 60, looping: false, reverse: false });
         (d, frame)
     }
 
@@ -2656,7 +2656,7 @@ mod tests {
         let a = d.create(page, NodeKind::Frame, "A", 0.0, 0.0, 100.0, 100.0).unwrap();
         let b = d.create(page, NodeKind::Frame, "B", 200.0, 0.0, 100.0, 100.0).unwrap();
         for f in [a, b] {
-            d.timelines.insert(f, figcraft_doc::anim::motion::TimelineSettings { duration_ms: 1000, fps: 60, looping: false });
+            d.timelines.insert(f, figcraft_doc::anim::motion::TimelineSettings { duration_ms: 1000, fps: 60, looping: false, reverse: false });
         }
         d.get_mut(a).unwrap().interactions.push(Interaction {
             trigger: Trigger::OnClick,
@@ -2687,7 +2687,7 @@ mod tests {
         let a = d.create(page, NodeKind::Frame, "A", 0.0, 0.0, 100.0, 100.0).unwrap();
         let b = d.create(page, NodeKind::Frame, "B", 200.0, 0.0, 100.0, 100.0).unwrap();
         for f in [a, b] {
-            d.timelines.insert(f, figcraft_doc::anim::motion::TimelineSettings { duration_ms: 1000, fps: 60, looping: false });
+            d.timelines.insert(f, figcraft_doc::anim::motion::TimelineSettings { duration_ms: 1000, fps: 60, looping: false, reverse: false });
         }
         // B 的动画被预先起播、此刻挂起在 600ms。
         let mut p = PresentState::new(a, false);

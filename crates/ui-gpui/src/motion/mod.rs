@@ -144,8 +144,20 @@ pub struct MotionUi {
     pub presets_open: bool,
     pub scroll_y: f32,
     pub scrubbing: bool,
+    /// Last play mode observed in the document. Undo/redo can change it while playing; the next
+    /// frame rebases `clock_ms` so it does not keep counting under the old mode.
+    pub mode: Option<motion::PlayMode>,
+    /// Last timeline duration observed while playing. A duration edit keeps the same mode, so
+    /// the mode check alone would map the old reverse clock against the new duration and jump
+    /// the playhead.
+    pub last_duration_ms: Option<u32>,
     pub drag_duration: Option<u32>,
     pub scroll_x: f32,
+    /// Horizontal timeline magnification over the fit-to-width scale. `0` means "not touched yet"
+    /// and behaves as `1`; see [`MotionUi::zoom_factor`].
+    pub zoom: f32,
+    /// The fit-to-width px-per-ms measured by the last timeline paint, used as the zoom base.
+    pub fit_pxms: f32,
     pub selected_clip: Option<(NodeId, u32)>,
     /// The clip whose floating settings window is open.
     pub clip_popover: Option<(NodeId, u32)>,
@@ -169,6 +181,14 @@ pub struct MotionUi {
 }
 
 impl MotionUi {
+    pub const MIN_ZOOM: f32 = 0.1;
+    pub const MAX_ZOOM: f32 = 32.0;
+
+    /// Zoom multiplier with the lazy default (`zoom == 0` because `MotionUi` derives `Default`).
+    pub fn zoom_factor(&self) -> f32 {
+        if self.zoom > 0.0 { self.zoom.clamp(Self::MIN_ZOOM, Self::MAX_ZOOM) } else { 1.0 }
+    }
+
     /// Advance the playback clock. Returns true when the playhead changed (a repaint is due).
     pub fn advance(&mut self, settings: TimelineSettings) -> bool {
         if !self.playing {
@@ -176,6 +196,20 @@ impl MotionUi {
             return false;
         }
         let now = Instant::now();
+        let mode = settings.play_mode();
+        let duration = settings.duration_ms;
+        let mode_changed = self.mode.is_some_and(|prev| prev != mode);
+        let duration_changed = self.last_duration_ms.is_some_and(|prev| prev != duration);
+        if mode_changed || (mode == motion::PlayMode::Reverse && duration_changed) {
+            // Undo/redo (or another window) changed the stored mode, or the reverse timeline's
+            // duration changed, mid-play. The clock counts up, so reverse must count from the
+            // end of the current playhead, not continue the old clock.
+            let d = duration as f64;
+            self.clock_ms = if mode == motion::PlayMode::Reverse { (d - self.playhead_ms).max(0.0) } else { self.playhead_ms };
+            self.last_tick = None;
+        }
+        self.mode = Some(mode);
+        self.last_duration_ms = Some(duration);
         let dt = self.last_tick.map(|t| now.duration_since(t).as_secs_f64() * 1000.0).unwrap_or(0.0);
         self.last_tick = Some(now);
         self.clock_ms += dt;
@@ -212,11 +246,20 @@ pub enum Act {
     FoldAll,
     Click(SelItem, bool),
     ClearSelection,
+    /// Replace the whole selection (marquee drag); no document write and no undo step.
+    SetSelection(Vec<SelItem>),
     AddKey(NodeId, AnimProperty, u32),
     AddKeyAtPlayhead,
     MoveKey(SelectedKey, u32),
     ToggleKey(NodeId, AnimProperty),
-    SetLoop(bool),
+    /// Three-state playback: forward (one-shot), reverse (one-shot from the end), loop.
+    /// Persisted through the undoable `motion.timeline {mode}` command.
+    SetPlayMode(motion::PlayMode),
+    /// Multiply the timeline magnification around `anchor_x` (a window x inside the track).
+    ZoomBy {
+        factor: f32,
+        anchor_x: f32,
+    },
     /// 0 = 循环切档（24/30/60），其它 = 指定 fps。
     SetFps(u32),
     Play,
@@ -429,10 +472,6 @@ fn run_cmd(app: &mut CanvasApp, label: &str, cmd: &str, params: serde_json::Valu
 
 fn set_duration(app: &mut CanvasApp, scope: NodeId, duration: u32) {
     let _ = app.session.execute("motion.timeline", &serde_json::json!({ "page": scope.0, "duration": duration }));
-}
-
-fn set_loop(app: &mut CanvasApp, scope: NodeId, looping: bool) {
-    let _ = app.session.execute("motion.timeline", &serde_json::json!({ "page": scope.0, "loop": looping }));
 }
 
 /// 写当前作用域（画框）的 fps（引擎 `motion.timeline {fps}`，影响逐帧步长与吸附）。
@@ -740,12 +779,23 @@ pub fn apply(app: &mut CanvasApp, ui: &mut MotionUi, acts: Vec<Act>) -> bool {
                 }
             }
             Act::FoldAll => {
-                if ui.folded.is_empty() {
-                    if let (Some(d), Some(pg)) = (&doc, page) {
-                        ui.folded.extend(animated_nodes(d, pg));
+                // Toggle, not "clear if anything is folded": collect every foldable layer in the
+                // current scope and fold them all unless all are already folded.
+                let mut candidates: BTreeSet<NodeId> = BTreeSet::new();
+                if let (Some(d), Some(pg)) = (&doc, page) {
+                    candidates.extend(animated_nodes(d, pg));
+                    for item in &ui.selection {
+                        if let SelItem::Layer(n) = item {
+                            candidates.insert(*n);
+                        }
+                    }
+                }
+                if candidates.iter().all(|n| ui.folded.contains(n)) {
+                    for n in &candidates {
+                        ui.folded.remove(n);
                     }
                 } else {
-                    ui.folded.clear();
+                    ui.folded.extend(candidates);
                 }
             }
             Act::EnsureSelected(item) => {
@@ -789,6 +839,12 @@ pub fn apply(app: &mut CanvasApp, ui: &mut MotionUi, acts: Vec<Act>) -> bool {
             }
             Act::ClearSelection => {
                 ui.selection.clear();
+                reconcile(ui);
+                ui.easing_target = false;
+            }
+            Act::SetSelection(items) => {
+                ui.selection.clear();
+                ui.selection.extend(items);
                 reconcile(ui);
                 ui.easing_target = false;
             }
@@ -846,9 +902,43 @@ pub fn apply(app: &mut CanvasApp, ui: &mut MotionUi, acts: Vec<Act>) -> bool {
                 }
             }
             Act::ToggleKey(n, p) => toggle_key(app, ui, n, p),
-            Act::SetLoop(on) => {
+            Act::SetPlayMode(mode) => {
                 if let Some(pg) = page {
-                    set_loop(app, pg, on);
+                    // Read the effective mode from the document after earlier actions in this
+                    // drain: Forward→Reverse→Reverse must not skip the second write.
+                    let current = app
+                        .session
+                        .doc()
+                        .ok()
+                        .map(|d| settings_of(d, pg).play_mode())
+                        .unwrap_or(motion::PlayMode::Forward);
+                    if current == mode {
+                        continue;
+                    }
+                    // Document state -> engine command, one undo step per mode change. Only move
+                    // the playback clock when the write actually landed (read-only sessions reject).
+                    let ok = app.session.execute("motion.timeline", &serde_json::json!({ "page": pg.0, "mode": mode.name() })).is_ok();
+                    if ok {
+                        ui.mode = Some(mode);
+                    }
+                    if ok && ui.playing {
+                        let d = app.session.doc().ok().map(|d| settings_of(d, pg).duration_ms as f64).unwrap_or(0.0);
+                        ui.clock_ms = if mode == motion::PlayMode::Reverse { (d - ui.playhead_ms).max(0.0) } else { ui.playhead_ms };
+                    }
+                }
+            }
+            Act::ZoomBy { factor, anchor_x } => {
+                let old = ui.zoom_factor();
+                let new = (old * factor).clamp(MotionUi::MIN_ZOOM, MotionUi::MAX_ZOOM);
+                if (new - old).abs() > f32::EPSILON {
+                    let fit = ui.fit_pxms.max(0.0);
+                    if fit > 0.0 {
+                        // Keep the time under the pointer fixed: solve for the new scroll_x.
+                        ui.zoom = new;
+                        ui.scroll_x = timeline::zoom_about(anchor_x, fit, old, new, ui.scroll_x);
+                    } else {
+                        ui.zoom = new;
+                    }
                 }
             }
             Act::SetFps(v) => {
@@ -870,12 +960,47 @@ pub fn apply(app: &mut CanvasApp, ui: &mut MotionUi, acts: Vec<Act>) -> bool {
                 ui.playing = !ui.playing;
                 ui.last_tick = None;
                 if ui.playing {
-                    ui.clock_ms = ui.playhead_ms;
+                    let settings = doc.as_ref().and_then(|d| page.map(|pg| settings_of(d, pg))).unwrap_or_default();
+                    let d = settings.duration_ms as f64;
+                    // The time field accepts values past the end while paused; a reverse start
+                    // from 5000 on a 2000 ms timeline would otherwise wait at 2000 for three
+                    // seconds because `clock_ms` went negative.
+                    ui.playhead_ms = ui.playhead_ms.clamp(0.0, d);
+                    ui.mode = Some(settings.play_mode());
+                    match settings.play_mode() {
+                        motion::PlayMode::Forward => {
+                            if ui.playhead_ms >= d - 0.5 {
+                                ui.playhead_ms = 0.0;
+                            }
+                            ui.clock_ms = ui.playhead_ms;
+                        }
+                        motion::PlayMode::Reverse => {
+                            if ui.playhead_ms <= 0.5 {
+                                ui.playhead_ms = d;
+                                ui.clock_ms = 0.0;
+                            } else {
+                                ui.clock_ms = d - ui.playhead_ms;
+                            }
+                        }
+                        motion::PlayMode::Loop => {
+                            ui.clock_ms = ui.playhead_ms;
+                        }
+                    }
                 }
             }
             Act::Seek(t) => {
                 ui.playhead_ms = t as f64;
-                ui.clock_ms = t as f64;
+                let settings = doc
+                    .as_ref()
+                    .and_then(|d| page.map(|pg| settings_of(d, pg)))
+                    .unwrap_or_default();
+                // The clock counts up; reverse playback reads `duration - clock`. Keep the
+                // playhead where the user dropped it while the reverse clock keeps running.
+                ui.clock_ms = if ui.playing && settings.play_mode() == motion::PlayMode::Reverse {
+                    (settings.duration_ms as f64 - ui.playhead_ms).max(0.0)
+                } else {
+                    ui.playhead_ms
+                };
             }
             Act::SetDuration(d) => {
                 if let Some(pg) = page {
@@ -1024,7 +1149,7 @@ pub fn apply(app: &mut CanvasApp, ui: &mut MotionUi, acts: Vec<Act>) -> bool {
             }
             Act::DragMove { x, pxms } => {
                 // Recompute from `orig` every move: no accumulated drift (egui's rule).
-                let to_ms = |dx_px: f32| (dx_px / pxms.max(0.0001)) as i64;
+                let to_ms = |dx_px: f32| if pxms > 0.0 { (dx_px / pxms) as i64 } else { 0 };
                 if let Some(d) = ui.clip_drag.clone() {
                     ui.seek_drag = true;
                     clip_dragged(app, ui, d.node, d.id, d.edge, to_ms(x - d.origin_x));
@@ -1060,6 +1185,31 @@ pub fn apply(app: &mut CanvasApp, ui: &mut MotionUi, acts: Vec<Act>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_mode_change_while_playing_rebases_the_clock() {
+        let mut ui = MotionUi { playing: true, playhead_ms: 300.0, clock_ms: 300.0, mode: Some(motion::PlayMode::Forward), ..Default::default() };
+        let reverse = figcraft_doc::anim::motion::TimelineSettings { duration_ms: 1000, reverse: true, ..Default::default() };
+        ui.advance(reverse);
+        assert!((ui.clock_ms - 700.0).abs() <= 1.0, "reverse starts counting from the current playhead: {}", ui.clock_ms);
+        assert!((ui.playhead_ms - 300.0).abs() <= 1.0, "the displayed playhead must not jump: {}", ui.playhead_ms);
+    }
+
+    #[test]
+    fn a_duration_change_while_reversing_keeps_the_playhead_in_place() {
+        let mut ui = MotionUi {
+            playing: true,
+            playhead_ms: 300.0,
+            clock_ms: 700.0,
+            mode: Some(motion::PlayMode::Reverse),
+            last_duration_ms: Some(1000),
+            ..Default::default()
+        };
+        let longer = figcraft_doc::anim::motion::TimelineSettings { duration_ms: 2000, reverse: true, ..Default::default() };
+        ui.advance(longer);
+        assert!((ui.clock_ms - 1700.0).abs() <= 1.0, "the reverse clock rebases against the new end: {}", ui.clock_ms);
+        assert!((ui.playhead_ms - 300.0).abs() <= 1.0, "the displayed playhead must not jump: {}", ui.playhead_ms);
+    }
 
     #[test]
     fn moving_the_playhead_rebuilds_the_preview_document() {
@@ -1140,8 +1290,8 @@ mod tests {
         let page = doc.first_page().unwrap();
         let frame = doc.create(page, NodeKind::Frame, "Card", 0.0, 0.0, 100.0, 100.0).unwrap();
         let inside = doc.create(frame, NodeKind::Rectangle, "Dot", 2.0, 2.0, 8.0, 8.0).unwrap();
-        let page_tl = TimelineSettings { duration_ms: 1000, fps: 30, looping: false };
-        let frame_tl = TimelineSettings { duration_ms: 300, fps: 60, looping: true };
+        let page_tl = TimelineSettings { duration_ms: 1000, fps: 30, looping: false, reverse: false };
+        let frame_tl = TimelineSettings { duration_ms: 300, fps: 60, looping: true, reverse: false };
         doc.timelines.insert(page, page_tl);
         let scope = scope_of(&doc, &[inside], page);
         assert_eq!(settings_of(&doc, scope), page_tl, "frame with no entry inherits the page");
