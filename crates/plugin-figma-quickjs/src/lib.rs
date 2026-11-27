@@ -348,9 +348,12 @@ fn bridge_set(ctx: &Ctx<'_>, state: Shared, id_text: &str, prop: &str, json: &st
     session.tick().map_err(|error| throw(ctx, error))?;
     let (before, after) = {
         let entry = session.pending.entry(id).or_default();
-        let before = props_bytes(entry);
+        // Account only the replaced property, not the whole node: a large unchanged `name`
+        // must not be reserialized on every `x = ...`.
+        let before = entry.get(key).map(|value| key.len() + value.to_string().len()).unwrap_or(0);
+        let after = key.len() + value.to_string().len();
         entry.insert(key.to_string(), value);
-        (before, props_bytes(entry))
+        (before, after)
     };
     session.pending_bytes = session.pending_bytes.saturating_sub(before).saturating_add(after);
     // `pending` values live on the Rust heap, outside `set_memory_limit`. Flush them into

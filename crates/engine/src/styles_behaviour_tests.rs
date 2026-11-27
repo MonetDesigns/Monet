@@ -334,6 +334,27 @@ fn applying_a_style_replaces_variables_bound_to_that_property() {
 }
 
 #[test]
+fn a_scaled_instance_keeps_an_unbound_text_style_link() {
+    // The instance draws a scaled font but the style definition stays unscaled; synchronization
+    // must compare the drawn value against a scaled definition or the link is cleared.
+    let mut s = Session::new();
+    let t = text(&mut s, 0.0);
+    let st = sid(run(&mut s, "style.create", json!({"type": "text", "name": "Body", "from": t})));
+    let before = font_size(&s, t);
+    let comp = id(run(&mut s, "component.create", json!({"ids": [t]})));
+    let inst = id(run(&mut s, "instance.create", json!({"component": comp, "x": 200, "y": 0})));
+    let child = node(&s, inst).children[0];
+    {
+        let doc = s.doc_mut().unwrap();
+        doc.get_mut(inst).unwrap().scale_factor = 2.0;
+        crate::cmd::styles::propagate_style(doc, &st);
+        crate::cmd::styles::sync_text_styles(doc, &[child]);
+    }
+    assert_eq!(font_size(&s, child), before * 2.0, "the instance draws the scaled length");
+    assert_eq!(node(&s, child).styles.text.as_deref(), Some(st.as_str()), "the style link survives");
+}
+
+#[test]
 fn text_styles_go_on_text_layers_and_chars() {
     // Documented: text styles apply to whole text layers or selected text. A text style is no
     // property of other layers: they're left alone; a selection without text is refused.

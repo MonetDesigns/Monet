@@ -783,13 +783,26 @@ pub fn sync_text_styles(doc: &mut Document, ids: &[NodeId]) {
         let Some(n) = doc.node(id) else { continue };
         let NodeKind::Text(t) = &n.kind else { continue };
         // Styles with bound fields read as this layer sees them.
+        let k = scale_of(doc, id);
         let mut defs = std::borrow::Cow::Borrowed(&defs);
+        if k != 1.0 {
+            // The layer's spans carry the drawn (instance-scaled) lengths; compare every
+            // definition at the same scale, including unbound styles, or a linked style
+            // unlinks itself in a scaled instance.
+            let scaled = defs
+                .iter()
+                .map(|(id, style)| {
+                    let mut style = style.clone();
+                    scale_text_lengths(&mut style, k);
+                    (id.clone(), style)
+                })
+                .collect::<BTreeMap<String, TextStyle>>();
+            defs = std::borrow::Cow::Owned(scaled);
+        }
         for st in &varying {
             if let StyleKind::Text { style, .. } = crate::style_vars::kind_for(doc, st, id).into_owned() {
-                // The layer's spans carry the drawn (instance-scaled) lengths; compare against
-                // the same values or a linked style unlinks itself in a scaled instance.
                 let mut drawn = style;
-                scale_text_lengths(&mut drawn, scale_of(doc, id));
+                scale_text_lengths(&mut drawn, k);
                 defs.to_mut().insert(st.id.clone(), drawn);
             }
         }
