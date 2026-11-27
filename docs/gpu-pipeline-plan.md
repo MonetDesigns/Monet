@@ -7,7 +7,7 @@
 > SDF 图元（圆角矩形/椭圆/多边形/星形）、四类渐变、裁剪、路径填充与描边网格（4× MSAA）、文字字形
 > 网格、离屏剪影 + 六 pass 盒模糊的投影/内阴影/图层模糊、八级加权混合的分级模糊、按段 resolve 的背景
 > 模糊回读、逐 cell 64 位哈希的 Mono/Duo/Multi 颗粒、整像素散射的纹理粗糙边、单叶组透明度、动画导出
-> 切到 `figcraft-gpu`、圆角裁剪、离屏组层透明度、CPU↔GPU 像素 diff（22 项对照测试），UI 画布已接线并整帧回退。**所有内置效果按产品计划弃用，后续效果转到外置 WGSL，
+> 切到 `figcraft-gpu`、圆角裁剪、离屏组层透明度、大图分块导出、CPU↔GPU 像素 diff（24 项对照测试），UI 画布已接线并整帧回退。**所有内置效果按产品计划弃用，后续效果转到外置 WGSL，
 > 本分支不再新增或扩展内置效果**；M5–M7 的非效果核心为设计与接口。
 > 日期：2026-11-27
 
@@ -281,13 +281,17 @@ match figcraft_gpu::render::Renderer::global().render(&scene) { Ok(rgba) => …,
 ### M6 导出链路
 
 - **已落地（过渡）**：动画导出的 `set_export_frame_hook` 从旧 `ui-gpui::gpu` 的纯色矩形场景切到
-  `figcraft-gpu`：`doc_scene::build_subtree` 判支持度、`render::render_if_gpu` 出帧，再包成
+  `figcraft-gpu`：`doc_scene::build_subtree` 判支持度、`render::render_document_if_gpu` 出帧，再包成
   `Pixmap` 交给原编码链路。用户强制 CPU 或无适配器时仍回落 CPU。带外置材质的区域导出继续走
   CPU 多 pass + `shade_gpu`，两条路径互不替代。
-- 大图分块：超过 `max_texture_dimension_2d` 时按 band 渲染再拼；导出进度回调 + 取消令牌
-  （`AtomicBool`），取消后释放纹理（**未做**）。
-- **验收**：同一文档 GPU 导出与 CPU 导出 diff 达标（椭圆帧已加对照）；取消在 1 帧内生效；
-  4K/8K 不 OOM（**未做**）。
+- **已落地（过渡）**：大图分块。`Renderer::render_document_tiled` 按
+  `max_texture_dimension_2d` 把视口切成不重叠的方格，每格单独 build + render，再把行原位拷进整帧
+  缓冲。纯图元/网格/文字/组层可以安全切分（组层按格建全帧层，合成语义逐像素可分离）；投影、
+  图层/分级/背景模糊、颗粒与纹理读格外的像素或按设备坐标锚定图案，整帧登记 `tiled-effect` 回退
+  CPU，避免接缝与图案漂移。对照测试用 64px 格切 200px 文档，与不切分 GPU 结果逐字节一致。
+- 取消令牌（`AtomicBool`）与导出进度回调（**未做**）；取消后释放纹理。
+- **验收**：同一文档 GPU 导出与 CPU 导出 diff 达标（椭圆帧已加对照）；分块与整帧逐字节一致
+  （已加两组对照：可切分文档、含投影拒绝切分）；取消在 1 帧内生效、4K/8K 不 OOM（**未做**）。
 
 ### M7 一致性
 

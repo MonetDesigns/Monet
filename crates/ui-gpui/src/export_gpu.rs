@@ -44,8 +44,8 @@ fn gpu_frame_supported(doc: &Document, ids: &[NodeId], view: &figcraft_render::V
 /// One animated-export frame on the GPU. `None` means "not expressible", "the user chose the CPU"
 /// or "no adapter", and the caller falls back to the CPU raster.
 fn render_frame_gpu(doc: &Document, ids: &[NodeId], view: &figcraft_render::View) -> Option<Pixmap> {
-    let scene = doc_scene::build_subtree(doc, *ids.first()?, &Viewport::from_view(view));
-    let data = figcraft_gpu::render::render_if_gpu(&scene)?;
+    let id = *ids.first()?;
+    let data = figcraft_gpu::render::render_document_if_gpu(doc, id, &Viewport::from_view(view))?;
     figcraft_render::pixmap_from_premultiplied_rgba(data, view.width, view.height)
 }
 

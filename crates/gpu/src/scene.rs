@@ -483,6 +483,16 @@ impl Scene {
         count_items(&self.items, &|item| matches!(item, Item::Group(_)))
     }
 
+    /// Whether the frame reads pixels outside its own bounds (blur, shadow, backdrop) or anchors
+    /// a pattern to device coordinates (grain, texture). A tiled export would create seams or
+    /// shifted patterns, so those frames are rendered whole and fall back to the CPU when they
+    /// are larger than the device limit.
+    pub fn has_tile_unsafe_effects(&self) -> bool {
+        count_items(&self.items, &|item| {
+            matches!(item, Item::Shadow(_) | Item::Blur(_) | Item::ProgressiveBlur(_) | Item::Backdrop(_) | Item::Noise(_) | Item::Texture(_))
+        }) > 0
+    }
+
     /// Record a feature this frame uses that this milestone cannot draw.
     pub fn unsupported(&mut self, feature: &'static str, detail: impl Into<String>) {
         self.unsupported.push(Unsupported { feature, detail: detail.into() });

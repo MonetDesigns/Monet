@@ -587,6 +587,64 @@ fn nested_group_opacity_layers_match_the_cpu() {
 }
 
 #[test]
+fn a_tiled_document_matches_the_untiled_pixels() {
+    let mut doc = Document::default();
+    let page = doc.pages[0];
+    transparent_page(&mut doc, page);
+    let group = doc.create(page, figcraft_doc::NodeKind::Group, "Band", 20.0, 20.0, 160.0, 160.0).expect("group");
+    let a = doc.create(group, figcraft_doc::NodeKind::Rectangle, "A", 0.0, 0.0, 120.0, 120.0).expect("a");
+    let b = doc.create(group, figcraft_doc::NodeKind::Rectangle, "B", 40.0, 50.0, 120.0, 100.0).expect("b");
+    if let Ok(n) = doc.get_mut(a) {
+        n.corners.radii = [14.0; 4];
+        n.fills = vec![Paint::solid(Color::new(0.85, 0.3, 0.2, 1.0))];
+    }
+    if let Ok(n) = doc.get_mut(b) {
+        n.corners.radii = [14.0; 4];
+        n.fills = vec![Paint::solid(Color::new(0.15, 0.5, 0.8, 0.8))];
+    }
+    if let Ok(n) = doc.get_mut(group) {
+        n.opacity = 0.6;
+    }
+
+    let scene = doc_scene::build(&doc, page, &viewport());
+    assert!(scene.is_supported(), "{:?}", scene.unsupported_features());
+    assert!(!scene.has_tile_unsafe_effects());
+    let mut renderer = figcraft_gpu::render::Renderer::new().expect("a test adapter");
+    let whole = renderer.render(&scene).expect("the untiled frame");
+    let tiled = renderer.render_document_tiled(&doc, page, &viewport(), 64).expect("the tiled frame");
+    let tol = Tolerance { per_channel: 2, max_bad_ratio: 0.0 };
+    let report = compare(&whole, &tiled, tol).expect("comparable");
+    assert!(report.passes(tol), "{}", report.summary());
+}
+
+#[test]
+fn a_large_blurred_frame_is_not_tiled() {
+    let mut doc = Document::default();
+    let page = doc.pages[0];
+    transparent_page(&mut doc, page);
+    let card = rect(&mut doc, page, "Card", 40.0, 40.0, 120.0, 80.0, 10.0, Paint::solid(Color::new(0.3, 0.6, 0.3, 1.0)));
+    if let Ok(n) = doc.get_mut(card) {
+        n.effects = vec![figcraft_doc::Effect {
+            kind: figcraft_doc::EffectKind::DropShadow(figcraft_doc::Shadow {
+                color: Color::new(0.0, 0.0, 0.0, 0.35),
+                offset: (6.0, 8.0),
+                radius: 12.0,
+                spread: 0.0,
+                blend: figcraft_color::BlendMode::Normal,
+                show_behind: false,
+            }),
+            visible: true,
+        }];
+    }
+    let scene = doc_scene::build(&doc, page, &viewport());
+    assert!(scene.is_supported(), "{:?}", scene.unsupported_features());
+    assert!(scene.has_tile_unsafe_effects(), "a shadow reads outside its tile");
+    let mut renderer = figcraft_gpu::render::Renderer::new().expect("a test adapter");
+    let err = renderer.render_document_tiled(&doc, page, &viewport(), 64).expect_err("tiling must be refused");
+    assert!(matches!(err, figcraft_gpu::render::RenderError::Unsupported(ref list) if list.iter().any(|u| u.feature == "tiled-effect")), "{err:?}");
+}
+
+#[test]
 fn a_layer_blur_matches_the_cpu_blur() {
     let mut doc = Document::default();
     let page = doc.pages[0];

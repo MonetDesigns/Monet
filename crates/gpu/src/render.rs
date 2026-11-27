@@ -17,9 +17,11 @@
 use std::sync::{Mutex, OnceLock};
 
 use bytemuck::{Pod, Zeroable};
+use figcraft_doc::{Document, NodeId};
 use figcraft_geom::Affine;
 
-use crate::scene::{Clip, Item, Paint, Rgba, Scene, ShapeKind, ShapeNode, Unsupported};
+use crate::doc_scene;
+use crate::scene::{Clip, Item, Paint, Rgba, Scene, ShapeKind, ShapeNode, Unsupported, Viewport};
 
 /// Samples per pixel the target uses. Tessellated geometry gets its coverage from these.
 const SAMPLES: u32 = 4;
@@ -1785,6 +1787,69 @@ impl Renderer {
         }
     }
 
+    /// The largest square texture this device can allocate.
+    pub fn max_side(&self) -> u32 {
+        self.max_side
+    }
+
+    /// Draw `doc` at `viewport`, splitting into tiles no larger than this device allows.
+    pub fn render_document(&mut self, doc: &Document, id: NodeId, viewport: &Viewport) -> Result<Vec<u8>, RenderError> {
+        self.render_document_tiled(doc, id, viewport, self.max_side)
+    }
+
+    /// Draw `doc` at `viewport`, splitting it into tiles no larger than `max_side`. Frames whose
+    /// effects read across tile bounds are refused so the CPU keeps them: tiling a blurred or
+    /// grained frame would leave seams or shifted patterns.
+    pub fn render_document_tiled(&mut self, doc: &Document, id: NodeId, viewport: &Viewport, max_side: u32) -> Result<Vec<u8>, RenderError> {
+        let (w, h) = (viewport.width, viewport.height);
+        if w == 0 || h == 0 {
+            return Err(RenderError::Size("the frame has no drawable size".into()));
+        }
+        if viewport.scale <= 0.0 {
+            return Err(RenderError::Size("the viewport has no positive scale".into()));
+        }
+        let full = doc_scene::build_subtree(doc, id, viewport);
+        if !full.is_supported() {
+            return Err(RenderError::Unsupported(full.unsupported_features().to_vec()));
+        }
+        let max = max_side.max(1);
+        if w <= max && h <= max {
+            return self.render(&full);
+        }
+        if full.has_tile_unsafe_effects() {
+            return Err(RenderError::Unsupported(vec![Unsupported {
+                feature: "tiled-effect",
+                detail: format!("{w}×{h} needs tiles but its effects read across tile bounds"),
+            }]));
+        }
+
+        let mut out = vec![0u8; (w as usize) * (h as usize) * 4];
+        for y in (0..h).step_by(max as usize) {
+            for x in (0..w).step_by(max as usize) {
+                let tw = max.min(w - x);
+                let th = max.min(h - y);
+                let tile = Viewport {
+                    origin: (viewport.origin.0 + f64::from(x) / viewport.scale, viewport.origin.1 + f64::from(y) / viewport.scale),
+                    scale: viewport.scale,
+                    width: tw,
+                    height: th,
+                };
+                let scene = doc_scene::build_subtree(doc, id, &tile);
+                if !scene.is_supported() {
+                    return Err(RenderError::Unsupported(scene.unsupported_features().to_vec()));
+                }
+                let pixels = self.render(&scene)?;
+                let dst_stride = (w as usize) * 4;
+                let src_stride = (tw as usize) * 4;
+                for row in 0..th as usize {
+                    let dst = (y as usize + row) * dst_stride + (x as usize) * 4;
+                    out[dst..dst + src_stride].copy_from_slice(&pixels[row * src_stride..(row + 1) * src_stride]);
+                }
+            }
+        }
+        Ok(out)
+    }
+
     /// Draw `scene` and read it back as premultiplied RGBA8, `width * height * 4` bytes.
     pub fn render(&mut self, scene: &Scene) -> Result<Vec<u8>, RenderError> {
         if !scene.is_supported() {
@@ -2378,6 +2443,18 @@ pub fn render_if_gpu(scene: &Scene) -> Option<Vec<u8>> {
     let global = global()?;
     let mut renderer = global.lock().ok()?;
     renderer.render(scene).ok()
+}
+
+/// A document subtree at `viewport`, tiled when it is larger than the device's texture limit.
+/// `None` when the user chose the CPU, no adapter exists, the frame is unsupported, or an effect
+/// reads across tile bounds.
+pub fn render_document_if_gpu(doc: &Document, id: NodeId, viewport: &Viewport) -> Option<Vec<u8>> {
+    if !crate::prefs::effective().is_gpu() {
+        return None;
+    }
+    let global = global()?;
+    let mut renderer = global.lock().ok()?;
+    renderer.render_document(doc, id, viewport).ok()
 }
 
 /// A document-space matrix as the affine helper `scene` expects, for callers that build scenes.
