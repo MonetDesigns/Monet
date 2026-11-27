@@ -11,6 +11,7 @@
 //! | strokes: weight, align, joins, caps, dashes, per-side weights (via `figcraft-pathops`) | group opacity, other blend modes, masks |
 //! | solid, linear/radial/angular/diamond gradients (≤ [`MAX_STOPS`] stops) on SDF shapes | round or noisy effects this build cannot draw |
 //! | drop shadows from an opaque SDF box: offset, blur (box-approximated exactly as the CPU), tint | drop shadows that spread, blend differently, or cast from groups, text or translucent/outlined layers |
+//! | inner shadows from an SDF box: offset, blur, tint, masked to the box | inner shadows that spread or blend differently, and group inner shadows |
 //! | text: glyph and decoration outlines from `figcraft_text`, solid fills and strokes per run | colour glyphs (emoji, COLR) |
 //! | node opacity, visibility, ancestor clipping rectangles | rounded or rotated clips, variable-bound fills |
 
@@ -89,9 +90,19 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, sce
         return;
     }
     let container = is_container(&n.kind);
-    let shadows: Vec<&figcraft_doc::Shadow> =
-        n.effects.iter().filter(|e| e.visible).filter_map(|e| if let EffectKind::DropShadow(s) = &e.kind { Some(s) } else { None }).collect();
-    if n.effects.iter().any(|e| e.visible && !matches!(e.kind, EffectKind::DropShadow(_))) {
+    let drop_shadows: Vec<&figcraft_doc::Shadow> = n
+        .effects
+        .iter()
+        .filter(|e| e.visible)
+        .filter_map(|e| if let EffectKind::DropShadow(s) = &e.kind { Some(s) } else { None })
+        .collect();
+    let inner_shadows: Vec<&figcraft_doc::Shadow> = n
+        .effects
+        .iter()
+        .filter(|e| e.visible)
+        .filter_map(|e| if let EffectKind::InnerShadow(s) = &e.kind { Some(s) } else { None })
+        .collect();
+    if n.effects.iter().any(|e| e.visible && !matches!(e.kind, EffectKind::DropShadow(_) | EffectKind::InnerShadow(_))) {
         scene.unsupported("effect", format!("`{}` has a visible effect this build cannot draw", n.name));
     }
     if !matches!(n.blend, BlendMode::Normal | BlendMode::PassThrough) {
@@ -139,12 +150,11 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, sce
     // Drop shadows sit under the node's own content, so they are emitted before its fills and
     // children. Only a node whose silhouette is exactly its SDF box can cast one in GPU.
     let shape = if sized { sdf_shape(n, &m, w, h) } else { None };
-    if !shadows.is_empty() {
+    if !drop_shadows.is_empty() {
         match shape {
-            Some(shape) if can_cast_shadow(n, &shadows) => {
-                for shadow in &shadows {
-                    emit_shadow(shape, m, w, h, scale, clip, shadow, scene);
-                }
+            Some(shape) if can_cast_shadow(n, &drop_shadows) => {
+                for shadow in &drop_shadows {
+                    emit_shadow(shape, m, w, h, scale, clip, shadow, false, scene);                }
             }
             _ => scene.unsupported("effect", format!("`{}` casts a drop shadow this build cannot draw", n.name)),
         }
@@ -160,6 +170,18 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, sce
             emit_sdf_fills(n, shape, m, w, h, clip, scene);
         } else if n.fills.iter().any(|f| f.visible) {
             emit_path_fills(doc, n, m, clip, scene);
+        }
+    }
+
+    // Inner shadows paint over the fills, under the children and the stroke, like the CPU.
+    if !inner_shadows.is_empty() {
+        match shape {
+            Some(shape) if can_cast_inner_shadow(n, &inner_shadows) => {
+                for shadow in &inner_shadows {
+                    emit_shadow(shape, m, w, h, scale, clip, shadow, true, scene);
+                }
+            }
+            _ => scene.unsupported("effect", format!("`{}` casts an inner shadow this build cannot draw", n.name)),
         }
     }
 
@@ -239,9 +261,20 @@ fn emit_sdf_fills(n: &Node, shape: ShapeKind, m: Affine, w: f64, h: f64, inner: 
     }
 }
 
+/// The shadow properties both kinds can express here: normal blend, no spread, finite radius and
+/// offset.
+fn shadow_is_plain(s: &figcraft_doc::Shadow) -> bool {
+    s.blend == BlendMode::Normal
+        && s.spread == 0.0
+        && s.radius.is_finite()
+        && s.radius >= 0.0
+        && s.offset.0.is_finite()
+        && s.offset.1.is_finite()
+}
+
 /// Whether this node casts its drop shadows from exactly its SDF box: an opaque solid fill or fills,
 /// no visible stroke, no children (or a clipping frame whose own fill is the whole layer), full node
-/// opacity, and shadows without spread and in normal blend mode.
+/// opacity, and plain shadows.
 fn can_cast_shadow(n: &Node, shadows: &[&figcraft_doc::Shadow]) -> bool {
     if n.opacity < 0.999 || n.has_visible_stroke() {
         return false;
@@ -256,20 +289,30 @@ fn can_cast_shadow(n: &Node, shadows: &[&figcraft_doc::Shadow]) -> bool {
             return false;
         }
     }
-    painted
-        && shadows.iter().all(|s| {
-            s.blend == BlendMode::Normal
-                && s.spread == 0.0
-                && s.radius.is_finite()
-                && s.radius >= 0.0
-                && s.offset.0.is_finite()
-                && s.offset.1.is_finite()
-        })
+    painted && shadows.iter().all(|s| shadow_is_plain(s))
 }
 
-/// One drop shadow: the node's box offset by the shadow's device-pixel offset, a sigma the CPU's
-/// blur uses (`radius / 2 * scale`) and the tint.
-fn emit_shadow(shape: ShapeKind, m: Affine, w: f64, h: f64, scale: f64, inner: Clip, shadow: &figcraft_doc::Shadow, scene: &mut Scene) {
+/// Whether this node casts its inner shadows from its own SDF box. Unlike a drop shadow the CPU casts
+/// an inner shadow from the node's outline, not its pixels, so fills, children and strokes do not get
+/// in the way; only the node's own opacity would need a layer, and the shape must be the SDF box.
+fn can_cast_inner_shadow(n: &Node, shadows: &[&figcraft_doc::Shadow]) -> bool {
+    n.opacity >= 0.999 && shadows.iter().all(|s| shadow_is_plain(s))
+}
+
+/// One shadow: the node's box offset by the shadow's device-pixel offset, a sigma the CPU's blur
+/// uses (`radius / 2 * scale`) and the tint. An inner shadow is masked to the box's own coverage.
+#[allow(clippy::too_many_arguments)]
+fn emit_shadow(
+    shape: ShapeKind,
+    m: Affine,
+    w: f64,
+    h: f64,
+    scale: f64,
+    clip: Clip,
+    shadow: &figcraft_doc::Shadow,
+    inner: bool,
+    scene: &mut Scene,
+) {
     let offset = [(shadow.offset.0 * scale).round() as f32, (shadow.offset.1 * scale).round() as f32];
     scene.push_shadow(ShadowNode {
         mat: crate::scene::matrix(m),
@@ -278,7 +321,8 @@ fn emit_shadow(shape: ShapeKind, m: Affine, w: f64, h: f64, scale: f64, inner: C
         offset,
         sigma: (shadow.radius / 2.0 * scale) as f32,
         color: Rgba::from_color(shadow.color),
-        clip: inner,
+        clip,
+        inner,
     });
 }
 
@@ -657,5 +701,48 @@ mod tests {
         assert!(scene.is_supported(), "{:?}", scene.unsupported_features());
         assert_eq!(scene.shapes().count(), 0, "the SDF cannot draw a ring");
         assert_eq!(scene.mesh_count(), 1, "the path fallback can");
+    }
+
+    #[test]
+    fn an_inner_shadow_paints_after_the_fill() {
+        let mut doc = Document::default();
+        let page = doc.pages[0];
+        let rect = doc.create(page, NodeKind::Rectangle, "Card", 10.0, 10.0, 60.0, 40.0).expect("rect");
+        if let Ok(n) = doc.get_mut(rect) {
+            n.fills = vec![DocPaint::solid(Color::new(0.9, 0.9, 0.9, 1.0))];
+            n.effects = vec![figcraft_doc::Effect {
+                kind: EffectKind::InnerShadow(figcraft_doc::Shadow {
+                    color: Color::new(0.0, 0.0, 0.0, 0.5),
+                    offset: (2.0, 3.0),
+                    radius: 6.0,
+                    spread: 0.0,
+                    blend: BlendMode::Normal,
+                    show_behind: false,
+                }),
+                visible: true,
+            }];
+        }
+        let scene = build(&doc, page, &view());
+        assert!(scene.is_supported(), "{:?}", scene.unsupported_features());
+        assert_eq!(scene.shadow_count(), 1);
+        assert!(matches!(scene.items.first(), Some(crate::scene::Item::Shape(_))), "the fill comes first");
+        assert!(matches!(scene.items.get(1), Some(crate::scene::Item::Shadow(s)) if s.inner), "the inner shadow paints over it");
+    }
+
+    #[test]
+    fn a_spread_inner_shadow_falls_back() {
+        let mut doc = Document::default();
+        let page = doc.pages[0];
+        let rect = doc.create(page, NodeKind::Rectangle, "Card", 10.0, 10.0, 60.0, 40.0).expect("rect");
+        if let Ok(n) = doc.get_mut(rect) {
+            n.fills = vec![DocPaint::solid(Color::new(0.9, 0.9, 0.9, 1.0))];
+            n.effects = vec![figcraft_doc::Effect {
+                kind: EffectKind::InnerShadow(figcraft_doc::Shadow { spread: 4.0, ..Default::default() }),
+                visible: true,
+            }];
+        }
+        let scene = build(&doc, page, &view());
+        assert!(!scene.is_supported());
+        assert!(scene.unsupported_features().iter().any(|u| u.feature == "effect"));
     }
 }

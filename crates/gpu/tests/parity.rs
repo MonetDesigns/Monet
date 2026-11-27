@@ -290,6 +290,49 @@ fn a_drop_shadow_matches_the_cpu_blur() {
 }
 
 #[test]
+fn an_inner_shadow_matches_the_cpu_blur() {
+    let mut doc = Document::default();
+    let page = doc.pages[0];
+    transparent_page(&mut doc, page);
+    let card = rect(&mut doc, page, "Card", 40.0, 40.0, 100.0, 70.0, 14.0, Paint::solid(Color::new(0.92, 0.92, 0.92, 1.0)));
+    if let Ok(n) = doc.get_mut(card) {
+        n.effects = vec![figcraft_doc::Effect {
+            kind: figcraft_doc::EffectKind::InnerShadow(figcraft_doc::Shadow {
+                color: Color::new(0.0, 0.0, 0.0, 0.6),
+                offset: (4.0, 6.0),
+                radius: 10.0,
+                spread: 0.0,
+                blend: figcraft_color::BlendMode::Normal,
+                show_behind: false,
+            }),
+            visible: true,
+        }];
+    }
+
+    let scene = doc_scene::build(&doc, page, &viewport());
+    assert!(scene.is_supported(), "the inner shadow must stay on the GPU path: {:?}", scene.unsupported_features());
+    assert_eq!(scene.shadow_count(), 1);
+    // An inner shadow paints over the fills: the fill item comes first in painter's order.
+    assert!(matches!(scene.items.first(), Some(figcraft_gpu::Item::Shape(_))), "{:?}", scene.items.first());
+    assert!(matches!(scene.items.get(1), Some(figcraft_gpu::Item::Shadow(_))), "{:?}", scene.items.get(1));
+
+    let cpu = cpu_pixels(&doc, page);
+    let Some(gpu) = gpu_pixels(&doc, page) else {
+        eprintln!("SKIP: no adapter");
+        return;
+    };
+    let tol = Tolerance { per_channel: 2, max_bad_ratio: 0.02 };
+    let report = compare_interiors(&cpu, &gpu, SIZE as usize, SIZE as usize, tol).expect("comparable");
+    assert!(report.passes(tol), "{}", report.summary());
+    // A point just inside the box near its top edge is darkened by the inner shadow; the middle is not.
+    let edge = pixel(&cpu, SIZE as usize, 90, 44).expect("in bounds");
+    let middle = pixel(&cpu, SIZE as usize, 90, 75).expect("in bounds");
+    assert!(u32::from(edge[0]) < u32::from(middle[0]) || u32::from(edge[3]) > 0, "the CPU drew no inner shadow: {edge:?} vs {middle:?}");
+    let gpu_edge = pixel(&gpu, SIZE as usize, 90, 44).expect("in bounds");
+    assert!(gpu_edge[0].abs_diff(edge[0]) <= 3, "the GPU's inner shadow differs at the edge: {gpu_edge:?} vs {edge:?}");
+}
+
+#[test]
 fn text_glyphs_match_the_cpu() {
     let mut doc = Document::default();
     let page = doc.pages[0];

@@ -10,8 +10,9 @@ struct Params {
   radius: i32,
   // 1 = along x (rows), 0 = along y (columns).
   horizontal: i32,
-  pad0: i32,
-  pad1: i32,
+  // 1 = read 255 - byte (the CPU's `invert_alpha`, before an inner shadow is blurred).
+  invert: i32,
+  pad: i32,
 };
 @group(0) @binding(0) var src: texture_2d<f32>;
 @group(0) @binding(1) var<uniform> params: Params;
@@ -29,8 +30,12 @@ fn vs(@builtin(vertex_index) vi: u32) -> VsOut {
   return o;
 }
 
-fn byte_of(v: f32) -> u32 {
-  return u32(round(clamp(v, 0.0, 1.0) * 255.0));
+fn byte_of(v: f32, invert: bool) -> u32 {
+  let b = u32(round(clamp(v, 0.0, 1.0) * 255.0));
+  if (invert) {
+    return 255u - b;
+  }
+  return b;
 }
 
 @fragment
@@ -38,6 +43,7 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
   let dims = vec2<i32>(textureDimensions(src, 0));
   let p = vec2<i32>(i32(floor(in.pos.x)), i32(floor(in.pos.y)));
   let r = max(params.radius, 0);
+  let invert = params.invert != 0;
   var sum = vec4<u32>(0u, 0u, 0u, 0u);
   for (var i = -r; i <= r; i = i + 1) {
     var q = p;
@@ -50,7 +56,7 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
       continue;
     }
     let v = textureLoad(src, q, 0);
-    sum = sum + vec4<u32>(byte_of(v.r), byte_of(v.g), byte_of(v.b), byte_of(v.a));
+    sum = sum + vec4<u32>(byte_of(v.r, invert), byte_of(v.g, invert), byte_of(v.b, invert), byte_of(v.a, invert));
   }
   let div = f32(2 * r + 1);
   let out = vec4<f32>(f32(sum.x), f32(sum.y), f32(sum.z), f32(sum.w)) / div / 255.0;

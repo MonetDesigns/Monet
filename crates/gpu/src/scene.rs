@@ -171,13 +171,13 @@ pub struct MeshNode {
     pub clip: Clip,
 }
 
-/// A drop shadow under an SDF shape: the shape's silhouette, offset, blurred and tinted. Painted
-/// **before** the shape it belongs to (the shadow sits behind the node, not on it), so it precedes
-/// the node's fill in painter's order.
+/// A shadow cast by an SDF shape: the shape's silhouette, offset, blurred and tinted. A drop shadow
+/// paints **before** the shape (it sits behind the node); an inner shadow paints **after** the fills
+/// and is masked to the shape's own coverage.
 ///
-/// Only shapes whose silhouette is exactly their box outline cast one (a filled primitive with no
-/// stroke and no content of its own); anything else is recorded as unsupported, because the CPU
-/// blurs the node's rendered pixels and a box would not be the same alpha.
+/// Only shapes whose silhouette is exactly their box outline are eligible (a filled or empty
+/// primitive with no stroke); anything else is recorded as unsupported, because the CPU blurs the
+/// node's rendered pixels and a box would not be the same alpha.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShadowNode {
     /// The caster's box in document units and local → device matrix, like [`ShapeNode`].
@@ -191,9 +191,11 @@ pub struct ShadowNode {
     /// The tint, straight sRGB (its alpha is the shadow's strength).
     pub color: Rgba,
     pub clip: Clip,
+    /// Inside the shape (`InnerShadow`) rather than behind it (`DropShadow`).
+    pub inner: bool,
 }
 
-/// One thing to draw, in painter's order: an SDF shape, a tessellated path or a drop shadow.
+/// One thing to draw, in painter's order: an SDF shape, a tessellated path or a shadow.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Item {
     Shape(ShapeNode),
