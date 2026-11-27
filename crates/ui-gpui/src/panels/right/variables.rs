@@ -433,13 +433,11 @@ fn bulk_menu_items(rows: &[(String, String, VarKind)], groups: &[String]) -> Vec
             items.push(MenuItem::new(label, "command.batch", json!({"label": "Move variables", "commands": steps})));
         }
     }
-    let mut scopes: Vec<(&'static str, &'static str)> = Vec::new();
-    for (_, _, kind) in rows {
-        for s in figcraft_doc::styles::scopes_for(kind.doc_type()) {
-            if !scopes.contains(s) {
-                scopes.push(*s);
-            }
-        }
+    let mut scopes: Vec<(&'static str, &'static str)> =
+        rows.first().map(|(_, _, kind)| figcraft_doc::styles::scopes_for(kind.doc_type()).to_vec()).unwrap_or_default();
+    for (_, _, kind) in rows.iter().skip(1) {
+        let kind_scopes = figcraft_doc::styles::scopes_for(kind.doc_type());
+        scopes.retain(|(id, _)| kind_scopes.iter().any(|(sid, _)| sid == id));
     }
     let scope_item = |label: String, value: Option<&'static str>| {
         let steps: Vec<Value> = rows
@@ -3997,6 +3995,50 @@ mod tests {
         st.anchor = Some("a".into());
         select_var(&mut st, "c", &order(), &Modifiers { shift: true, control: true, ..Default::default() });
         assert_eq!(st.selected, ["a", "d", "b", "c"]);
+    }
+
+    #[test]
+    fn plain_click_replaces_the_selection() {
+        let mut st = EditorState::new();
+        st.selected = vec!["a".into(), "d".into()];
+        st.anchor = Some("a".into());
+        select_var(&mut st, "b", &order(), &Modifiers::default());
+        assert_eq!(st.selected, ["b"]);
+        assert_eq!(st.anchor.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn shift_click_without_a_valid_anchor_toggles() {
+        // The anchor must still be selected; a stale one makes Shift behave like Cmd/Ctrl.
+        let mut st = EditorState::new();
+        st.selected = vec!["d".into()];
+        st.anchor = Some("a".into());
+        select_var(&mut st, "c", &order(), &Modifiers { shift: true, ..Default::default() });
+        assert_eq!(st.selected, ["d", "c"]);
+        assert_eq!(st.anchor.as_deref(), Some("c"));
+    }
+
+    #[test]
+    fn bulk_menu_omits_a_move_that_changes_nothing() {
+        let rows = vec![("1".to_string(), "Brand/Primary".to_string(), VarKind::Color)];
+        let items = bulk_menu_items(&rows, &["Brand".into(), "Other".into()]);
+        // Already in Brand: `Brand/Primary` would be the same name, so no step and no item.
+        assert!(!items.iter().any(|i| i.label.contains("Move to group Brand")), "{:?}", items.iter().map(|i| &i.label).collect::<Vec<_>>());
+        assert!(items.iter().any(|i| i.label.contains("Move out of any group")));
+        assert!(items.iter().any(|i| i.label.contains("Move to group Other")));
+    }
+
+    #[test]
+    fn bulk_menu_scopes_only_what_every_type_supports() {
+        let rows = vec![
+            ("1".to_string(), "Brand/Primary".to_string(), VarKind::Color),
+            ("2".to_string(), "Flag/On".to_string(), VarKind::Boolean),
+        ];
+        let items = bulk_menu_items(&rows, &[]);
+        // Colour scopes and boolean scopes do not overlap, so only the generic entries stay.
+        assert!(!items.iter().any(|i| i.label.starts_with("Scope: only")), "{:?}", items.iter().map(|i| &i.label).collect::<Vec<_>>());
+        assert!(items.iter().any(|i| i.label == "Scope: hidden from pickers"));
+        assert!(items.iter().any(|i| i.label == "Scope: all supported properties"));
     }
 
     #[test]
