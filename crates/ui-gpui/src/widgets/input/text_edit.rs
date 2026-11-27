@@ -213,13 +213,15 @@ impl TextEdit {
         let was = self.rows > 0;
         self.rows = rows;
         self.input.set_multiline(rows);
-        if was && rows == 0 {
-            // The pooled field is about to be reused as a single-line field; restore the committed
-            // value without a stray line break from the previous multiline use.
-            let text = self.value.replace('\n', " ");
-            self.value = text.clone();
-            self.kept = text.clone();
-            self.input.buffer.set_text(text);
+        if !self.editing && was && rows == 0 {
+            // The pooled field is about to be reused as a single-line field; show the committed
+            // value without a stray line break. Keep `value` intact so a later multiline owner
+            // of the same slot can restore the original text.
+            self.input.buffer.set_text(self.value.replace('\n', " "));
+        } else if !self.editing && !was && rows > 0 {
+            // Entering multiline mode: the buffer may have been normalised by a previous
+            // single-line reuse of this slot, so restore the committed multiline value.
+            self.input.buffer.set_text(self.value.clone());
         }
     }
     pub fn is_multiline(&self) -> bool {
@@ -921,6 +923,8 @@ mod tests {
             field.set_multiline(0);
             assert!(!field.is_multiline());
             assert_eq!(field.input.buffer.text(), "one  two", "the committed value loses its breaks");
+            field.set_multiline(2);
+            assert_eq!(field.input.buffer.text(), "one\n\ntwo", "re-entering multiline restores the buffer");
         });
     }
 }
