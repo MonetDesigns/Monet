@@ -21,10 +21,12 @@ struct Params {
   seed: u32,
   density: f32,
   fill_alpha: f32,
-  pad0: f32,
+  mode: u32,
   cell: vec2<f32>,
-  pad1: vec2<f32>,
+  opacity: f32,
+  pad1: f32,
   color: vec4<f32>,
+  secondary: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -248,11 +250,28 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
   }
 
   // The layer alpha the grain rides on is the node's own fill alpha under the mask, exactly what
-  // the CPU's `grain::noise` multiplies by the grain colour's alpha.
+  // the CPU's `grain::grains` multiplies by the grain colour's alpha.
   let layer_a = params.fill_alpha * coverage;
-  let a = params.color.a * layer_a;
+  var rgb = params.color.rgb;
+  var ca = params.color.a;
+  if (params.mode == 1u) {
+    // Duo: `hv >> 63` picks the secondary colour, like the CPU's `hv >> 63 == 1`.
+    let second = hv.y >= 2147483648u;
+    rgb = select(params.color.rgb, params.secondary.rgb, second);
+    ca = select(params.color.a, params.secondary.a, second);
+  } else if (params.mode >= 2u) {
+    // Multi: one colour per grain from the 16-bit fields at bits 16, 32 and 48; the grain's
+    // alpha is the effect's own opacity, not any colour's alpha.
+    rgb = vec3<f32>(
+      f32((hv.x >> 16u) & 0xFFFFu) / 65536.0,
+      f32(hv.y & 0xFFFFu) / 65536.0,
+      f32((hv.y >> 16u) & 0xFFFFu) / 65536.0,
+    );
+    ca = params.opacity;
+  }
+  let a = ca * layer_a;
   if (!(a > 0.0)) {
     discard;
   }
-  return vec4<f32>(params.color.r * a, params.color.g * a, params.color.b * a, a);
+  return vec4<f32>(rgb * a, a);
 }

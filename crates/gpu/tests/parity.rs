@@ -562,6 +562,82 @@ fn a_rough_texture_matches_the_cpu() {
 }
 
 #[test]
+fn duo_and_multi_noise_match_the_cpu() {
+    let mut doc = Document::default();
+    let page = doc.pages[0];
+    transparent_page(&mut doc, page);
+
+    let duo = rect(&mut doc, page, "Duo", 15.0, 25.0, 80.0, 120.0, 8.0, Paint::solid(Color::new(0.2, 0.55, 0.3, 1.0)));
+    if let Ok(n) = doc.get_mut(duo) {
+        n.effects = vec![figcraft_doc::Effect {
+            kind: figcraft_doc::EffectKind::Noise(figcraft_doc::Noise {
+                mode: figcraft_doc::NoiseMode::Duo,
+                size: 1.3,
+                density: 0.6,
+                color: Color::new(0.9, 0.1, 0.05, 0.35),
+                secondary: Color::new(0.05, 0.15, 0.9, 0.65),
+                ..Default::default()
+            }),
+            visible: true,
+        }];
+    }
+
+    let multi = rect(&mut doc, page, "Multi", 105.0, 25.0, 80.0, 120.0, 8.0, Paint::solid(Color::new(0.5, 0.5, 0.5, 1.0)));
+    if let Ok(n) = doc.get_mut(multi) {
+        n.effects = vec![figcraft_doc::Effect {
+            kind: figcraft_doc::EffectKind::Noise(figcraft_doc::Noise {
+                mode: figcraft_doc::NoiseMode::Multi,
+                size: 1.3,
+                density: 0.6,
+                opacity: 0.45,
+                ..Default::default()
+            }),
+            visible: true,
+        }];
+    }
+
+    let scene = doc_scene::build(&doc, page, &viewport());
+    assert!(scene.is_supported(), "duo/multi noise must stay on the GPU path: {:?}", scene.unsupported_features());
+    assert_eq!(scene.noise_count(), 2);
+    assert_eq!(scene.shapes().count(), 2, "each grain rides on its own fill");
+
+    let cpu = cpu_pixels(&doc, page);
+    let Some(gpu) = gpu_pixels(&doc, page) else {
+        eprintln!("SKIP: no adapter");
+        return;
+    };
+    let tol = Tolerance { per_channel: 4, max_bad_ratio: 0.02 };
+    let report = compare_interiors(&cpu, &gpu, SIZE as usize, SIZE as usize, tol).expect("comparable");
+    assert!(report.passes(tol), "{}", report.summary());
+
+    // Both cards really show grains, on both sides.
+    let changed = |bytes: &[u8], x0: usize| {
+        let mut count = 0usize;
+        for y in 35..135 {
+            for x in x0..x0 + 60 {
+                let p = pixel(bytes, SIZE as usize, x, y).expect("in bounds");
+                // The fills are known; any large deviation is a grain.
+                if p[0].abs_diff(51) > 8 || p[1].abs_diff(140) > 8 || p[2].abs_diff(76) > 8 {
+                    if x0 > 100 {
+                        // The multi card's fill is grey: count colour, not the fill.
+                        if p[0].abs_diff(p[1]) > 6 || p[1].abs_diff(p[2]) > 6 {
+                            count += 1;
+                        }
+                    } else {
+                        count += 1;
+                    }
+                }
+            }
+        }
+        count
+    };
+    assert!(changed(&cpu, 25) > 100, "the CPU drew too few duo grains");
+    assert!(changed(&gpu, 25) > 100, "the GPU drew too few duo grains");
+    assert!(changed(&cpu, 115) > 100, "the CPU drew too few multi grains");
+    assert!(changed(&gpu, 115) > 100, "the GPU drew too few multi grains");
+}
+
+#[test]
 fn text_glyphs_match_the_cpu() {
     let mut doc = Document::default();
     let page = doc.pages[0];

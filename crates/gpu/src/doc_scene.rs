@@ -15,7 +15,7 @@
 //! | uniform layer blur over one opaque SDF box fill | progressive blurs, and layers with children, strokes or clips |
 //! | uniform background blur over one SDF box with one fill (the frame is resolved and blurred in place) | background blur over children, strokes, clips, group opacity, and glass |
 //! | text: glyph and decoration outlines from `figcraft_text`, solid fills and strokes per run | colour glyphs (emoji, COLR) |
-//! | mono noise over one SDF box fill, hashed exactly as the CPU | duo/multi noise, and noise over children, strokes, clips, groups or other effects |
+//! | mono/duo/multi grains over one SDF box fill, hashed exactly as the CPU | grains over children, strokes, clips, groups or other effects |
 //! | texture over one SDF box fill: whole-pixel scatter hashed exactly as the CPU | textures combined with children, strokes, clips, or other effects |
 //! | node opacity, visibility, ancestor clipping rectangles | rounded or rotated clips, variable-bound fills |
 
@@ -28,8 +28,8 @@ use figcraft_geom::{Affine, BezPath, Point};
 
 use crate::geometry;
 use crate::scene::{
-    BackdropNode, Clip, GradientKind, LayerBlurNode, MAX_STOPS, MeshNode, NoiseNode, Paint, Rgba, Scene, ShadowNode, ShapeKind, ShapeNode, Stop,
-    TextureNode, Viewport, is_similarity,
+    BackdropNode, Clip, GradientKind, GrainMode, LayerBlurNode, MAX_STOPS, MeshNode, NoiseNode, Paint, Rgba, Scene, ShadowNode, ShapeKind, ShapeNode,
+    Stop, TextureNode, Viewport, is_similarity,
 };
 
 /// The deepest subtree walked; a document that nests deeper is a broken file and a fallback.
@@ -494,7 +494,7 @@ fn can_noise(n: &Node, noises: &[&figcraft_doc::Noise], clip: Clip) -> bool {
     let [noise] = noises else {
         return false;
     };
-    if !matches!(noise.mode, NoiseMode::Mono) || !noise.density.is_finite() || !matches!(noise.blend, BlendMode::Normal) {
+    if !noise.density.is_finite() || !matches!(noise.blend, BlendMode::Normal) {
         return false;
     }
     if !n.children.is_empty() || n.clip || !clip.is_none() || n.has_visible_stroke() || n.opacity < 0.999 {
@@ -529,15 +529,17 @@ fn noise_fill_alpha(n: &Node) -> f32 {
     (color.a * n.opacity.clamp(0.0, 1.0)).clamp(0.0, 1.0) as f32
 }
 
-/// Emit the CPU's mono grain: one full-screen quad masked by the node's box, hashed per document
-/// cell. The layer alpha under each grain is the fill's own alpha; the renderer reproduces the CPU's
-/// 64-bit cell hash in WGSL, so the pattern lands on the same pixels.
+/// Emit the CPU's grains: one full-screen quad masked by the node's box, hashed per document
+/// cell. The layer alpha under each grain is the fill's own alpha; the renderer reproduces the
+/// CPU's 64-bit cell hash in WGSL, so the pattern lands on the same pixels. Mono, Duo and Multi
+/// differ only in where the grain colour comes from.
 fn emit_noise(id: NodeId, n: &Node, noise: &figcraft_doc::Noise, shape: ShapeKind, m: Affine, w: f64, h: f64, clip: Clip, scene: &mut Scene) {
     let density = (noise.density as f32).clamp(0.0, 1.0);
     if density <= 0.0 {
         return;
     }
     let (gx, gy) = noise.grain();
+    let opacity = if noise.opacity.is_finite() { noise.opacity.clamp(0.0, 1.0) } else { 0.0 };
     scene.push_noise(NoiseNode {
         mat: crate::scene::matrix(m),
         size: [w as f32, h as f32],
@@ -546,7 +548,14 @@ fn emit_noise(id: NodeId, n: &Node, noise: &figcraft_doc::Noise, shape: ShapeKin
         seed: id.0 as u32,
         density,
         cell: [(gx * 2.0) as f32, (gy * 2.0) as f32],
-        color: Rgba::from_color(noise.color),
+        color: Rgba::from_color(noise.color.sanitized()),
+        secondary: Rgba::from_color(noise.secondary.sanitized()),
+        opacity,
+        mode: match noise.mode {
+            NoiseMode::Mono => GrainMode::Mono,
+            NoiseMode::Duo => GrainMode::Duo,
+            NoiseMode::Multi => GrainMode::Multi,
+        },
         fill_alpha: noise_fill_alpha(n),
     });
 }
@@ -1139,19 +1148,25 @@ mod tests {
     }
 
     #[test]
-    fn a_duo_noise_falls_back() {
-        let mut doc = Document::default();
-        let page = doc.pages[0];
-        let rect = doc.create(page, NodeKind::Rectangle, "Grain", 10.0, 10.0, 60.0, 40.0).expect("rect");
-        if let Ok(n) = doc.get_mut(rect) {
-            n.fills = vec![DocPaint::solid(Color::new(0.2, 0.6, 0.3, 1.0))];
-            let mut noise = figcraft_doc::Noise::default();
-            noise.mode = NoiseMode::Duo;
-            n.effects = vec![figcraft_doc::Effect { kind: EffectKind::Noise(noise), visible: true }];
+    fn duo_and_multi_noise_ride_on_one_fill() {
+        for (mode, expected) in [(NoiseMode::Duo, crate::scene::GrainMode::Duo), (NoiseMode::Multi, crate::scene::GrainMode::Multi)] {
+            let mut doc = Document::default();
+            let page = doc.pages[0];
+            let rect = doc.create(page, NodeKind::Rectangle, "Grain", 10.0, 10.0, 60.0, 40.0).expect("rect");
+            if let Ok(n) = doc.get_mut(rect) {
+                n.fills = vec![DocPaint::solid(Color::new(0.2, 0.6, 0.3, 1.0))];
+                let mut noise = figcraft_doc::Noise::default();
+                noise.mode = mode;
+                n.effects = vec![figcraft_doc::Effect { kind: EffectKind::Noise(noise), visible: true }];
+            }
+            let scene = build(&doc, page, &view());
+            assert!(scene.is_supported(), "{mode:?}: {:?}", scene.unsupported_features());
+            assert_eq!(scene.noise_count(), 1);
+            let crate::scene::Item::Noise(noise) = &scene.items[1] else {
+                panic!("the grain rides on the fill");
+            };
+            assert_eq!(noise.mode, expected);
         }
-        let scene = build(&doc, page, &view());
-        assert!(!scene.is_supported(), "two-colour grains are not this shader's input");
-        assert!(scene.unsupported_features().iter().any(|u| u.feature == "effect"));
     }
 
     #[test]

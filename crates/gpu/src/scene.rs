@@ -227,8 +227,17 @@ pub struct BackdropNode {
     pub clip: Clip,
 }
 
-/// A mono grain layer: `density` of the cells of `cell` (document units) show `color` over the
-/// node's own fill, at the fill's alpha (the CPU's `grain::noise`).
+/// Which colour rule the grains use: one colour, one of two by the hash's top bit, or a colour per
+/// grain from three 16-bit hash fields.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GrainMode {
+    Mono,
+    Duo,
+    Multi,
+}
+
+/// A grain layer: `density` of the cells of `cell` (document units) show a colour over the node's
+/// own fill, at the fill's alpha (the CPU's `grain::grains`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct NoiseNode {
     pub mat: [f32; 6],
@@ -240,8 +249,13 @@ pub struct NoiseNode {
     pub density: f32,
     /// Cell size in document units (the CPU's twice the grain size).
     pub cell: [f32; 2],
-    /// The grain colour, straight sRGB.
+    /// Mono and Duo: the grain colour, straight sRGB.
     pub color: Rgba,
+    /// Duo: the other grains' colour, straight sRGB.
+    pub secondary: Rgba,
+    /// Multi: the grains' alpha; ignored by Mono and Duo.
+    pub opacity: f32,
+    pub mode: GrainMode,
     /// The fill's alpha (paint × node opacity): the layer alpha the grains ride on.
     pub fill_alpha: f32,
 }

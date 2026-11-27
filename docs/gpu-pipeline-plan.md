@@ -1,11 +1,11 @@
 # 完整 GPU 管线立项（Monet / FigCraft）
 
 > 分支：`ai/gpu-pipeline`（worktree `D:\Projektdateien\GPUI\branches\gpu-pipeline`，从 `main` 拉出）
-> 状态：阶段 1（图元与填充）、阶段 2（路径与描边）、阶段 3（文字）与阶段 4 的第一块（投影、内阴影、uniform 图层模糊、背景模糊、Mono 颗粒与纹理粗糙边）
+> 状态：阶段 1（图元与填充）、阶段 2（路径与描边）、阶段 3（文字）与阶段 4 的第一块（投影、内阴影、uniform 图层模糊、背景模糊、Mono/Duo/Multi 颗粒与纹理粗糙边）
 > 已落地——能力探测、`auto/gpu/cpu` 三档偏好（引擎命令 + Preferences ▸ Rendering）、场景 IR、实例化
 > SDF 图元（圆角矩形/椭圆/多边形/星形）、四类渐变、裁剪、路径填充与描边网格（4× MSAA）、文字字形
 > 网格、离屏剪影 + 六 pass 盒模糊的投影/内阴影/图层模糊、按段 resolve 的背景模糊回读、逐 cell 64 位哈希
-> 的 Mono 颗粒、整像素散射的纹理粗糙边、CPU↔GPU 像素 diff（14 项对照测试），UI 画布已接线并整帧回退；M4 其余、M5–M7 为设计与接口
+> 的 Mono/Duo/Multi 颗粒、整像素散射的纹理粗糙边、CPU↔GPU 像素 diff（15 项对照测试），UI 画布已接线并整帧回退；M4 其余、M5–M7 为设计与接口
 > 日期：2026-11-27
 
 ## 0. 一句话结论
@@ -183,11 +183,12 @@ match figcraft_gpu::render::Renderer::global().render(&scene) { Ok(rgba) => …,
   `Load` 主 pass，用 `shaders/backdrop.wgsl` 的 SDF 覆盖把模糊结果画进盒子（随后投影、填充、子节点照旧
   覆盖其上）。模糊用 CPU 同一 `sigma = radius / 2 * scale` 与同一盒宽；mask 与 `shape.wgsl` 同一组 SDF
   函数。多段/多个背景模糊各建一条链，读取的都是当时的帧内容。
-- **Mono 颗粒**：只接受「一个可见的 Mono `Noise`（density > 0，Normal 混合）+ SDF 盒子 + 恰好一个
-  可见纯色填充 + 无子节点/可见描边/`clip` + 节点 `opacity = 1` + 没有其它可见效果」。grain 的层 alpha
-  就是该填充的 alpha（颜色 × 填充 opacity）；`shaders/noise.wgsl` 在片元里复刻 CPU 的 64 位 cell 哈希
-  （`ix*K1 ^ iy*K2 ^ seed*K3` 再三轮 `xorshift/mul`，用两条 `u32` limb 模 2^64 乘加），按 2^-20 舍入
-  后 floor 到整数 cell，`unit(h,0) < density` 才画，输出 `grain color × 层 alpha` 的预乘值；不新增
+- **颗粒（Mono / Duo / Multi）**：只接受「一个可见的 `Noise`（density > 0，Normal 混合）+ SDF 盒子 +
+  恰好一个可见纯色填充 + 无子节点/可见描边/`clip` + 节点 `opacity = 1` + 没有其它可见效果」。grain 的
+  层 alpha 就是该填充的 alpha（颜色 × 填充 opacity）；`shaders/noise.wgsl` 在片元里复刻 CPU 的 64 位
+  cell 哈希（`ix*K1 ^ iy*K2 ^ seed*K3` 再三轮 `xorshift/mul`，用两条 `u32` limb 模 2^64 乘加），按 2^-20
+  舍入后 floor 到整数 cell，`unit(h,0) < density` 才画：Mono 输出 `color × 层 alpha`；Duo 用哈希最高位
+  选 `secondary`；Multi 用 bit 16/32/48 的三个 16 位字段当 RGB、`opacity` 当 alpha，均输出预乘值。不新增
   中间纹理，也不依赖模糊链。
 - **纹理粗糙边**：只接受「一个可见的 `Texture` + SDF 盒子 + 恰好一个可见纯色填充 + 无子节点/可见
   描边/`clip` + 节点 `opacity = 1` + 没有其它可见效果」。它与图层模糊一样**替换**节点本身的填充：
@@ -198,7 +199,7 @@ match figcraft_gpu::render::Renderer::global().render(&scene) { Ok(rgba) => …,
   bind group 覆盖纹理、采样器与 tint/clip uniform；颗粒和纹理复用主实例缓冲，各建一组 uniform
   bind group。本帧现建，暂不做跨帧缓存池。
 - 仍登记为 Unsupported：分级图层模糊（`Blur::is_progressive()`）、带子节点/描边/`clip` 的图层模糊、
-  Duo/Multi 颗粒、颗粒/纹理叠在子节点/描边/其它效果上、玻璃（M4 其余）；spread ≠ 0、非
+  颗粒/纹理叠在子节点/描边/其它效果上、玻璃（M4 其余）；spread ≠ 0、非
   Normal 混合、组/文字/半透明/带描边剪影的投影、组内阴影。
 - **验收**：`box_radii` 单测对 CPU 近似公式的三组值；对照 `a_drop_shadow_matches_the_cpu_blur`（圆角
   矩形 radius 12 / offset (6,10) / 55% 黑投影）、`an_inner_shadow_matches_the_cpu_blur`（圆角矩形
@@ -206,24 +207,25 @@ match figcraft_gpu::render::Renderer::global().render(&scene) { Ok(rgba) => …,
   （radius 8 的实心卡片 + radius 6 的 80% 填充 × 0.65 层透明卡片，断言卡片上方有模糊外溢）、
   `a_background_blur_matches_the_cpu_blur`（红/蓝硬边背景上一张 radius 10 的 35% 白卡 + 第二张
   radius 6 的 30% 白卡，断言接缝被抹开且两次 resolve/续画都一致）、`mono_noise_matches_the_cpu`
-  （radius 10 的绿色卡片 + `size 1.2 / density 0.55` 的 35% 深色颗粒，断言两侧都真的画出了 grain）与
-  `a_rough_texture_matches_the_cpu`（70% 填充的裁剪纹理卡片 + 不裁剪的纹理卡片，断言前者的外溢被
-  裁掉、后者确实溢出到形状上方）。阴影/内阴影为 `per_channel = 2`、2%；两种模糊因两侧量化放宽到
-  `3 / 3%`；颗粒因 CPU 先量化 8 位层 alpha 用 `3 / 2%`；纹理是逐像素整搬、边缘两侧 AA 不同，用
-  `24 / 3%`（`Tolerance::EDGE` 的口径）。
+  （radius 10 的绿色卡片 + `size 1.2 / density 0.55` 的 35% 深色颗粒，断言两侧都真的画出了 grain）、
+  `duo_and_multi_noise_match_the_cpu`（Duo 红/蓝双色 35%/65%、Multi 彩色 + `opacity 0.45`，断言两张卡
+  都有彩色颗粒且像素 diff 达标）与 `a_rough_texture_matches_the_cpu`（70% 填充的裁剪纹理卡片 + 不裁剪
+  的纹理卡片，断言前者的外溢被裁掉、后者确实溢出到形状上方）。阴影/内阴影为 `per_channel = 2`、2%；
+  两种模糊因两侧量化放宽到 `3 / 3%`；颗粒因 CPU 先量化 8 位层 alpha 用 `3 / 2%`；纹理是逐像素整搬、
+  边缘两侧 AA 不同，用 `24 / 3%`（`Tolerance::EDGE` 的口径）。
 - 风险：剪影边缘是 4× MSAA 覆盖率、CPU 是解析覆盖率，1 级差会随模糊扩散几像素——对照口径因此
   放宽到 `per_channel = 2` 且允许 2% 像素；不透明度/描边/子节点等剪影不唯一的场景一律回退。
 
 ### M4 效果（设计，M4 其余）
 
-- 阴影/内阴影/uniform 图层模糊/背景模糊/Mono 颗粒/纹理粗糙边已在上一节落地；本节的「两 pass 高斯」是针对分级模糊的替代方案讨论，
+- 阴影/内阴影/uniform 图层模糊/背景模糊/颗粒（Mono/Duo/Multi）/纹理粗糙边已在上一节落地；本节的「两 pass 高斯」是针对分级模糊的替代方案讨论，
   当前仍以 CPU 精确复刻（三盒近似）为准。
 - 分级图层模糊（`start_radius/start/end` 的渐进过渡）：可分离高斯 + 按半径分带，半径按设备像素，
   边缘 clamp 扩边（避免透明边收缩）；目前 `is_progressive()` 一律回退。
 - 玻璃：多 pass（降采样 → 模糊 → 折射/色散 → 合成），复用 `glass.wgsl` 的 uniform 约定；
   与 CPU `glass.rs` 的「玻璃切分」口径对齐。
-- 颗粒：Mono 已用 `noise.wgsl` 逐 cell 复刻；Duo/Multi 需要第二色/逐粒色的分支与 `opacity` 语义，
-  按帧种子固定（导出可复现）。
+- 颗粒：Mono、Duo、Multi 均已用 `noise.wgsl` 逐 cell 复刻；Duo 由哈希最高位选第二色，Multi 由
+  bit 16/32/48 取 RGB、`opacity` 取 alpha，按帧种子固定（导出可复现）。
 - **验收**：每种效果单独 diff；效果叠加顺序与 `figcraft_render::effect_order_tests` 一致。
 - 风险：模糊核在不同后端（DX12/Metal/Vulkan）的采样精度差异 → 核系数用 f16 存储时先量化。
 

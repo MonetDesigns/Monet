@@ -193,21 +193,26 @@ struct NoisePlan {
     seed: u32,
     density: f32,
     fill_alpha: f32,
+    mode: u32,
+    opacity: f32,
     cell: [f32; 2],
     color: Rgba,
+    secondary: Rgba,
 }
 
-/// Uniforms for [`NoisePlan`]; 48 bytes, every vec4/vec2 at its natural alignment.
+/// Uniforms for [`NoisePlan`]; 64 bytes, every vec4/vec2 at its natural alignment.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 struct NoiseParams {
     seed: u32,
     density: f32,
     fill_alpha: f32,
-    _pad0: f32,
+    mode: u32,
     cell: [f32; 2],
-    _pad1: [f32; 2],
+    opacity: f32,
+    _pad1: f32,
     color: [f32; 4],
+    secondary: [f32; 4],
 }
 
 /// One rough-edge texture layer: the instance that masks it, the CPU's cell hash seed, the scatter
@@ -938,10 +943,12 @@ impl Renderer {
             seed: plan.seed,
             density: plan.density,
             fill_alpha: plan.fill_alpha,
-            _pad0: 0.0,
+            mode: plan.mode,
             cell: plan.cell,
-            _pad1: [0.0; 2],
+            opacity: plan.opacity,
+            _pad1: 0.0,
             color: [plan.color.r, plan.color.g, plan.color.b, plan.color.a],
+            secondary: [plan.secondary.r, plan.secondary.g, plan.secondary.b, plan.secondary.a],
         };
         let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("noise params"),
@@ -1194,8 +1201,15 @@ impl Renderer {
                         seed: noise.seed,
                         density: noise.density,
                         fill_alpha: noise.fill_alpha,
+                        mode: match noise.mode {
+                            crate::scene::GrainMode::Mono => 0,
+                            crate::scene::GrainMode::Duo => 1,
+                            crate::scene::GrainMode::Multi => 2,
+                        },
+                        opacity: noise.opacity,
                         cell: noise.cell,
                         color: noise.color,
+                        secondary: noise.secondary,
                     });
                 }
                 Item::Texture(texture) => {
