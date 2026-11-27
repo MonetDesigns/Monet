@@ -6,6 +6,8 @@
 //   - 调试边框（FC_DEBUG_LAYOUT）一律按「字形墨盒」绘制，不得退回行盒（ascent+descent）。
 //   - 小标题（sublabels / sublabels2）字形上方保留 pt(4.0) 留白，不得删除。
 //   - 统一网格（segmented、sublabels2 空列、field 行）一律 w_full + flex_1，禁止手算列宽。
+// 2026-11-27 补充：用户明确要求给共享 TextEdit 增加多行能力（评论 composer 的 Shift+Enter
+// 换行），本文件按该指令解冻；以上 INVARIANT 仍保持不变。
 // ============================================================================
 //! `TextInput` — Monet's most primitive, reusable single-line GPUI input.
 //!
@@ -53,11 +55,29 @@ impl TextAlign {
 #[derive(Default)]
 struct LayoutCache {
     line: Option<ShapedLine>,
+    /// Explicit-line layouts for multiline mode. One entry per `\n`-separated paragraph.
+    lines: Vec<CachedLine>,
     bounds: Option<Bounds<Pixels>>,
     /// X of the first glyph in window coordinates (may differ from `bounds.origin.x` when centred).
     text_x: Option<Pixels>,
     /// Whether the shaped line was the composition view (it cannot be mapped back to the buffer).
     composed: bool,
+    multiline: bool,
+    line_height: Pixels,
+    /// Vertical scroll in multiline mode, kept so the caret stays inside the composer.
+    scroll_y: Pixels,
+}
+
+struct CachedLine {
+    line: ShapedLine,
+    text: SharedString,
+    /// Character index of this visual line's first character in the whole buffer.
+    char_start: usize,
+    /// Character index one past this visual line's last character (a `\n` or a soft wrap point is
+    /// not included).
+    char_end: usize,
+    /// A soft-wrapped row continues into the next cached line; a paragraph-final row does not.
+    wrapped: bool,
 }
 
 /// State handed from `prepaint` to `paint`.
@@ -70,6 +90,15 @@ struct PaintState {
     selection: Option<PaintQuad>,
     caret: Option<PaintQuad>,
     /// Underline under the live IME composition, egui draws the same in `canvas/overlays.rs`.
+    preedit: Option<PaintQuad>,
+}
+
+/// State handed from `prepaint` to `paint` in multiline mode.
+struct MultilinePaintState {
+    lines: Vec<(ShapedLine, Point<Pixels>)>,
+    line_height: Pixels,
+    selection: Vec<PaintQuad>,
+    caret: Option<PaintQuad>,
     preedit: Option<PaintQuad>,
 }
 
@@ -130,6 +159,8 @@ pub struct TextInput {
     /// A computed value (a Fill child's size) reads at 50% ink in egui's number fields.
     dim: bool,
     align: TextAlign,
+    /// Shape every `\n`-separated paragraph on its own line. Single-line fields keep the old path.
+    multiline: bool,
     caret_blink: Rc<CaretBlink>,
 }
 
@@ -148,8 +179,26 @@ impl TextInput {
             suffix: SharedString::new(""),
             dim: false,
             align: TextAlign::Left,
+            multiline: false,
             caret_blink: Rc::new(CaretBlink { started: std::cell::Cell::new(None) }),
         }
+    }
+
+    /// Enable multiline editing: paragraphs stack, long rows soft-wrap, and pasted newlines stay.
+    pub fn set_multiline(&mut self, multiline: bool) {
+        self.multiline = multiline;
+        self.buffer.set_multiline(multiline);
+    }
+
+    pub fn is_multiline(&self) -> bool {
+        self.multiline
+    }
+
+    /// Test hook: how many visual rows the last paint cached, and where it scrolled.
+    #[cfg(test)]
+    pub(crate) fn visual_rows_for_test(&self) -> (usize, Pixels) {
+        let cache = self.cache.borrow();
+        (cache.lines.len(), cache.scroll_y)
     }
 
     /// Set where the glyphs sit inside the editor box. All hit-testing follows this origin.
@@ -202,6 +251,19 @@ impl TextInput {
         let cache = self.cache.borrow();
         let Some(bounds) = cache.bounds else { return 0 };
         let text_x = cache.text_x.unwrap_or(bounds.origin.x);
+        if cache.multiline && !cache.lines.is_empty() {
+            let line_ix = if p.y <= bounds.origin.y {
+                0
+            } else {
+                (((p.y - bounds.origin.y + cache.scroll_y) / cache.line_height) as usize).min(cache.lines.len() - 1)
+            };
+            let line = &cache.lines[line_ix];
+            if p.x <= text_x {
+                return line.char_start;
+            }
+            let byte = line.line.closest_index_for_x(p.x - text_x);
+            return line.char_start + line.text.as_ref()[..byte].chars().count();
+        }
         if p.x <= text_x {
             return 0;
         }
@@ -210,6 +272,37 @@ impl TextInput {
             None => return self.buffer.len(),
         };
         self.buffer.from_byte(byte)
+    }
+
+    /// The character range of the visual line containing `caret`. Used by Home/End in a
+    /// multiline editor; single-line callers keep the buffer-wide behaviour.
+    pub(crate) fn line_bounds(&self, caret: usize) -> Option<(usize, usize)> {
+        let cache = self.cache.borrow();
+        if !cache.multiline || cache.lines.is_empty() {
+            return None;
+        }
+        let ix = line_index_for_char(&cache.lines, caret);
+        let line = &cache.lines[ix];
+        Some((line.char_start, line.char_end))
+    }
+
+    /// Move `caret` one visual line up/down while keeping the x position as close as possible.
+    pub(crate) fn vertical_target(&self, caret: usize, dir: i32) -> Option<usize> {
+        let cache = self.cache.borrow();
+        if !cache.multiline || cache.lines.is_empty() {
+            return None;
+        }
+        let ix = line_index_for_char(&cache.lines, caret);
+        let line = &cache.lines[ix];
+        let local = caret.saturating_sub(line.char_start).min(line.char_end - line.char_start);
+        let x = line.line.x_for_index(byte_at(&line.text, local));
+        let target_ix = (ix as i32 + dir).clamp(0, cache.lines.len() as i32 - 1) as usize;
+        if target_ix == ix {
+            return Some(caret);
+        }
+        let target = &cache.lines[target_ix];
+        let byte = target.line.closest_index_for_x(x);
+        Some(target.char_start + target.text.as_ref()[..byte].chars().count())
     }
 
     // ── EntityInputHandler delegation (no editing logic duplicated) ─────────────────────────
@@ -233,6 +326,24 @@ impl TextInput {
     }
     pub fn input_bounds_for_range(&self, range: Range<usize>, element_bounds: Bounds<Pixels>) -> Option<Bounds<Pixels>> {
         let cache = self.cache.borrow();
+        if cache.multiline && !cache.lines.is_empty() {
+            if cache.composed {
+                return Some(element_bounds);
+            }
+            let start = self.buffer.utf16_to_char(range.start);
+            let end = self.buffer.utf16_to_char(range.end);
+            let ix = line_index_for_char(&cache.lines, start);
+            let line = &cache.lines[ix];
+            let local_start = start.saturating_sub(line.char_start).min(line.char_end - line.char_start);
+            let local_end = end.saturating_sub(line.char_start).min(line.char_end - line.char_start);
+            let x0 = line.line.x_for_index(byte_at(&line.text, local_start));
+            let x1 = line.line.x_for_index(byte_at(&line.text, local_end));
+            let top = cache.bounds.map_or(element_bounds.origin.y, |b| b.origin.y) + cache.line_height * ix as f32 - cache.scroll_y;
+            // The platform passes the element bounds; keep the horizontal shift used by glyphs.
+            let text_x = cache.text_x.unwrap_or(element_bounds.origin.x);
+            let shift = text_x - cache.bounds.map_or(element_bounds.origin.x, |b| b.origin.x);
+            return Some(Bounds { origin: point(element_bounds.origin.x + shift + x0, top), size: size((x1 - x0).max(px(1.0)), cache.line_height) });
+        }
         let line = cache.line.as_ref()?;
         if cache.composed {
             return Some(element_bounds);
@@ -245,6 +356,13 @@ impl TextInput {
     }
     pub fn input_character_index_for_point(&self, p: Point<Pixels>) -> Option<usize> {
         let cache = self.cache.borrow();
+        if cache.multiline && !cache.lines.is_empty() {
+            if cache.composed {
+                return None; // composition view has no stable mapping back to the committed text
+            }
+            let ci = self.index_for_point(p);
+            return Some(self.buffer.char_to_utf16(ci));
+        }
         let bounds = cache.bounds.as_ref()?;
         let line = cache.line.as_ref()?;
         if cache.composed {
@@ -263,7 +381,10 @@ impl TextInput {
         focus: FocusHandle,
         focused: bool,
         cursor: Option<gpui::CursorStyle>,
-    ) -> impl IntoElement {
+    ) -> gpui::AnyElement {
+        if self.multiline {
+            return self.multiline_element(entity, focus, focused, cursor).into_any_element();
+        }
         let (display, is_composed) = self.display(focused);
         let blink = self.caret_blink.clone();
         let ticker_started = Rc::new(std::cell::Cell::new(false));
@@ -372,7 +493,8 @@ impl TextInput {
                     bounds.origin.y, bounds.size.height, line.ascent, line.descent, text_top, text_height
                 );
             }
-            *cache.borrow_mut() = LayoutCache { line: Some(line.clone()), bounds: Some(bounds), text_x: Some(text_x), composed: is_composed };
+            *cache.borrow_mut() =
+                LayoutCache { line: Some(line.clone()), bounds: Some(bounds), text_x: Some(text_x), composed: is_composed, ..Default::default() };
             PaintState { line, origin: point(text_x, text_top), text_height, selection, caret: caret_quad, preedit }
         };
 
@@ -391,6 +513,234 @@ impl TextInput {
         };
         let el = canvas(prepaint, paint).size_full();
         match cursor {
+            Some(c) => el.cursor(c).into_any_element(),
+            None => el.into_any_element(),
+        }
+    }
+
+    /// Multiline rendering. One shaped line per explicit `\n` paragraph; the parent composer gives
+    /// the editor its height and clips lines beyond it. No soft wrapping, so caret/selection
+    /// geometry stays byte-accurate per paragraph.
+    fn multiline_element<V: EntityInputHandler + 'static>(
+        &self,
+        entity: Entity<V>,
+        focus: FocusHandle,
+        focused: bool,
+        cursor: Option<gpui::CursorStyle>,
+    ) -> impl IntoElement {
+        let (display, is_composed) = self.display(focused);
+        let blink = self.caret_blink.clone();
+        let ticker_started = Rc::new(std::cell::Cell::new(false));
+        let prepaint_ticker = ticker_started.clone();
+        let blink_entity = entity.clone();
+        let font_size = self.font_size;
+        let t = tokens();
+        let ink = if t.dark { rgba(t.text) } else { rgba(crate::canvas::geom::Color32::from_rgb(0x1A, 0x1A, 0x1A)) };
+        let dim_ink = if t.dark {
+            rgba(crate::canvas::geom::Color32::from_white_alpha(128))
+        } else {
+            rgba(crate::canvas::geom::Color32::from_black_alpha(128))
+        };
+        let color: Hsla = if self.buffer.is_empty() {
+            rgba(t.text_tertiary)
+        } else if self.dim {
+            dim_ink
+        } else {
+            ink
+        }
+        .into();
+        let caret_color: Hsla = rgba(caret::color(&t)).into();
+        let selection_color: Hsla = rgba(caret::selection(&t)).into();
+        let c = self.buffer.composed();
+        let sel_range = if c.composing { c.mark_start..c.mark_end } else { self.buffer.range() };
+        let sel_a = sel_range.start;
+        let sel_b = sel_range.end;
+        let caret = c.caret;
+        let preedit = c.composing.then(|| (c.mark_start, c.mark_end));
+        let cache = self.cache.clone();
+
+        let prepaint = move |bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App| {
+            let ticker_started = prepaint_ticker.clone();
+            let previous_scroll = cache.borrow().scroll_y;
+            let font = window.text_style().font();
+            let mut cached = Vec::new();
+            let mut char_start = 0;
+            let mut line_height = font_size * 1.35;
+            let text_top = bounds.origin.y;
+            let text_x = bounds.origin.x;
+            let wrap_width = bounds.size.width.max(px(1.0));
+            for (ix, part) in display.split('\n').enumerate() {
+                let chars: Vec<char> = part.chars().collect();
+                if chars.is_empty() {
+                    let text = SharedString::new("");
+                    let run = TextRun { len: 0, font: font.clone(), color, background_color: None, underline: None, strikethrough: None };
+                    let line = window.text_system().shape_line(text.clone(), font_size, &[run], None);
+                    if ix == 0 {
+                        line_height = (line.ascent + line.descent).max(font_size * 1.35);
+                    }
+                    cached.push(CachedLine { line, text, char_start, char_end: char_start, wrapped: false });
+                    // The paragraph break itself is not part of any visual row.
+                    char_start += 1;
+                    continue;
+                }
+                let full_text = SharedString::from(part.to_string());
+                let full_run =
+                    TextRun { len: full_text.len(), font: font.clone(), color, background_color: None, underline: None, strikethrough: None };
+                let full = window.text_system().shape_line(full_text.clone(), font_size, &[full_run], None);
+                if ix == 0 {
+                    line_height = (full.ascent + full.descent).max(font_size * 1.35);
+                }
+                let mut start = 0;
+                while start < chars.len() {
+                    let byte_start = byte_at(part, start);
+                    let x0 = full.x_for_index(byte_start);
+                    let mut fit = chars.len();
+                    for end in start + 1..=chars.len() {
+                        if full.x_for_index(byte_at(part, end)) - x0 > wrap_width {
+                            fit = end.saturating_sub(1);
+                            break;
+                        }
+                    }
+                    // Prefer a word boundary: a trailing space stays on the row it belongs to.
+                    if fit < chars.len() {
+                        if let Some(space) = chars[start..fit].iter().rposition(|c| c.is_whitespace() || *c == '-') {
+                            if space > 0 {
+                                fit = start + space + 1;
+                            }
+                        }
+                        fit = fit.max(start + 1);
+                    }
+                    let text: String = chars[start..fit].iter().collect();
+                    let len = text.len();
+                    let run = TextRun { len, font: font.clone(), color, background_color: None, underline: None, strikethrough: None };
+                    let line = window.text_system().shape_line(SharedString::from(text.clone()), font_size, &[run], None);
+                    let wrapped = fit < chars.len();
+                    cached.push(CachedLine {
+                        line,
+                        text: SharedString::from(text),
+                        char_start: char_start + start,
+                        char_end: char_start + fit,
+                        wrapped,
+                    });
+                    start = fit;
+                }
+                char_start += chars.len() + 1;
+            }
+            // A fixed-height composer clips long comments. Keep the caret line inside the visible
+            // box instead of letting the user type past the bottom edge blindly.
+            let total_h = line_height * cached.len() as f32;
+            let visible_h = bounds.size.height.max(px(1.0));
+            let mut scroll_y = previous_scroll;
+            if total_h > visible_h {
+                let caret_ix = line_index_for_char(&cached, caret);
+                let caret_top = line_height * caret_ix as f32;
+                if caret_top < scroll_y {
+                    scroll_y = caret_top;
+                } else if caret_top + line_height > scroll_y + visible_h {
+                    scroll_y = caret_top + line_height - visible_h;
+                }
+                scroll_y = scroll_y.max(px(0.0)).min(total_h - visible_h);
+            } else {
+                scroll_y = px(0.0);
+            }
+            let lines: Vec<(ShapedLine, Point<Pixels>)> = cached
+                .iter()
+                .enumerate()
+                .map(|(ix, line)| (line.line.clone(), point(text_x, text_top + line_height * ix as f32 - scroll_y)))
+                .collect();
+            let mut selection = Vec::new();
+            for line in &cached {
+                let start = sel_a.max(line.char_start).min(line.char_end);
+                let end = sel_b.max(line.char_start).min(line.char_end);
+                if start < end {
+                    let x0 = line.line.x_for_index(byte_at(&line.text, start - line.char_start));
+                    let x1 = line.line.x_for_index(byte_at(&line.text, end - line.char_start));
+                    selection.push(fill(
+                        Bounds {
+                            origin: point(text_x + x0, text_top + line_height * line_index_for_char(&cached, line.char_start) as f32 - scroll_y),
+                            size: size((x1 - x0).max(px(1.0)), line_height),
+                        },
+                        selection_color,
+                    ));
+                }
+            }
+            let caret_quad = if focused && blink.visible() && sel_a == sel_b {
+                let ix = line_index_for_char(&cached, caret);
+                let line = &cached[ix];
+                let local = caret.saturating_sub(line.char_start).min(line.char_end - line.char_start);
+                let x = line.line.x_for_index(byte_at(&line.text, local));
+                let mut quad = fill(
+                    Bounds { origin: point(text_x + x, text_top + line_height * ix as f32 - scroll_y), size: size(px(caret::WIDTH), line_height) },
+                    caret_color,
+                );
+                quad.corner_radii = gpui::Corners::all(px(caret::RADIUS as f32));
+                Some(quad)
+            } else {
+                None
+            };
+            let preedit = preedit.and_then(|(a, b)| {
+                let ix = line_index_for_char(&cached, a);
+                let line = &cached[ix];
+                let a = a.saturating_sub(line.char_start).min(line.char_end - line.char_start);
+                let b = b.saturating_sub(line.char_start).min(line.char_end - line.char_start);
+                let x0 = line.line.x_for_index(byte_at(&line.text, a));
+                let x1 = line.line.x_for_index(byte_at(&line.text, b));
+                Some(fill(
+                    Bounds {
+                        origin: point(text_x + x0, text_top + line_height * ix as f32 + line_height - px(1.0) - scroll_y),
+                        size: size((x1 - x0).max(px(1.0)), px(1.0)),
+                    },
+                    color,
+                ))
+            });
+            if !focused {
+                blink.clear();
+            } else {
+                blink.start();
+                if !ticker_started.get() {
+                    ticker_started.set(true);
+                    let e = blink_entity.clone();
+                    cx.spawn(async move |cx: &mut gpui::AsyncApp| {
+                        loop {
+                            cx.background_executor().timer(caret::BLINK).await;
+                            if e.update(cx, |_, cx| cx.notify()).is_err() {
+                                break;
+                            }
+                        }
+                    })
+                    .detach();
+                }
+            }
+            *cache.borrow_mut() = LayoutCache {
+                line: None,
+                lines: cached,
+                bounds: Some(bounds),
+                text_x: Some(text_x),
+                composed: is_composed,
+                multiline: true,
+                line_height,
+                scroll_y,
+            };
+            MultilinePaintState { lines, line_height, selection, caret: caret_quad, preedit }
+        };
+
+        let paint = move |bounds: Bounds<Pixels>, state: MultilinePaintState, window: &mut Window, cx: &mut App| {
+            window.handle_input(&focus, ElementInputHandler::new(bounds, entity), cx);
+            for quad in state.selection {
+                window.paint_quad(quad);
+            }
+            for (line, origin) in state.lines {
+                let _ = line.paint(origin, state.line_height, window, cx);
+            }
+            if let Some(quad) = state.preedit {
+                window.paint_quad(quad);
+            }
+            if let Some(quad) = state.caret {
+                window.paint_quad(quad);
+            }
+        };
+        let el = canvas(prepaint, paint).size_full();
+        match cursor {
             Some(c) => el.cursor(c),
             None => el,
         }
@@ -400,6 +750,13 @@ impl TextInput {
 /// Character index → UTF-8 byte offset in an arbitrary (possibly composed) string.
 fn byte_at(s: &str, ci: usize) -> usize {
     s.char_indices().nth(ci).map(|(b, _)| b).unwrap_or(s.len())
+}
+
+/// Which visual row contains `caret`. At a soft-wrap boundary the caret belongs to the row that
+/// starts there, while at a paragraph-final boundary (the `\n` is not part of the row) it belongs
+/// to the row that just ended.
+fn line_index_for_char(lines: &[CachedLine], caret: usize) -> usize {
+    lines.iter().position(|l| caret < l.char_end || (caret == l.char_end && !l.wrapped)).unwrap_or(lines.len() - 1)
 }
 
 impl Default for TextInput {

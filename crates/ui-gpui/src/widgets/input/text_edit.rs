@@ -8,6 +8,8 @@
 //   - 统一网格（segmented、sublabels2 空列、field 行）一律 w_full + flex_1，禁止手算列宽。
 // 2026-11-05 补充：用户随后明确指令「重构 color_field / template 插槽隐藏 / number_field 范围 /
 // 失焦提交」，本文件按该指令解冻；以上 INVARIANT 仍保持不变。
+// 2026-11-27 补充：用户明确要求本控件支持多行（评论 composer 的 Shift+Enter 换行），按该指令
+// 解冻；以上 INVARIANT 仍保持不变。
 // ============================================================================
 //! `TextEdit` — `ui-egui`'s **`text_field_edit` / `field_editor`**: the editing lifecycle only.
 //!
@@ -109,6 +111,8 @@ pub struct TextEdit {
     right_pad: f32,
     /// Right-align the value: the opacity's number sits right-aligned in its 44 pt cell.
     align: TextAlign,
+    /// Explicit newlines are enabled: stack paragraphs, Shift+Enter inserts a break.
+    multiline: bool,
     /// A read-only field never enters edit mode (a display-only combo).
     readonly: bool,
     /// Escape clears this field (a search box).
@@ -137,6 +141,7 @@ impl TextEdit {
             inset_left: 0.0,
             right_pad: 0.0,
             align: TextAlign::Left,
+            multiline: false,
             readonly: false,
             search_clear: false,
         }
@@ -211,6 +216,15 @@ impl TextEdit {
     pub fn set_align(&mut self, a: TextAlign) {
         self.align = a;
         self.input.set_align(a);
+    }
+    /// Explicit newlines: the editor stacks paragraphs and Shift+Enter inserts a line break.
+    /// Plain Enter still follows the existing commit path (comment composers intercept it first).
+    pub fn set_multiline(&mut self, multiline: bool) {
+        self.multiline = multiline;
+        self.input.set_multiline(multiline);
+    }
+    pub fn is_multiline(&self) -> bool {
+        self.multiline
     }
     pub fn set_readonly(&mut self, b: bool) {
         self.readonly = b;
@@ -473,7 +487,8 @@ impl Render for TextEdit {
             .w_full()
             .h_full()
             .flex()
-            .items_center()
+            .when(self.multiline, |d| d.items_start())
+            .when(!self.multiline, |d| d.items_center())
             .pl(pt(self.inset_left))
             .pr(pt(self.right_pad))
             .child(self.input.element(entity, focus, focused, cursor));
@@ -710,6 +725,46 @@ impl Render for TextEdit {
                     cx.notify();
                     return;
                 }
+                // Multiline editing: Shift+Enter inserts a paragraph break, arrows/home/end follow
+                // the visual paragraphs rather than the whole buffer.
+                if this.multiline {
+                    match key {
+                        "enter" if m.shift => {
+                            this.input.buffer.insert("\n");
+                            this.select_all_pending = false;
+                            this.notify_change(window, cx);
+                            cx.notify();
+                            return;
+                        }
+                        "arrowup" | "arrowdown" => {
+                            let dir = if key == "arrowup" { -1 } else { 1 };
+                            if let Some(target) = this.input.vertical_target(this.input.buffer.range().end, dir) {
+                                if m.shift {
+                                    this.input.buffer.select_to(target);
+                                } else {
+                                    this.input.buffer.move_to(target);
+                                }
+                                this.select_all_pending = false;
+                                cx.notify();
+                            }
+                            return;
+                        }
+                        "home" | "end" => {
+                            if let Some((start, end)) = this.input.line_bounds(this.input.buffer.range().end) {
+                                let target = if key == "home" { start } else { end };
+                                if m.shift {
+                                    this.input.buffer.select_to(target);
+                                } else {
+                                    this.input.buffer.move_to(target);
+                                }
+                                this.select_all_pending = false;
+                                cx.notify();
+                            }
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
                 // Printable characters belong to the platform input handler.
                 if let Some(ch) = e.keystroke.key_char.as_ref().and_then(|s| s.chars().next()).filter(|c| *c >= ' ') {
                     if !this.editing {
@@ -883,6 +938,73 @@ mod tests {
             field.commit(window, cx);
             assert_eq!(field.value(), "80", "the old number must survive");
             assert_eq!(field.input.buffer.text(), "80", "the text must disappear from the field");
+        });
+    }
+
+    /// 评论 composer：多行模式下 Shift+Enter 必须真的在缓冲区里插入段落，而不是提交或忽略。
+    #[gpui::test]
+    async fn shift_enter_inserts_a_paragraph_break(cx: &mut gpui::TestAppContext) {
+        let (view, window) = cx.add_window_view(|_window, cx| {
+            let mut field = TextEdit::new(cx);
+            field.set_value("first");
+            field.set_multiline(true);
+            field
+        });
+
+        view.update_in(window, |field, window, _cx| {
+            field.begin_edit(window, false);
+            window.focus(&field.focus);
+        });
+        window.simulate_keystrokes("shift-enter");
+
+        view.update(window, |field, _| {
+            assert_eq!(field.input.buffer.text(), "first\n", "Shift+Enter must insert a newline");
+            assert!(field.is_multiline());
+        });
+    }
+
+    /// 上下键按视觉段落走：从第二行末尾上行到第一行末尾，而不是整段文本的首尾。
+    #[gpui::test]
+    async fn up_moves_to_the_previous_visual_paragraph(cx: &mut gpui::TestAppContext) {
+        let (view, window) = cx.add_window_view(|_window, cx| {
+            let mut field = TextEdit::new(cx);
+            field.set_value("ab\ncdef");
+            field.set_multiline(true);
+            field
+        });
+        window.simulate_resize(gpui::Size::new(px(300.0), px(90.0)));
+        view.update_in(window, |field, window, _cx| {
+            field.begin_edit(window, false);
+            window.focus(&field.focus);
+        });
+        window.simulate_keystrokes("up");
+
+        view.update(window, |field, _| {
+            assert_eq!(field.input.buffer.range().end, 2, "the caret should land at the end of 'ab'");
+        });
+    }
+
+    /// 固定高度的 composer 也要真的能看全内容：长行软换行，行数超过可视高度时跟随光标滚动。
+    #[gpui::test]
+    async fn long_lines_wrap_and_the_caret_scrolls_inside_the_box(cx: &mut gpui::TestAppContext) {
+        let (view, window) = cx.add_window_view(|_window, cx| {
+            let mut field = TextEdit::new(cx);
+            field.set_value("one two three four five six seven eight nine ten\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine");
+            field.set_multiline(true);
+            field
+        });
+        window.simulate_resize(gpui::Size::new(px(140.0), px(72.0)));
+        view.update_in(window, |field, window, _cx| {
+            field.begin_edit(window, false);
+            window.focus(&field.focus);
+        });
+        // Force a paint so the cache reflects this window's narrow, short composer.
+        window.simulate_keystrokes("end");
+
+        view.update(window, |field, _| {
+            let (rows, scroll_y) = field.input.visual_rows_for_test();
+            assert!(scroll_y > px(0.0), "the caret row must stay inside the 72 px composer");
+            assert!(rows > 9, "the long paragraph must wrap into extra visual rows");
         });
     }
 }

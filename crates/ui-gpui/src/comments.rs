@@ -8,7 +8,7 @@
 //! a command or a widget.
 
 use crate::panels::{Cmd, RightFields};
-use crate::widgets::input::TextField;
+use crate::widgets::input::TextEdit;
 use crate::widgets::popover::{Open, popover_window, title_text};
 use crate::widgets::{Dropdown, LabelButton, MenuRow, rgba, tokens};
 use figcraft_doc::{Document, Message, NodeId};
@@ -42,7 +42,7 @@ pub(crate) struct DraftState {
     pub x: f64,
     pub y: f64,
     pub text: String,
-    pub field: Entity<TextField>,
+    pub field: Entity<TextEdit>,
     /// The composer asks for the keyboard on its first frame.
     pub focus: bool,
     /// Byte offset of the live caret; `@mention` ends here, not at the end of the draft.
@@ -57,7 +57,7 @@ pub(crate) struct DraftState {
 pub(crate) struct ThreadState {
     pub id: u64,
     pub reply: String,
-    pub field: Entity<TextField>,
+    pub field: Entity<TextEdit>,
     pub focus: bool,
     /// The message index (0 = first message) being edited, if any.
     pub editing: Option<usize>,
@@ -153,6 +153,7 @@ pub(crate) fn draft_popover(
     state: &Rc<RefCell<DraftState>>,
     canvas_origin: (f32, f32),
     viewport: Size<Pixels>,
+    cx: &mut App,
     dismiss: Rc<dyn Fn(&mut Window, &mut App)>,
     submit: Rc<dyn Fn(&mut Window, &mut App)>,
     pick: Rc<dyn Fn(&str, &mut Window, &mut App)>,
@@ -178,9 +179,21 @@ pub(crate) fn draft_popover(
     };
     // The estimate only drives viewport clamping; include the mention list so a picker near the
     // bottom of the screen lifts instead of drawing past it.
-    let estimated_h = 112.0 + names.len() as f32 * 26.0;
+    let estimated_h = 176.0 + names.len() as f32 * 26.0;
 
-    let mut body = div().flex().flex_col().gap(px(6.0)).child(div().w_full().child(field));
+    let mut body = div().flex().flex_col().gap(px(6.0)).child(
+        div()
+            .w_full()
+            .h(px(72.0))
+            .px(px(8.0))
+            .py(px(6.0))
+            .rounded(px(5.0))
+            .bg(rgba(t.field))
+            .border_1()
+            .border_color(rgba(t.border))
+            .overflow_hidden()
+            .child(field),
+    );
     if !names.is_empty() {
         let mut list = div().flex().flex_col().rounded(px(6.0)).bg(rgba(t.field)).overflow_hidden();
         for (i, name) in names.iter().enumerate() {
@@ -213,7 +226,7 @@ pub(crate) fn draft_popover(
             .items_center()
             .justify_between()
             .child(div().text_size(px(10.0)).text_color(rgba(t.text_tertiary)).child(tr("Click Post · @ to mention")))
-            .child(LabelButton::new("comment-draft-post", tr("Post")).on_click({
+            .child(LabelButton::new("comment-draft-post", tr("Post")).focusable(cx).on_click({
                 let submit = submit.clone();
                 move |window, cx| submit(window, cx)
             })),
@@ -229,6 +242,7 @@ pub(crate) fn thread_popover(
     state: &Rc<RefCell<crate::comments::ThreadState>>,
     canvas_origin: (f32, f32),
     viewport: Size<Pixels>,
+    cx: &mut App,
     dismiss: Rc<dyn Fn(&mut Window, &mut App)>,
     submit: Rc<dyn Fn(&mut Window, &mut App)>,
     resolve: Rc<dyn Fn(bool, &mut Window, &mut App)>,
@@ -277,11 +291,16 @@ pub(crate) fn thread_popover(
                     .flex()
                     .flex_row()
                     .gap(px(6.0))
-                    .child(LabelButton::new("comment-thread-resolve", if c.resolved { tr("Reopen") } else { tr("Resolve") }).secondary().on_click({
-                        let resolved = c.resolved;
-                        move |window, cx| resolve(!resolved, window, cx)
-                    }))
-                    .child(LabelButton::new("comment-thread-more", tr("More")).secondary().on_click({
+                    .child(
+                        LabelButton::new("comment-thread-resolve", if c.resolved { tr("Reopen") } else { tr("Resolve") })
+                            .secondary()
+                            .focusable(cx)
+                            .on_click({
+                                let resolved = c.resolved;
+                                move |window, cx| resolve(!resolved, window, cx)
+                            }),
+                    )
+                    .child(LabelButton::new("comment-thread-more", tr("More")).secondary().focusable(cx).on_click({
                         let state = state.clone();
                         move |window, cx| {
                             let next = {
@@ -298,9 +317,9 @@ pub(crate) fn thread_popover(
             ),
     );
     if state.borrow().more {
-        let menu = |id: &'static str, label: &'static str, act: ThreadAction| {
+        let menu = |id: &'static str, label: &'static str, act: ThreadAction, cx: &mut App| {
             let action = action.clone();
-            LabelButton::new(id, tr(label)).secondary().on_click(move |window, cx| action(act.clone(), window, cx))
+            LabelButton::new(id, tr(label)).secondary().focusable(cx).on_click(move |window, cx| action(act.clone(), window, cx))
         };
         body = body.child(
             div()
@@ -312,9 +331,9 @@ pub(crate) fn thread_popover(
                 .border_1()
                 .border_color(rgba(t.border))
                 .p(px(4.0))
-                .child(menu("comment-thread-unread", "Mark as unread", ThreadAction::MarkUnread))
-                .child(menu("comment-thread-link", "Copy link", ThreadAction::CopyLink))
-                .child(menu("comment-thread-ai", "Copy for AI", ThreadAction::CopyForAi)),
+                .child(menu("comment-thread-unread", "Mark as unread", ThreadAction::MarkUnread, cx))
+                .child(menu("comment-thread-link", "Copy link", ThreadAction::CopyLink, cx))
+                .child(menu("comment-thread-ai", "Copy for AI", ThreadAction::CopyForAi, cx)),
         );
     }
 
@@ -338,9 +357,10 @@ pub(crate) fn thread_popover(
                         s.editing = Some(index);
                         s.reply = text.clone();
                     }
-                    field.update(cx, |tf, cx| {
-                        tf.edit().update(cx, |edit, _| edit.set_draft_text(text));
-                        tf.edit().update(cx, |edit, _| edit.focus_editor(window));
+                    field.update(cx, |edit, cx| {
+                        edit.set_draft_text(text);
+                        edit.focus_editor(window);
+                        cx.notify();
                     });
                     window.refresh();
                 }) as Rc<dyn Fn(&mut Window, &mut App)>
@@ -358,6 +378,7 @@ pub(crate) fn thread_popover(
                     .child(
                         LabelButton::new(gpui::ElementId::from(("comment-edit", index as u64)), tr("Edit"))
                             .secondary()
+                            .focusable(cx)
                             .on_click(move |window, cx| edit(window, cx)),
                     )
                     .child(
@@ -366,6 +387,7 @@ pub(crate) fn thread_popover(
                             if index == 0 { tr("Delete thread") } else { tr("Delete") },
                         )
                         .secondary()
+                        .focusable(cx)
                         .on_click(move |window, cx| del(window, cx)),
                     ),
             );
@@ -378,12 +400,12 @@ pub(crate) fn thread_popover(
             let action = action.clone();
             let label = format!("{emoji} {}", r.users.len());
             let id = gpui::ElementId::from(SharedString::from(format!("comment-reaction-{index}-{ri}")));
-            let button = LabelButton::new(id, label).secondary().selected(on);
+            let button = LabelButton::new(id, label).secondary().selected(on).focusable(cx);
             reactions = reactions.child(button.on_click(move |window, cx| action(act.clone(), window, cx)));
         }
         let toggle = state.clone();
         let add_id = gpui::ElementId::from(SharedString::from(format!("comment-react-add-{index}")));
-        reactions = reactions.child(LabelButton::new(add_id, "+").secondary().on_click(move |window, _| {
+        reactions = reactions.child(LabelButton::new(add_id, "+").secondary().focusable(cx).on_click(move |window, _| {
             let mut s = toggle.borrow_mut();
             s.reacting = if s.reacting == Some(index) { None } else { Some(index) };
             s.more = false;
@@ -396,7 +418,7 @@ pub(crate) fn thread_popover(
                 let action = action.clone();
                 let act = ThreadAction::React(index, emoji.to_string());
                 let pick_id = gpui::ElementId::from(SharedString::from(format!("comment-react-pick-{index}-{emoji}")));
-                picker = picker.child(LabelButton::new(pick_id, emoji).secondary().on_click(move |window, cx| {
+                picker = picker.child(LabelButton::new(pick_id, emoji).secondary().focusable(cx).on_click(move |window, cx| {
                     action(act.clone(), window, cx);
                     // The picker closes after a pick; the command's result repaints the thread.
                 }));
@@ -418,22 +440,23 @@ pub(crate) fn thread_popover(
                 s.reply = restore.clone();
                 restore
             };
-            field.update(cx, |tf, cx| {
-                tf.edit().update(cx, |edit, _| edit.set_draft_text(restore));
-                tf.edit().update(cx, |edit, _| edit.focus_editor(window));
+            field.update(cx, |edit, cx| {
+                edit.set_draft_text(restore);
+                edit.focus_editor(window);
+                cx.notify();
             });
             window.refresh();
         }) as Rc<dyn Fn(&mut Window, &mut App)>
     };
     let mut reply_actions = div().flex().flex_row().justify_end().gap(px(6.0)).child(
-        LabelButton::new("comment-thread-reply", if editing.is_some() { tr("Save") } else { tr("Reply") }).on_click({
+        LabelButton::new("comment-thread-reply", if editing.is_some() { tr("Save") } else { tr("Reply") }).focusable(cx).on_click({
             let submit = submit.clone();
             move |window, cx| submit(window, cx)
         }),
     );
     if editing.is_some() {
-        reply_actions =
-            reply_actions.child(LabelButton::new("comment-thread-cancel", tr("Cancel")).secondary().on_click(move |window, cx| cancel(window, cx)));
+        reply_actions = reply_actions
+            .child(LabelButton::new("comment-thread-cancel", tr("Cancel")).secondary().focusable(cx).on_click(move |window, cx| cancel(window, cx)));
     }
     let mut composer = div().flex().flex_col().gap(px(4.0));
     if !names.is_empty() {
@@ -443,12 +466,28 @@ pub(crate) fn thread_popover(
             let pick = pick_mention.clone();
             let id = gpui::ElementId::from(SharedString::from(format!("comment-reply-mention-{name}")));
             list = list.child(
-                LabelButton::new(id, name.clone()).secondary().selected(i == mention_sel).on_click(move |window, cx| pick(&picked, window, cx)),
+                LabelButton::new(id, name.clone())
+                    .secondary()
+                    .selected(i == mention_sel)
+                    .focusable(cx)
+                    .on_click(move |window, cx| pick(&picked, window, cx)),
             );
         }
         composer = composer.child(list);
     }
-    composer = composer.child(div().w_full().child(reply_field));
+    composer = composer.child(
+        div()
+            .w_full()
+            .h(px(72.0))
+            .px(px(8.0))
+            .py(px(6.0))
+            .rounded(px(5.0))
+            .bg(rgba(t.field))
+            .border_1()
+            .border_color(rgba(t.border))
+            .overflow_hidden()
+            .child(reply_field),
+    );
     body =
         body.child(div().flex().flex_col().gap(px(6.0)).border_t_1().border_color(rgba(t.border)).pt(px(8.0)).child(composer).child(reply_actions));
     let body = with_enter_submit(body, submit);
