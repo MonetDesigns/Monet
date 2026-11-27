@@ -231,6 +231,36 @@ fn cell_of(vars: &figcraft_doc::Variables, val: Option<&figcraft_doc::VariableVa
     }
 }
 
+/// The first of `base`, `base 2`, `base 3`… that `taken` doesn't hold (egui `unique`).
+fn unique_name(base: &str, taken: impl Fn(&str) -> bool) -> String {
+    (1..10_000).map(|k| if k == 1 { base.to_string() } else { format!("{base} {k}") }).find(|n| !taken(n)).unwrap_or_else(|| base.to_string())
+}
+
+/// `command.batch` params copying the local variables under `group` into the next free sibling
+/// group (`Brand` → `Brand 2`), every mode and scope included. Mirrors egui `duplicate_group`:
+/// each copy is `variable.duplicate` then a rename through the `$ref` tag, so one undo step
+/// restores the whole group. Inherited (library-extension) members are skipped: the engine
+/// rejects them and one failure would roll the entire batch back.
+fn duplicate_group_batch(rows: &[VarRow], groups: &[String], group: &str) -> Option<Value> {
+    let (parent, leaf) = group.rsplit_once('/').map_or(("", group), |(p, l)| (p, l));
+    let copy_leaf = unique_name(leaf, |n| {
+        let full = if parent.is_empty() { n.to_string() } else { format!("{parent}/{n}") };
+        full == group || groups.contains(&full) || rows.iter().any(|r| r.full_name.starts_with(&format!("{full}/")))
+    });
+    let copy = if parent.is_empty() { copy_leaf } else { format!("{parent}/{copy_leaf}") };
+    let prefix = format!("{group}/");
+    let mut steps: Vec<Value> = Vec::new();
+    for (k, r) in rows.iter().filter(|r| !r.inherited && r.full_name.starts_with(&prefix)).enumerate() {
+        let tag = format!("copy{k}");
+        steps.push(json!({"command": "variable.duplicate", "params": {"variable": r.id}, "as": tag}));
+        steps.push(json!({
+            "command": "variable.update",
+            "params": {"variable": {"$ref": tag}, "name": format!("{copy}/{}", &r.full_name[prefix.len()..])},
+        }));
+    }
+    (!steps.is_empty()).then(|| json!({"label": tr("Duplicate group"), "commands": steps}))
+}
+
 /// 把分组连同它的所有祖先分组一起收集（`Varia/bl/k` → `Varia`、`Varia/bl`）。
 /// 用户 2026-11-17：只有叶子组会被 `rsplit_once('/')` 命中，中间层在侧栏里会凭空消失。
 fn push_group(groups: &mut Vec<String>, group: &str) {
@@ -2226,7 +2256,8 @@ impl VariablesEditor {
                                         f32::from(e.position.x),
                                         f32::from(e.position.y),
                                         vec![
-                                            MenuItem::new(tr("Rename group"), "ui.renameGroup", json!({ "group": g_toggle, "name": g_short })),
+                                            MenuItem::new(tr("Rename group"), "ui.renameGroup", json!({ "group": g_toggle.clone(), "name": g_short })),
+                                            MenuItem::new(tr("Duplicate group"), "ui.duplicateGroup", json!({ "group": g_toggle.clone() })),
                                             MenuItem::new(tr("Delete group"), "ui.deleteGroup", json!({ "variables": vars })),
                                         ],
                                     ));
@@ -3465,6 +3496,15 @@ impl VariablesEditor {
                                     Self::paste_column(&state, &cmds, &data, m);
                                 }
                             }
+                            "ui.duplicateGroup" => {
+                                let Some(g) = params["group"].as_str() else { return };
+                                let colls = Self::collections(&state, &data);
+                                let ci = state.borrow().collection.min(colls.len().saturating_sub(1));
+                                let Some(c) = colls.get(ci) else { return };
+                                if let Some(batch) = duplicate_group_batch(&c.rows, &c.groups, g) {
+                                    cmds.push(Cmd { id: "command.batch", params: Some(batch) });
+                                }
+                            }
                             "ui.deleteGroup" => {
                                 let ids: Vec<String> = params["variables"]
                                     .as_array()
@@ -4064,6 +4104,80 @@ mod tests {
         assert!(!items.iter().any(|i| i.label.starts_with("Scope: only")), "{:?}", items.iter().map(|i| &i.label).collect::<Vec<_>>());
         assert!(items.iter().any(|i| i.label == "Scope: hidden from pickers"));
         assert!(items.iter().any(|i| i.label == "Scope: all supported properties"));
+    }
+
+    fn var_row(id: &str, full_name: &str, inherited: bool) -> VarRow {
+        let (group, name) = full_name.rsplit_once('/').map_or(("", full_name), |(g, n)| (g, n));
+        VarRow {
+            id: id.to_string(),
+            full_name: full_name.to_string(),
+            name: name.to_string(),
+            group: group.to_string(),
+            kind: VarKind::Color,
+            values: Vec::new(),
+            overrides: Vec::new(),
+            description: String::new(),
+            hidden: false,
+            code: Vec::new(),
+            scopes: None,
+            inherited,
+        }
+    }
+
+    #[test]
+    fn bulk_menu_moves_every_selected_variable_in_one_batch() {
+        let rows = vec![
+            ("1".to_string(), "Brand/Primary".to_string(), VarKind::Color),
+            ("2".to_string(), "Brand/Secondary".to_string(), VarKind::Color),
+        ];
+        let items = bulk_menu_items(&rows, &["Space".into()]);
+        let moving = items.iter().find(|i| i.label.contains("Move to group Space")).expect("the move item");
+        let steps = moving.params["commands"].as_array().expect("batch steps");
+        assert_eq!(steps.len(), 2);
+        assert_eq!(steps[0]["params"]["name"], "Space/Primary");
+        assert_eq!(steps[1]["params"]["name"], "Space/Secondary");
+    }
+
+    #[test]
+    fn bulk_menu_scope_change_sets_the_same_scope_on_every_selected_variable() {
+        let rows = vec![
+            ("1".to_string(), "Brand/Primary".to_string(), VarKind::Color),
+            ("2".to_string(), "Brand/Secondary".to_string(), VarKind::Color),
+        ];
+        let items = bulk_menu_items(&rows, &[]);
+        let scoped = items.iter().find(|i| i.label == "Scope: only Frame fill").expect("the fill scope item");
+        let steps = scoped.params["commands"].as_array().expect("batch steps");
+        assert_eq!(steps.len(), 2);
+        for step in steps {
+            assert_eq!(step["params"]["scopes"], json!(["FRAME_FILL"]));
+        }
+    }
+
+    #[test]
+    fn duplicate_group_copies_every_local_variable_under_the_next_free_name() {
+        let rows = vec![
+            var_row("1", "Brand/Primary", false),
+            var_row("2", "Brand/Secondary", false),
+            var_row("3", "Other/Tertiary", false),
+        ];
+        let groups = vec!["Brand".into(), "Brand 2".into(), "Other".into()];
+        let batch = duplicate_group_batch(&rows, &groups, "Brand").expect("a batch");
+        assert_eq!(batch["label"], "Duplicate group");
+        let steps = batch["commands"].as_array().expect("steps");
+        assert_eq!(steps.len(), 4, "two copies, each duplicate + rename");
+        assert_eq!(steps[0]["as"], "copy0");
+        assert_eq!(steps[1]["params"]["variable"]["$ref"], "copy0");
+        assert_eq!(steps[1]["params"]["name"], "Brand 3/Primary");
+        assert_eq!(steps[3]["params"]["name"], "Brand 3/Secondary");
+    }
+
+    #[test]
+    fn duplicate_group_skips_inherited_members_and_empty_groups() {
+        let rows = vec![var_row("1", "Brand/Primary", false), var_row("2", "Brand/Library", true)];
+        let groups = vec!["Brand".into()];
+        let batch = duplicate_group_batch(&rows, &groups, "Brand").expect("a batch");
+        assert_eq!(batch["commands"].as_array().map(Vec::len), Some(2), "only the local member");
+        assert_eq!(duplicate_group_batch(&[var_row("3", "Other/x", false)], &["Other".into()], "Empty"), None);
     }
 
     #[test]
