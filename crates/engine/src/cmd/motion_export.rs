@@ -586,7 +586,7 @@ mod tests {
             pos.set_key(0, AnimValue::Vec2(Vec2::new(2.0, 2.0)), None);
             pos.set_key(500, AnimValue::Vec2(Vec2::new(14.0, 2.0)), None);
         }
-        d.timelines.insert(frame, TimelineSettings { duration_ms: 500, fps: 10, looping: true });
+        d.timelines.insert(frame, TimelineSettings { duration_ms: 500, fps: 10, looping: true, reverse: false });
         (d, frame, id)
     }
 
@@ -610,7 +610,7 @@ mod tests {
             pos.set_key(0, AnimValue::Vec2(Vec2::new(8.0, 8.0)), None);
             pos.set_key(500, AnimValue::Vec2(Vec2::new(216.0, 8.0)), Some(Ease::Linear));
         }
-        d.timelines.insert(frame, TimelineSettings { duration_ms: 500, fps: 10, looping: true });
+        d.timelines.insert(frame, TimelineSettings { duration_ms: 500, fps: 10, looping: true, reverse: false });
 
         let mut s = Session::with_document(d);
         let t = Instant::now();
@@ -634,11 +634,11 @@ mod tests {
     }
 
     #[test]
-    fn frame_times_loop_vs_one_shot() {        let tl = TimelineSettings { duration_ms: 1000, fps: 10, looping: true };
+    fn frame_times_loop_vs_one_shot() {        let tl = TimelineSettings { duration_ms: 1000, fps: 10, looping: true, reverse: false };
         let t = frame_times(&tl, 10);
         assert_eq!(t.len(), 10, "looping: 0..duration excludes the wrap-around frame");
         assert!((t[0] - 0.0).abs() < 1e-6 && (t[9] - 900.0).abs() < 1e-6);
-        let tl = TimelineSettings { duration_ms: 1000, fps: 10, looping: false };
+        let tl = TimelineSettings { duration_ms: 1000, fps: 10, looping: false, reverse: false };
         let t = frame_times(&tl, 10);
         assert_eq!(t.len(), 11, "one-shot adds a final frame at duration");
         assert!((t[10] - 1000.0).abs() < 1e-6);
