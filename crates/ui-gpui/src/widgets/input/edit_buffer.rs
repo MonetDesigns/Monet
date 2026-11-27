@@ -63,7 +63,7 @@ impl Composed {
     }
 }
 
-/// A single-line text buffer with caret, selection anchor and an IME composition.
+/// A text buffer with caret, selection anchor and an IME composition.
 #[derive(Clone, Debug, Default)]
 pub struct EditBuffer {
     /// The committed text.
@@ -76,6 +76,8 @@ pub struct EditBuffer {
     preedit: Option<(String, usize)>,
     /// True while a pointer drag is extending the selection.
     selecting: bool,
+    /// Keep `\n` when text is inserted (multiline editors); single-line fields flatten it.
+    multiline: bool,
 }
 
 impl EditBuffer {
@@ -84,6 +86,20 @@ impl EditBuffer {
         b.caret = b.len();
         b.anchor = b.caret;
         b
+    }
+
+    /// Whether inserted text keeps paragraph breaks. Single-line fields flatten them, as before.
+    pub fn set_multiline(&mut self, multiline: bool) {
+        self.multiline = multiline;
+    }
+
+    /// Drop control characters, normalise CRLF/CR to `\n`, and keep `\n` only when asked.
+    /// `insert` asks for it in multiline mode; platform replacements do not, because the
+    /// Shift+Enter key handler already inserts the paragraph break and the platform's WM_CHAR
+    /// would otherwise add a second one.
+    fn sanitize(&self, text: &str, keep_newlines: bool) -> String {
+        let normalised = text.replace("\r\n", "\n").replace('\r', "\n");
+        normalised.chars().filter(|c| *c >= ' ' || *c == '\t' || (keep_newlines && *c == '\n')).collect()
     }
 
     // ── basics ──────────────────────────────────────────────────────────────────────────────
@@ -283,7 +299,7 @@ impl EditBuffer {
     /// Insert text at the selection, replacing it (keyboard, paste, IME commit).
     pub fn insert(&mut self, text: &str) {
         let r = self.range();
-        let clean: String = text.chars().filter(|c| *c >= ' ' || *c == '\t').collect();
+        let clean = self.sanitize(text, self.multiline);
         self.replace_chars(r.start, r.end, &clean);
     }
     /// Replace a platform (UTF-16) range, or the selection when `None`.
@@ -300,7 +316,8 @@ impl EditBuffer {
                 }
             }
         };
-        self.replace_chars(a, b, text);
+        let clean = self.sanitize(text, false);
+        self.replace_chars(a, b, &clean);
         self.preedit = None;
     }
     pub fn delete_backward(&mut self) {
@@ -491,6 +508,21 @@ mod tests {
         assert_eq!(b.char_to_utf16(4), 5); // 😀 is a surrogate pair
         b.set_text("");
         assert_eq!(b.from_byte(0), 0);
+    }
+
+    #[test]
+    fn pasted_newlines_survive_only_in_multiline_mode() {
+        let mut single = EditBuffer::new("a");
+        single.insert("b\nc");
+        assert_eq!(single.text(), "abc", "single-line fields must keep flattening pastes");
+
+        let mut multi = EditBuffer::new("a");
+        multi.set_multiline(true);
+        multi.insert("b\r\nc\rd");
+        assert_eq!(multi.text(), "ab\nc\nd", "CRLF and CR are normalised to paragraph breaks");
+
+        multi.replace_utf16(None, "e\r\nf");
+        assert_eq!(multi.text(), "ab\nc\ndef", "platform replacements flatten, so the key handler owns Enter");
     }
 
     #[test]
