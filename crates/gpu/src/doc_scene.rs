@@ -92,7 +92,7 @@ fn can_group_opacity(doc: &Document, n: &Node) -> bool {
         // multiplies onto that same paint.
         return can_group_opacity(doc, child);
     }
-    if !child.children.is_empty() || child.has_visible_stroke() || child.clip || child.is_mask {
+    if !child.children.is_empty() || child.clip || child.is_mask {
         return false;
     }
     if child.effects.iter().any(|e| e.visible) || !matches!(child.blend, BlendMode::Normal | BlendMode::PassThrough) {
@@ -100,17 +100,15 @@ fn can_group_opacity(doc: &Document, n: &Node) -> bool {
     }
     // One paint is what makes the layer→opacity composite equal to painting the leaf at that alpha;
     // stacked paints would accumulate their own alpha before the group multiplies it.
-    if child.fills.iter().filter(|f| f.visible).count() != 1 {
-        return false;
-    }
-    true
+    can_leaf_opacity(child)
 }
 
-/// A leaf whose own alpha can be multiplied straight into its paint: one visible fill, no visible
-/// stroke and no effect. Anything else is a layer on the CPU, and folding its alpha into each paint
-/// would double-composite where paints overlap.
+/// A leaf whose own alpha can be multiplied straight into its paint: exactly one visible paint (a
+/// fill or a stroke), no effect. Anything else is a layer on the CPU, and folding its alpha into
+/// each paint would double-composite where paints overlap.
 fn can_leaf_opacity(n: &Node) -> bool {
-    n.fills.iter().filter(|f| f.visible).count() == 1 && !n.has_visible_stroke() && !n.effects.iter().any(|e| e.visible)
+    let paints = n.fills.iter().filter(|f| f.visible).count() + n.strokes.iter().filter(|s| s.visible).count();
+    paints == 1 && !n.effects.iter().any(|e| e.visible)
 }
 
 /// Whether a node kind only carries children (and possibly its own box fill).
@@ -1226,6 +1224,24 @@ mod tests {
         assert!(scene.is_supported(), "{:?}", scene.unsupported_features());
         let shape = scene.shapes().next().expect("the leaf shape");
         assert!((shape.opacity - 0.4).abs() < 1e-4, "the chain multiplies: {}", shape.opacity);
+    }
+
+    #[test]
+    fn a_single_stroke_leaf_opacity_reaches_the_mesh() {
+        let mut doc = Document::default();
+        let page = doc.pages[0];
+        let rect = doc.create(page, NodeKind::Rectangle, "Ring", 20.0, 20.0, 60.0, 40.0).expect("rect");
+        if let Ok(n) = doc.get_mut(rect) {
+            n.fills.clear();
+            n.strokes = vec![DocPaint::solid(Color::new(0.2, 0.5, 0.8, 1.0))];
+            n.stroke.weight = 8.0;
+            n.opacity = 0.5;
+        }
+        let scene = build(&doc, page, &view());
+        assert!(scene.is_supported(), "{:?}", scene.unsupported_features());
+        let mesh =
+            scene.items.iter().find_map(|item| if let crate::scene::Item::Mesh(mesh) = item { Some(mesh) } else { None }).expect("the stroke mesh");
+        assert!((mesh.opacity - 0.5).abs() < 1e-4, "the leaf alpha multiplies into the stroke: {}", mesh.opacity);
     }
 
     #[test]

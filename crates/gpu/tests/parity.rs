@@ -224,6 +224,33 @@ fn strokes_are_tessellated_from_the_cpu_outline_and_match_inside() {
 }
 
 #[test]
+fn a_translucent_stroke_leaf_matches_the_cpu() {
+    let mut doc = Document::default();
+    let page = doc.pages[0];
+    transparent_page(&mut doc, page);
+    let ring = rect(&mut doc, page, "Ring", 30.0, 30.0, 110.0, 70.0, 14.0, Paint::solid(Color::new(0.95, 0.95, 0.95, 0.0)));
+    if let Ok(n) = doc.get_mut(ring) {
+        n.fills.clear();
+        n.strokes = vec![Paint::solid(Color::new(0.1, 0.3, 0.7, 1.0))];
+        n.stroke.weight = 10.0;
+        n.stroke.join = StrokeJoin::Round;
+        n.opacity = 0.5;
+    }
+    let scene = doc_scene::build(&doc, page, &viewport());
+    assert!(scene.is_supported(), "{:?}", scene.unsupported_features());
+    assert_eq!(scene.mesh_count(), 1);
+
+    let cpu = cpu_pixels(&doc, page);
+    let Some(gpu) = gpu_pixels(&doc, page) else {
+        eprintln!("SKIP: no adapter");
+        return;
+    };
+    let tol = Tolerance { per_channel: 2, max_bad_ratio: 0.02 };
+    let report = compare_interiors(&cpu, &gpu, SIZE as usize, SIZE as usize, tol).expect("comparable");
+    assert!(report.passes(tol), "{}", report.summary());
+}
+
+#[test]
 fn a_dialogue_free_ring_and_a_star_stroke_stay_gpu_drawable() {
     let mut doc = Document::default();
     let page = doc.pages[0];
