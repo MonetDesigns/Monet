@@ -176,7 +176,11 @@ fn slashed_layer_names_and_phone_widths_merge_right() {
     for (name, width, dir, sizing) in [("Landing", 1440.0, "horizontal", "hug"), ("Landing mobile", 390.0, "vertical", "fill")] {
         let p = idv(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": width, "height": 600, "name": name})));
         ex(&mut s, "layout.add", json!({"ids": [p], "direction": "vertical"}));
-        let ctas = idv(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 342, "height": 120, "parent": p, "name": "CTAs"})));
+        let ctas = idv(&ex(
+            &mut s,
+            "frame.create",
+            json!({"x": 0, "y": 0, "width": if width > 1000.0 { 600.0 } else { 342.0 }, "height": 120, "parent": p, "name": "CTAs"}),
+        ));
         ex(&mut s, "layout.add", json!({"ids": [ctas], "direction": dir}));
         let b = idv(&ex(&mut s, "frame.create", json!({"x": 0, "y": 0, "width": 200, "height": 48, "parent": ctas, "name": "Button/Primary"})));
         ex(&mut s, "layout.add", json!({"ids": [b], "direction": "horizontal"}));
@@ -190,7 +194,7 @@ fn slashed_layer_names_and_phone_widths_merge_right() {
     let button =
         out.lines().find(|l| l.contains("lg:") && l.contains("rounded") || l.contains("self-stretch") && l.contains("flex-row")).unwrap_or_default();
     assert!(button.contains("self-stretch") && button.contains("lg:self-auto"), "the slashed name keeps its mobile classes: {out}");
-    assert!(!out.contains("max-w-[342px] ") || out.contains("lg:max-w-[342px]"), "no phone-width cap below lg: {out}");
+    assert!(!out.contains("max-w-[342px]") && out.contains("lg:max-w-[600px]"), "no phone-width cap below lg: {out}");
     assert!(out.contains("Only in the mobile frame") && out.contains("Tag"), "{out}");
     let divider = out.lines().filter(|l| l.contains("<div") && (l.contains("h-[1px]") || l.contains("h-px"))).count();
     assert!(out.contains("w-full") && divider <= 2, "{out}");
