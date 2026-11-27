@@ -599,9 +599,9 @@ EGUI 原文件再动手，禁止再出现简化替代**；完成后同步 `CONTR
 | R4 | **画框标签改名** `canvas.renameLabel` | `canvas/frame_labels.rs::rename_field`：**在画布标签的屏幕坐标上**盖一个内联编辑框，Enter/失焦改名、Esc 保留 | `dialogs.rs:302` → `Kind::Rename` 居中对话框 | 改回画布内联编辑：双击标签 → 在标签处画 `TextField`，走 `object.rename`；不要弹窗 |
 | R5 | **图层面板改名** `layers.rename` | 在 Layers 列表行内**就地**改（egui `layers_rename_tests.rs`） | `dialogs.rs:302` → `Kind::Rename` 居中对话框 | 改回列表行内联编辑（GPUI 左面板已用 `TextField` 做文件头改名，图层行同理） |
 | R6 | **看板文字编辑** `board.editText` | 贴着画布的内联文字编辑 | `dialogs.rs:302` → `Kind::Rename` 居中对话框 | 改回内联编辑（依赖 A2/A27 画板模式先落地） |
-| R7 | **快捷键面板 Shortcuts** | 窗口**底部**常驻条（`panels/layers.rs` 底部），非模态 | `ExtraKind::Shortcuts` 居中浮层（`extra.rs` 注释承认此差异） | 移到窗口底部 dock（或至少承认差异并登记为偏差，不要伪装成弹窗） |
-| R8 | **版本历史 Versions** | 独立**面板**（左面板宽，`versions::panel`），非居中卡片 | `ExtraKind::Versions` 居中浮层 | 改成独立面板（左栏宽或右侧抽屉），不要居中卡片 |
-| R9 | **Dev 对比 DevCompare** | 双图并排/叠加对比（占满工作区） | `ExtraKind::DevCompare` 居中浮层 | 占满主区做对比视图，不要居中卡片 |
+| R7 | **快捷键面板 Shortcuts** | 窗口**底部**常驻条（`panels/shortcuts_panel.rs` 的 `show` 锚在 `CENTER_BOTTOM`），非模态 | ✅ 2026-11-27：`panels/extra.rs::render` 对 `Shortcuts` 走 `left/right/bottom=0` 的 340pt 底部 dock，带标题与 Close，内容滚动；不再走 760×520 居中卡片 |
+| R8 | **版本历史 Versions** | 独立**面板**（左面板宽，`versions::open` 打开左栏并切 `LeftTab::File`），非居中卡片 | ✅ 2026-11-27：`panels/extra.rs::render` 对 `Versions` 走左缘 300pt、`top=TITLE_H`、`bottom=0` 的全高面板，带独立 Close 条；`versions_body` 原样复用 `PanelSection` |
+| R9 | **Dev 对比 DevCompare** | 双图并排/叠加对比（占满工作区） | ✅ 2026-11-27：`panels/extra.rs::render` 对 `DevCompare` 走 `top=TITLE_H`、`left/right/bottom=0` 的工作区全屏分支；Close/Resolve 仍由 `compare_body` 底栏持有 |
 
 ### R.2 连带的规划文件错误（需同步修订）
 
@@ -1272,4 +1272,21 @@ token 双向核对。**2026-11-27 P2-6 复验**：在 `main` 的 detach worktree
 worktree 合并 PR head 后 `cargo check -p figcraft-ui-gpui --features test-support` 通过，`devmode` 6/6、
 `dev_gate` 3/3、`parity_contract` 4/4 通过；工作树未在功能分支构建。P2-1 的 codegen golden 与 P2-3 的缓存
 性能回归尚未单独跑。
+
+## AF. 2026-11-27 晚：R.7 / R.8 / R.9 面板形态收口
+
+> 本轮把三块从共用的 760×520 居中浮层里拆出来，按 EGUI 的宿主形态停靠；`ExtraKind` 本身不变，
+> 只改 `panels/extra.rs::render` 的外壳分支。
+
+| 项 | 落点 | 形态 |
+|---|---|---|
+| R.7 Shortcuts | `panels/extra.rs::render` 的 `shortcuts-bar` | 窗口底部 340pt dock，`left/right/bottom=0`，独立标题与 Close，内容滚动 |
+| R.8 Versions | `panels/extra.rs::render` 的 `versions-panel` | 左缘 300pt 全高面板，`top=TITLE_H`、`bottom=0`，独立 Close 条，`versions_body` 复用 `PanelSection` |
+| R.9 DevCompare | `panels/extra.rs::render` 的 `dev-compare-screen` | `top=TITLE_H`、`left/right/bottom=0` 的工作区全屏，Close/Resolve 仍由 `compare_body` 底栏持有 |
+
+**验证**：`origin/sync/variable-binding-2026-11` rebase 到 `c8ca43b82` 后，
+`cargo check -p figcraft-ui-gpui --features test-support` 通过；`devmode_tests` 13/13。
+提交 `46af3a863`（R.9）、`3e72677a5`（R.7/R.8）。**边界**：没有无头布局断言，实际像素/Hit-test
+仍需在 exe 上手验；R.8 是覆盖左栏位置的独立 dock，不是把 `versions_body` 接进
+`layer_tree` 的 tab 容器（EGUI 的 `versions.open` 会切 `LeftTab::File` 并替换左栏内容）。
 
