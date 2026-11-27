@@ -6,9 +6,8 @@
 //! 所有写操作都推引擎命令（`version.*` / `dev.*` / `instance.place` / `style.apply`），
 //! 面板本身不改文档。控件全部复用冻结的 `widgets/`。
 //!
-//! ⚠️ TODO（规划错配，见 parity plan R.1 / R.7 / R.8 / R.9）：egui 把 Versions 放独立面板、
-//! Dev compare 做占满工作区的双图对比、Shortcuts 放窗口底部常驻条；GPUI 目前仍把它们塞进
-//! 同一个可关闭的居中浮层外壳，**这是已知偏差，不是既定设计**。
+//! ✅ R.7 / R.8 / R.9 已对齐（2026-11-27）：Shortcuts 停靠窗口底部、Versions 停靠左缘的独立
+//! 面板、Dev compare 占满标题栏以下的工作区；三者不再走 760×520 的居中浮层外壳。
 //! ✅ Assets / Icons 已按 R.4 搬进左栏 `left_tab`（`layer_tree.rs` 直接调 `assets_body` /
 //! `icons_panel::body`），不再经过本文件的 `ExtraKind`；Home 走占满窗口的 `CentralPanel` 分支。
 //!
