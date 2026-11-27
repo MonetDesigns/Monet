@@ -405,12 +405,14 @@ pub fn apply_style_ref(doc: &mut Document, id: NodeId, field: &str, sid: Option<
         }
         None => None,
     };
+    // The layer draws typography at its instance scale; link the same scaled values the text
+    // will render with, or the next style sync sees a mismatch and unlinks immediately.
+    let k = scale_of(doc, id);
     let n = doc.get_mut(id)?;
     // The style's values replace variables bound to what it sets.
     if let Some(st) = &style {
         n.bound.retain(|k, _| !style_sets(field, &st.kind, k));
-    }
-    match (field, &style) {
+    }    match (field, &style) {
         ("fillStyle", Some(Style { kind: StyleKind::Paint { paints }, id, .. })) => {
             n.fills = paints.clone();
             n.styles.fill = Some(id.clone());
@@ -431,8 +433,10 @@ pub fn apply_style_ref(doc: &mut Document, id: NodeId, field: &str, sid: Option<
             // Every char takes the style's typography (their fills and links stay), and the layer
             // what the style sets at the paragraph level (#1829).
             if let NodeKind::Text(t) = &mut n.kind {
+                let mut drawn = style.clone();
+                scale_text_lengths(&mut drawn, k);
                 let len = t.char_count();
-                t.link_text_style(0, len, style, id);
+                t.link_text_style(0, len, &drawn, id);
                 t.take_paragraph_style(paragraph);
             }
             n.styles.text = Some(id.clone());
