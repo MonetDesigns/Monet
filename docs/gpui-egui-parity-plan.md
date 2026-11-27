@@ -1285,7 +1285,8 @@ worktree 合并 PR head 后 `cargo check -p figcraft-ui-gpui --features test-sup
 | R.9 DevCompare | `panels/extra.rs::render` 的 `dev-compare-screen` | `top=TITLE_H`、`left/right/bottom=0` 的工作区全屏，Close/Resolve 仍由 `compare_body` 底栏持有 |
 
 **验证**：`origin/sync/variable-binding-2026-11` rebase 到 `c8ca43b82` 后，
-`cargo check -p figcraft-ui-gpui --features test-support` 通过；`devmode_tests` 13/13。
+`cargo check -p figcraft-ui-gpui --features test-support` 通过；`devmode_tests` 14/14
+（新增 P1-1 的「无属性组件不显示 Playground」`has_controls` 断言）。
 提交 `46af3a863`（R.9）、`3e72677a5`（R.7/R.8）。**边界**：没有无头布局断言，实际像素/Hit-test
 仍需在 exe 上手验；R.8 是覆盖左栏位置的独立 dock，不是把 `versions_body` 接进
 `layer_tree` 的 tab 容器（EGUI 的 `versions.open` 会切 `LeftTab::File` 并替换左栏内容）。
