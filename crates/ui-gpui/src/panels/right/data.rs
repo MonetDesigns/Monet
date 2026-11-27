@@ -1727,7 +1727,6 @@ pub struct PageData {
     pub profiles: Vec<String>,
     /// 页面级 Variable modes（`page_variable_modes`：Auto = 集合默认模式）。
     pub variable_modes: Vec<ModeRow>,
-    pub local_variables: usize,
     pub local_styles: usize,
     /// 页面子层（egui `page_section`：`doc.node(page).children`），整页导出的 `ids`。
     pub export_ids: Vec<NodeId>,
@@ -2433,7 +2432,7 @@ pub fn read_with_dev(
     // 实例内部的位置由主组件决定：任一命中即整块 Position 只读（参考实现 `nested`）。
     d.position_readonly = ids.iter().any(|id| figcraft_engine::components::inside_instance(doc, *id));
     if ids.is_empty() {
-        // ── Page（`page_section`）：背景色 / 色彩配置 / 本地变量与样式数量 ──
+        // ── Page（`page_section`）：背景色 / 色彩配置 / 页面模式与本地样式数量 ──
         let page_node = page.and_then(|p| doc.node(p));
         let bg = page_node
             .and_then(|n| match &n.kind {
@@ -2447,12 +2446,6 @@ pub fn read_with_dev(
             profile: doc.color_profile.label().to_string(),
             profiles: figcraft_color::ColorProfile::ALL.iter().map(|p| p.label().to_string()).collect(),
             variable_modes: page_mode_rows(doc, page),
-            local_variables: doc
-                .variables
-                .variables
-                .iter()
-                .filter(|v| !figcraft_engine::library::is_remote_variable(doc, &v.id))
-                .count(),
             local_styles: doc.styles.len(),
             export_ids: page_node.map(|n| n.children.clone()).unwrap_or_default(),
         });

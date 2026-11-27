@@ -773,6 +773,9 @@ pub(crate) struct RightFields {
     /// Auto layout — component-backed subset (gap / padding / alignment). Rest is placeholder.
     gap: Entity<TextField>,
     cross_gap: Entity<TextField>,
+    /// 多选智能间距（`arrange.spacing`）：水平 / 垂直两个共享 `TextField`，带图标 lead。
+    spacing_h: Entity<TextField>,
+    spacing_v: Entity<TextField>,
     /// Dimensions 的 min/max（`layout_panel.rs::limit_row_v`）。
     dim_min_w: Entity<TextField>,
     dim_max_w: Entity<TextField>,
@@ -797,6 +800,8 @@ pub(crate) struct RightFields {
     corner_br: Entity<TextField>,
     /// 「独立圆角」展开开关（egui `right.rs` 的 `Id::new("indep_corners")` 临时标记）。
     corners_individual: std::rc::Rc<std::cell::RefCell<bool>>,
+    /// X/Y 行右边的约束展开按钮：默认收起，点开后才显示 Constraints 子节。
+    constraints_open: std::rc::Rc<std::cell::RefCell<bool>>,
     /// 描边逐边权重 T/R/B/L（`strokeTopWeight` … `strokeLeftWeight`）。选「Custom」后展开，
     /// 对应 egui `paints.rs::stroke` 的 `common(doc, sel, |n| n.stroke.sides)` 那两行输入框。
     stroke_side_t: Entity<TextField>,
@@ -1101,6 +1106,17 @@ fn nf_stroke_side(cx: &mut App, icon: Icon, key: &'static str, cmds: &Cmds, wake
                 wake();
             }
         });
+    });
+    set_icon_lead(&field, cx, icon);
+    field
+}
+
+/// 多选智能间距字段（egui `canvas::selection_spacing::panel` 的 number_field）：
+/// 走统一的 `TextField` 外壳 + 24 pt 图标 lead，**不能**把裸 `TextEdit` 直接塞进 `field_row`
+/// —— 裸编辑器没有 field 底色、边框、24 pt 行高和 lead 槽，看起来就是一条没有壳的文本。
+fn nf_selection_spacing(cx: &mut App, icon: Icon) -> Entity<TextField> {
+    let field = TextField::build(cx, DEFAULT_COL, |tf, _| {
+        tf.set_numeric("", 1.0);
     });
     set_icon_lead(&field, cx, icon);
     field
@@ -1463,6 +1479,8 @@ impl RightFields {
             // ── Auto layout：gap / padding[4] / 主轴+交叉轴对齐（用现成 TextField + Dropdown）──
             gap: nf_set(cx, tr("Gap"), 10.0, "", 1.0, "gap", &cmds, wake),
             cross_gap: nf_set(cx, tr("Gap"), 10.0, "", 1.0, "crossGap", &cmds, wake),
+            spacing_h: nf_selection_spacing(cx, Icon::DistributeH),
+            spacing_v: nf_selection_spacing(cx, Icon::DistributeV),
             dim_min_w: nf_set(cx, tr("Min W"), 0.0, "", 1.0, "minWidth", &cmds, wake),
             dim_max_w: nf_set(cx, tr("Max W"), 0.0, "", 1.0, "maxWidth", &cmds, wake),
             dim_min_h: nf_set(cx, tr("Min H"), 0.0, "", 1.0, "minHeight", &cmds, wake),
@@ -1480,6 +1498,7 @@ impl RightFields {
             corner_bl: nf_corner(cx, "BL", "bottomLeftRadius", &cmds),
             corner_br: nf_corner(cx, "BR", "bottomRightRadius", &cmds),
             corners_individual: std::rc::Rc::new(std::cell::RefCell::new(false)),
+            constraints_open: std::rc::Rc::new(std::cell::RefCell::new(false)),
             // 描边逐边权重：与菜单里 T/R/B/L 四项、展开后 lead 同一族图标。
             stroke_side_t: nf_stroke_side(cx, Icon::PaddingTop, "strokeTopWeight", &cmds, wake),
             stroke_side_r: nf_stroke_side(cx, Icon::PaddingRight, "strokeRightWeight", &cmds, wake),
@@ -1544,6 +1563,8 @@ impl RightFields {
             &fields.scale_k,
             &fields.gap,
             &fields.cross_gap,
+            &fields.spacing_h,
+            &fields.spacing_v,
             &fields.pad_t,
             &fields.pad_r,
             &fields.pad_b,
@@ -1612,6 +1633,7 @@ impl RightFields {
         // scale_ctx / pad 同理保留共享（见上方注释），不重置。
         f.pad_individual = Default::default();
         f.corners_individual = Default::default();
+        f.constraints_open = Default::default();
         f.limit_open = Default::default();
         f.bind_hover = Default::default();
         f.blend_open = Default::default();
@@ -2623,7 +2645,8 @@ pub(crate) fn right_panel(
     // ── 无选中：Page（egui `page_section`）──────────────────────────────────────
     if sel.empty {
         // `view_bar` 已有下边框，这里不再补一条线。
-        // egui `page_section` 是三节（Page / Local variables / Local styles），节间各一条线。
+        // 空选区的 Page 节顺序：Page / Variable modes / Color profile / Local styles / Export。
+        // `Local variables` 已在 81b9c772b 删除，别把上游那份整段抄回来。
         let secs = right::sections::page(f, data, row_w, &mut n, window, cx);
         let last = secs.len().saturating_sub(1);
         for (i, sec) in secs.into_iter().enumerate() {
@@ -2795,21 +2818,26 @@ pub(crate) fn right_panel(
                 }
                 pos_sec = pos_sec.child(sublabel_row(tr("Alignment"))).child(align_row);
             }
-            // 参考实现把 Constraints 挂在 Rotation 之后，**没有展开按钮**：只要 `in_frame`
-            // （frame 子层、父级无 auto layout 或自身 absolute）就画出来。旧实现用一颗
-            // `LayoutGrid` 切换按钮先折叠，等于默认把约束藏起来，与本轮对齐目标相反。
-            let mut xy_row = field_row(vec![f.x.clone().into_any_element(), f.y.clone().into_any_element()], Vec::<IconButton>::new());
+            // X/Y 行右边的约束展开按钮：默认收起，点开后才显示 Constraints 子节。
+            // 这是既有交互，不是可随手删掉的装饰；按钮和 Constraints 子节共用 `in_frame` 门槛。
+            let constraints_open = *f.constraints_open.borrow();
+            let constraints_toggle = data.in_frame.then(|| {
+                let flag = f.constraints_open.clone();
+                let wake = f.cmds.clone();
+                IconButton::new(Icon::LayoutGrid).size(24.0).active(constraints_open).on_click(move |_e, _w, _cx| {
+                    let next = !*flag.borrow();
+                    *flag.borrow_mut() = next;
+                    wake.wake();
+                })
+            });
+            let mut xy_row = field_row(
+                vec![f.x.clone().into_any_element(), f.y.clone().into_any_element()],
+                constraints_toggle.into_iter().collect::<Vec<IconButton>>(),
+            );
             if data.position_readonly {
                 xy_row = xy_row.tip(tr("Layers in an instance take their position from the main component"));
             }
             pos_sec = pos_sec.child(sublabel_row(tr("Position"))).child(xy_row);
-            // 顺序照参考实现 `position_fields`：align → X/Y → rotation → constraints。
-            let rot_el = if data.position_readonly { rotate.build().opacity(0.45).into_any_element() } else { rotate.into_any_element() };
-            let mut rot_row = field_row(vec![f.rotation.clone().into_any_element(), rot_el], Vec::<IconButton>::new());
-            if data.position_readonly {
-                rot_row = rot_row.tip(tr("Layers in an instance take their position from the main component"));
-            }
-            let pos_sec = pos_sec.child(sublabel_row(tr("Rotation"))).child(rot_row);
 
             // ── Constraints（egui `right.rs::position_fields`：仅 frame 子层、自身无自动布局或为
             // absolute 时才显示；`in_frame` 的逻辑与 egui `common` 后的 `all(...)` 完全一致）。──
@@ -2817,7 +2845,7 @@ pub(crate) fn right_panel(
             // 选中即 `node.set {"props":{"constraints":{"horizontal"/"vertical":v}}}`（等价于 egui 的
             // `app.set_props(&ids, json!({"constraints":{"horizontal": v}}))`，`node.set` 由 Cmd 通道附带
             // 选区 ids 执行）。`None` = Mixed，下拉显示 "Mixed"。
-            let pos_sec = if data.in_frame {
+            let pos_sec = if constraints_open && data.in_frame {
                 let pretty_h = |v: Option<&'static str>| -> &'static str {
                     match v {
                         Some("leftRight") => tr("Left & right"),
@@ -2881,7 +2909,14 @@ pub(crate) fn right_panel(
             } else {
                 pos_sec
             };
-            pos_sec
+            // 顺序照参考实现 `position_fields`：align → X/Y → constraints → rotation。
+            // 约束节必须在 Rotation 之上，不能跟在 Rotation 后面。
+            let rot_el = if data.position_readonly { rotate.build().opacity(0.45).into_any_element() } else { rotate.into_any_element() };
+            let mut rot_row = field_row(vec![f.rotation.clone().into_any_element(), rot_el], Vec::<IconButton>::new());
+            if data.position_readonly {
+                rot_row = rot_row.tip(tr("Layers in an instance take their position from the main component"));
+            }
+            pos_sec.child(sublabel_row(tr("Rotation"))).child(rot_row)
         })
         .child(sep())
         // ── Auto layout（egui `layout_panel.rs::layout_section` / `direction` / `spacing` / `alignment`）──
@@ -3314,42 +3349,44 @@ pub(crate) fn auto_layout_section(
     sec = right::sections::grid_track_rows(f, data, cx, n, sec);
     // ⑤ 智能选区间距（egui `canvas::selection_spacing::panel`，在 auto layout 之后）。
     if let Some(sp) = data.selection_spacing.as_ref() {
-        let mut spacing_field = |axis: &'static str, value: Option<f64>| -> gpui::AnyElement {
-            if value.is_none() && !matches!(axis, "horizontal" if sp.horizontal.is_some()) && !matches!(axis, "vertical" if sp.vertical.is_some()) {
-                return div().into_any_element();
-            }
-            let ids = data.ids.clone();
-            let map = Rc::new(move |s: &str| {
-                let v = s.parse::<f64>().ok()?;
-                Some(json!({ "ids": ids, axis: v.clamp(-1e6, 1e6), "fromGesture": true }))
-            });
-            let shown = value.map(|v| format!("{v}")).unwrap_or_default();
-            let edit = f.row_field(
-                cx,
-                right::sections::slot(n),
-                &shown,
-                RowEditCtx {
-                    cmd: "arrange.spacing",
-                    params: json!({}),
-                    key: axis,
-                    scale: 1.0,
-                    string_value: false,
-                    paint: None,
-                    nest: None,
-                    nest_key: None,
-                    map: Some(map),
-                    paint_color: None,
-                },
-            );
-            if value.is_none() {
-                edit.update(cx, |te, _| te.set_placeholder(tr("Mixed")));
-            }
-            edit.into_any_element()
-        };
-        sec = sec.child(sublabel_row(tr("Spacing"))).child(field_row(
-            vec![spacing_field("horizontal", sp.horizontal.flatten()), spacing_field("vertical", sp.vertical.flatten())],
-            Vec::<IconButton>::new(),
-        ));
+        let h_present = sp.horizontal.is_some();
+        let v_present = sp.vertical.is_some();
+        if h_present || v_present {
+            // 两个轴各用一个共享 `TextField`（带 24 pt 图标 lead），跟右栏其它数字行同款；
+            // 裸 `TextEdit` 直接塞进 `field_row` 会变成没有壳、没有 lead 的文本，既不是
+            // 通用控件，也破坏统一网格的 24 pt 字段/32 pt 行高。
+            let mut spacing_field = |field: &Entity<TextField>, axis: &'static str, present: bool, value: Option<f64>| -> gpui::AnyElement {
+                if !present {
+                    return div().into_any_element();
+                }
+                let ids = data.ids.clone();
+                let cmds = f.cmds.clone();
+                field.update(cx, |tf, _| {
+                    tf.set_value(value.map(|v| format!("{v}")).unwrap_or_default());
+                    if value.is_none() {
+                        tf.set_placeholder(tr("Mixed"));
+                    } else {
+                        tf.set_placeholder("");
+                    }
+                    tf.set_on_commit(move |text, _w, _cx| {
+                        let Ok(v) = text.trim().parse::<f64>() else { return };
+                        // The engine keys the requested axis by name (`horizontal` / `vertical`),
+                        // not by a generic `axis` field.
+                        let mut params = json!({ "ids": ids, "fromGesture": true });
+                        params[axis] = json!(v.clamp(-1e6, 1e6));
+                        cmds.push(Cmd { id: "arrange.spacing", params: Some(params) });
+                    });
+                });
+                field.clone().into_any_element()
+            };
+            sec = sec.child(sublabel_row(tr("Spacing"))).child(field_row(
+                vec![
+                    spacing_field(&f.spacing_h, "horizontal", h_present, sp.horizontal.flatten()),
+                    spacing_field(&f.spacing_v, "vertical", v_present, sp.vertical.flatten()),
+                ],
+                Vec::<IconButton>::new(),
+            ));
+        }
     }
     // ⑤ 网格单元格（egui `layout_panel.rs::grid_cell`）：父级是 grid、子层不 absolute 时出现。
     if let Some(cell) = data.grid_cell.as_ref() {
