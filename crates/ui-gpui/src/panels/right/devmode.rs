@@ -28,7 +28,7 @@ const READY_FILTERS: [&str; 4] = [tr_noop("Ready for dev"), tr_noop("Changed"), 
 /// layer. A request for another layer is dropped instead of waiting to steal focus later
 /// (egui `a_note_request_for_a_layer_that_is_not_selected_is_dropped`).
 pub(crate) fn accepts_note_focus(doc: &figcraft_doc::Document, selection: &[figcraft_doc::NodeId], id: figcraft_doc::NodeId) -> bool {
-    doc.contains(id) && selection.contains(&id)
+    selection.contains(&id) && doc.node(id).is_some_and(|n| !n.is_page())
 }
 
 // ───────────────────────────────────────────────────────────────────────────────────────────────

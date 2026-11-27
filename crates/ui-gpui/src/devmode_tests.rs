@@ -192,9 +192,10 @@ mod tests {
 
     #[test]
     fn a_note_focus_request_is_dropped_for_a_layer_that_is_not_selected() {
-        let (mut s, _, _, rect) = dev_doc();
+        let (mut s, page, _, rect) = dev_doc();
         s.execute("select.set", &json!({"ids": []})).unwrap();
         assert!(!accepts_note_focus(s.doc().unwrap(), s.selection().as_slice(), rect), "nothing selected yet");
+        assert!(!accepts_note_focus(s.doc().unwrap(), &[page], page), "a page never owns a note field");
         s.execute("select.set", &json!({"ids": [rect]})).unwrap();
         assert!(accepts_note_focus(s.doc().unwrap(), s.selection().as_slice(), rect));
         s.execute("edit.delete", &json!({"ids": [rect]})).unwrap();

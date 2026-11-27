@@ -2380,8 +2380,6 @@ impl CanvasView {
                         if selected {
                             self.fields.set_right_tab(2);
                             self.fields.request_note_focus(id);
-                        } else {
-                            self.fields.clear_note_focus();
                         }
                     }
                     cx.notify();
