@@ -321,17 +321,24 @@ mod tests {
             pos.set_key(0, AnimValue::Vec2(Vec2::new(2.0, 2.0)), None);
             pos.set_key(500, AnimValue::Vec2(Vec2::new(14.0, 2.0)), None);
         }
-        d.timelines.insert(frame, TimelineSettings { duration_ms: 500, fps: 10, looping: true });
+        d.timelines.insert(frame, TimelineSettings { duration_ms: 500, fps: 10, looping: true, reverse: false });
         (d, frame, id)
     }
 
     #[test]
+    fn mp4_quality_maps_to_a_sane_crf() {
+        assert!((mp4_crf(85) - 23.0).abs() < 0.5, "the default 85 must be CRF ~23, not the old 51 clamp");
+        assert!((mp4_crf(100) - 18.0).abs() < 0.01, "best quality is CRF 18");
+        assert!((mp4_crf(1) - 51.0).abs() < 0.01, "lowest quality is CRF 51");
+    }
+
+    #[test]
     fn frame_times_loop_vs_one_shot() {
-        let tl = TimelineSettings { duration_ms: 1000, fps: 10, looping: true };
+        let tl = TimelineSettings { duration_ms: 1000, fps: 10, looping: true, reverse: false };
         let t = frame_times(&tl, 10);
         assert_eq!(t.len(), 10, "looping: 0..duration excludes the wrap-around frame");
         assert!((t[0] - 0.0).abs() < 1e-6 && (t[9] - 900.0).abs() < 1e-6);
-        let tl = TimelineSettings { duration_ms: 1000, fps: 10, looping: false };
+        let tl = TimelineSettings { duration_ms: 1000, fps: 10, looping: false, reverse: false };
         let t = frame_times(&tl, 10);
         assert_eq!(t.len(), 11, "one-shot adds a final frame at duration");
         assert!((t[10] - 1000.0).abs() < 1e-6);

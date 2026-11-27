@@ -7,7 +7,7 @@
 use super::CommandSpec;
 use crate::params::*;
 use crate::{EngineError, Result, Session, bad, spec};
-use figcraft_doc::anim::motion::{self, AnimProperty, Clip, ClipKind, ClipMode, Ease, NodeMotion};
+use figcraft_doc::anim::motion::{self, AnimProperty, Clip, ClipKind, ClipMode, Ease, NodeMotion, PlayMode, TimelineSettings};
 use figcraft_doc::proto::Transition;
 use figcraft_geom::Vec2;
 use serde_json::{Value, json};
@@ -111,7 +111,7 @@ pub(crate) fn specs() -> Vec<CommandSpec> {
         spec!(
             "motion.timeline",
             "Motion timeline",
-            "{duration?, fps?, loop?, page?} sets a page's motion timeline (default page when omitted); writing the defaults drops the page's entry.",
+            "{duration?, fps?, loop?, mode?, reverse?, page?} sets a page's motion timeline (default page when omitted); `mode` is forward | reverse | loop; writing the defaults drops the page's entry.",
             true,
             motion_timeline
         ),
@@ -539,6 +539,23 @@ fn motion_timeline(s: &mut Session, p: &Value) -> Result<Value> {
     }
     if let Some(l) = p.get("loop").and_then(Value::as_bool) {
         settings.looping = l;
+        if l {
+            settings.reverse = false;
+        } else if p.get("mode").is_none() && p.get("reverse").is_none() {
+            // The legacy `loop` boolean is a two-state switch: turning it off means forward.
+            settings.reverse = false;
+        }
+    }
+    if let Some(r) = p.get("reverse").and_then(Value::as_bool) {
+        settings.reverse = r;
+        if r {
+            settings.looping = false;
+        }
+    }
+    if let Some(name) = p.get("mode").and_then(Value::as_str) {
+        let mode =
+            PlayMode::from_name(name).ok_or_else(|| bad("motion.timeline", format!("unknown playback mode '{name}' (forward | reverse | loop)")))?;
+        settings = settings.with_play_mode(mode);
     }
     let settings = settings.sanitized();
     let doc = s.doc_mut()?;
@@ -546,7 +563,7 @@ fn motion_timeline(s: &mut Session, p: &Value) -> Result<Value> {
     // 否则父页设置非默认时，删掉帧的条目会让它继承到不同的值（CodeRabbit）。
     // 页作用域没有父级（`page_of(page) == page`），继承值恒为默认。
     let inherited = if doc.node(page).is_some_and(|n| n.is_page()) {
-        motion::TimelineSettings::default()
+        TimelineSettings::default()
     } else {
         doc.page_of(page).and_then(|pg| doc.timelines.get(&pg)).copied().unwrap_or_default()
     };
@@ -556,7 +573,7 @@ fn motion_timeline(s: &mut Session, p: &Value) -> Result<Value> {
         doc.timelines.insert(page, settings);
     }
     doc.mark_dirty([page]);
-    Ok(json!({"duration": settings.duration_ms, "fps": settings.fps, "loop": settings.looping}))
+    Ok(json!({"duration": settings.duration_ms, "fps": settings.fps, "loop": settings.looping, "mode": settings.play_mode().name()}))
 }
 
 fn transition_poses(_s: &mut Session, p: &Value) -> Result<Value> {
@@ -645,6 +662,29 @@ mod tests {
         let err = s.execute("motion.keyframe", &json!({"property": "Position", "time": 0, "value": 5.0, "ids": [n.0]}));
         assert!(err.is_err(), "标量不能给 Position");
         assert_eq!(node(&s, n).motion, before, "被拒的写入不碰文档");
+    }
+
+    /// Three playback modes are one undoable document command: forward → reverse → loop.
+    #[test]
+    fn timeline_playback_mode_roundtrips_through_undo_and_redo() {
+        let mut s = Session::new();
+        let page = s.page().expect("a page");
+        let out = ex(&mut s, "motion.timeline", json!({"mode": "reverse", "duration": 1000, "fps": 30, "page": page.0}));
+        assert_eq!(out["mode"], "reverse");
+        let settings = s.doc().unwrap().timeline_settings_for(page);
+        assert_eq!(settings.play_mode(), PlayMode::Reverse);
+        assert!(!settings.looping && settings.reverse);
+
+        assert!(s.undo().unwrap(), "the mode command is on the undo stack");
+        assert_eq!(s.doc().unwrap().timeline_settings_for(page), TimelineSettings::default());
+
+        assert!(s.redo().unwrap(), "redo restores the mode");
+        assert_eq!(s.doc().unwrap().timeline_settings_for(page).play_mode(), PlayMode::Reverse);
+
+        ex(&mut s, "motion.timeline", json!({"mode": "loop", "page": page.0}));
+        assert_eq!(s.doc().unwrap().timeline_settings_for(page).play_mode(), PlayMode::Loop);
+        ex(&mut s, "motion.timeline", json!({"mode": "forward", "page": page.0}));
+        assert_eq!(s.doc().unwrap().timeline_settings_for(page).play_mode(), PlayMode::Forward);
     }
 
     /// timeline 写回默认值时删条目（默认页不进文件 / 不进 collab）；可指定 page。

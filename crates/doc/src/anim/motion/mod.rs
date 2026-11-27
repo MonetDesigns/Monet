@@ -32,6 +32,37 @@ fn default_fps() -> u32 {
     60
 }
 
+/// How the Motion playhead runs from one end of the timeline to the other.
+///
+/// `Loop` is the historical `looping` flag; `Reverse` is a one-shot playback from the end back to
+/// 0. The pair `(looping, reverse)` is kept in the document for backwards-compatible JSON
+/// (`loop` has always been a boolean), and `PlayMode` is the three-state view the UI edits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PlayMode {
+    Forward,
+    Reverse,
+    Loop,
+}
+
+impl PlayMode {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Forward => "forward",
+            Self::Reverse => "reverse",
+            Self::Loop => "loop",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "forward" | "forwards" | "fwd" => Some(Self::Forward),
+            "reverse" | "backward" | "backwards" | "rev" => Some(Self::Reverse),
+            "loop" | "looping" => Some(Self::Loop),
+            _ => None,
+        }
+    }
+}
+
 /// Timeline settings of one page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TimelineSettings {
@@ -44,11 +75,15 @@ pub struct TimelineSettings {
     /// Whether playback loops (the Loop button).
     #[serde(default, rename = "loop")]
     pub looping: bool,
+    /// One-shot playback from the end of the timeline back to 0. Ignored while `looping` is set;
+    /// `sanitized()` clears the combination and new files never carry it.
+    #[serde(default)]
+    pub reverse: bool,
 }
 
 impl Default for TimelineSettings {
     fn default() -> Self {
-        Self { duration_ms: default_duration(), fps: default_fps(), looping: false }
+        Self { duration_ms: default_duration(), fps: default_fps(), looping: false, reverse: false }
     }
 }
 
@@ -60,10 +95,31 @@ impl TimelineSettings {
         *self == Self::default()
     }
 
+    /// The three-state playback mode the timeline header exposes.
+    pub fn play_mode(&self) -> PlayMode {
+        if self.looping {
+            PlayMode::Loop
+        } else if self.reverse {
+            PlayMode::Reverse
+        } else {
+            PlayMode::Forward
+        }
+    }
+
+    /// Write a mode into the two backwards-compatible flags.
+    pub fn with_play_mode(mut self, mode: PlayMode) -> Self {
+        self.looping = matches!(mode, PlayMode::Loop);
+        self.reverse = matches!(mode, PlayMode::Reverse);
+        self
+    }
+
     /// Clamps to a usable range: duration 1ms ..= 10min, fps 1 ..= 240.
     pub fn sanitized(mut self) -> Self {
         self.duration_ms = self.duration_ms.clamp(1, Self::MAX_DURATION_MS);
         self.fps = self.fps.clamp(1, Self::MAX_FPS);
+        if self.looping {
+            self.reverse = false;
+        }
         self
     }
 
@@ -88,13 +144,21 @@ impl TimelineSettings {
         (t_ms / f).round() * f
     }
 
-    /// Maps a free-running playback clock to timeline time.
+    /// Maps a free-running playback clock to timeline time. Forward and loop clocks count up
+    /// from 0; the reverse clock counts down from the end (`duration - elapsed`).
     pub fn playback_time(&self, elapsed_ms: f32) -> f32 {
         let d = self.duration_ms.max(1) as f32;
-        if self.looping { elapsed_ms.rem_euclid(d) } else { elapsed_ms.clamp(0.0, d) }
+        if self.looping {
+            elapsed_ms.rem_euclid(d)
+        } else if self.reverse {
+            (d - elapsed_ms).clamp(0.0, d)
+        } else {
+            elapsed_ms.clamp(0.0, d)
+        }
     }
 
-    /// Whether non-looping playback has reached the end at `elapsed_ms`.
+    /// Whether non-looping playback has reached the far end at `elapsed_ms`. The reverse mode
+    /// reaches the far end when the clock has run the full duration (the playhead is at 0).
     pub fn finished(&self, elapsed_ms: f32) -> bool {
         !self.looping && elapsed_ms >= self.duration_ms as f32
     }
@@ -107,7 +171,8 @@ mod tests {
     #[test]
     fn defaults_match_figma() {
         let s = TimelineSettings::default();
-        assert_eq!((s.duration_ms, s.fps, s.looping), (2000, 60, false));
+        assert_eq!((s.duration_ms, s.fps, s.looping, s.reverse), (2000, 60, false, false));
+        assert_eq!(s.play_mode(), PlayMode::Forward);
         assert!(s.is_default());
         assert_eq!(s.frame_count(), 120);
         assert!((s.frame_ms() - 16.6667).abs() < 1e-3);
@@ -120,15 +185,29 @@ mod tests {
         let s: TimelineSettings = serde_json::from_str(r#"{"loop":true,"duration_ms":500}"#).unwrap();
         assert!(s.looping && s.duration_ms == 500 && s.fps == 60);
         assert!(serde_json::to_string(&s).unwrap().contains("\"loop\":true"));
+        let s: TimelineSettings = serde_json::from_str(r#"{"reverse":true,"duration_ms":500}"#).unwrap();
+        assert!(s.reverse && s.play_mode() == PlayMode::Reverse);
     }
 
     #[test]
     fn sanitize_and_playback_time() {
-        let s = TimelineSettings { duration_ms: 0, fps: 0, looping: false }.sanitized();
+        let s = TimelineSettings { duration_ms: 0, fps: 0, looping: false, reverse: false }.sanitized();
         assert_eq!((s.duration_ms, s.fps), (1, 1));
-        let s = TimelineSettings { duration_ms: 1000, fps: 30, looping: true };
+        let s = TimelineSettings { duration_ms: 1000, fps: 30, looping: true, reverse: false };
         assert!((s.playback_time(2500.0) - 500.0).abs() < 1e-3);
         assert!(!s.finished(5000.0));
+
+        let reverse = TimelineSettings { duration_ms: 1000, fps: 30, looping: false, reverse: true };
+        assert_eq!(reverse.play_mode(), PlayMode::Reverse);
+        assert!((reverse.playback_time(250.0) - 750.0).abs() < 1e-3);
+        assert!((reverse.playback_time(1500.0) - 0.0).abs() < 1e-3);
+        assert!(reverse.finished(1000.0));
+        assert!(!reverse.finished(999.0));
+
+        let mixed = TimelineSettings { duration_ms: 1000, fps: 30, looping: true, reverse: true }.sanitized();
+        assert_eq!(mixed.play_mode(), PlayMode::Loop);
+        assert!(!mixed.reverse, "loop + reverse is normalized back to plain loop");
+        assert_eq!(mixed.with_play_mode(PlayMode::Reverse).reverse, true);
     }
 
     use crate::{Document, NodeKind};
@@ -142,7 +221,7 @@ mod tests {
         pos.set_key(0, AnimValue::Vec2(figcraft_geom::Vec2::new(10.0, 20.0)), Some(Ease::bezier(0.07, 0.97, 0.58, 1.0)));
         pos.set_key(1500, AnimValue::Vec2(figcraft_geom::Vec2::new(300.0, 20.0)), None);
         n.motion.clips = find_preset("Pulse").unwrap().instantiate(250, 0);
-        d.timelines.insert(page, TimelineSettings { duration_ms: 4000, fps: 30, looping: true });
+        d.timelines.insert(page, TimelineSettings { duration_ms: 4000, fps: 30, looping: true, reverse: false });
         (d, page, id)
     }
 

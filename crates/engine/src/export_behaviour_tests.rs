@@ -399,7 +399,7 @@ fn animation_is_a_normal_export_row_with_a_png_zip() {
         tr.set_key(0, AnimValue::Scalar(0.0), None);
         tr.set_key(500, AnimValue::Scalar(1.0), Some(Ease::Linear));
     }
-    s.doc_mut().unwrap().timelines.insert(f, TimelineSettings { duration_ms: 500, fps: 10, looping: true });
+    s.doc_mut().unwrap().timelines.insert(f, TimelineSettings { duration_ms: 500, fps: 10, looping: true, reverse: false });
 
     ex(&mut s, "export.add", json!({"ids": [f]}));
     ex(&mut s, "export.update", json!({"ids": [f], "index": 0, "format": "zip", "fps": 10, "size": "1x", "suffix": "-frames"}));
@@ -444,7 +444,7 @@ fn mp4_pads_odd_animation_bounds_to_an_even_picture() {
         tr.set_key(0, AnimValue::Scalar(0.0), None);
         tr.set_key(500, AnimValue::Scalar(1.0), Some(Ease::Linear));
     }
-    s.doc_mut().unwrap().timelines.insert(f, TimelineSettings { duration_ms: 500, fps: 10, looping: true });
+    s.doc_mut().unwrap().timelines.insert(f, TimelineSettings { duration_ms: 500, fps: 10, looping: true, reverse: false });
 
     ex(&mut s, "export.add", json!({"ids": [f], "setting": {"format": "mp4", "fps": 10, "size": "1x"}}));
     let r = ex(&mut s, "file.exportLayers", json!({"ids": [f]}));

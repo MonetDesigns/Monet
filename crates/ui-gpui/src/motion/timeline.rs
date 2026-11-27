@@ -15,7 +15,9 @@
 //! The docked Motion timeline: ruler, layer rows, property tracks, keyframe diamonds,
 //! segments, clip bars and the playhead.
 
-use figcraft_doc::anim::motion::{AnimProperty, TimelineSettings};
+use std::collections::BTreeSet;
+
+use figcraft_doc::anim::motion::{AnimProperty, PlayMode, TimelineSettings};
 use figcraft_doc::{Document, NodeId};
 use figcraft_i18n::tr;
 use gpui::{
@@ -190,7 +192,11 @@ enum HitKind {
     LayerEdge(NodeId, ClipEdge),
     AddKeyAtPlayhead,
     Play,
-    Loop,
+    /// One of the three playback modes (forward / reverse / loop).
+    PlayMode(PlayMode),
+    /// Header zoom pill: multiply the timeline magnification around the track centre.
+    ZoomIn,
+    ZoomOut,
     /// 帧率按钮：点一下在 24 / 30 / 60 间循环（写 `motion.timeline {fps}`）。
     Fps,
     Duration,
@@ -223,6 +229,8 @@ enum DragKind {
     /// A clip bar / layer summary: `Act::DragMove` recomputes from the snapshot taken on press.
     Clip,
     Layer,
+    /// Rubber-band selection over the empty track lane. Only keyframe centres are selected.
+    Marquee,
 }
 
 // ⛔ 拖拽的瞬时状态必须**跨帧持久**。`bar()` 每帧都会重新执行（`q.push` → wake → `cx.notify()`
@@ -266,6 +274,24 @@ thread_local! {
     /// (scale px/ms, scroll_x, track_right, frame_ms, duration_ms).
     static GEOM: std::cell::RefCell<(f32, f32, f32, f32, u32)> =
         const { std::cell::RefCell::new((1.0, 0.0, 9999.0, 1000.0 / 60.0, 2000)) };
+    /// The live marquee: origin in bar-local space, current point, the selection to merge from
+    /// (Shift), and whether the pointer actually travelled far enough to count as a drag.
+    static MARQUEE: std::cell::RefCell<Option<Marquee>> = const { std::cell::RefCell::new(None) };
+    /// Selection at press time, refreshed by `bar()` each frame so `dispatch_down` (which has no
+    /// `&MotionUi`) can build the additive marquee base.
+    static MARQUEE_BASE: std::cell::RefCell<BTreeSet<SelItem>> = const { std::cell::RefCell::new(BTreeSet::new()) };
+    /// Keyframe centres in bar-local space, rebuilt by `build()` every frame. A marquee selects a
+    /// key when its centre falls inside the rectangle (desigma's hit rule).
+    static KEY_CENTERS: std::cell::RefCell<Vec<(Pos2, SelItem)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[derive(Clone, Debug)]
+struct Marquee {
+    origin: Pos2,
+    cur: Pos2,
+    base: BTreeSet<SelItem>,
+    additive: bool,
+    moved: bool,
 }
 
 /// 设置拖拽抓取的关键帧。`apply` 在 `MoveKey` 落地后用它按**真实**时间纠正时间轴的乐观值
@@ -294,6 +320,17 @@ fn elide(s: &str, max_chars: usize) -> String {
 /// egui `pxms` (L316-318).
 fn scale_of(track_x: f32, right: f32, duration_ms: u32) -> f32 {
     ((right - track_x - TIME_PAD - 16.0).max(40.0)) / duration_ms.max(1) as f32
+}
+
+/// Scroll-x that keeps the time under `anchor_x` fixed when the magnification goes from
+/// `old_zoom` to `new_zoom`. `fit` is the fit-to-width px/ms base. This is desigma's `zoom_about`
+/// without its UI type.
+pub fn zoom_about(anchor_x: f32, fit: f32, old_zoom: f32, new_zoom: f32, scroll_x: f32) -> f32 {
+    if fit <= 0.0 || old_zoom <= 0.0 {
+        return scroll_x;
+    }
+    let anchor_t = ((anchor_x - LEFT_W - TIME_PAD + scroll_x) / (fit * old_zoom)).max(0.0);
+    (TIME_PAD + anchor_t * fit * new_zoom - (anchor_x - LEFT_W)).max(0.0)
 }
 
 /// egui `tick_step` (L1315-1329).
@@ -326,19 +363,23 @@ fn build(
     // 指针在 bar 里的局部坐标（`None` = 指针不在时间轴上）。egui 的 `rect_contains_pointer`
     // 悬停效果（hover 底色、眼睛图标、菱形变亮）都由它驱动；GPUI 没有逐元素 hover 状态。
     hover: Option<Pos2>,
-) -> (Painter, Vec<Label>, Vec<Hit>, Vec<(Rect, Icon, Color32)>) {
+) -> (Painter, Vec<Label>, Vec<Hit>, Vec<(Rect, Icon, Color32)>, Vec<(Pos2, SelItem)>) {
     let t = tokens();
     let mut p = Painter::new(Rect::from_min_size(pos2(0.0, 0.0), vec2(width, height)));
     let mut labels = Vec::new();
     let mut hits = Vec::new();
     let mut icons = Vec::new();
+    let mut key_centers = Vec::new();
 
     // egui L188: the whole panel is one flat panel-coloured rect.
     p.rect_filled(Rect::from_min_size(pos2(0.0, 0.0), vec2(width, height)), CornerRadius::ZERO, t.panel);
 
     let track_x = LEFT_W;
     let track_right = width;
-    let scale = scale_of(track_x, track_right, settings.duration_ms);
+    // Fit-to-width is the zoom base; `zoom` is a pure magnification on top of it. `Ctrl/Cmd +
+    // wheel` and the header's −/+ pill both change only `zoom`.
+    let fit_pxms = scale_of(track_x, track_right, settings.duration_ms);
+    let scale = fit_pxms * ui.zoom_factor();
     let scroll_x = ui.scroll_x;
     // egui L327 / L426: x_of(time) = track_x + TIME_PAD + time*scale - scroll.
     let x_of = |time: f64| track_x + TIME_PAD + (time as f32) * scale - scroll_x;
@@ -431,9 +472,12 @@ fn build(
                     if ui.folded.contains(&row.node) { Icon::ChevronRight } else { Icon::ChevronDown },
                     t.text_secondary,
                 ));
-                hits.push(Hit { rect: Rect::from_center_size(c, vec2(ROW_ICON, ROW_ICON)), kind: HitKind::Fold(row.node) });
+                // The chevron hit must be registered AFTER the row hit: `hit_at` scans in reverse,
+                // so a row-wide Layer hit pushed last would swallow the fold arrow (the bug where
+                // clicking the chevron just selected the layer).
                 // egui L507-510: the row click covers the LEFT column only.
                 hits.push(Hit { rect: Rect::from_min_max(pos2(0.0, y), pos2(LEFT_W, y + ROW_H)), kind: HitKind::Layer(row.node) });
+                hits.push(Hit { rect: Rect::from_center_size(c, vec2(ROW_ICON, ROW_ICON)), kind: HitKind::Fold(row.node) });
                 text(&mut labels, pos2(name_x, cy), Align2::LEFT_CENTER, elide(&row.label, 28), semibold(10.5), t.text);
                 // egui L636-641: the eye only shows while the row is hovered（悬停才出现）。
                 if row_hovered {
@@ -469,7 +513,8 @@ fn build(
                 // 否则它会把后面更具体的关键帧、segment 命中全遮住 —— 那正是「菱形拖不动、
                 // 两帧之间的线选不中」的根因。egui 里 `rresp` 也是先创建、seg/key 后创建。
                 hits.push(Hit { rect: Rect::from_min_max(pos2(0.0, y), pos2(LEFT_W, y + ROW_H)), kind: HitKind::Track(row.node, prop_of(row)) });
-                hits.push(Hit { rect, kind: HitKind::Track(row.node, prop_of(row)) });
+                // Only the left column selects the track; the track lane stays `Clear` so a drag
+                // there can start a marquee instead of being swallowed by a full-row hit.
                 text(
                     &mut labels,
                     pos2(name_x, cy),
@@ -594,6 +639,7 @@ fn build(
                         rect: Rect::from_center_size(c, vec2(KF_R * 2.0 + 6.0, KF_R * 2.0 + 6.0)),
                         kind: HitKind::Key(row.node, prop, time),
                     });
+                    key_centers.push((c, SelItem::Key(row.node, prop, time)));
                     let _ = ki;
                 }
                 // 整行的「双击加关键帧 / 点空白清空」命中已在上面（关键帧与 segment 之下）。
@@ -672,10 +718,9 @@ fn build(
     // Seek, so clicking Export only moved the playhead and the animation export never opened.
     let ruler = Rect::from_min_max(pos2(track_x, 0.0), pos2(track_right, HEADER_H));
     hits.push(Hit { rect: ruler, kind: HitKind::Seek });
-    let controls: [(Rect, HitKind, Icon); 5] = [
+    let controls: [(Rect, HitKind, Icon); 4] = [
         (at(38.0, 22.0, 24.0), HitKind::AddKeyAtPlayhead, Icon::Instance),
-        (at(160.0, 22.0, 24.0), HitKind::Loop, if settings.looping { Icon::LinkOn } else { Icon::LinkOff }),
-        (at(190.0, 22.0, 24.0), HitKind::FoldAll, Icon::ChevronDown),
+        (at(224.0, 20.0, 22.0), HitKind::FoldAll, Icon::ChevronDown),
         (Rect::from_center_size(pos2(track_right - 46.0, cy), vec2(24.0, 24.0)), HitKind::Export, Icon::Arrow),
         (Rect::from_center_size(pos2(track_right - 18.0, cy), vec2(24.0, 24.0)), HitKind::Close, Icon::Close),
     ];
@@ -687,13 +732,35 @@ fn build(
         icons.push((Rect::from_center_size(r.center(), vec2(14.0, 14.0)), icon, t.icon));
         hits.push(Hit { rect: r, kind });
     }
+    // Three playback modes: 从头 / 从尾 / 循环. Each writes `motion.timeline {mode}`, one undo
+    // step; the active mode is tinted with the accent colour.
+    let current_mode = settings.play_mode();
+    for (mode, label, cx) in [(PlayMode::Forward, "从头", 158.0), (PlayMode::Reverse, "从尾", 180.0), (PlayMode::Loop, "循环", 202.0)] {
+        let r = at(cx, 20.0, 22.0);
+        if current_mode == mode {
+            p.rect_filled(r, CornerRadius::same(5), t.accent.gamma_multiply(0.16));
+        } else if hover.is_some_and(|p| r.contains(p)) {
+            p.rect_filled(r, CornerRadius::same(5), t.hover);
+        }
+        text(&mut labels, r.center(), Align2::CENTER_CENTER, label, regular(8.0), if current_mode == mode { t.accent } else { t.text_secondary });
+        hits.push(Hit { rect: r, kind: HitKind::PlayMode(mode) });
+    }
     // 帧率：egui 没有 UI 入口但引擎 `motion.timeline {fps}` 支持；这里给一个可见的循环按钮。
-    let fps_r = at(220.0, 34.0, 22.0);
+    let fps_r = at(246.0, 24.0, 22.0);
     if hover.is_some_and(|p| fps_r.contains(p)) {
         p.rect_filled(fps_r, CornerRadius::same(5), t.hover);
     }
     hits.push(Hit { rect: fps_r, kind: HitKind::Fps });
     text(&mut labels, fps_r.center(), Align2::CENTER_CENTER, format!("{}", settings.fps), regular(9.0), t.text_secondary);
+    // Zoom pill: − / + around the track centre. Ctrl/Cmd + wheel does the same around the pointer.
+    for (kind, icon, cx, w) in [(HitKind::ZoomOut, Icon::Minus, 269.0, 18.0), (HitKind::ZoomIn, Icon::Plus, 288.0, 14.0)] {
+        let r = at(cx, w, 18.0);
+        if hover.is_some_and(|p| r.contains(p)) {
+            p.rect_filled(r, CornerRadius::same(4), t.hover);
+        }
+        icons.push((Rect::from_center_size(r.center(), vec2(11.0, 11.0)), icon, t.icon));
+        hits.push(Hit { rect: r, kind });
+    }
     // egui L243-257: two editable time boxes + the "s" unit label. The boxes are real
     // `TextField`s (drawn by `field_layers`), so no hit region is registered for them here —
     // a hit would swallow the click that focuses the editor.
@@ -735,6 +802,15 @@ fn build(
         tick = tick.saturating_add(minor.max(1));
     }
 
+    // ── marquee rubber band (drawn above rows, below the playhead) ──────────
+    if let Some(m) = MARQUEE.with(|m| m.borrow().clone())
+        && m.moved
+    {
+        let r = Rect::from_min_max(pos2(m.origin.x.min(m.cur.x), m.origin.y.min(m.cur.y)), pos2(m.origin.x.max(m.cur.x), m.origin.y.max(m.cur.y)));
+        p.rect_filled(r, CornerRadius::ZERO, t.accent.gamma_multiply(0.12));
+        p.rect_stroke(r, CornerRadius::ZERO, stroke(t.accent, 1.0), crate::canvas::geom::StrokeKind::Inside);
+    }
+
     // ── playhead LAST (egui L826-831) ────────────────────────────────────────
     let px_head = playhead_x;
     let y0 = playhead_top;
@@ -746,7 +822,7 @@ fn build(
     // 顶边高度手柄的命中交给 `bar()` div 上那条 4px GPUI 覆盖条（能向上溢出到画布侧），
     // 拖动状态机与左面板共用 `resize_drag::Handle::BottomTimeline`。
     let _ = time_of;
-    (p, labels, hits, icons)
+    (p, labels, hits, icons, key_centers)
 }
 
 // ---------------------------------------------------------------- 图层
@@ -825,7 +901,13 @@ pub fn bar(
         let local = pos2(f32::from(mp.x) - f32::from(bar_o.x), f32::from(mp.y) - f32::from(bar_o.y));
         (local.x >= 0.0 && local.x <= width && local.y >= 0.0 && local.y <= h).then_some(local)
     };
-    let (painter, labels, hits, icons) = build(doc, ui, selection, page, width, h, settings, hover);
+    let fit_pxms = scale_of(LEFT_W, width, settings.duration_ms);
+    ui.fit_pxms = fit_pxms;
+    let scale = fit_pxms * ui.zoom_factor();
+    // Snapshot the selection so a marquee press can merge from it without `&MotionUi`.
+    MARQUEE_BASE.with(|b| *b.borrow_mut() = ui.selection.clone());
+    let (painter, labels, hits, icons, key_centers) = build(doc, ui, selection, page, width, h, settings, hover);
+    KEY_CENTERS.with(|k| *k.borrow_mut() = key_centers);
     let ops = painter.ops.clone();
 
     // GPUI mouse events arrive in WINDOW coordinates, but `build`'s hit table and the canvas
@@ -877,7 +959,6 @@ pub fn bar(
     .into_any_element();
 
     let q_down = queue.clone();
-    let scale = scale_of(LEFT_W, width, settings.duration_ms);
     let scrolling_x = ui.scroll_x;
     let looping = settings.looping;
     let drag_doc = doc.clone();
@@ -1019,7 +1100,13 @@ pub fn bar(
                     ScrollDelta::Pixels(p) => (f32::from(p.x), f32::from(p.y)),
                     ScrollDelta::Lines(p) => (p.x * 30.0, p.y * 30.0),
                 };
-                if e.modifiers.shift || dx.abs() > dy.abs() {
+                if e.modifiers.control || e.modifiers.platform {
+                    // Ctrl/Cmd + wheel zooms about the pointer, preserving the time under it.
+                    let o = BAR_ORIGIN.with(|o| *o.borrow());
+                    let anchor_x = f32::from(e.position.x) - f32::from(o.x);
+                    let factor = (1.15_f32).powf(dy.clamp(-3.0, 3.0));
+                    q.push(Act::ZoomBy { factor, anchor_x });
+                } else if e.modifiers.shift || dx.abs() > dy.abs() {
                     q.push(Act::ScrollX(scroll_x + dx.abs().max(dy.abs())));
                 } else {
                     q.push(Act::ScrollY(scroll - dy));
@@ -1047,7 +1134,9 @@ fn cursor_for(kind: HitKind) -> CursorStyle {
         },
         HitKind::Key(..) => CursorStyle::PointingHand,
         HitKind::Play
-        | HitKind::Loop
+        | HitKind::PlayMode(_)
+        | HitKind::ZoomIn
+        | HitKind::ZoomOut
         | HitKind::Fps
         | HitKind::Fold(_)
         | HitKind::FoldAll
@@ -1083,6 +1172,7 @@ fn dispatch_down(
     shift: bool,
     double: bool,
 ) -> Option<DragKind> {
+    let _ = looping;
     let Some(h) = hit else { return None };
     match h.kind {
         HitKind::Seek => {
@@ -1092,7 +1182,9 @@ fn dispatch_down(
         HitKind::Fold(n) => q.push(Act::Fold(n)),
         HitKind::FoldAll => q.push(Act::FoldAll),
         HitKind::Play => q.push(Act::Play),
-        HitKind::Loop => q.push(Act::SetLoop(!looping)),
+        HitKind::PlayMode(mode) => q.push(Act::SetPlayMode(mode)),
+        HitKind::ZoomIn => q.push(Act::ZoomBy { factor: 1.25, anchor_x: LEFT_W + 60.0 }),
+        HitKind::ZoomOut => q.push(Act::ZoomBy { factor: 0.8, anchor_x: LEFT_W + 60.0 }),
         HitKind::Fps => q.push(Act::SetFps(0)),
         HitKind::AddKeyAtPlayhead => q.push(Act::AddKeyAtPlayhead),
         HitKind::Duration => {
@@ -1176,7 +1268,13 @@ fn dispatch_down(
         // The arrow is the animation export entry; Motion mode opens the same Export dialog as
         // the File menu, now with the MP4 / GIF / WebM / PNG-sequence rows.
         HitKind::Export => q.push(Act::OpenExport),
-        HitKind::Clear => q.push(Act::ClearSelection),
+        HitKind::Clear => {
+            // A press on the empty lane starts a marquee; a plain click that never travels
+            // clears the selection on release (see `end_drag`). Shift keeps the base selection.
+            let base = if shift { MARQUEE_BASE.with(|b| b.borrow().clone()) } else { BTreeSet::new() };
+            MARQUEE.with(|m| *m.borrow_mut() = Some(Marquee { origin: pos, cur: pos, base, additive: shift, moved: false }));
+            return Some(DragKind::Marquee);
+        }
     }
     None
 }
@@ -1252,6 +1350,27 @@ fn route_drag_move(q: &Queue, scale: f32, scroll_x: f32, pos: Pos2) {
         // Clip / layer bars: `DragMove` recomputes from the snapshot taken on press.
         Some(DragKind::Clip) | Some(DragKind::Layer) => {
             q.push(Act::DragMove { x: pos.x, pxms: scale });
+        }
+        Some(DragKind::Marquee) => {
+            MARQUEE.with(|slot| {
+                let taken = slot.borrow_mut().take();
+                if let Some(mut m) = taken {
+                    m.moved |= (pos.x - m.origin.x).abs() + (pos.y - m.origin.y).abs() > 3.0;
+                    m.cur = pos;
+                    let r =
+                        Rect::from_min_max(pos2(m.origin.x.min(pos.x), m.origin.y.min(pos.y)), pos2(m.origin.x.max(pos.x), m.origin.y.max(pos.y)));
+                    let mut sel = if m.additive { m.base.clone() } else { BTreeSet::new() };
+                    KEY_CENTERS.with(|k| {
+                        for (c, item) in k.borrow().iter() {
+                            if r.contains(*c) {
+                                sel.insert(item.clone());
+                            }
+                        }
+                    });
+                    q.push(Act::SetSelection(sel.into_iter().collect()));
+                    *slot.borrow_mut() = Some(m);
+                }
+            });
         }
         None => {}
     }
@@ -1348,6 +1467,16 @@ pub fn drag_active() -> bool {
 /// pointer is outside the bar (incl. released outside the window).
 pub fn end_drag(q: &Queue) {
     let kind = DRAG.with(|d| *d.borrow());
+    // A marquee that never travelled is a plain click on the empty lane: restore the base
+    // selection (empty for a plain click, the old selection for Shift). No document write.
+    if matches!(kind, Some(DragKind::Marquee))
+        && let Some(m) = MARQUEE.with(|m| m.borrow_mut().take())
+        && !m.moved
+    {
+        q.push(Act::SetSelection(m.base.into_iter().collect()));
+    } else {
+        MARQUEE.with(|m| *m.borrow_mut() = None);
+    }
     GRABBED.with(|g| *g.borrow_mut() = None);
     DRAG.with(|d| *d.borrow_mut() = None);
     DUR_SCROLL.with(|s| s.set(0.0));
@@ -1373,6 +1502,9 @@ mod tests {
         DRAG.with(|d| *d.borrow_mut() = None);
         GRABBED.with(|g| *g.borrow_mut() = None);
         BEGAN.with(|b| *b.borrow_mut() = false);
+        MARQUEE.with(|m| *m.borrow_mut() = None);
+        MARQUEE_BASE.with(|b| b.borrow_mut().clear());
+        KEY_CENTERS.with(|k| k.borrow_mut().clear());
     }
 
     fn doc() -> Document {
@@ -1396,9 +1528,70 @@ mod tests {
             tr.set_key(500, AnimValue::Vec2(figcraft_geom::Vec2::new(10.0, 0.0)), None);
         }
         let page_scope = page; // 空选时 scope_of 回退到页面。
-        let settings = TimelineSettings { duration_ms: 1000, fps: 30, looping: false };
+        let settings = TimelineSettings { duration_ms: 1000, fps: 30, looping: false, reverse: false };
         assert!(build_rows(&d, &[], &MotionUi::default(), page_scope, settings).is_empty(), "空选不列轨道");
         assert!(!build_rows(&d, &[dot], &MotionUi::default(), frame, settings).is_empty(), "选中层仍要列出轨道");
+    }
+
+    /// The layer row and its fold chevron overlap. `hit_at` scans backwards, so the chevron must
+    /// be registered after the row; otherwise clicking the arrow selects the layer (the bug where
+    /// the left panel "has a chevron but never folds").
+    #[test]
+    fn fold_chevron_wins_over_the_layer_row_hit() {
+        let (doc, id) = doc_with_keys();
+        let ui = MotionUi::default();
+        let settings = settings_of(&doc, doc.pages[0]);
+        let (_, _, hits, _, _) = build(&doc, &ui, &[id], doc.pages[0], 1200.0, 309.0, settings, None);
+        let arrow = pos2(ROW_PAD + ROW_ICON / 2.0, HEADER_H + 8.0 + ROW_H / 2.0);
+        assert!(
+            matches!(hit_at(&hits, arrow).map(|h| h.kind), Some(HitKind::Fold(n)) if n == id),
+            "the chevron centre must resolve to Fold, got {:?}",
+            hit_at(&hits, arrow).map(|h| h.kind)
+        );
+        // The row body still selects the layer (the label, away from the chevron).
+        let body = pos2(120.0, HEADER_H + 8.0 + ROW_H / 2.0);
+        assert!(matches!(hit_at(&hits, body).map(|h| h.kind), Some(HitKind::Layer(n)) if n == id));
+    }
+
+    /// Marquee: press the empty lane, drag a box over a keyframe centre, and only that key is
+    /// selected. It is a pure selection gesture (no `BeginEdit`, no document write).
+    #[test]
+    fn marquee_drag_selects_keyframes_inside_the_box() {
+        reset_drag_state();
+        let q = Queue::new(Rc::new(|| {}));
+        let hits = vec![Hit { rect: Rect { min: pos2(-9999.0, -9999.0), max: pos2(9999.0, 9999.0) }, kind: HitKind::Clear }];
+        let begin = pos2(400.0, 80.0);
+        let mutate = begin_drag(&q, hit_at(&hits, begin), begin, 1.0, false, 0.0, &doc(), 2000, false, false);
+        assert!(!mutate, "marquee selection must not open an undo step");
+        assert!(matches!(DRAG.with(|d| *d.borrow()), Some(DragKind::Marquee)));
+        assert!(q.drain().is_empty(), "press alone writes nothing");
+
+        let a = SelItem::Key(NodeId(1), AnimProperty::Opacity, 0);
+        let b = SelItem::Key(NodeId(1), AnimProperty::Opacity, 500);
+        KEY_CENTERS.with(|k| *k.borrow_mut() = vec![(pos2(450.0, 90.0), a), (pos2(300.0, 90.0), b)]);
+        let q_move = Queue::new(Rc::new(|| {}));
+        route_drag_move(&q_move, 1.0, 0.0, pos2(500.0, 140.0));
+        let acts = q_move.drain();
+        let Some(Act::SetSelection(items)) = acts.first() else {
+            panic!("marquee move must push SetSelection, got {acts:?}");
+        };
+        assert_eq!(items.len(), 1, "only the key whose centre is inside the box");
+        assert_eq!(items[0], a);
+        assert_eq!(MARQUEE.with(|m| m.borrow().as_ref().map(|m| m.moved)), Some(true));
+    }
+
+    /// Zoom keeps the time under the anchor fixed: x_of(t) is the same before and after.
+    #[test]
+    fn zoom_about_keeps_the_anchor_time_under_the_pointer() {
+        let fit = 0.5;
+        let old = 1.0;
+        let new = 2.0;
+        let anchor_x = LEFT_W + TIME_PAD + 200.0 * fit;
+        let scroll = zoom_about(anchor_x, fit, old, new, 0.0);
+        let before = LEFT_W + TIME_PAD + 200.0 * fit - 0.0;
+        let after = LEFT_W + TIME_PAD + 200.0 * fit * new - scroll;
+        assert!((before - anchor_x).abs() < 1e-3);
+        assert!((after - anchor_x).abs() < 1e-2, "new scroll {scroll} must keep the anchor at {anchor_x}, got {after}");
     }
 
     /// Regression test for the "handles won't drag at all" bug. The root cause was that the
@@ -1528,7 +1721,7 @@ mod tests {
     fn build_hits(g: &Geom, hover: Option<Pos2>) -> Vec<Hit> {
         let mut ui = MotionUi::default();
         ui.selection.insert(SelItem::Layer(g.id));
-        let (_, _, hits, _) = build(&g.doc, &ui, &[g.id], g.doc.pages[0], g.width, 309.0, g.settings, hover);
+        let (_, _, hits, _, _) = build(&g.doc, &ui, &[g.id], g.doc.pages[0], g.width, 309.0, g.settings, hover);
         hits
     }
 

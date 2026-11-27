@@ -652,7 +652,7 @@ mod tests {
             fill.set_key(0, AnimValue::Color(Color::new(1.0, 0.0, 0.0, 1.0)), Some(Ease::Linear));
             fill.set_key(2000, AnimValue::Color(Color::new(0.0, 0.0, 1.0, 1.0)), None);
         }
-        d.timelines.insert(page, TimelineSettings { duration_ms: 2000, fps: 60, looping });
+        d.timelines.insert(page, TimelineSettings { duration_ms: 2000, fps: 60, looping, reverse: false });
         (d, frame, id)
     }
 
@@ -690,7 +690,7 @@ mod tests {
         let page = d.first_page().unwrap();
         let id = d.create(page, NodeKind::Rectangle, "Dot", 0.0, 0.0, 10.0, 10.0).unwrap();
         d.node_mut(id).unwrap().motion.clips = find_preset("Pulse").unwrap().instantiate(0, 0);
-        d.timelines.insert(page, TimelineSettings { duration_ms: 1000, fps: 60, looping: true });
+        d.timelines.insert(page, TimelineSettings { duration_ms: 1000, fps: 60, looping: true, reverse: false });
         let css = css_animation_for(&d, id);
         assert!(css.contains("@keyframes dot-scale {"), "{css}");
         assert!(css.matches("% { scale:").count() > 10, "baked samples: {css}");

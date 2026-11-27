@@ -331,8 +331,8 @@ fn timeline_settings_for_falls_back_from_frame_to_page() {
     let mut d = Document::new("x");
     let p = page(&d);
     let f = d.create(p, NodeKind::Frame, "F", 0.0, 0.0, 100.0, 100.0).unwrap();
-    let page_tl = TimelineSettings { duration_ms: 900, fps: 30, looping: false };
-    let frame_tl = TimelineSettings { duration_ms: 320, fps: 24, looping: true };
+    let page_tl = TimelineSettings { duration_ms: 900, fps: 30, looping: false, reverse: false };
+    let frame_tl = TimelineSettings { duration_ms: 320, fps: 24, looping: true, reverse: false };
     // Nothing set: both the page and its frame read the default.
     assert_eq!(d.timeline_settings_for(p), TimelineSettings::default());
     assert_eq!(d.timeline_settings_for(f), TimelineSettings::default());
@@ -353,8 +353,8 @@ fn repair_keeps_frame_timelines_and_drops_only_invalid_scopes() {
     let p = page(&d);
     let f = d.create(p, NodeKind::Frame, "F", 0.0, 0.0, 100.0, 100.0).unwrap();
     let rect = d.create(f, NodeKind::Rectangle, "R", 0.0, 0.0, 10.0, 10.0).unwrap();
-    let frame_tl = TimelineSettings { duration_ms: 320, fps: 24, looping: true };
-    let page_tl = TimelineSettings { duration_ms: 900, fps: 30, looping: false };
+    let frame_tl = TimelineSettings { duration_ms: 320, fps: 24, looping: true, reverse: false };
+    let page_tl = TimelineSettings { duration_ms: 900, fps: 30, looping: false, reverse: false };
     d.timelines.insert(p, page_tl);
     d.timelines.insert(f, frame_tl);
     // A plain layer can't own a timeline, and a dangling id must be dropped.
