@@ -476,13 +476,16 @@ impl Scene {
             fn new(rects: &[[f32; 4]]) -> Self {
                 let xs = edges(rects.iter().flat_map(|r| [r[0], r[0] + r[2]]).collect());
                 let ys = edges(rects.iter().flat_map(|r| [r[1], r[1] + r[3]]).collect());
-                let mut covered = vec![false; (xs.len() - 1) * (ys.len() - 1)];
-                for (row, y) in ys.windows(2).enumerate() {
-                    let my = (y[0] + y[1]) * 0.5;
-                    for (col, x) in xs.windows(2).enumerate() {
-                        let mx = (x[0] + x[1]) * 0.5;
-                        covered[row * (xs.len() - 1) + col] =
-                            rects.iter().any(|r| mx >= r[0] - EPS && mx <= r[0] + r[2] + EPS && my >= r[1] - EPS && my <= r[1] + r[3] + EPS);
+                let cols = xs.len() - 1;
+                let mut covered = vec![false; cols * (ys.len() - 1)];
+                for r in rects {
+                    // Every rect edge is in `xs`/`ys`; the cell range inside it is a contiguous slab.
+                    let x0 = xs.partition_point(|v| *v < r[0] - EPS);
+                    let x1 = (xs.partition_point(|v| *v <= r[0] + r[2] + EPS) - 1).min(cols);
+                    let y0 = ys.partition_point(|v| *v < r[1] - EPS);
+                    let y1 = (ys.partition_point(|v| *v <= r[1] + r[3] + EPS) - 1).min(ys.len() - 1);
+                    for row in y0..y1 {
+                        covered[row * cols + x0..row * cols + x1].fill(true);
                     }
                 }
                 Self { xs, ys, covered }
