@@ -304,6 +304,19 @@ pub(crate) fn render(
             // （离开靠点标签栏的首页按钮或某个标签）。之前右上角浮着的那个 ✕ 是浮层外壳的残留。
             .child(body);
     }
+    if matches!(kind, ExtraKind::DevCompare { .. }) {
+        // R9: egui's `dev_compare.rs` draws the two canvases in the main workspace, not a
+        // 760x520 popover. Keep the title bar visible; the body owns its own Close/Resolve row.
+        return div()
+            .id("dev-compare-screen")
+            .absolute()
+            .top(px(crate::title_bar::TITLE_H))
+            .left(px(0.0))
+            .right(px(0.0))
+            .bottom(px(0.0))
+            .bg(rgba(t.panel))
+            .child(body);
+    }
     let close_btn = {
         let close = close.clone();
         IconButton::new(Icon::Close).size(24.0).on_click(move |_e, _w, _cx| close())
