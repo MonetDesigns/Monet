@@ -600,7 +600,7 @@ EGUI 原文件再动手，禁止再出现简化替代**；完成后同步 `CONTR
 | R5 | **图层面板改名** `layers.rename` | 在 Layers 列表行内**就地**改（egui `layers_rename_tests.rs`） | `dialogs.rs:302` → `Kind::Rename` 居中对话框 | 改回列表行内联编辑（GPUI 左面板已用 `TextField` 做文件头改名，图层行同理） |
 | R6 | **看板文字编辑** `board.editText` | 贴着画布的内联文字编辑 | `dialogs.rs:302` → `Kind::Rename` 居中对话框 | 改回内联编辑（依赖 A2/A27 画板模式先落地） |
 | R7 | **快捷键面板 Shortcuts** | 窗口**底部**常驻条（`panels/shortcuts_panel.rs` 的 `show` 锚在 `CENTER_BOTTOM`），非模态 | ✅ 2026-11-27：`panels/extra.rs::render` 对 `Shortcuts` 走 `left/right/bottom=0` 的 340pt 底部 dock，带标题与 Close，内容滚动；不再走 760×520 居中卡片 |
-| R8 | **版本历史 Versions** | 独立**面板**（左面板宽，`versions::open` 打开左栏并切 `LeftTab::File`），非居中卡片 | ✅ 2026-11-27：`panels/extra.rs::render` 对 `Versions` 走左缘 300pt、`top=TITLE_H`、`bottom=0` 的全高面板，带独立 Close 条；`versions_body` 原样复用 `PanelSection` |
+| R8 | **版本历史 Versions** | 独立**面板**（左面板宽，`versions::open` 打开左栏并切 `LeftTab::File`），非居中卡片 | ✅ 2026-11-27：`panels/extra.rs::render` 对 `Versions` 走左缘 `DEFAULT_LEFT_PANEL`（240pt）、`top=TITLE_H`、`bottom=0` 的全高面板，带独立 Close 条；`versions_body` 原样复用 `PanelSection` |
 | R9 | **Dev 对比 DevCompare** | 双图并排/叠加对比（占满工作区） | ✅ 2026-11-27：`panels/extra.rs::render` 对 `DevCompare` 走 `top=TITLE_H`、`left/right/bottom=0` 的工作区全屏分支；Close/Resolve 仍由 `compare_body` 底栏持有 |
 
 ### R.2 连带的规划文件错误（需同步修订）
@@ -1281,7 +1281,7 @@ worktree 合并 PR head 后 `cargo check -p figcraft-ui-gpui --features test-sup
 | 项 | 落点 | 形态 |
 |---|---|---|
 | R.7 Shortcuts | `panels/extra.rs::render` 的 `shortcuts-bar` | 窗口底部 340pt dock，`left/right/bottom=0`，独立标题与 Close，内容滚动 |
-| R.8 Versions | `panels/extra.rs::render` 的 `versions-panel` | 左缘 300pt 全高面板，`top=TITLE_H`、`bottom=0`，独立 Close 条，`versions_body` 复用 `PanelSection` |
+| R.8 Versions | `panels/extra.rs::render` 的 `versions-panel` | 左缘 `DEFAULT_LEFT_PANEL`（240pt） 全高面板，`top=TITLE_H`、`bottom=0`，独立 Close 条，`versions_body` 复用 `PanelSection` |
 | R.9 DevCompare | `panels/extra.rs::render` 的 `dev-compare-screen` | `top=TITLE_H`、`left/right/bottom=0` 的工作区全屏，Close/Resolve 仍由 `compare_body` 底栏持有 |
 
 **验证**：`origin/sync/variable-binding-2026-11` rebase 到 `c8ca43b82` 后，

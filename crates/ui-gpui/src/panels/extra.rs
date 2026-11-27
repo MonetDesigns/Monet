@@ -314,7 +314,7 @@ pub(crate) fn render(
             .top(px(crate::title_bar::TITLE_H))
             .left(px(0.0))
             .bottom(px(0.0))
-            .w(px(300.0))
+            .w(px(crate::panels::DEFAULT_LEFT_PANEL))
             .flex()
             .flex_col()
             .bg(rgba(t.panel))
