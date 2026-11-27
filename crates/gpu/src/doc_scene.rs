@@ -12,8 +12,8 @@
 //! | solid, linear/radial/angular/diamond gradients (≤ [`MAX_STOPS`] stops) on SDF shapes | round or noisy effects this build cannot draw |
 //! | drop shadows from an opaque SDF box: offset, blur (box-approximated exactly as the CPU), tint | drop shadows that spread, blend differently, or cast from groups, text or translucent/outlined layers |
 //! | inner shadows from an SDF box: offset, blur, tint, masked to the box | inner shadows that spread or blend differently, and group inner shadows |
-//! | uniform layer blur over one opaque SDF box fill | progressive blurs, and layers with children, strokes or clips |
-//! | uniform background blur over one SDF box with one fill (the frame is resolved and blurred in place) | background blur over children, strokes, clips, group opacity, and glass |
+//! | uniform or progressive layer blur over one opaque SDF box fill | layers with children, strokes, clips or other effects |
+//! | uniform background blur over one SDF box with one fill (the frame is resolved and blurred in place) | background blur over children, strokes, clips, group opacity, and glass (out of scope) |
 //! | text: glyph and decoration outlines from `figcraft_text`, solid fills and strokes per run | colour glyphs (emoji, COLR) |
 //! | mono/duo/multi grains over one SDF box fill, hashed exactly as the CPU | grains over children, strokes, clips, groups or other effects |
 //! | texture over one SDF box fill: whole-pixel scatter hashed exactly as the CPU | textures combined with children, strokes, clips, or other effects |
@@ -28,8 +28,8 @@ use figcraft_geom::{Affine, BezPath, Point};
 
 use crate::geometry;
 use crate::scene::{
-    BackdropNode, Clip, GradientKind, GrainMode, LayerBlurNode, MAX_STOPS, MeshNode, NoiseNode, Paint, Rgba, Scene, ShadowNode, ShapeKind, ShapeNode,
-    Stop, TextureNode, Viewport, is_similarity,
+    BackdropNode, Clip, GradientKind, GrainMode, LayerBlurNode, MAX_STOPS, MeshNode, NoiseNode, Paint, ProgressiveBlurNode, Rgba, Scene, ShadowNode,
+    ShapeKind, ShapeNode, Stop, TextureNode, Viewport, is_similarity,
 };
 
 /// The deepest subtree walked; a document that nests deeper is a broken file and a fallback.
@@ -388,8 +388,8 @@ fn layer_blur(
 
 /// Whether this node's layer is exactly one opaque SDF box fill, so blurring the box's coverage and
 /// repainting it is what the CPU's layer blur does. Children, strokes, its own or an ancestor's clip,
-/// other effects, progressive blurs and boxes close enough to the frame edge that the blur would read
-/// past it are all declined (the CPU's layer can carry content outside the frame; this build cannot).
+/// other effects and boxes close enough to the frame edge that the blur would read past it are all
+/// declined (the CPU's layer can carry content outside the frame; this build cannot).
 #[allow(clippy::too_many_arguments)]
 fn can_blur_layer(
     n: &Node,
@@ -402,12 +402,9 @@ fn can_blur_layer(
     frame_width: u32,
     frame_height: u32,
 ) -> bool {
-    let [blur] = blurs else {
+    let [_blur] = blurs else {
         return false;
     };
-    if blur.is_progressive() || !(blur.radius.is_finite() && blur.radius >= 0.0) {
-        return false;
-    }
     if !n.children.is_empty() || n.has_visible_stroke() || n.clip || !clip.is_none() {
         return false;
     }
@@ -426,7 +423,7 @@ fn can_blur_layer(
     }
     // The CPU blurs a layer that may extend past the frame; this pipeline only has the frame, so a
     // box whose blur reaches outside it would read different pixels at the border.
-    let reach = blur.max_radius() * 1.5 * scale;
+    let reach = blurs[0].max_radius() * 1.5 * scale;
     if !reach.is_finite() {
         return false;
     }
@@ -445,14 +442,61 @@ fn emit_layer_blur(shape: ShapeKind, m: Affine, w: f64, h: f64, scale: f64, blur
     };
     let mut color = Rgba::from_color(fill);
     color.a *= n.opacity.clamp(0.0, 1.0);
-    scene.push_blur(LayerBlurNode {
-        mat: crate::scene::matrix(m),
-        size: [w as f32, h as f32],
-        shape,
-        sigma: (blur.radius / 2.0 * scale) as f32,
-        color,
-        clip,
-    });
+    let b = blur.sanitized();
+    if b.is_progressive() {
+        let (s0, s1) = (b.start_radius / 2.0 * scale, b.radius / 2.0 * scale);
+        let start = map_point(m, b.start.0 * w, b.start.1 * h);
+        let end = map_point(m, b.end.0 * w, b.end.1 * h);
+        scene.push_progressive_blur(ProgressiveBlurNode {
+            mat: crate::scene::matrix(m),
+            size: [w as f32, h as f32],
+            shape,
+            s0: s0 as f32,
+            s1: s1 as f32,
+            start: [start.0 as f32, start.1 as f32],
+            end: [end.0 as f32, end.1 as f32],
+            levels: progressive_levels(s0, s1, start, end),
+            color,
+            clip,
+        });
+    } else {
+        scene.push_blur(LayerBlurNode {
+            mat: crate::scene::matrix(m),
+            size: [w as f32, h as f32],
+            shape,
+            sigma: (b.radius / 2.0 * scale) as f32,
+            color,
+            clip,
+        });
+    }
+}
+
+/// The CPU's `blur::levels`: `lo`, then geometric steps of 1.5 up to `hi`, at most eight.
+fn progressive_levels(s0: f64, s1: f64, start: (f64, f64), end: (f64, f64)) -> Vec<f32> {
+    let cap = |s: f64| if s.is_finite() { s.clamp(0.0, 1_000_000.0) } else { 0.0 };
+    let (s0, s1) = (cap(s0), cap(s1));
+    let d = (end.0 - start.0, end.1 - start.1);
+    if (s1 - s0).abs() < 0.05 || d.0 * d.0 + d.1 * d.1 <= 1e-12 {
+        return vec![s1 as f32];
+    }
+    let (lo, hi) = (s0.min(s1), s0.max(s1));
+    let mut out = Vec::with_capacity(8);
+    let base = lo.max(1.0);
+    if lo < base {
+        out.push(lo);
+    }
+    if hi <= base {
+        if hi > lo || out.is_empty() {
+            out.push(hi);
+        }
+        return out.into_iter().map(|v| v as f32).collect();
+    }
+    let steps = ((hi / base).ln() / 1.5_f64.ln()).ceil().clamp(1.0, 6.0) as usize;
+    for k in 0..steps {
+        out.push(base * (hi / base).powf(k as f64 / steps as f64));
+    }
+    out.push(hi);
+    out.into_iter().map(|v| v as f32).collect()
 }
 
 /// Emits this node's background blur when it is one this build can draw; it paints before the node's
@@ -867,6 +911,7 @@ fn meshes(scene: &Scene) -> impl Iterator<Item = &MeshNode> {
         crate::scene::Item::Shape(_)
         | crate::scene::Item::Shadow(_)
         | crate::scene::Item::Blur(_)
+        | crate::scene::Item::ProgressiveBlur(_)
         | crate::scene::Item::Backdrop(_)
         | crate::scene::Item::Noise(_)
         | crate::scene::Item::Texture(_) => None,
@@ -1098,6 +1143,37 @@ mod tests {
         let scene = build(&doc, page, &view());
         assert!(!scene.is_supported(), "the layer's children are part of what the CPU blurs");
         assert!(scene.unsupported_features().iter().any(|u| u.feature == "effect"));
+    }
+
+    #[test]
+    fn a_progressive_layer_blur_becomes_a_progressive_node() {
+        let mut doc = Document::default();
+        let page = doc.pages[0];
+        let rect = doc.create(page, NodeKind::Rectangle, "Ramp", 40.0, 40.0, 60.0, 40.0).expect("rect");
+        if let Ok(n) = doc.get_mut(rect) {
+            n.fills = vec![DocPaint::solid(Color::new(0.2, 0.5, 0.8, 1.0))];
+            n.effects = vec![figcraft_doc::Effect {
+                kind: EffectKind::LayerBlur(figcraft_doc::Blur {
+                    radius: 12.0,
+                    blur_type: figcraft_doc::BlurType::Progressive,
+                    start_radius: 0.0,
+                    start: (0.5, 0.0),
+                    end: (0.5, 1.0),
+                }),
+                visible: true,
+            }];
+        }
+        let scene = build(&doc, page, &view());
+        assert!(scene.is_supported(), "{:?}", scene.unsupported_features());
+        assert_eq!(scene.progressive_blur_count(), 1);
+        assert_eq!(scene.blur_count(), 1);
+        assert_eq!(scene.shapes().count(), 0, "the progressive layer paints the fill");
+        let crate::scene::Item::ProgressiveBlur(blur) = scene.items.first().expect("one item") else {
+            panic!("the progressive blur replaces the fill");
+        };
+        assert!(blur.levels.len() > 1 && blur.levels.len() <= 8);
+        assert!((blur.start[0] as f64 - 70.0).abs() < 1e-3, "device start x");
+        assert!((blur.start[1] as f64 - 40.0).abs() < 1e-3, "device start y");
     }
 
     #[test]

@@ -416,6 +416,49 @@ fn a_layer_blur_matches_the_cpu_blur() {
 }
 
 #[test]
+fn a_progressive_layer_blur_matches_the_cpu_blur() {
+    let mut doc = Document::default();
+    let page = doc.pages[0];
+    transparent_page(&mut doc, page);
+    let card = rect(&mut doc, page, "Ramp", 50.0, 50.0, 100.0, 100.0, 12.0, Paint::solid(Color::new(0.9, 0.4, 0.2, 1.0)));
+    if let Ok(n) = doc.get_mut(card) {
+        n.effects = vec![figcraft_doc::Effect {
+            kind: figcraft_doc::EffectKind::LayerBlur(figcraft_doc::Blur {
+                radius: 12.0,
+                blur_type: figcraft_doc::BlurType::Progressive,
+                start_radius: 0.0,
+                start: (0.5, 0.0),
+                end: (0.5, 1.0),
+            }),
+            visible: true,
+        }];
+    }
+
+    let scene = doc_scene::build(&doc, page, &viewport());
+    assert!(scene.is_supported(), "the progressive layer blur must stay on the GPU path: {:?}", scene.unsupported_features());
+    assert_eq!(scene.progressive_blur_count(), 1);
+    assert_eq!(scene.shapes().count(), 0, "the fill is replaced by the blurred layer");
+
+    let cpu = cpu_pixels(&doc, page);
+    let Some(gpu) = gpu_pixels(&doc, page) else {
+        eprintln!("SKIP: no adapter");
+        return;
+    };
+    let tol = Tolerance { per_channel: 3, max_bad_ratio: 0.03 };
+    let report = compare_interiors(&cpu, &gpu, SIZE as usize, SIZE as usize, tol).expect("comparable");
+    assert!(report.passes(tol), "{}", report.summary());
+
+    // The ramp runs top (sigma 0) to bottom (sigma 12): the top edge stays sharp, the bottom spills.
+    let (cpu_top, gpu_top) = (pixel(&cpu, SIZE as usize, 100, 47).expect("in bounds"), pixel(&gpu, SIZE as usize, 100, 47).expect("in bounds"));
+    assert!(cpu_top[3] < 8, "the CPU blurred the sharp end: {cpu_top:?}");
+    assert!(gpu_top[3] < 8, "the GPU blurred the sharp end: {gpu_top:?}");
+    let (cpu_bottom, gpu_bottom) =
+        (pixel(&cpu, SIZE as usize, 100, 153).expect("in bounds"), pixel(&gpu, SIZE as usize, 100, 153).expect("in bounds"));
+    assert!(cpu_bottom[3] > 8, "the CPU drew no spill at the blurred end: {cpu_bottom:?}");
+    assert!(gpu_bottom[3] > 8, "the GPU drew no spill at the blurred end: {gpu_bottom:?}");
+}
+
+#[test]
 fn a_background_blur_matches_the_cpu_blur() {
     let mut doc = Document::default();
     let page = doc.pages[0];

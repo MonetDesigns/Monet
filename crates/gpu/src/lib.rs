@@ -15,8 +15,9 @@
 //! * [`diff`] — CPU↔GPU pixel comparison for the regression tests.
 //!
 //! See `docs/gpu-pipeline-plan.md` for the staged plan. Stages 1–3 (shapes and paints, paths and
-//! strokes, text) and stage 4's shadows, blurs, grains and rough-edge texture are in; the rest of
-//! the effects, composition and the export path follow.
+//! strokes, text) and stage 4's shadows, uniform and progressive blurs, grains and rough-edge
+//! texture are in; glass is out of scope (the product deprecates it), composition and the export
+//! path follow.
 
 pub mod backend;
 pub mod diff;
@@ -31,5 +32,6 @@ pub mod render;
 pub use backend::{Capability, DeviceClass};
 pub use prefs::{Effective, RenderBackend};
 pub use scene::{
-    BackdropNode, GrainMode, Item, LayerBlurNode, MeshNode, NoiseNode, Paint, Scene, ShadowNode, ShapeKind, ShapeNode, TextureNode, Viewport,
+    BackdropNode, GrainMode, Item, LayerBlurNode, MeshNode, NoiseNode, Paint, ProgressiveBlurNode, Scene, ShadowNode, ShapeKind, ShapeNode,
+    TextureNode, Viewport,
 };

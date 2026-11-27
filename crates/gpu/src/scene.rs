@@ -214,6 +214,27 @@ pub struct LayerBlurNode {
     pub clip: Clip,
 }
 
+/// A progressive layer blur: the box is blurred with a different sigma along a line in its own
+/// bounds (`s0` at `start`, `s1` at `end`), the CPU's eight-level weighted mix.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProgressiveBlurNode {
+    /// The box in document units and local → device matrix, like [`ShapeNode`].
+    pub mat: [f32; 6],
+    pub size: [f32; 2],
+    pub shape: ShapeKind,
+    /// The two endpoint sigmas in device pixels (the CPU's `radius / 2 * scale`).
+    pub s0: f32,
+    pub s1: f32,
+    /// The ramp endpoints in device pixels, derived from the blur's unit-box points.
+    pub start: [f32; 2],
+    pub end: [f32; 2],
+    /// The CPU's `levels(lo, hi)`; one entry for a degenerate ramp.
+    pub levels: Vec<f32>,
+    /// The fill, straight sRGB, its alpha already folded with the node's opacity.
+    pub color: Rgba,
+    pub clip: Clip,
+}
+
 /// A background blur: the backdrop under the box, blurred and shown through the box before the
 /// node's own fills and children paint over it.
 #[derive(Clone, Debug, PartialEq)]
@@ -288,6 +309,7 @@ pub enum Item {
     Mesh(MeshNode),
     Shadow(ShadowNode),
     Blur(LayerBlurNode),
+    ProgressiveBlur(ProgressiveBlurNode),
     Backdrop(BackdropNode),
     Noise(NoiseNode),
     Texture(TextureNode),
@@ -339,6 +361,11 @@ impl Scene {
         self.items.push(Item::Blur(blur));
     }
 
+    /// A progressive blurred layer in the box's place.
+    pub fn push_progressive_blur(&mut self, blur: ProgressiveBlurNode) {
+        self.items.push(Item::ProgressiveBlur(blur));
+    }
+
     /// A blurred backdrop under the box, painted before the node's own content.
     pub fn push_backdrop(&mut self, backdrop: BackdropNode) {
         self.items.push(Item::Backdrop(backdrop));
@@ -358,7 +385,9 @@ impl Scene {
     pub fn shapes(&self) -> impl Iterator<Item = &ShapeNode> {
         self.items.iter().filter_map(|item| match item {
             Item::Shape(shape) => Some(shape),
-            Item::Mesh(_) | Item::Shadow(_) | Item::Blur(_) | Item::Backdrop(_) | Item::Noise(_) | Item::Texture(_) => None,
+            Item::Mesh(_) | Item::Shadow(_) | Item::Blur(_) | Item::ProgressiveBlur(_) | Item::Backdrop(_) | Item::Noise(_) | Item::Texture(_) => {
+                None
+            }
         })
     }
 
@@ -374,7 +403,11 @@ impl Scene {
 
     /// How many layer blurs the frame carries.
     pub fn blur_count(&self) -> usize {
-        self.items.iter().filter(|item| matches!(item, Item::Blur(_))).count()
+        self.items.iter().filter(|item| matches!(item, Item::Blur(_) | Item::ProgressiveBlur(_))).count()
+    }
+
+    pub fn progressive_blur_count(&self) -> usize {
+        self.items.iter().filter(|item| matches!(item, Item::ProgressiveBlur(_))).count()
     }
 
     pub fn backdrop_count(&self) -> usize {

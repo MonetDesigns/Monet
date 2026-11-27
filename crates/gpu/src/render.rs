@@ -137,6 +137,8 @@ enum Cmd {
     Noise(usize),
     /// Rough-edge texture over instance `n` of the frame's texture plans.
     Texture(usize),
+    /// Progressive layer blur `n` (index into the frame's progressive plans).
+    Progressive(usize),
 }
 
 /// One shadow to draw: its silhouette (one instance), the blur radius in device pixels, the tint and
@@ -213,6 +215,50 @@ struct NoiseParams {
     _pad1: f32,
     color: [f32; 4],
     secondary: [f32; 4],
+}
+
+/// One progressive layer blur: the box's instance, the CPU's level radii and the ramp endpoints.
+struct ProgressivePlan {
+    first: u32,
+    levels: Vec<f32>,
+    s0: f32,
+    s1: f32,
+    start: [f32; 2],
+    end: [f32; 2],
+    color: Rgba,
+}
+
+/// Uniforms for [`ProgressivePlan`]: 80 bytes, levels as two `vec4`s.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+struct ProgressiveParams {
+    start: [f32; 2],
+    end: [f32; 2],
+    s0: f32,
+    s1: f32,
+    level_count: u32,
+    _pad0: u32,
+    levels: [[f32; 4]; 2],
+    color: [f32; 4],
+}
+
+/// A progressive blur's offscreen chain: one silhouette, one shared ping, and one eight-layer
+/// texture holding each level's final blur. The six box passes per level write into the shared ping
+/// on even passes and into that level's layer on odd passes.
+#[allow(dead_code)]
+struct ProgressiveResources {
+    silhouette_msaa: wgpu::Texture,
+    silhouette_msaa_view: wgpu::TextureView,
+    silhouette: wgpu::Texture,
+    silhouette_view: wgpu::TextureView,
+    ping: wgpu::Texture,
+    ping_view: wgpu::TextureView,
+    levels: wgpu::Texture,
+    level_views: Vec<wgpu::TextureView>,
+    blur_binds: Vec<Vec<wgpu::BindGroup>>,
+    blur_params: Vec<wgpu::Buffer>,
+    bind: wgpu::BindGroup,
+    params: wgpu::Buffer,
 }
 
 /// One rough-edge texture layer: the instance that masks it, the CPU's cell hash seed, the scatter
@@ -305,6 +351,7 @@ pub struct Renderer {
     backdrop_pipeline: wgpu::RenderPipeline,
     noise_pipeline: wgpu::RenderPipeline,
     texture_pipeline: wgpu::RenderPipeline,
+    progressive_pipeline: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
     globals: wgpu::Buffer,
     bind_globals: wgpu::BindGroup,
@@ -315,6 +362,7 @@ pub struct Renderer {
     backdrop_layout: wgpu::BindGroupLayout,
     noise_layout: wgpu::BindGroupLayout,
     texture_layout: wgpu::BindGroupLayout,
+    progressive_layout: wgpu::BindGroupLayout,
     instances: Option<(wgpu::Buffer, wgpu::BindGroup, u64)>,
     mesh_verts: Option<(wgpu::Buffer, u64)>,
     mesh_indices: Option<(wgpu::Buffer, u64)>,
@@ -396,6 +444,10 @@ impl Renderer {
         let texture_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("figcraft-gpu-texture"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/texture.wgsl").into()),
+        });
+        let progressive_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("figcraft-gpu-progressive"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/progressive.wgsl").into()),
         });
 
         let globals_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -536,6 +588,26 @@ impl Renderer {
                 count: None,
             }],
         });
+        let mut progressive_entries: Vec<wgpu::BindGroupLayoutEntry> = (0..8)
+            .map(|i| wgpu::BindGroupLayoutEntry {
+                binding: i,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            })
+            .collect();
+        progressive_entries.push(wgpu::BindGroupLayoutEntry {
+            binding: 8,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+            count: None,
+        });
+        let progressive_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("progressive"), entries: &progressive_entries });
         let shape_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("shape"),
             bind_group_layouts: &[Some(&globals_layout), Some(&instances_layout)],
@@ -629,6 +701,11 @@ impl Renderer {
         let texture_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("texture"),
             bind_group_layouts: &[Some(&texture_layout), Some(&instances_layout)],
+            immediate_size: 0,
+        });
+        let progressive_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("progressive"),
+            bind_group_layouts: &[Some(&progressive_layout), Some(&instances_layout)],
             immediate_size: 0,
         });
         let single_state = |b: Option<wgpu::BlendState>| wgpu::ColorTargetState {
@@ -764,6 +841,27 @@ impl Renderer {
             multiview_mask: None,
             cache: None,
         });
+        let progressive_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("progressive"),
+            layout: Some(&progressive_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &progressive_shader,
+                entry_point: Some("vs"),
+                buffers: &[],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &progressive_shader,
+                entry_point: Some("fs"),
+                targets: &[Some(single_state(blend()))],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState { count: SAMPLES, mask: !0, alpha_to_coverage_enabled: false },
+            multiview_mask: None,
+            cache: None,
+        });
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("shadow"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -798,6 +896,7 @@ impl Renderer {
             backdrop_pipeline,
             noise_pipeline,
             texture_pipeline,
+            progressive_pipeline,
             sampler,
             globals,
             bind_globals,
@@ -808,6 +907,7 @@ impl Renderer {
             backdrop_layout,
             noise_layout,
             texture_layout,
+            progressive_layout,
             instances: None,
             mesh_verts: None,
             mesh_indices: None,
@@ -991,6 +1091,133 @@ impl Renderer {
         (buffer, bind)
     }
 
+    /// A progressive blur's silhouette, shared ping and per-level blur targets. Each level gets
+    /// six box passes; even passes write the shared ping, odd passes its own layer of `levels`.
+    fn progressive_resources(&self, width: u32, height: u32, plan: &ProgressivePlan) -> Option<ProgressiveResources> {
+        use wgpu::TextureUsages as U;
+        let size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
+        let texture = |label: &str, samples: u32, usage: U| {
+            self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size,
+                mip_level_count: 1,
+                sample_count: samples,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage,
+                view_formats: &[],
+            })
+        };
+        let silhouette_msaa = texture("progressive-msaa", SAMPLES, U::RENDER_ATTACHMENT);
+        let silhouette_msaa_view = silhouette_msaa.create_view(&wgpu::TextureViewDescriptor::default());
+        let silhouette = texture("progressive-silhouette", 1, U::RENDER_ATTACHMENT | U::TEXTURE_BINDING);
+        let silhouette_view = silhouette.create_view(&wgpu::TextureViewDescriptor::default());
+        let ping = texture("progressive-ping", 1, U::RENDER_ATTACHMENT | U::TEXTURE_BINDING);
+        let ping_view = ping.create_view(&wgpu::TextureViewDescriptor::default());
+        let levels = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("progressive-levels"),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 8 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: U::RENDER_ATTACHMENT | U::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let level_views: Vec<wgpu::TextureView> = (0..8)
+            .map(|i| {
+                levels.create_view(&wgpu::TextureViewDescriptor {
+                    label: Some("progressive-level"),
+                    format: None,
+                    dimension: Some(wgpu::TextureViewDimension::D2),
+                    usage: None,
+                    aspect: wgpu::TextureAspect::All,
+                    base_mip_level: 0,
+                    mip_level_count: None,
+                    base_array_layer: i,
+                    array_layer_count: Some(1),
+                })
+            })
+            .collect();
+        let mut blur_binds = Vec::with_capacity(plan.levels.len());
+        let mut blur_params = Vec::with_capacity(plan.levels.len() * 6);
+        for (level, sigma) in plan.levels.iter().enumerate() {
+            let radii = box_radii(*sigma);
+            let inputs: [&wgpu::TextureView; 6] = [&silhouette_view, &ping_view, &level_views[level], &ping_view, &level_views[level], &ping_view];
+            let mut binds = Vec::with_capacity(6);
+            for (i, input) in inputs.iter().enumerate() {
+                let params = [radii[i % 3] as i32, i32::from(i < 3), 0, 0];
+                let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("progressive blur params"),
+                    size: 16,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                self.queue.write_buffer(&buffer, 0, bytemuck::cast_slice(&params));
+                let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("progressive blur"),
+                    layout: &self.blur_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(input) },
+                        wgpu::BindGroupEntry { binding: 1, resource: buffer.as_entire_binding() },
+                    ],
+                });
+                blur_params.push(buffer);
+                binds.push(bind);
+            }
+            blur_binds.push(binds);
+        }
+
+        let mut levels_flat = [[0.0f32; 4]; 2];
+        for (i, v) in plan.levels.iter().take(8).enumerate() {
+            levels_flat[i / 4][i % 4] = *v;
+        }
+        let params = ProgressiveParams {
+            start: plan.start,
+            end: plan.end,
+            s0: plan.s0,
+            s1: plan.s1,
+            level_count: plan.levels.len() as u32,
+            _pad0: 0,
+            levels: levels_flat,
+            color: [plan.color.r, plan.color.g, plan.color.b, plan.color.a],
+        };
+        let params_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("progressive params"),
+            size: std::mem::size_of::<ProgressiveParams>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&params_buffer, 0, bytemuck::bytes_of(&params));
+        let mut entries: Vec<wgpu::BindGroupEntry> = (0..8)
+            .map(|i| wgpu::BindGroupEntry {
+                binding: i as u32,
+                resource: wgpu::BindingResource::TextureView(&level_views[i.min(plan.levels.len().saturating_sub(1))]),
+            })
+            .collect();
+        entries.push(wgpu::BindGroupEntry { binding: 8, resource: params_buffer.as_entire_binding() });
+        let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("progressive"),
+            layout: &self.progressive_layout,
+            entries: &entries,
+        });
+
+        Some(ProgressiveResources {
+            silhouette_msaa,
+            silhouette_msaa_view,
+            silhouette,
+            silhouette_view,
+            ping,
+            ping_view,
+            levels,
+            level_views,
+            blur_binds,
+            blur_params,
+            bind,
+            params: params_buffer,
+        })
+    }
+
     /// The blur chain for one background blur: the resolved frame as the source, then six box passes.
     fn backdrop_resources(&self, width: u32, height: u32, sigma: f32, source: &wgpu::TextureView) -> Option<BackdropResources> {
         use wgpu::TextureUsages as U;
@@ -1070,6 +1297,7 @@ impl Renderer {
         let mut shadow_plans: Vec<ShadowPlan> = Vec::new();
         let mut noise_plans: Vec<NoisePlan> = Vec::new();
         let mut texture_plans: Vec<TexturePlan> = Vec::new();
+        let mut progressive_plans: Vec<ProgressivePlan> = Vec::new();
         let mut verts: Vec<GpuMeshVertex> = Vec::new();
         let mut indices: Vec<u32> = Vec::new();
         let mut cmds: Vec<Cmd> = Vec::new();
@@ -1157,6 +1385,32 @@ impl Renderer {
                         color: blur.color,
                         clip: blur.clip,
                         inner: false,
+                    });
+                }
+                Item::ProgressiveBlur(blur) => {
+                    if instances.len() > batch {
+                        cmds.push(Cmd::Shapes { first: batch as u32, count: (instances.len() - batch) as u32 });
+                        batch = instances.len();
+                    }
+                    let caster = ShapeNode {
+                        mat: blur.mat,
+                        size: blur.size,
+                        shape: blur.shape,
+                        paint: Paint::Solid(Rgba::new(1.0, 1.0, 1.0, 1.0)),
+                        clip: blur.clip,
+                        opacity: 1.0,
+                    };
+                    let first = shadow_instances.len() as u32;
+                    shadow_instances.push(GpuInstance::of(&caster));
+                    cmds.push(Cmd::Progressive(progressive_plans.len()));
+                    progressive_plans.push(ProgressivePlan {
+                        first,
+                        levels: blur.levels.clone(),
+                        s0: blur.s0,
+                        s1: blur.s1,
+                        start: blur.start,
+                        end: blur.end,
+                        color: blur.color,
                     });
                 }
                 Item::Backdrop(backdrop) => {
@@ -1268,7 +1522,7 @@ impl Renderer {
         self.queue.write_buffer(buffer, 0, &bytes);
 
         // Shadow silhouettes get their own instance buffer; the main one holds the frame's shapes.
-        let shadow_bind: Option<(wgpu::Buffer, wgpu::BindGroup)> = if shadow_plans.is_empty() {
+        let shadow_bind: Option<(wgpu::Buffer, wgpu::BindGroup)> = if shadow_plans.is_empty() && progressive_plans.is_empty() {
             None
         } else {
             let bytes: Vec<u8> = bytemuck::cast_slice(&shadow_instances).to_vec();
@@ -1312,6 +1566,11 @@ impl Renderer {
             .map(|plan| self.shadow_resources(w, h, plan))
             .collect::<Option<Vec<_>>>()
             .ok_or_else(|| RenderError::Device("the shadow targets were not created".into()))?;
+        let progressive_resources: Vec<ProgressiveResources> = progressive_plans
+            .iter()
+            .map(|plan| self.progressive_resources(w, h, plan))
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| RenderError::Device("the progressive blur targets were not created".into()))?;
         let noise_binds: Vec<(wgpu::Buffer, wgpu::BindGroup)> = noise_plans.iter().map(|plan| self.noise_resources(plan)).collect();
         let texture_binds: Vec<(wgpu::Buffer, wgpu::BindGroup)> = texture_plans.iter().map(|plan| self.texture_resources(plan)).collect();
 
@@ -1457,6 +1716,49 @@ impl Renderer {
                     pass.set_pipeline(&self.blur_pipeline);
                     pass.set_bind_group(0, blur_bind, &[]);
                     pass.draw(0..3, 0..1);
+                }
+            }
+            // Progressive silhouettes: one per node, then each level's six box passes. Every even
+            // pass writes the shared ping; every odd pass writes that level's layer.
+            for (plan, res) in progressive_plans.iter().zip(&progressive_resources) {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("progressive silhouette"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &res.silhouette_msaa_view,
+                        depth_slice: None,
+                        resolve_target: Some(&res.silhouette_view),
+                        ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&self.pipeline);
+                pass.set_bind_group(0, &self.bind_globals, &[]);
+                pass.set_bind_group(1, bind_shadow, &[]);
+                pass.draw(0..6, plan.first..plan.first + 1);
+                drop(pass);
+                for (level, binds) in res.blur_binds.iter().enumerate() {
+                    for (k, blur_bind) in binds.iter().enumerate() {
+                        let view = if k % 2 == 0 { &res.ping_view } else { &res.level_views[level] };
+                        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("progressive blur"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view,
+                                depth_slice: None,
+                                resolve_target: None,
+                                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                            })],
+                            depth_stencil_attachment: None,
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                            multiview_mask: None,
+                        });
+                        pass.set_pipeline(&self.blur_pipeline);
+                        pass.set_bind_group(0, blur_bind, &[]);
+                        pass.draw(0..3, 0..1);
+                    }
                 }
             }
         }
@@ -1613,6 +1915,23 @@ impl Renderer {
                         pass.set_pipeline(&self.texture_pipeline);
                         pass.set_bind_group(0, texture_bind, &[]);
                         pass.set_bind_group(1, bind, &[]);
+                        pass.draw(0..3, plan.first..plan.first + 1);
+                        bound_shapes = false;
+                        bound_mesh = false;
+                    }
+                    Cmd::Progressive(index) => {
+                        let Some(res) = progressive_resources.get(index) else {
+                            continue;
+                        };
+                        let Some(plan) = progressive_plans.get(index) else {
+                            continue;
+                        };
+                        let Some((_, shadow_bind)) = shadow_bind.as_ref() else {
+                            continue;
+                        };
+                        pass.set_pipeline(&self.progressive_pipeline);
+                        pass.set_bind_group(0, &res.bind, &[]);
+                        pass.set_bind_group(1, shadow_bind, &[]);
                         pass.draw(0..3, plan.first..plan.first + 1);
                         bound_shapes = false;
                         bound_mesh = false;

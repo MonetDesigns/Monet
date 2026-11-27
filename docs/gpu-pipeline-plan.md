@@ -1,11 +1,13 @@
 # 完整 GPU 管线立项（Monet / FigCraft）
 
 > 分支：`ai/gpu-pipeline`（worktree `D:\Projektdateien\GPUI\branches\gpu-pipeline`，从 `main` 拉出）
-> 状态：阶段 1（图元与填充）、阶段 2（路径与描边）、阶段 3（文字）与阶段 4 的第一块（投影、内阴影、uniform 图层模糊、背景模糊、Mono/Duo/Multi 颗粒与纹理粗糙边）
-> 已落地——能力探测、`auto/gpu/cpu` 三档偏好（引擎命令 + Preferences ▸ Rendering）、场景 IR、实例化
+> 状态：阶段 1（图元与填充）、阶段 2（路径与描边）、阶段 3（文字）与阶段 4（投影、内阴影、uniform 与
+> 分级图层模糊、背景模糊、Mono/Duo/Multi 颗粒与纹理粗糙边）已落地——能力探测、`auto/gpu/cpu` 三档
+> 偏好（引擎命令 + Preferences ▸ Rendering）、场景 IR、实例化
 > SDF 图元（圆角矩形/椭圆/多边形/星形）、四类渐变、裁剪、路径填充与描边网格（4× MSAA）、文字字形
-> 网格、离屏剪影 + 六 pass 盒模糊的投影/内阴影/图层模糊、按段 resolve 的背景模糊回读、逐 cell 64 位哈希
-> 的 Mono/Duo/Multi 颗粒、整像素散射的纹理粗糙边、CPU↔GPU 像素 diff（15 项对照测试），UI 画布已接线并整帧回退；M4 其余、M5–M7 为设计与接口
+> 网格、离屏剪影 + 六 pass 盒模糊的投影/内阴影/图层模糊、八级加权混合的分级模糊、按段 resolve 的背景
+> 模糊回读、逐 cell 64 位哈希的 Mono/Duo/Multi 颗粒、整像素散射的纹理粗糙边、CPU↔GPU 像素 diff
+> （16 项对照测试），UI 画布已接线并整帧回退；玻璃按产品弃用移出范围；M5–M7 为设计与接口
 > 日期：2026-11-27
 
 ## 0. 一句话结论
@@ -154,7 +156,7 @@ match figcraft_gpu::render::Renderer::global().render(&scene) { Ok(rgba) => …,
   （不再 SKIP，字形轮廓、亚像素位置与装饰线均一致）；无字体环境仍打印 `SKIP`。`parity` 的 GPU 设备
   创建/销毁用一把测试锁串行化：并行创建十几个 adapter/device 会卡驱动（安装真字体后暴露）。
 
-### M4 效果（本分支已落地：drop shadow、inner shadow、uniform 图层模糊与背景模糊）
+### M4 效果（本分支已落地：阴影、模糊、颗粒与纹理；玻璃已弃用）
 
 - **剪影**：投影要求「轮廓 == 节点自身填充轮廓」——SDF 可表达的盒子、无可见描边、无子节点
   （或 `clip` 且自身有填充的 frame-like）、全部可见填充为不透明纯色、节点 `opacity = 1`。内阴影只
@@ -198,8 +200,14 @@ match figcraft_gpu::render::Renderer::global().render(&scene) { Ok(rgba) => …,
 - **共享**：每个阴影/模糊用一条独立实例（内阴影另有零偏移实例），六组 blur bind group 与一组 draw/inner
   bind group 覆盖纹理、采样器与 tint/clip uniform；颗粒和纹理复用主实例缓冲，各建一组 uniform
   bind group。本帧现建，暂不做跨帧缓存池。
-- 仍登记为 Unsupported：分级图层模糊（`Blur::is_progressive()`）、带子节点/描边/`clip` 的图层模糊、
-  颗粒/纹理叠在子节点/描边/其它效果上、玻璃（M4 其余）；spread ≠ 0、非
+- **分级图层模糊**：同一套剪影 + 六 pass 盒模糊，但按 CPU 的 `levels` 取至多 8 个半径；每个半径
+  模糊成一层（一层共享的 ping/pong + 一张八层纹理），最后 `progressive.wgsl` 按设备像素上的
+  `Ramp` 求 `sigma`，用 CPU 的 `lower_bound - 1` / 255 量化权重混合相邻两层。它同样**替换**节点
+  填充，且不套 SDF mask——CPU 画的是已模糊的层像素，会把模糊外溢一起画出来；端点重合或半径差
+  < 0.05 时退化成 `sigma1` 的单层。
+- **玻璃**：产品已决定弃用，移出本分支范围，不再实现；UI 仍按现有 CPU 路径绘制。
+- 仍登记为 Unsupported：带子节点/描边/`clip` 的图层模糊、
+  颗粒/纹理叠在子节点/描边/其它效果上；spread ≠ 0、非
   Normal 混合、组/文字/半透明/带描边剪影的投影、组内阴影。
 - **验收**：`box_radii` 单测对 CPU 近似公式的三组值；对照 `a_drop_shadow_matches_the_cpu_blur`（圆角
   矩形 radius 12 / offset (6,10) / 55% 黑投影）、`an_inner_shadow_matches_the_cpu_blur`（圆角矩形
@@ -209,21 +217,19 @@ match figcraft_gpu::render::Renderer::global().render(&scene) { Ok(rgba) => …,
   radius 6 的 30% 白卡，断言接缝被抹开且两次 resolve/续画都一致）、`mono_noise_matches_the_cpu`
   （radius 10 的绿色卡片 + `size 1.2 / density 0.55` 的 35% 深色颗粒，断言两侧都真的画出了 grain）、
   `duo_and_multi_noise_match_the_cpu`（Duo 红/蓝双色 35%/65%、Multi 彩色 + `opacity 0.45`，断言两张卡
-  都有彩色颗粒且像素 diff 达标）与 `a_rough_texture_matches_the_cpu`（70% 填充的裁剪纹理卡片 + 不裁剪
-  的纹理卡片，断言前者的外溢被裁掉、后者确实溢出到形状上方）。阴影/内阴影为 `per_channel = 2`、2%；
-  两种模糊因两侧量化放宽到 `3 / 3%`；颗粒因 CPU 先量化 8 位层 alpha 用 `3 / 2%`；纹理是逐像素整搬、
+  都有彩色颗粒且像素 diff 达标）、`a_progressive_layer_blur_matches_the_cpu_blur`（顶端 0、底端 12 的
+  渐变卡片，断言顶端仍锐、底端有外溢且像素 diff 达标）与 `a_rough_texture_matches_the_cpu`（70% 填充的
+  裁剪纹理卡片 + 不裁剪的纹理卡片，断言前者的外溢被裁掉、后者确实溢出到形状上方）。阴影/内阴影为
+  `per_channel = 2`、2%；模糊因两侧量化放宽到 `3 / 3%`；颗粒因 CPU 先量化 8 位层 alpha 用 `3 / 2%`；纹理是逐像素整搬、
   边缘两侧 AA 不同，用 `24 / 3%`（`Tolerance::EDGE` 的口径）。
 - 风险：剪影边缘是 4× MSAA 覆盖率、CPU 是解析覆盖率，1 级差会随模糊扩散几像素——对照口径因此
   放宽到 `per_channel = 2` 且允许 2% 像素；不透明度/描边/子节点等剪影不唯一的场景一律回退。
 
-### M4 效果（设计，M4 其余）
+### M4 效果（设计，玻璃已弃用）
 
-- 阴影/内阴影/uniform 图层模糊/背景模糊/颗粒（Mono/Duo/Multi）/纹理粗糙边已在上一节落地；本节的「两 pass 高斯」是针对分级模糊的替代方案讨论，
-  当前仍以 CPU 精确复刻（三盒近似）为准。
-- 分级图层模糊（`start_radius/start/end` 的渐进过渡）：可分离高斯 + 按半径分带，半径按设备像素，
-  边缘 clamp 扩边（避免透明边收缩）；目前 `is_progressive()` 一律回退。
-- 玻璃：多 pass（降采样 → 模糊 → 折射/色散 → 合成），复用 `glass.wgsl` 的 uniform 约定；
-  与 CPU `glass.rs` 的「玻璃切分」口径对齐。
+- 阴影/内阴影/uniform 与分级图层模糊/背景模糊/颗粒（Mono/Duo/Multi）/纹理粗糙边已在上一节落地；
+  本节的「两 pass 高斯」是针对模糊核的替代方案讨论，当前仍以 CPU 精确复刻（三盒近似）为准。
+- 玻璃：产品已决定弃用，移出范围，不做 GPU 实现。
 - 颗粒：Mono、Duo、Multi 均已用 `noise.wgsl` 逐 cell 复刻；Duo 由哈希最高位选第二色，Multi 由
   bit 16/32/48 取 RGB、`opacity` 取 alpha，按帧种子固定（导出可复现）。
 - **验收**：每种效果单独 diff；效果叠加顺序与 `figcraft_render::effect_order_tests` 一致。
