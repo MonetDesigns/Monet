@@ -4739,6 +4739,16 @@ impl CanvasView {
                     .collect();
 
                 if files.is_empty() {
+                    // `file.exportLayers {dir}` writes the files itself and returns `path` entries,
+                    // not base64 `data`. The engine has already finished writing: report the
+                    // count like egui's `pick_folder` branch instead of returning silently.
+                    let written = result.get("files").and_then(serde_json::Value::as_array).map_or(0, Vec::len);
+                    if written > 0 {
+                        let _ = this.update(cx, |view, cx| {
+                            let text = figcraft_i18n::trf("Exported {count} files", &[("count", &written.to_string())]);
+                            view.toast(text, cx);
+                        });
+                    }
                     return;
                 }
 

@@ -1254,7 +1254,7 @@ C2、C3（文案规范待全面对齐）。
 | P2-1 | 引擎 CSS/Tailwind 同步 | `codegen/css.rs`、`codegen/tailwind.rs` | ✅ 逐段 `text-wrap` 与 mobile `max-width` 保留已对齐；剩余 `codegen.rs` 为格式/anim 差异，html/code_connect/devinspect 为本地有意扩展；`cargo check` 通过 |
 | P2-2 | Motion 出码入口 | `codegen::motion_code_for`、`InspectData::motion_code`、`inspect.rs::motion_section` | ✅ Code 节按 css/swiftui/compose 显示动画块，无动画不显示 |
 | P2-3 | 面板快照缓存 | `lib.rs::panel_data`、`panels/right/data.rs::read_with_dev` | ✅ Dev 节按 `(uid, revision, page, selection, ready_filter)` 缓存；`cargo check` 通过，缓存回归未单测 |
-| P2-4 | 资产导出对齐 | `inspect.rs::asset_row` / `export_all` | ✅ 逐项「另存为」+ `file.exportLayers` 多资产已接；格式参数细节待核 |
+| P2-4 | 资产导出对齐 | `inspect.rs::asset_row` / `export_all`、`lib.rs::deliver_download` | ✅ 逐项「另存为」+ `file.exportLayers` 多资产文件夹/zip 已接；`dir` 分支完成后也报 `Exported {count} files`（不再静默返回） |
 | P2-5 | `code_connect` 缓存 | `code_connect.rs::import` | ✅ 同一组件多条 link 只 `describe` 一次 |
 | P2-6 | 多行输入 | `widgets/input/text_edit.rs` | ✅ 已实现：`TextEdit::set_multiline`（便签 2 行、模板 3 行）；单行默认路径不变 |
 
