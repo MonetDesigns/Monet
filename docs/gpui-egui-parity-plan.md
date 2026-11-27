@@ -1256,7 +1256,7 @@ C2、C3（文案规范待全面对齐）。
 | P2-3 | 面板快照缓存 | `lib.rs::panel_data`、`panels/right/data.rs::read_with_dev` | ✅ Dev 节按 `(uid, revision, page, selection, ready_filter)` 缓存；`cargo check` 通过，缓存回归未单测 |
 | P2-4 | 资产导出对齐 | `inspect.rs::asset_row` / `export_all` | ✅ 逐项「另存为」+ `file.exportLayers` 多资产已接；格式参数细节待核 |
 | P2-5 | `code_connect` 缓存 | `code_connect.rs::import` | ✅ 同一组件多条 link 只 `describe` 一次 |
-| P2-6 | 多行输入 | `widgets/**` | ⬜ 需单独决策：扩 `TextEdit::multiline` 或把便签/模板改弹层，不在 Dev 面板局部 hack |
+| P2-6 | 多行输入 | `widgets/input/text_edit.rs` | 📝 方案已定：扩 `TextEdit` 支持 multiline（便签 2 行、模板 3 行）；控件层改造，待实现 |
 
 **验证**：历史记录：`cargo check -p figcraft-ui-gpui` 曾在 A 盘 target 通过，`dev_gate` / `devmode` 测试曾在
 `--features test-support` 下运行；`parity_contract` 的 `PARITY_CONTRACT_STATUS` 块由 `capabilities()` 从源码派生
