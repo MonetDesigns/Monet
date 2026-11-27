@@ -673,6 +673,7 @@ pub(crate) struct StyleEditState {
     /// 样式编辑器变量菜单里的数字 / 字符串变量名。
     pub number_variables: Vec<String>,
     pub string_variables: Vec<String>,
+    pub color_variables: Vec<String>,
     /// 效果样式的完整 effects 数组（每行带原始 JSON，供写回 `style.update {value}`）。
     pub effects: Option<Vec<EffectRow>>,
     /// 网格样式的完整 grids 数组（每行带原始 JSON，供写回 `style.update {value}`）。
@@ -695,6 +696,7 @@ struct StyleSnap {
     bound: Vec<(String, String)>,
     number_variables: Vec<String>,
     string_variables: Vec<String>,
+    color_variables: Vec<String>,
     effects: Option<Vec<EffectRow>>,
     grids: Option<Vec<GridRow>>,
 }
@@ -2562,6 +2564,7 @@ impl WindowState {
         bound: Vec<(String, String)>,
         number_variables: Vec<String>,
         string_variables: Vec<String>,
+        color_variables: Vec<String>,
         effects: Option<Vec<EffectRow>>,
         grids: Option<Vec<GridRow>>,
         popups: crate::panels::PopupReqs,
@@ -2605,6 +2608,7 @@ impl WindowState {
             bound.clone(),
             number_variables.clone(),
             string_variables.clone(),
+            color_variables.clone(),
             effects.clone(),
             grids.clone(),
             cmds.clone(),
@@ -2617,6 +2621,7 @@ impl WindowState {
             bound,
             number_variables,
             string_variables,
+            color_variables,
             effects,
             grids,
             popups,
@@ -2639,6 +2644,7 @@ impl WindowState {
         bound: Vec<(String, String)>,
         number_variables: Vec<String>,
         string_variables: Vec<String>,
+        color_variables: Vec<String>,
         effects: Option<Vec<EffectRow>>,
         grids: Option<Vec<GridRow>>,
         cmds: Cmds,
@@ -2890,6 +2896,8 @@ impl WindowState {
             doc.variables.variables.iter().filter(|v| v.kind == figcraft_doc::VariableType::Number).map(|v| v.name.clone()).collect();
         let string_variables: Vec<String> =
             doc.variables.variables.iter().filter(|v| v.kind == figcraft_doc::VariableType::String).map(|v| v.name.clone()).collect();
+        let color_variables: Vec<String> =
+            doc.variables.variables.iter().filter(|v| v.kind == figcraft_doc::VariableType::Color).map(|v| v.name.clone()).collect();
         let (paints, text, effects, grids) = match &st.kind {
             figcraft_doc::StyleKind::Paint { paints } => (paints.clone(), None, None, None),
             figcraft_doc::StyleKind::Text { style, .. } => (Vec::new(), serde_json::to_value(style).ok(), None, None),
@@ -2946,7 +2954,7 @@ impl WindowState {
                 )
             }
         };
-        StyleSnap { ty, name: st.name.clone(), description: st.description.clone(), paints, text, bound, number_variables, string_variables, effects, grids }
+        StyleSnap { ty, name: st.name.clone(), description: st.description.clone(), paints, text, bound, number_variables, string_variables, color_variables, effects, grids }
     }
 
     /// 卡片高度估算（与 `style_editor` 打开时一致）：命令增删属性行后重算，避免卡片定位偏移。
@@ -2973,7 +2981,7 @@ impl WindowState {
 
     /// 命令回写文档后，用新快照原地重建正文 `settings`（保留位置 / 拖动状态），让界面即时反映。
     pub(crate) fn apply_style_snapshot(&mut self, cx: &mut App, snap: StyleSnap) {
-        let StyleSnap { ty, name, description, paints, text, bound, number_variables, string_variables, effects, grids } = snap;
+        let StyleSnap { ty, name, description, paints, text, bound, number_variables, string_variables, color_variables, effects, grids } = snap;
         let id = self.style_edit.as_ref().map(|e| e.id.clone()).unwrap_or_default();
         let mut settings = Self::style_editor_settings(
             cx,
@@ -2986,6 +2994,7 @@ impl WindowState {
             bound.clone(),
             number_variables.clone(),
             string_variables.clone(),
+            color_variables.clone(),
             effects.clone(),
             grids.clone(),
             self.cmds.clone(),
@@ -3016,6 +3025,7 @@ impl WindowState {
             edit.bound = bound;
             edit.number_variables = number_variables;
             edit.string_variables = string_variables;
+            edit.color_variables = color_variables;
             edit.effects = effects;
             edit.grids = grids;
         }
@@ -6181,11 +6191,13 @@ impl WindowState {
                 };
                 // 色块点击 → 取色器（`Act::EditPaint`）：写回同样走 `style.update` 的整组 paints。
                 let current = paint.solid_color().map(crate::widgets::swatch::color32).unwrap_or(crate::canvas::geom::Color32::BLACK);
+                let paint_bind = style_paint_bind_field(paint, idx);
+                let field_w = if paint_bind.is_some() { STYLE_ROW_FIELD_W - 20.0 } else { STYLE_ROW_FIELD_W };
                 let mut cf = crate::widgets::color_field::ColorField::new(
                     cx,
                     paint.clone(),
                     crate::widgets::color_field::ColorText::Hex(SharedString::from(hex)),
-                    STYLE_ROW_FIELD_W,
+                    field_w,
                     hex_ed.clone(),
                     op_ed.clone(),
                 );
@@ -6226,9 +6238,43 @@ impl WindowState {
                         *slot.borrow_mut() = Some(Box::new(child));
                         open_cmds.wake();
                     });
-                    return Some(with_button_bounds(crate::widgets::panel_section::field_row_full_trailing(cf, vec![eye, minus]), hit));
+                    let control = if let Some(field) = paint_bind.clone() {
+                        let bound = edit.bound.iter().find(|(f, _)| f == &field).map(|(_, n)| n.clone());
+                        style_bind_field(
+                            field,
+                            cf.into_any_element(),
+                            bound,
+                            &edit.color_variables,
+                            sid.clone(),
+                            cmds.clone(),
+                            self.overlays.clone(),
+                            self.overlay_dismiss.clone(),
+                            self.viewport,
+                        )
+                    } else {
+                        cf.into_any_element()
+                    };
+                    return Some(with_button_bounds(crate::widgets::panel_section::field_row_full_trailing(control, vec![eye, minus]), hit));
                 }
-                Some(crate::widgets::panel_section::field_row_full_trailing(cf, vec![eye, minus]).into_any_element())
+                let control = if let Some(field) = paint_bind {
+                    let edit = self.style_edit.as_ref();
+                    let bound = edit.and_then(|e| e.bound.iter().find(|(f, _)| f == &field).map(|(_, n)| n.clone()));
+                    let vars = edit.map(|e| e.color_variables.clone()).unwrap_or_default();
+                    style_bind_field(
+                        field,
+                        cf.into_any_element(),
+                        bound,
+                        &vars,
+                        sid.clone(),
+                        cmds.clone(),
+                        self.overlays.clone(),
+                        self.overlay_dismiss.clone(),
+                        self.viewport,
+                    )
+                } else {
+                    cf.into_any_element()
+                };
+                Some(crate::widgets::panel_section::field_row_full_trailing(control, vec![eye, minus]).into_any_element())
             }
             Setting::PaintPreview { paint } => {
                 // lizard `style_paint_preview`：304×120 区，内缩 16 后的 272×104 **整块**铺色；
@@ -7239,7 +7285,7 @@ impl WindowState {
                 let family_select = style_bind_control(
                     248.0,
                     family_select,
-                    "fontFamily",
+                    "fontFamily".to_string(),
                     bound.iter().find(|(f, _)| f.as_str() == "fontFamily").map(|(_, n)| n.clone()),
                     family_targets,
                     style_id.clone(),
@@ -7254,7 +7300,7 @@ impl WindowState {
                 let style_select = style_bind_control(
                     120.0,
                     style_select,
-                    weight_field,
+                    weight_field.to_string(),
                     bound
                         .iter()
                         .find(|(f, _)| f.as_str() == "fontWeight")
@@ -7270,7 +7316,7 @@ impl WindowState {
                 let size_field = style_bind_control(
                     120.0,
                     size_field.clone().into_any_element(),
-                    "fontSize",
+                    "fontSize".to_string(),
                     bound.iter().find(|(f, _)| f.as_str() == "fontSize").map(|(_, n)| n.clone()),
                     style_targets("fontSize", number_variables),
                     style_id.clone(),
@@ -7282,7 +7328,7 @@ impl WindowState {
                 let line_field = style_bind_control(
                     120.0,
                     line_field.clone().into_any_element(),
-                    "lineHeight",
+                    "lineHeight".to_string(),
                     bound.iter().find(|(f, _)| f.as_str() == "lineHeight").map(|(_, n)| n.clone()),
                     style_targets("lineHeight", number_variables),
                     style_id.clone(),
@@ -7294,7 +7340,7 @@ impl WindowState {
                 let spacing_field = style_bind_control(
                     120.0,
                     spacing_field.clone().into_any_element(),
-                    "letterSpacing",
+                    "letterSpacing".to_string(),
                     bound.iter().find(|(f, _)| f.as_str() == "letterSpacing").map(|(_, n)| n.clone()),
                     style_targets("letterSpacing", number_variables),
                     style_id.clone(),
@@ -7358,7 +7404,7 @@ impl WindowState {
                         .into_any_element(),
                 )
             }
-            Setting::EffectRow { tab: st, style_id, index, label, ty: _, visible, effect: _, array, anchor } => {
+            Setting::EffectRow { tab: st, style_id, index, label, ty, visible, effect: _, array, anchor } => {
                 if *st != tab {
                     return None;
                 }
@@ -7371,6 +7417,9 @@ impl WindowState {
                 let vis = *visible;
                 let arr = array.clone();
                 let cmds = self.cmds.clone();
+                // 与 egui `effect_binding` 一致：阴影绑颜色，两层模糊绑半径，其余效果不提供绑定。
+                let binding = style_effect_bind_field(*ty, idx);
+                let dd_w = if binding.is_some() { STYLE_ROW_FIELD_W - 20.0 } else { STYLE_ROW_FIELD_W };
                 let eye = {
                     let arr = arr.clone();
                     let cmds = cmds.clone();
@@ -7403,7 +7452,7 @@ impl WindowState {
                 // `visible` 保持不变。点开与收起都走 `overlays`（浮层内菜单的唯一通道）。
                 let at = anchor.clone();
                 let wake = cmds.clone();
-                let dd = dropdown(label.clone(), STYLE_ROW_FIELD_W, None).fill().on_click(move |rect, _w, _cx| {
+                let dd = dropdown(label.clone(), dd_w, None).fill().on_click(move |rect, _w, _cx| {
                     *at.borrow_mut() = Some(rect);
                     wake.wake();
                 });
@@ -7443,7 +7492,27 @@ impl WindowState {
                         dismiss,
                     );
                 }
-                Some(crate::widgets::panel_section::field_row_full_trailing(dd, vec![eye, minus]).into_any_element())
+                let control = if let Some((field, is_color)) = binding {
+                    let edit = self.style_edit.as_ref();
+                    let bound = edit.and_then(|e| e.bound.iter().find(|(f, _)| f == &field).map(|(_, n)| n.clone()));
+                    let vars = edit
+                        .map(|e| if is_color { e.color_variables.clone() } else { e.number_variables.clone() })
+                        .unwrap_or_default();
+                    style_bind_field(
+                        field,
+                        dd.into_any_element(),
+                        bound,
+                        &vars,
+                        sid.clone(),
+                        cmds.clone(),
+                        self.overlays.clone(),
+                        self.overlay_dismiss.clone(),
+                        self.viewport,
+                    )
+                } else {
+                    dd.into_any_element()
+                };
+                Some(crate::widgets::panel_section::field_row_full_trailing(control, vec![eye, minus]).into_any_element())
             }
             Setting::GridRow { tab: st, style_id, index, label, visible, grids, anchor } => {
                 if *st != tab {
@@ -7484,9 +7553,11 @@ impl WindowState {
                     })
                 };
                 // 类型下拉：Grid / Columns / Rows（与「+」菜单同源），换类型时保留 `visible` 与颜色。
+                // 与 egui 一致，网格只绑数量字段 `layoutGrids/{i}/size`。
+                let field = style_grid_bind_field(idx);
                 let at = anchor.clone();
                 let wake = cmds.clone();
-                let dd = dropdown(label.clone(), STYLE_ROW_FIELD_W, None).fill().on_click(move |rect, _w, _cx| {
+                let dd = dropdown(label.clone(), STYLE_ROW_FIELD_W - 20.0, None).fill().on_click(move |rect, _w, _cx| {
                     *at.borrow_mut() = Some(rect);
                     wake.wake();
                 });
@@ -7535,7 +7606,23 @@ impl WindowState {
                         dismiss,
                     );
                 }
-                Some(crate::widgets::panel_section::field_row_full_trailing(dd, vec![eye, minus]).into_any_element())
+                let control = {
+                    let edit = self.style_edit.as_ref();
+                    let bound = edit.and_then(|e| e.bound.iter().find(|(f, _)| f == &field).map(|(_, n)| n.clone()));
+                    let vars = edit.map(|e| e.number_variables.clone()).unwrap_or_default();
+                    style_bind_field(
+                        field,
+                        dd.into_any_element(),
+                        bound,
+                        &vars,
+                        sid.clone(),
+                        cmds.clone(),
+                        self.overlays.clone(),
+                        self.overlay_dismiss.clone(),
+                        self.viewport,
+                    )
+                };
+                Some(crate::widgets::panel_section::field_row_full_trailing(control, vec![eye, minus]).into_any_element())
             }
         }
     }
@@ -7857,14 +7944,61 @@ fn style_bind_cmd(style_id: &str, field: &str, variable: Value) -> Cmd {
     Cmd { id: "style.bind", params: Some(json!({ "style": style_id, "field": field, "variable": variable })) }
 }
 
+/// 样式属性行可绑定的字段（egui `binding_cell` / `effect_binding` 的同一范围）：
+/// - Paint 只有纯色填充的 `fills/{i}/color`；
+/// - Effect 阴影绑颜色、两层模糊绑半径；
+/// - Grid 绑 `layoutGrids/{i}/size`。
+fn style_paint_bind_field(paint: &figcraft_color::Paint, index: usize) -> Option<String> {
+    paint.solid_color().map(|_| format!("fills/{index}/color"))
+}
+
+fn style_effect_bind_field(ty: &str, index: usize) -> Option<(String, bool)> {
+    match ty {
+        "dropShadow" | "innerShadow" => Some((format!("effects/{index}/color"), true)),
+        "layerBlur" | "backgroundBlur" => Some((format!("effects/{index}/radius"), false)),
+        _ => None,
+    }
+}
+
+fn style_grid_bind_field(index: usize) -> String {
+    format!("layoutGrids/{index}/size")
+}
+
 /// 样式编辑器里的一个可绑定字段：未绑定时是原控件 + 右侧变量按钮；绑定时是同宽 chip，
 /// 点 chip 换变量、右侧 detach 解绑。变量菜单直接推 `style.bind`，与 egui
 /// `widgets/style_picker.rs` 的 `text_binding` 同一语义。
 #[allow(clippy::too_many_arguments)]
+fn style_bind_field(
+    field: String,
+    control: AnyElement,
+    bound: Option<String>,
+    variables: &[String],
+    style_id: String,
+    cmds: Cmds,
+    overlays: Rc<RefCell<Vec<AnyElement>>>,
+    dismissers: Rc<RefCell<Vec<Rc<dyn Fn(&mut Window, &mut App)>>>>,
+    viewport: Size<Pixels>,
+) -> AnyElement {
+    let targets: Vec<(String, String, String)> = variables.iter().map(|v| (v.clone(), field.clone(), v.clone())).collect();
+    style_bind_control(
+        STYLE_ROW_FIELD_W,
+        control,
+        field,
+        bound,
+        targets,
+        style_id,
+        cmds,
+        overlays,
+        dismissers,
+        viewport,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
 fn style_bind_control(
     width: f32,
     control: AnyElement,
-    field: &'static str,
+    field: String,
     bound: Option<String>,
     targets: Vec<(String, String, String)>,
     style_id: String,
@@ -7979,7 +8113,7 @@ fn style_bind_control(
                 .items_center()
                 .justify_center()
                 .on_mouse_down(MouseButton::Left, move |_: &MouseDownEvent, _, _| {
-                    detach_cmds.push(style_bind_cmd(&detach_style, field, Value::Null));
+                    detach_cmds.push(style_bind_cmd(&detach_style, &field, Value::Null));
                 })
                 .child(crate::widgets::icon::paint(Icon::Detach, rgba(t.text_secondary), 12.0)),
         )
@@ -8821,6 +8955,20 @@ mod tests {
         let unbind_params = unbind.params.expect("params");
         assert_eq!(unbind_params["field"], "fontWeight");
         assert_eq!(unbind_params["variable"], Value::Null);
+    }
+
+    /// style 绑定字段与引擎 `style.bind` 的契约（egui `binding_cell` 的同一范围）。
+    #[test]
+    fn style_bind_fields_match_engine_contract() {
+        use figcraft_color::{Color, Paint};
+        assert_eq!(style_paint_bind_field(&Paint::solid(Color::BLACK), 3).as_deref(), Some("fills/3/color"));
+        assert_eq!(style_effect_bind_field("dropShadow", 1).map(|(f, c)| (f, c)), Some(("effects/1/color".into(), true)));
+        assert_eq!(style_effect_bind_field("innerShadow", 2).map(|(f, c)| (f, c)), Some(("effects/2/color".into(), true)));
+        assert_eq!(style_effect_bind_field("layerBlur", 0).map(|(f, c)| (f, c)), Some(("effects/0/radius".into(), false)));
+        assert_eq!(style_effect_bind_field("backgroundBlur", 4).map(|(f, c)| (f, c)), Some(("effects/4/radius".into(), false)));
+        assert_eq!(style_effect_bind_field("glass", 0), None);
+        assert_eq!(style_effect_bind_field("noise", 0), None);
+        assert_eq!(style_grid_bind_field(5), "layoutGrids/5/size");
     }
 
     /// 浮层内菜单的定位/关闭不变量（用户 2026-11-19 逐条指定）：

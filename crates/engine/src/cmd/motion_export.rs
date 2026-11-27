@@ -252,11 +252,15 @@ impl Animation {
             // the frame size and a shared byte budget; `threads` frames can also be in progress.
             let frame_bytes = (self.size.0 as usize).saturating_mul(self.size.1 as usize).saturating_mul(4).max(1);
             let budget_frames = (MAX_IN_FLIGHT_FRAME_BYTES / frame_bytes).max(1);
-            let capacity = budget_frames.saturating_sub(threads).max(1);
-            let (tx, rx) = mpsc::sync_channel::<(usize, std::result::Result<figcraft_motion_codec::FrameRgba, String>)>(capacity);
-            for w in 0..threads {
+            // At least one slot per worker is required: a later worker can otherwise occupy the
+            // only slot with frame 17 while the receiver waits for frame 0, and no worker can
+            // make progress. Cap the worker count by the byte budget instead of letting the
+            // queue hold one full frame per worker.
+            let workers = threads.min(budget_frames).max(1);
+            let (tx, rx) = mpsc::sync_channel::<(usize, std::result::Result<figcraft_motion_codec::FrameRgba, String>)>(workers);
+            for w in 0..workers {
                 let tx = tx.clone();
-                scope.spawn(move || self.render_worker(times, threads, w, tx));
+                scope.spawn(move || self.render_worker(times, workers, w, tx));
             }
             // The main thread must drop its sender or `recv` never observes all workers finishing.
             drop(tx);

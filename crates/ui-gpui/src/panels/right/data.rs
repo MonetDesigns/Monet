@@ -1842,6 +1842,7 @@ pub struct LocalStyleRow {
     /// 样式编辑器可绑定的数字 / 字符串变量名（按类型过滤后的快照）。
     pub number_variables: Vec<String>,
     pub string_variables: Vec<String>,
+    pub color_variables: Vec<String>,
     /// 效果样式的完整 effects 数组（每个含原始 JSON，供写回 `style.update {value: …}`）。
     pub effects: Option<Vec<EffectRow>>,
     /// 网格样式的完整 grids 数组（每个含原始 JSON，供写回 `style.update {value: …}`）。
@@ -2423,6 +2424,7 @@ pub fn read_with_dev(
                 bound: s.bound.iter().filter_map(|(k, v)| doc.variables.get(v).map(|x| (k.clone(), x.name.clone()))).collect(),
                 number_variables: doc.variables.variables.iter().filter(|v| v.kind == figcraft_doc::VariableType::Number).map(|v| v.name.clone()).collect(),
                 string_variables: doc.variables.variables.iter().filter(|v| v.kind == figcraft_doc::VariableType::String).map(|v| v.name.clone()).collect(),
+                color_variables: doc.variables.variables.iter().filter(|v| v.kind == figcraft_doc::VariableType::Color).map(|v| v.name.clone()).collect(),
                 effects,
                 grids,
             }
