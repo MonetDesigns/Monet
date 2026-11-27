@@ -1303,6 +1303,9 @@ impl CanvasView {
     }
 
     fn layer_toggle_expand(&mut self, id: NodeId, cx: &mut Context<Self>) {
+        // The chevron stops propagation, so the row's mouse-down never runs. Claim keyboard
+        // focus here or the next arrow still moves the canvas selection (CodeRabbit PR#38).
+        self.layer_tree.focused = true;
         if self.layer_tree.expanded.contains(&id) {
             self.layer_tree.expanded.remove(&id);
         } else {
