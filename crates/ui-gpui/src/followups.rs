@@ -8,11 +8,11 @@
 
 use crate::widgets::input::TextField;
 use crate::widgets::popover::{Open, popover_window, title_text};
-use crate::widgets::{rgba, tokens};
+use crate::widgets::{Checkbox, LabelButton, rgba, tokens};
 use figcraft_doc::Document;
 use figcraft_engine::library::{Selection, default_selection, publishable};
 use figcraft_i18n::tr;
-use gpui::{AnyElement, App, Entity, IntoElement, Pixels, Point, Size, Window, div, prelude::*, px};
+use gpui::{AnyElement, App, Entity, IntoElement, KeyDownEvent, Pixels, Point, Size, Window, div, prelude::*, px};
 use serde_json::{Value, json};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -56,22 +56,18 @@ pub(crate) fn cursor_chat_popover(
             .flex_row()
             .items_center()
             .justify_between()
-            .child(div().text_size(px(10.0)).text_color(rgba(t.text_tertiary)).child(tr("Enter to send")))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .h(px(24.0))
-                    .px(px(10.0))
-                    .rounded(px(5.0))
-                    .bg(rgba(t.accent))
-                    .cursor_pointer()
-                    .id("cursor-chat-send")
-                    .on_click(move |_, window, cx| submit(window, cx))
-                    .child(div().text_size(px(11.0)).text_color(rgba(crate::canvas::geom::Color32::WHITE)).child(tr("Send"))),
-            ),
+            .child(div().text_size(px(10.0)).text_color(rgba(t.text_tertiary)).child(tr("Type to send")))
+            .child(LabelButton::new("cursor-chat-send", tr("Send")).on_click({
+                let submit = submit.clone();
+                move |window, cx| submit(window, cx)
+            })),
     );
+    let body = body.on_key_down(move |e: &KeyDownEvent, window, cx| {
+        if e.keystroke.key == "enter" && !e.keystroke.modifiers.shift {
+            submit(window, cx);
+            cx.stop_propagation();
+        }
+    });
 
     popover_window(Open::At(at)).width(260.0).height(110.0).title(title_text(tr("Cursor chat"))).body(body).show(viewport, dismiss).1
 }
@@ -103,28 +99,29 @@ pub(crate) fn library_publish_popover(
                 .child(tr("Create components, styles or variables to publish them as a library.")),
         );
     } else {
+        let mut choices = div().id("library-publish-choices").flex().flex_col().gap(px(2.0)).max_h(px(360.0)).overflow_y_scroll();
         if !all.components.is_empty() {
-            body = body.child(section_title(tr("Components")));
+            choices = choices.child(section_title(tr("Components")));
             for id in &all.components {
                 let name = doc.node(*id).map(|n| n.name.clone()).unwrap_or_default();
-                body = body.child(toggle_row(state, "c", &id.0.to_string(), name, picked.components.contains(id)));
+                choices = choices.child(toggle_row(state, "c", &id.0.to_string(), name, picked.components.contains(id)));
             }
         }
         if !all.styles.is_empty() {
-            body = body.child(section_title(tr("Styles")));
+            choices = choices.child(section_title(tr("Styles")));
             for id in &all.styles {
                 let name = doc.style(id).map(|s| s.name.clone()).unwrap_or_default();
-                body = body.child(toggle_row(state, "s", id, name, picked.styles.contains(id)));
+                choices = choices.child(toggle_row(state, "s", id, name, picked.styles.contains(id)));
             }
         }
         if !all.collections.is_empty() {
-            body = body.child(section_title(tr("Variable collections")));
+            choices = choices.child(section_title(tr("Variable collections")));
             for id in &all.collections {
                 let name = doc.variables.collection_by_id(id).map(|c| c.name.clone()).unwrap_or_default();
-                body = body.child(toggle_row(state, "v", id, name, picked.collections.contains(id)));
+                choices = choices.child(toggle_row(state, "v", id, name, picked.collections.contains(id)));
             }
         }
-        body = body.child(
+        body = body.child(choices).child(
             div()
                 .mt(px(4.0))
                 .flex()
@@ -135,25 +132,14 @@ pub(crate) fn library_publish_popover(
         );
     }
     body = body.child(
-        div().flex().flex_row().items_center().justify_end().gap(px(8.0)).mt(px(4.0)).child(
-            div()
-                .flex()
-                .items_center()
-                .justify_center()
-                .h(px(26.0))
-                .px(px(12.0))
-                .rounded(px(6.0))
-                .when(!any, |d| d.opacity(0.45))
-                .bg(rgba(t.accent))
-                .cursor_pointer()
-                .id("library-publish")
-                .on_click(move |_, window, cx| {
-                    if any {
-                        publish(window, cx)
-                    }
-                })
-                .child(div().text_size(px(11.0)).text_color(rgba(crate::canvas::geom::Color32::WHITE)).child(tr("Publish"))),
-        ),
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_end()
+            .gap(px(8.0))
+            .mt(px(4.0))
+            .child(LabelButton::new("library-publish", tr("Publish")).disabled(!any).on_click(move |window, cx| publish(window, cx))),
     );
 
     popover_window(Open::At(Point { x: px(crate::panels::RAIL_W + 24.0), y: px(116.0) }))
@@ -170,62 +156,47 @@ fn section_title(text: impl Into<gpui::SharedString>) -> impl IntoElement {
     div().pt(px(2.0)).text_size(px(10.0)).text_color(rgba(t.text_secondary)).child(text.into())
 }
 
-/// One checkbox row; the key is `c<node>`, `s<style>` or `v<collection>`, and the state is
-/// updated in place so the next frame redraws the tick.
+/// One publishable asset; the shared `Checkbox` owns selection and accessibility.
 fn toggle_row(state: &Rc<RefCell<LibraryPublishState>>, kind: &'static str, key: &str, label: String, on: bool) -> impl IntoElement {
-    let t = tokens();
     let state = state.clone();
     let key = key.to_string();
-    let row = div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(px(6.0))
-        .h(px(22.0))
-        .cursor_pointer()
-        .id(gpui::ElementId::from(gpui::SharedString::from(format!("library-publish-{kind}-{key}"))))
-        .on_click(move |_, window, _| {
-            let mut s = state.borrow_mut();
-            let target = match kind {
-                "c" => key.parse::<u64>().ok().map(figcraft_doc::NodeId),
-                _ => None,
-            };
-            if kind == "c" {
-                if let Some(id) = target {
-                    if s.picked.components.contains(&id) {
-                        s.picked.components.retain(|x| *x != id);
-                    } else {
+    let id = gpui::ElementId::from(gpui::SharedString::from(format!("library-publish-{kind}-{key}")));
+    Checkbox::new(id).label(label).checked(on).text_xs().on_change(move |next, window, _| {
+        let wanted = *next;
+        let mut s = state.borrow_mut();
+        match kind {
+            "c" => {
+                let Some(id) = key.parse::<u64>().ok().map(figcraft_doc::NodeId) else { return };
+                if wanted {
+                    if !s.picked.components.contains(&id) {
                         s.picked.components.push(id);
                     }
-                }
-            } else if kind == "s" {
-                if s.picked.styles.iter().any(|x| x == &key) {
-                    s.picked.styles.retain(|x| x != &key);
                 } else {
-                    s.picked.styles.push(key.clone());
+                    s.picked.components.retain(|x| *x != id);
                 }
-            } else if s.picked.collections.iter().any(|x| x == &key) {
-                s.picked.collections.retain(|x| x != &key);
-            } else {
-                s.picked.collections.push(key.clone());
             }
-            drop(s);
-            window.refresh();
-        })
-        .child(
-            div()
-                .size(px(14.0))
-                .rounded(px(3.0))
-                .border_1()
-                .border_color(rgba(if on { t.accent } else { t.border }))
-                .bg(rgba(if on { t.accent } else { t.field }))
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(div().text_size(px(9.0)).text_color(rgba(crate::canvas::geom::Color32::WHITE)).child(if on { "✓" } else { "" })),
-        )
-        .child(div().text_size(px(11.0)).text_color(rgba(t.text)).child(label));
-    row
+            "s" => {
+                if wanted {
+                    if !s.picked.styles.iter().any(|x| x == &key) {
+                        s.picked.styles.push(key.clone());
+                    }
+                } else {
+                    s.picked.styles.retain(|x| x != &key);
+                }
+            }
+            _ => {
+                if wanted {
+                    if !s.picked.collections.iter().any(|x| x == &key) {
+                        s.picked.collections.push(key.clone());
+                    }
+                } else {
+                    s.picked.collections.retain(|x| x != &key);
+                }
+            }
+        }
+        drop(s);
+        window.refresh();
+    })
 }
 
 /// The include list `library.publish` takes from the form.

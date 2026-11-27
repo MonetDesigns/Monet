@@ -10,11 +10,11 @@
 use crate::panels::{Cmd, RightFields};
 use crate::widgets::input::TextField;
 use crate::widgets::popover::{Open, popover_window, title_text};
-use crate::widgets::{Dropdown, MenuRow, rgba, tokens};
+use crate::widgets::{Dropdown, LabelButton, MenuRow, rgba, tokens};
 use figcraft_doc::{Document, Message, NodeId};
 use figcraft_engine::cmd::comment::{Filter, Query, Sort, frame_of, query};
 use figcraft_i18n::tr;
-use gpui::{AnyElement, App, Div, Entity, IntoElement, Pixels, Point, SharedString, Size, Window, div, prelude::*, px};
+use gpui::{AnyElement, App, Div, Entity, IntoElement, KeyDownEvent, Pixels, Point, SharedString, Size, Window, div, prelude::*, px};
 use serde_json::json;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -53,6 +53,8 @@ pub(crate) struct ThreadState {
     pub reply: String,
     pub field: Entity<TextField>,
     pub focus: bool,
+    /// The message index (0 = first message) being edited, if any.
+    pub editing: Option<usize>,
 }
 
 /// The `@query` being typed at the end of `text`: its byte range from `@` through the end.
@@ -91,11 +93,23 @@ pub(crate) fn insert_mention(text: &mut String, range: (usize, usize), name: &st
     text.replace_range(a..b, &format!("@{name} "));
 }
 
+/// A composer body submits only on Enter. Keeping this on the popover subtree matters: the
+/// editor consumes Enter (`EditBuffer::Submit`) and blurs, but its parent still sees the bubble.
+fn with_enter_submit(body: Div, submit: Rc<dyn Fn(&mut Window, &mut App)>) -> Div {
+    body.on_key_down(move |e: &KeyDownEvent, window, cx| {
+        if e.keystroke.key == "enter" && !e.keystroke.modifiers.shift {
+            submit(window, cx);
+            cx.stop_propagation();
+        }
+    })
+}
+
 /// A comment composer next to its pin (egui `draft_composer`). Posting hands the text back to
 /// the view, which owns the `comment.add` command and closes the popover only on success.
 pub(crate) fn draft_popover(
     app: &crate::CanvasApp,
     state: &Rc<RefCell<DraftState>>,
+    canvas_origin: (f32, f32),
     viewport: Size<Pixels>,
     dismiss: Rc<dyn Fn(&mut Window, &mut App)>,
     submit: Rc<dyn Fn(&mut Window, &mut App)>,
@@ -111,7 +125,7 @@ pub(crate) fn draft_popover(
         return div().into_any_element();
     }
     let at = app.to_screen(x, y);
-    let pos = Point { x: px(f32::from(at.x) + 36.0), y: px(f32::from(at.y) - 28.0) };
+    let pos = Point { x: px(f32::from(at.x) + canvas_origin.0 + 36.0), y: px(f32::from(at.y) + canvas_origin.1 - 28.0) };
     let people = app.session.ds().map(|ds| ds.doc.comment_people()).unwrap_or_default();
     let me = figcraft_engine::cmd::comment::user_name(&app.session);
     let names = mention_query_at_end(&text).map(|(a, b)| mention_matches(&people, text.get(a + 1..b).unwrap_or(""), &me)).unwrap_or_default();
@@ -149,22 +163,13 @@ pub(crate) fn draft_popover(
             .flex_row()
             .items_center()
             .justify_between()
-            .child(div().text_size(px(10.0)).text_color(rgba(t.text_tertiary)).child(tr("Enter to post · @ to mention")))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .h(px(24.0))
-                    .px(px(10.0))
-                    .rounded(px(5.0))
-                    .bg(rgba(t.accent))
-                    .cursor_pointer()
-                    .id("comment-draft-post")
-                    .on_click(move |_, window, cx| submit(window, cx))
-                    .child(div().text_size(px(11.0)).text_color(rgba(crate::canvas::geom::Color32::WHITE)).child(tr("Post"))),
-            ),
+            .child(div().text_size(px(10.0)).text_color(rgba(t.text_tertiary)).child(tr("Click Post · @ to mention")))
+            .child(LabelButton::new("comment-draft-post", tr("Post")).on_click({
+                let submit = submit.clone();
+                move |window, cx| submit(window, cx)
+            })),
     );
+    let body = with_enter_submit(body, submit);
 
     popover_window(Open::At(pos)).width(300.0).height(estimated_h).title(title_text(tr("Comment"))).body(body).show(viewport, dismiss).1
 }
@@ -172,11 +177,13 @@ pub(crate) fn draft_popover(
 /// A thread popover next to its pin (egui `thread`): messages, resolve state and a reply field.
 pub(crate) fn thread_popover(
     app: &crate::CanvasApp,
-    state: &Rc<RefCell<ThreadState>>,
+    state: &Rc<RefCell<crate::comments::ThreadState>>,
+    canvas_origin: (f32, f32),
     viewport: Size<Pixels>,
     dismiss: Rc<dyn Fn(&mut Window, &mut App)>,
     submit: Rc<dyn Fn(&mut Window, &mut App)>,
     resolve: Rc<dyn Fn(bool, &mut Window, &mut App)>,
+    delete: Rc<dyn Fn(Option<usize>, &mut Window, &mut App)>,
 ) -> AnyElement {
     let t = tokens();
     let id = state.borrow().id;
@@ -188,7 +195,7 @@ pub(crate) fn thread_popover(
     }
     let (x, y) = c.position(&ds.doc);
     let at = app.to_screen(x, y);
-    let pos = Point { x: px(f32::from(at.x) + 36.0), y: px(f32::from(at.y) - 28.0) };
+    let pos = Point { x: px(f32::from(at.x) + canvas_origin.0 + 36.0), y: px(f32::from(at.y) + canvas_origin.1 - 28.0) };
     let me = figcraft_engine::cmd::comment::user_name(&app.session);
 
     let mut body = div().flex().flex_col().gap(px(8.0));
@@ -203,49 +210,103 @@ pub(crate) fn thread_popover(
             } else {
                 tr("Open")
             }))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .h(px(22.0))
-                    .px(px(8.0))
-                    .rounded(px(5.0))
-                    .bg(rgba(t.field))
-                    .cursor_pointer()
-                    .hover(|d| d.bg(rgba(t.hover)))
-                    .id("comment-thread-resolve")
-                    .on_click({
-                        let resolved = c.resolved;
-                        move |_, window, cx| resolve(!resolved, window, cx)
-                    })
-                    .child(div().text_size(px(11.0)).text_color(rgba(t.text)).child(if c.resolved { tr("Reopen") } else { tr("Resolve") })),
-            ),
+            .child(LabelButton::new("comment-thread-resolve", if c.resolved { tr("Reopen") } else { tr("Resolve") }).secondary().on_click({
+                let resolved = c.resolved;
+                move |window, cx| resolve(!resolved, window, cx)
+            })),
     );
 
+    let editing = state.borrow().editing;
     let mut messages = div().id("comment-thread-messages").flex().flex_col().gap(px(10.0)).max_h(px(320.0)).overflow_y_scroll();
-    for m in c.messages() {
-        messages = messages.child(message_row(m, &me));
-    }
-    body = body.child(messages);
-    body = body.child(
-        div().flex().flex_col().gap(px(6.0)).border_t_1().border_color(rgba(t.border)).pt(px(8.0)).child(div().w_full().child(reply_field)).child(
-            div().flex().justify_end().child(
+    for (index, m) in c.messages().enumerate() {
+        let mut entry = message_row(m, &me);
+        if m.author == me {
+            let edit = {
+                let state = state.clone();
+                let field = reply_field.clone();
+                let text = m.text.clone();
+                Rc::new(move |window: &mut Window, cx: &mut App| {
+                    let field = field.clone();
+                    let text = text.clone();
+                    {
+                        let mut s = state.borrow_mut();
+                        s.editing = Some(index);
+                        s.reply = text.clone();
+                    }
+                    field.update(cx, |tf, cx| {
+                        tf.edit().update(cx, |edit, _| edit.set_draft_text(text));
+                        tf.edit().update(cx, |edit, _| edit.focus_editor(window));
+                    });
+                    window.refresh();
+                }) as Rc<dyn Fn(&mut Window, &mut App)>
+            };
+            let del = {
+                let delete = delete.clone();
+                Rc::new(move |window: &mut Window, cx: &mut App| delete(index.checked_sub(1), window, cx)) as Rc<dyn Fn(&mut Window, &mut App)>
+            };
+            entry = entry.child(
                 div()
                     .flex()
-                    .items_center()
-                    .justify_center()
-                    .h(px(24.0))
-                    .px(px(10.0))
-                    .rounded(px(5.0))
-                    .bg(rgba(t.accent))
-                    .cursor_pointer()
-                    .id("comment-thread-reply")
-                    .on_click(move |_, window, cx| submit(window, cx))
-                    .child(div().text_size(px(11.0)).text_color(rgba(crate::canvas::geom::Color32::WHITE)).child(tr("Reply"))),
-            ),
-        ),
+                    .flex_row()
+                    .gap(px(6.0))
+                    .pl(px(30.0))
+                    .child(
+                        LabelButton::new(gpui::ElementId::from(("comment-edit", index as u64)), tr("Edit"))
+                            .secondary()
+                            .on_click(move |window, cx| edit(window, cx)),
+                    )
+                    .child(
+                        LabelButton::new(
+                            gpui::ElementId::from(("comment-delete", index as u64)),
+                            if index == 0 { tr("Delete thread") } else { tr("Delete") },
+                        )
+                        .secondary()
+                        .on_click(move |window, cx| del(window, cx)),
+                    ),
+            );
+        }
+        messages = messages.child(entry);
+    }
+    body = body.child(messages);
+    let cancel = {
+        let state = state.clone();
+        let field = reply_field.clone();
+        Rc::new(move |window: &mut Window, cx: &mut App| {
+            let field = field.clone();
+            {
+                let mut s = state.borrow_mut();
+                s.editing = None;
+                s.reply.clear();
+            }
+            field.update(cx, |tf, cx| {
+                tf.edit().update(cx, |edit, _| edit.set_draft_text(""));
+                tf.edit().update(cx, |edit, _| edit.focus_editor(window));
+            });
+            window.refresh();
+        }) as Rc<dyn Fn(&mut Window, &mut App)>
+    };
+    let mut reply_actions = div().flex().flex_row().justify_end().gap(px(6.0)).child(
+        LabelButton::new("comment-thread-reply", if editing.is_some() { tr("Save") } else { tr("Reply") }).on_click({
+            let submit = submit.clone();
+            move |window, cx| submit(window, cx)
+        }),
     );
+    if editing.is_some() {
+        reply_actions =
+            reply_actions.child(LabelButton::new("comment-thread-cancel", tr("Cancel")).secondary().on_click(move |window, cx| cancel(window, cx)));
+    }
+    body = body.child(
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(6.0))
+            .border_t_1()
+            .border_color(rgba(t.border))
+            .pt(px(8.0))
+            .child(div().w_full().child(reply_field))
+            .child(reply_actions),
+    );
+    let body = with_enter_submit(body, submit);
 
     popover_window(Open::At(pos)).width(320.0).height(560.0).title(title_text(tr("Comment"))).body(body).show(viewport, dismiss).1
 }

@@ -172,6 +172,16 @@ impl TextEdit {
         }
         self.input.buffer.set_text(self.value.clone());
     }
+
+    /// Replace the visible draft too (mention insertion is a programmatic edit while the field
+    /// is active). `set_value` deliberately keeps a live draft; this does not change that rule
+    /// for document pushes.
+    pub(crate) fn set_draft_text(&mut self, v: impl Into<String>) {
+        let v = v.into();
+        self.value = v.clone();
+        self.kept = v.clone();
+        self.input.buffer.set_text(v);
+    }
     pub fn set_placeholder(&mut self, p: impl Into<SharedString>) {
         self.input.set_placeholder(p);
     }

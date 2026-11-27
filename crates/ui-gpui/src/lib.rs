@@ -1278,6 +1278,11 @@ impl CanvasView {
             }
         }
         self.close_home();
+        // A publish selection is document-owned: never let it outlive the document it was built
+        // from (its IDs would otherwise publish into the newly active document).
+        if matches!(&self.popup, Some(Popup::LibraryPublish { .. })) {
+            self.popup = None;
+        }
         cx.notify();
     }
 
@@ -2312,7 +2317,7 @@ impl CanvasView {
                                 });
                             });
                         }
-                        self.popup = Some(Popup::CursorChat { state });
+                        self.replace_popup(Popup::CursorChat { state }, cx);
                         cx.notify();
                     }
                     continue;
@@ -2325,11 +2330,13 @@ impl CanvasView {
                         if self.app.session.tool.tool != figcraft_engine::ToolId::Comment {
                             let _ = self.app.session.execute("tool.set", &serde_json::json!({ "tool": "comment" }));
                         }
-                        self.fields.comment_ui().borrow_mut().open = Some(id);
                         let already = matches!(&self.popup, Some(Popup::CommentThread { state }) if state.borrow().id == id);
                         if !already {
                             self.open_comment_thread(id, cx);
                         }
+                        // Set after `open_comment_thread`: its replacement cleanup clears the
+                        // previous thread's highlight.
+                        self.fields.comment_ui().borrow_mut().open = Some(id);
                         cx.notify();
                     }
                     continue;
@@ -2680,7 +2687,7 @@ impl CanvasView {
             field.update(cx, |tf, _| tf.set_on_change(move |text, _, _| state.borrow_mut().text = text.to_string()));
         }
         self.fields.comment_ui().borrow_mut().open = None;
-        self.popup = Some(Popup::CommentDraft { state });
+        self.replace_popup(Popup::CommentDraft { state }, cx);
         cx.notify();
     }
 
@@ -2712,27 +2719,53 @@ impl CanvasView {
     /// position is recomputed every frame so it follows canvas pan/zoom.
     fn open_comment_thread(&mut self, id: u64, cx: &mut Context<Self>) {
         let field = self.new_popup_field(288.0, tr("Reply…"), cx);
-        let state = Rc::new(RefCell::new(comments::ThreadState { id, reply: String::new(), field: field.clone(), focus: true }));
+        let state = Rc::new(RefCell::new(comments::ThreadState { id, reply: String::new(), field: field.clone(), focus: true, editing: None }));
         {
             let state = state.clone();
             field.update(cx, |tf, _| tf.set_on_change(move |text, _, _| state.borrow_mut().reply = text.to_string()));
         }
-        self.popup = Some(Popup::CommentThread { state });
+        self.replace_popup(Popup::CommentThread { state }, cx);
         cx.notify();
     }
 
     fn post_thread_reply(&mut self, state: &Rc<RefCell<comments::ThreadState>>, cx: &mut Context<Self>) {
-        let (id, text, field) = {
+        let (id, text, field, editing) = {
             let s = state.borrow();
-            (s.id, s.reply.trim().to_string(), s.field.clone())
+            (s.id, s.reply.trim().to_string(), s.field.clone(), s.editing)
         };
         if text.is_empty() {
             return;
         }
-        match self.app.session.execute("comment.reply", &serde_json::json!({ "id": id, "text": text })) {
+        let (cmd, params) = match editing {
+            Some(0) => ("comment.edit", serde_json::json!({ "id": id, "text": text })),
+            Some(reply) => ("comment.edit", serde_json::json!({ "id": id, "reply": reply - 1, "text": text })),
+            None => ("comment.reply", serde_json::json!({ "id": id, "text": text })),
+        };
+        match self.app.session.execute(cmd, &params) {
             Ok(_) => {
-                state.borrow_mut().reply.clear();
-                field.update(cx, |tf, _| tf.set_value(""));
+                let mut s = state.borrow_mut();
+                s.reply.clear();
+                s.editing = None;
+                drop(s);
+                field.update(cx, |tf, cx| {
+                    tf.edit().update(cx, |edit, _| edit.set_draft_text(""));
+                });
+                cx.notify();
+            }
+            Err(e) => self.toast(e.to_string(), cx),
+        }
+    }
+
+    fn delete_thread_message(&mut self, id: u64, reply: Option<usize>, cx: &mut Context<Self>) {
+        let params = match reply {
+            Some(index) => serde_json::json!({ "id": id, "reply": index }),
+            None => serde_json::json!({ "id": id }),
+        };
+        match self.app.session.execute("comment.delete", &params) {
+            Ok(_) => {
+                if reply.is_none() {
+                    self.close_popup(cx);
+                }
                 cx.notify();
             }
             Err(e) => self.toast(e.to_string(), cx),
@@ -2756,7 +2789,7 @@ impl CanvasView {
             let state = state.clone();
             field.update(cx, |tf, _| tf.set_on_change(move |text, _, _| state.borrow_mut().description = text.to_string()));
         }
-        self.popup = Some(Popup::LibraryPublish { state });
+        self.replace_popup(Popup::LibraryPublish { state }, cx);
         cx.notify();
     }
 
@@ -6531,6 +6564,14 @@ impl CanvasView {
         }
     }
 
+    /// Replace one detached surface with another, running the same cleanup as an explicit close
+    /// first (cursor-chat message, thread highlight).
+    fn replace_popup(&mut self, popup: Popup, cx: &mut Context<Self>) {
+        self.close_popup(cx);
+        self.popup = Some(popup);
+        cx.notify();
+    }
+
     /// 变量面板在 Floating / Full 之间切换（header 的展开按钮用）。
 
     /// 左栏选中态由 `variables_full` 驱动，所以切换后要重画一帧。
@@ -8073,10 +8114,6 @@ impl Render for CanvasView {
                                 | Popup::Palette { .. }
                                 | Popup::Menu { .. }
                                 | Popup::Share { .. }
-                                | Popup::CommentDraft { .. }
-                                | Popup::CommentThread { .. }
-                                | Popup::CursorChat { .. }
-                                | Popup::LibraryPublish { .. }
                         )
                     )
                 {
@@ -8942,12 +8979,14 @@ impl Render for CanvasView {
                                 (s.field.clone(), s.text.clone())
                             };
                             field.update(cx, |tf, cx| {
-                                tf.set_value(text);
-                                tf.edit().update(cx, |edit, cx| edit.focus_editor(window));
+                                tf.edit().update(cx, |edit, _| {
+                                    edit.set_draft_text(text);
+                                    edit.focus_editor(window);
+                                });
                             });
                         })
                     };
-                    els.push(comments::draft_popover(&self.app, &state, vp, dismiss.clone(), submit, pick));
+                    els.push(comments::draft_popover(&self.app, &state, self.dock().canvas_origin(), vp, dismiss.clone(), submit, pick));
                 }
 
                 Popup::CommentThread { state } => {
@@ -8981,7 +9020,22 @@ impl Render for CanvasView {
                             me.update(cx, |cv, cx| cv.resolve_thread(id, resolved, cx));
                         })
                     };
-                    els.push(comments::thread_popover(&self.app, &state, vp, dismiss.clone(), submit, resolve));
+                    let delete = {
+                        let me = me.clone();
+                        Rc::new(move |reply: Option<usize>, _window: &mut Window, cx: &mut App| {
+                            me.update(cx, |cv, cx| cv.delete_thread_message(id, reply, cx));
+                        })
+                    };
+                    els.push(comments::thread_popover(
+                        &self.app,
+                        &state,
+                        self.dock().canvas_origin(),
+                        vp,
+                        dismiss.clone(),
+                        submit,
+                        resolve,
+                        delete,
+                    ));
                 }
 
                 Popup::CursorChat { state } => {
@@ -9813,6 +9867,56 @@ impl Render for CanvasView {
             }))
             .on_key_down(cx.listener(|this: &mut CanvasView, e: &KeyDownEvent, window, cx| {
                 this.bind_window_document(window, true, cx);
+                // The composers focus an editor under `popup_el`; Escape must be handled here at
+                // the root (the canvas subtree is a sibling and never sees those keys), and it
+                // goes through `close_popup` so cursor-chat/thread cleanup still runs.
+                if e.keystroke.key == "escape"
+                    && matches!(
+                        &this.popup,
+                        Some(
+                            Popup::CommentDraft { .. }
+                                | Popup::CommentThread { .. }
+                                | Popup::CursorChat { .. }
+                                | Popup::LibraryPublish { .. }
+                        )
+                    )
+                {
+                    this.close_popup(cx);
+                    cx.notify();
+                    cx.stop_propagation();
+                    return;
+                }
+                // Enter is handled at the root too: the editor's `on_commit` also fires on blur,
+                // and a comment must not be posted just because focus moved away.
+                if e.keystroke.key == "enter" && !e.keystroke.modifiers.shift {
+                    let draft = match &this.popup {
+                        Some(Popup::CommentDraft { state }) => Some(state.clone()),
+                        _ => None,
+                    };
+                    if let Some(state) = draft {
+                        this.post_comment_draft(&state, cx);
+                        cx.stop_propagation();
+                        return;
+                    }
+                    let thread = match &this.popup {
+                        Some(Popup::CommentThread { state }) => Some(state.clone()),
+                        _ => None,
+                    };
+                    if let Some(state) = thread {
+                        this.post_thread_reply(&state, cx);
+                        cx.stop_propagation();
+                        return;
+                    }
+                    let chat = match &this.popup {
+                        Some(Popup::CursorChat { state }) => Some(state.clone()),
+                        _ => None,
+                    };
+                    if let Some(state) = chat {
+                        this.submit_cursor_chat(&state, cx);
+                        cx.stop_propagation();
+                        return;
+                    }
+                }
                 let accel = e.keystroke.modifiers.platform || e.keystroke.modifiers.control;
 
                 // 右键菜单先拿键盘；弹层开着时框选让路（Escape 先关弹层，方向键不动背后的框）。
