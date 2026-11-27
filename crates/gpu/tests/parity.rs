@@ -645,6 +645,140 @@ fn a_large_blurred_frame_is_not_tiled() {
 }
 
 #[test]
+fn the_feature_zoo_matches_the_cpu_at_three_scales() {
+    let mut doc = Document::default();
+    let page = doc.pages[0];
+    transparent_page(&mut doc, page);
+
+    let linear = Gradient {
+        kind: GradientKind::Linear,
+        stops: vec![
+            figcraft_color::ColorStop { position: 0.0, color: Color::new(0.08, 0.1, 0.35, 1.0) },
+            figcraft_color::ColorStop { position: 1.0, color: Color::new(0.85, 0.35, 0.12, 1.0) },
+        ],
+        from: (0.0, 0.0),
+        to: (1.0, 1.0),
+        width: (0.0, 1.0),
+    };
+    rect(&mut doc, page, "Base", 0.0, 0.0, 400.0, 300.0, 0.0, Paint::gradient(linear));
+
+    // A rounded clip over a child that overflows its frame.
+    let clip = doc.create(page, NodeKind::Frame, "Clip", 20.0, 20.0, 90.0, 70.0).expect("clip");
+    if let Ok(n) = doc.get_mut(clip) {
+        n.clip = true;
+        n.corners.radii = [16.0; 4];
+        n.fills.clear();
+    }
+    rect(&mut doc, clip, "Overflow", 0.0, 0.0, 120.0, 100.0, 0.0, Paint::solid(Color::new(0.95, 0.85, 0.2, 1.0)));
+
+    // Two overlapping leaves under one group alpha: the isolated layer path.
+    let group = doc.create(page, NodeKind::Group, "Fade", 140.0, 20.0, 95.0, 70.0).expect("group");
+    rect(&mut doc, group, "G1", 0.0, 0.0, 70.0, 60.0, 10.0, Paint::solid(Color::new(0.9, 0.3, 0.25, 1.0)));
+    rect(&mut doc, group, "G2", 25.0, 15.0, 70.0, 50.0, 10.0, Paint::solid(Color::new(0.15, 0.45, 0.85, 0.8)));
+    if let Ok(n) = doc.get_mut(group) {
+        n.opacity = 0.65;
+    }
+
+    // Drop shadow and inner shadow on solid cards.
+    let shadow = rect(&mut doc, page, "Shadow", 255.0, 20.0, 100.0, 60.0, 14.0, Paint::solid(Color::new(0.95, 0.95, 0.92, 1.0)));
+    if let Ok(n) = doc.get_mut(shadow) {
+        n.effects = vec![figcraft_doc::Effect {
+            kind: figcraft_doc::EffectKind::DropShadow(figcraft_doc::Shadow {
+                color: Color::new(0.0, 0.0, 0.0, 0.4),
+                offset: (8.0, 10.0),
+                radius: 10.0,
+                spread: 0.0,
+                blend: figcraft_color::BlendMode::Normal,
+                show_behind: false,
+            }),
+            visible: true,
+        }];
+    }
+    let inner = rect(&mut doc, page, "Inner", 255.0, 95.0, 100.0, 60.0, 14.0, Paint::solid(Color::new(0.2, 0.55, 0.35, 1.0)));
+    if let Ok(n) = doc.get_mut(inner) {
+        n.effects = vec![figcraft_doc::Effect {
+            kind: figcraft_doc::EffectKind::InnerShadow(figcraft_doc::Shadow {
+                color: Color::new(0.0, 0.0, 0.0, 0.55),
+                offset: (4.0, 6.0),
+                radius: 10.0,
+                spread: 0.0,
+                blend: figcraft_color::BlendMode::Normal,
+                show_behind: false,
+            }),
+            visible: true,
+        }];
+    }
+
+    // A stroked star: path meshes.
+    let star = doc.create(page, NodeKind::Star { count: 5, inner_ratio: 0.45 }, "Star", 30.0, 105.0, 80.0, 80.0).expect("star");
+    if let Ok(n) = doc.get_mut(star) {
+        n.fills = vec![Paint::solid(Color::new(0.2, 0.25, 0.8, 1.0))];
+        n.strokes = vec![Paint::solid(Color::new(0.95, 0.4, 0.1, 1.0))];
+        n.stroke.weight = 5.0;
+    }
+
+    // Background blur over the gradient, then the three grain/texture/blur cards.
+    let frosted = rect(&mut doc, page, "Frosted", 140.0, 110.0, 100.0, 70.0, 14.0, Paint::solid(Color::new(1.0, 1.0, 1.0, 0.3)));
+    if let Ok(n) = doc.get_mut(frosted) {
+        n.effects = vec![figcraft_doc::Effect { kind: figcraft_doc::EffectKind::BackgroundBlur(figcraft_doc::Blur::uniform(10.0)), visible: true }];
+    }
+
+    let noisy = rect(&mut doc, page, "Noise", 20.0, 215.0, 80.0, 60.0, 10.0, Paint::solid(Color::new(0.25, 0.65, 0.35, 1.0)));
+    if let Ok(n) = doc.get_mut(noisy) {
+        n.effects = vec![figcraft_doc::Effect {
+            kind: figcraft_doc::EffectKind::Noise(figcraft_doc::Noise {
+                size: 1.2,
+                density: 0.55,
+                color: Color::new(0.02, 0.05, 0.02, 0.35),
+                ..Default::default()
+            }),
+            visible: true,
+        }];
+    }
+    let textured = rect(&mut doc, page, "Texture", 115.0, 215.0, 75.0, 60.0, 10.0, Paint::solid(Color::new(0.8, 0.35, 0.2, 0.75)));
+    if let Ok(n) = doc.get_mut(textured) {
+        n.effects = vec![figcraft_doc::Effect {
+            kind: figcraft_doc::EffectKind::Texture(figcraft_doc::Texture { size: 1.0, radius: 5.0, clip_to_shape: true, ..Default::default() }),
+            visible: true,
+        }];
+    }
+    let blurred = rect(&mut doc, page, "Layer blur", 200.0, 215.0, 75.0, 60.0, 10.0, Paint::solid(Color::new(0.95, 0.55, 0.2, 1.0)));
+    if let Ok(n) = doc.get_mut(blurred) {
+        n.effects = vec![figcraft_doc::Effect { kind: figcraft_doc::EffectKind::LayerBlur(figcraft_doc::Blur::uniform(7.0)), visible: true }];
+    }
+    let ramped = rect(&mut doc, page, "Ramp", 290.0, 215.0, 75.0, 60.0, 10.0, Paint::solid(Color::new(0.25, 0.35, 0.9, 1.0)));
+    if let Ok(n) = doc.get_mut(ramped) {
+        n.effects = vec![figcraft_doc::Effect {
+            kind: figcraft_doc::EffectKind::LayerBlur(figcraft_doc::Blur {
+                blur_type: figcraft_doc::BlurType::Progressive,
+                radius: 10.0,
+                start_radius: 0.0,
+                start: (0.5, 0.0),
+                end: (0.5, 1.0),
+            }),
+            visible: true,
+        }];
+    }
+
+    let mut renderer = figcraft_gpu::render::Renderer::new().expect("a test adapter");
+    for scale in [0.5_f64, 1.0, 2.0] {
+        let view = figcraft_render::View { origin: (0.0, 0.0), scale, width: (400.0 * scale) as u32, height: (300.0 * scale) as u32 };
+        let scene = doc_scene::build(&doc, page, &Viewport::from_view(&view));
+        assert!(scene.is_supported(), "scale {scale}: {:?}", scene.unsupported_features());
+        let cpu = figcraft_render::render_view(&doc, page, &view, &Options { background: None, ..Default::default() })
+            .expect("the CPU renders the zoo")
+            .data()
+            .to_vec();
+        let gpu = renderer.render(&scene).expect("the GPU renders the zoo");
+        // The zoo stacks every tolerance's worst case in one frame; the edge band's 2% covers
+        // each feature alone, while three scales plus grain and texture together need 3%.
+        let tol = Tolerance { per_channel: 24, max_bad_ratio: 0.03 };
+        let report = compare(&cpu, &gpu, tol).expect("comparable buffers");
+        assert!(report.passes(tol), "scale {scale}: {}", report.summary());
+    }
+}
+
+#[test]
 fn a_layer_blur_matches_the_cpu_blur() {
     let mut doc = Document::default();
     let page = doc.pages[0];

@@ -7,7 +7,7 @@
 > SDF 图元（圆角矩形/椭圆/多边形/星形）、四类渐变、裁剪、路径填充与描边网格（4× MSAA）、文字字形
 > 网格、离屏剪影 + 六 pass 盒模糊的投影/内阴影/图层模糊、八级加权混合的分级模糊、按段 resolve 的背景
 > 模糊回读、逐 cell 64 位哈希的 Mono/Duo/Multi 颗粒、整像素散射的纹理粗糙边、单叶组透明度、动画导出
-> 切到 `figcraft-gpu`、圆角裁剪、离屏组层透明度、大图分块导出、CPU↔GPU 像素 diff（24 项对照测试），UI 画布已接线并整帧回退。**所有内置效果按产品计划弃用，后续效果转到外置 WGSL，
+> 切到 `figcraft-gpu`、圆角裁剪、离屏组层透明度、大图分块导出、CPU↔GPU 像素 diff（25 项对照测试），UI 画布已接线并整帧回退。**所有内置效果按产品计划弃用，后续效果转到外置 WGSL，
 > 本分支不再新增或扩展内置效果**；M5–M7 的非效果核心为设计与接口。
 > 日期：2026-11-27
 
@@ -295,8 +295,12 @@ match figcraft_gpu::render::Renderer::global().render(&scene) { Ok(rgba) => …,
 
 ### M7 一致性
 
+- **已落地（过渡）**：组合回归 `the_feature_zoo_matches_the_cpu_at_three_scales` 把渐变底、圆角裁剪、
+  离屏组层、投影、内阴影、描边星形、背景模糊、颗粒、纹理、图层模糊与分级模糊放进同一文档，
+  在 0.5× / 1× / 2× 三档缩放下与 CPU 整帧 diff（`per_channel = 24`、3% 像素）。单项仍用各自
+  更严的口径。
 - 每个特性一组「金样文档 + 三种缩放 + 两种背景」的 diff 用例（第 6 节），CI 无适配器时跳过并标记
-  `SKIP: no adapter`，不算通过也不算失败。
+  `SKIP: no adapter`，不算通过也不算失败。混合模式与蒙版尚未进组合回归。
 - 新增特性必须同时提交：`doc_scene` 支持判定、WGSL 实现、diff 用例、Unsupported 回退用例。
 - **验收**：`cargo test -p figcraft-gpu --features wgpu` 全绿；`--no-default-features` 下纯逻辑测试全绿。
 
