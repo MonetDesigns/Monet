@@ -167,7 +167,8 @@ impl Session {
                     Ok(())
                 }
                 ToolId::Comment => {
-                    self.request_ui("comment.new", json!({"x": ev.x, "y": ev.y}));
+                    let page = self.page()?;
+                    self.request_ui("comment.new", json!({"x": ev.x, "y": ev.y, "page": page}));
                     Ok(())
                 }
                 ToolId::Annotation => self.annotation_down(ev),
