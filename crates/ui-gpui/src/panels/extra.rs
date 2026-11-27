@@ -304,6 +304,85 @@ pub(crate) fn render(
             // （离开靠点标签栏的首页按钮或某个标签）。之前右上角浮着的那个 ✕ 是浮层外壳的残留。
             .child(body);
     }
+    if matches!(kind, ExtraKind::Versions) {
+        // R8: egui's `panels/versions.rs` replaces the left sidebar instead of floating a
+        // 760x520 card. Dock the history to the left edge so it reads as that panel; the body
+        // already owns the Version history header, so only a close strip is added here.
+        let close_versions = close.clone();
+        return div()
+            .id("versions-panel")
+            .absolute()
+            .top(px(crate::title_bar::TITLE_H))
+            .left(px(0.0))
+            .bottom(px(0.0))
+            .w(px(300.0))
+            .flex()
+            .flex_col()
+            .bg(rgba(t.panel))
+            .border_r_1()
+            .border_color(rgba(t.border))
+            .child(
+                div()
+                    .flex_none()
+                    .h(px(36.0))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .px(pt(10.0))
+                    .border_b_1()
+                    .border_color(rgba(t.border))
+                    .child(div())
+                    .child(
+                        IconButton::new(Icon::Close)
+                            .size(24.0)
+                            .on_click(move |_e, _w, _cx| close_versions()),
+                    ),
+            )
+            .child(div().id("versions-body").flex_1().min_h(px(0.0)).overflow_y_scroll().child(body));
+    }
+    if matches!(kind, ExtraKind::Shortcuts) {
+        // R7: egui shows shortcuts in a window pinned to the bottom edge, not in the centred
+        // card. A docked bar keeps the canvas visible above it and always has a close control.
+        let close_shortcuts = close.clone();
+        return div()
+            .id("shortcuts-bar")
+            .absolute()
+            .left(px(0.0))
+            .right(px(0.0))
+            .bottom(px(0.0))
+            .h(px(340.0))
+            .flex()
+            .flex_col()
+            .bg(rgba(t.panel))
+            .border_t_1()
+            .border_color(rgba(t.border))
+            .child(
+                div()
+                    .flex_none()
+                    .h(px(40.0))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .px(pt(16.0))
+                    .border_b_1()
+                    .border_color(rgba(t.border))
+                    .child(
+                        div()
+                            .text_size(pt(13.0))
+                            .font_weight(crate::panels::UI_FONT_REGULAR)
+                            .text_color(rgba(t.text))
+                            .child(SharedString::from(kind.title())),
+                    )
+                    .child(
+                        IconButton::new(Icon::Close)
+                            .size(24.0)
+                            .on_click(move |_e, _w, _cx| close_shortcuts()),
+                    ),
+            )
+            .child(div().id("shortcuts-body").flex_1().min_h(px(0.0)).overflow_y_scroll().child(body));
+    }
     if matches!(kind, ExtraKind::DevCompare { .. }) {
         // R9: egui's `dev_compare.rs` draws the two canvases in the main workspace, not a
         // 760x520 popover. Keep the title bar visible; the body owns its own Close/Resolve row.
