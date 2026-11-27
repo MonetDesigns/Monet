@@ -4018,6 +4018,31 @@ mod tests {
         assert_eq!(st.anchor.as_deref(), Some("c"));
     }
 
+    #[gpui::test]
+    async fn escape_clears_the_selection(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            let wake: Rc<dyn Fn()> = Rc::new(|| {});
+            let mut st = VariablesEditor::new(
+                Cmds::new(&wake),
+                VariablesData::default(),
+                cx,
+                None,
+                Rc::new(|_, _| {}),
+                Rc::new(|_| {}),
+            );
+            {
+                let mut s = st.state.borrow_mut();
+                s.selected = vec!["a".into(), "b".into()];
+                s.anchor = Some("a".into());
+            }
+            assert!(st.key("escape", false));
+            assert!(st.state.borrow().selected.is_empty());
+            assert!(st.state.borrow().anchor.is_none());
+            // The next Escape has nothing left to release and must reach the panel/window.
+            assert!(!st.key("escape", false));
+        });
+    }
+
     #[test]
     fn bulk_menu_omits_a_move_that_changes_nothing() {
         let rows = vec![("1".to_string(), "Brand/Primary".to_string(), VarKind::Color)];

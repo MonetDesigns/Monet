@@ -255,7 +255,7 @@ feat(engine): Scale 工具在实例上保留变量绑定的长度，其它层烘
    - 已有 4 条（Ctrl/Shift 选择、批量菜单）；
    - 待补：Escape 清选、选中行颜色、批量删除/改分组/改 scope、40 组菜单滚动、分组复制/重命名/嵌套、Edit variables 的描边与隐藏发布、scope 页签的开关与布尔特例。
    - 先逐条对照 GPUI 是否「有实现无测试」，再决定补测试还是补行为。
-   - 进展（2026-11-27）：测试从 4 条补到 8 条并全部通过，新增 `plain_click_replaces_the_selection`、`shift_click_without_a_valid_anchor_toggles`、`bulk_menu_omits_a_move_that_changes_nothing`、`bulk_menu_scopes_only_what_every_type_supports`。最后一条暴露出一处行为差异：批量改 scope 菜单原先把各类型的 scope 取**并集**，会把只适用于 Color 的 `Frame fill` 之类条目也给到含 Boolean 的混合选择；已改为取**交集**（与 egui 行为一致）。其余对照项（Escape 清选、选中行颜色、40 组菜单滚动、分组复制/重命名/嵌套、scope 页签开关与布尔特例）仍为待补。
+   - 进展（2026-11-27）：测试从 4 条补到 9 条并全部通过，新增 `plain_click_replaces_the_selection`、`shift_click_without_a_valid_anchor_toggles`、`escape_clears_the_selection`、`bulk_menu_omits_a_move_that_changes_nothing`、`bulk_menu_scopes_only_what_every_type_supports`。最后一条暴露出一处行为差异：批量改 scope 菜单原先把各类型的 scope 取**并集**，会把只适用于 Color 的 `Frame fill` 之类条目也给到含 Boolean 的混合选择；已改为取**交集**（与 egui 行为一致）。其余对照项（选中行颜色、40 组菜单滚动、分组复制/重命名/嵌套、scope 页签开关与布尔特例）仍为待补。
    - 注：右栏的 `visible` 绑定行、Layout grid 逐字段绑定、Page 级 Variable modes / Local variables 入口，已在 `docs/right-panel-visibility-parity-plan.md`（D25 / D14 / D10 / D11）单独立项，本计划不重复排期。
 4. GPUI 样式绑定入口（独立项，可另行排期）：`style.bind` 目前零引用；至少补 Text 样式的 `fontSize/lineHeight/letterSpacing/fontWeight/fontFamily/fontStyle`，Paint/Effect/Grid 次之。
 
@@ -409,6 +409,6 @@ cargo xtask ci   # fmt + clippy -D warnings + tests + layers + assets + wasm
 - 合并 `origin/main`（`599f89187`），解决 6 处冲突：`library.rs`（bake 与时间线复制并存）、`clipboard.rs`/`overlays.rs`/`paste_motion_tests.rs`（取 origin 新版）、`app.rs`（`opacity_digit` 与 `key_box_doc`/`pick` 并存）、`ui-gpui/lib.rs`（`annotation.new` 与 `selectArea`、`layers.collapseAll`/`contextMenu`、Developer Mode 拒绝与取色归属并存）。
 - 合并后发现并修复重复的 `key_box_key` 与 `selectArea` 分支（`c0b2d42dd`）；`cargo check -p figcraft-engine`、`cargo check -p figcraft-ui-gpui` 均通过。
 - 批次 5 上游化草稿：`docs/upstream-variable-binding-proposal.md`。
-- 2026-11-27 续：合并远端 `a369c2853`（Dev Mode 缓存/审计、text-wrap、导出格式等 14 文件）无冲突；`cargo check -p figcraft-ui-gpui` 通过。GPUI 变量面板测试 8/8 通过，并修复批量改 scope 菜单把各类型 scope 取并集的 bug（改为交集）。推送后 head `e95f63154`，PR Ready、`mergeable=clean`，36 commits；CI 已触发，等待结果。
+- 2026-11-27 续：合并远端 `a369c2853`（Dev Mode 缓存/审计、text-wrap、导出格式等 14 文件）无冲突；`cargo check -p figcraft-ui-gpui` 通过。GPUI 变量面板测试 9/9 通过，并修复批量改 scope 菜单把各类型 scope 取并集的 bug（改为交集）。推送后 head `e95f63154`，PR Ready、`mergeable=clean`，36 commits；CI 已触发，等待结果。
 
 
