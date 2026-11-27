@@ -667,12 +667,14 @@ impl Render for TextEdit {
                             if !s.is_empty() {
                                 cx.write_to_clipboard(ClipboardItem::new_string(s));
                                 this.input.buffer.insert("");
+                                this.notify_change(window, cx);
                             }
                         }
                         "v" => {
                             let text = cx.read_from_clipboard().and_then(|i| i.text().map(|s| s.to_string()));
                             if let Some(s) = text {
                                 this.input.buffer.insert(&s);
+                                this.notify_change(window, cx);
                             }
                         }
                         _ => return,

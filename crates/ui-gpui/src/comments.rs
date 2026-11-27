@@ -47,6 +47,10 @@ pub(crate) struct DraftState {
     pub focus: bool,
     /// Byte offset of the live caret; `@mention` ends here, not at the end of the draft.
     pub caret: usize,
+    /// Selected row in the open mention picker.
+    pub mention_sel: usize,
+    /// A picker dismissed with Escape, keyed by the `@` byte offset.
+    pub mention_dismissed: Option<usize>,
 }
 
 /// An open thread and the reply being written into it.
@@ -63,6 +67,12 @@ pub(crate) struct ThreadState {
     pub reacting: Option<usize>,
     /// Byte offset of the reply caret (mentions at the composer also end here).
     pub caret: usize,
+    /// Selected row in the reply's open mention picker.
+    pub mention_sel: usize,
+    /// A reply picker dismissed with Escape, keyed by the `@` byte offset.
+    pub mention_dismissed: Option<usize>,
+    /// The unfinished reply, kept while editing so Cancel/Save restores it.
+    pub reply_backup: Option<String>,
 }
 
 /// Thread-level actions that need the view's command/clipboard plumbing.
@@ -104,6 +114,13 @@ pub(crate) fn mention_matches(people: &[String], query: &str, me: &str) -> Vec<S
         .collect()
 }
 
+/// The names offered for the mention at `caret` in the active document.
+pub(crate) fn mention_names(app: &crate::CanvasApp, text: &str, caret: usize) -> Vec<String> {
+    let people = app.session.ds().map(|ds| ds.doc.comment_people()).unwrap_or_default();
+    let me = figcraft_engine::cmd::comment::user_name(&app.session);
+    mention_query(text, caret).map(|(a, b)| mention_matches(&people, text.get(a + 1..b).unwrap_or(""), &me)).unwrap_or_default()
+}
+
 /// Replace the `@query` at `range` with `@name `.
 pub(crate) fn insert_mention(text: &mut String, range: (usize, usize), name: &str) {
     let (a, mut b) = range;
@@ -141,9 +158,9 @@ pub(crate) fn draft_popover(
     pick: Rc<dyn Fn(&str, &mut Window, &mut App)>,
 ) -> AnyElement {
     let t = tokens();
-    let (text, field, x, y, page, caret) = {
+    let (text, field, x, y, page, caret, mention_sel, dismissed) = {
         let s = state.borrow();
-        (s.text.clone(), s.field.clone(), s.x, s.y, s.page, s.caret)
+        (s.text.clone(), s.field.clone(), s.x, s.y, s.page, s.caret, s.mention_sel, s.mention_dismissed)
     };
     // A draft only draws on its own page (the engine pins the page when the click is recorded).
     if app.session.page().is_ok_and(|p| p != page) {
@@ -153,7 +170,12 @@ pub(crate) fn draft_popover(
     let pos = Point { x: px(f32::from(at.x) + canvas_origin.0 + 36.0), y: px(f32::from(at.y) + canvas_origin.1 - 28.0) };
     let people = app.session.ds().map(|ds| ds.doc.comment_people()).unwrap_or_default();
     let me = figcraft_engine::cmd::comment::user_name(&app.session);
-    let names = mention_query(&text, caret).map(|(a, b)| mention_matches(&people, text.get(a + 1..b).unwrap_or(""), &me)).unwrap_or_default();
+    let range = mention_query(&text, caret);
+    let names = if range.map(|r| r.0) == dismissed {
+        Vec::new()
+    } else {
+        range.map(|(a, b)| mention_matches(&people, text.get(a + 1..b).unwrap_or(""), &me)).unwrap_or_default()
+    };
     // The estimate only drives viewport clamping; include the mention list so a picker near the
     // bottom of the screen lifts instead of drawing past it.
     let estimated_h = 112.0 + names.len() as f32 * 26.0;
@@ -161,9 +183,10 @@ pub(crate) fn draft_popover(
     let mut body = div().flex().flex_col().gap(px(6.0)).child(div().w_full().child(field));
     if !names.is_empty() {
         let mut list = div().flex().flex_col().rounded(px(6.0)).bg(rgba(t.field)).overflow_hidden();
-        for name in names {
+        for (i, name) in names.iter().enumerate() {
             let picked = name.clone();
             let pick = pick.clone();
+            let id = gpui::ElementId::from(SharedString::from(format!("comment-mention-{name}")));
             list = list.child(
                 div()
                     .flex()
@@ -173,11 +196,12 @@ pub(crate) fn draft_popover(
                     .h(px(26.0))
                     .px(px(8.0))
                     .cursor_pointer()
+                    .when(i == mention_sel, |d| d.bg(rgba(t.selected_row)))
                     .hover(|d| d.bg(rgba(t.hover)))
-                    .id(gpui::ElementId::from(SharedString::from(format!("comment-mention-{name}"))))
+                    .id(id)
                     .on_click(move |_, window, cx| pick(&picked, window, cx))
-                    .child(avatar(&name))
-                    .child(div().text_size(px(12.0)).text_color(rgba(t.text)).child(name)),
+                    .child(avatar(name))
+                    .child(div().text_size(px(12.0)).text_color(rgba(t.text)).child(name.clone())),
             );
         }
         body = body.child(list);
@@ -224,12 +248,17 @@ pub(crate) fn thread_popover(
     let at = app.to_screen(x, y);
     let pos = Point { x: px(f32::from(at.x) + canvas_origin.0 + 36.0), y: px(f32::from(at.y) + canvas_origin.1 - 28.0) };
     let me = figcraft_engine::cmd::comment::user_name(&app.session);
-    let (reply, caret) = {
+    let (reply, caret, mention_sel, dismissed) = {
         let s = state.borrow();
-        (s.reply.clone(), s.caret)
+        (s.reply.clone(), s.caret, s.mention_sel, s.mention_dismissed)
     };
     let people = app.session.ds().map(|ds| ds.doc.comment_people()).unwrap_or_default();
-    let names = mention_query(&reply, caret).map(|(a, b)| mention_matches(&people, reply.get(a + 1..b).unwrap_or(""), &me)).unwrap_or_default();
+    let range = mention_query(&reply, caret);
+    let names = if range.map(|r| r.0) == dismissed {
+        Vec::new()
+    } else {
+        range.map(|(a, b)| mention_matches(&people, reply.get(a + 1..b).unwrap_or(""), &me)).unwrap_or_default()
+    };
 
     let mut body = div().flex().flex_col().gap(px(8.0));
     body = body.child(
@@ -303,6 +332,9 @@ pub(crate) fn thread_popover(
                     let text = text.clone();
                     {
                         let mut s = state.borrow_mut();
+                        if s.editing.is_none() {
+                            s.reply_backup = Some(s.reply.clone());
+                        }
                         s.editing = Some(index);
                         s.reply = text.clone();
                     }
@@ -379,13 +411,15 @@ pub(crate) fn thread_popover(
         let field = reply_field.clone();
         Rc::new(move |window: &mut Window, cx: &mut App| {
             let field = field.clone();
-            {
+            let restore = {
                 let mut s = state.borrow_mut();
                 s.editing = None;
-                s.reply.clear();
-            }
+                let restore = s.reply_backup.take().unwrap_or_default();
+                s.reply = restore.clone();
+                restore
+            };
             field.update(cx, |tf, cx| {
-                tf.edit().update(cx, |edit, _| edit.set_draft_text(""));
+                tf.edit().update(cx, |edit, _| edit.set_draft_text(restore));
                 tf.edit().update(cx, |edit, _| edit.focus_editor(window));
             });
             window.refresh();
@@ -404,11 +438,13 @@ pub(crate) fn thread_popover(
     let mut composer = div().flex().flex_col().gap(px(4.0));
     if !names.is_empty() {
         let mut list = div().flex().flex_col().rounded(px(6.0)).bg(rgba(t.field)).overflow_hidden();
-        for name in names {
+        for (i, name) in names.iter().enumerate() {
             let picked = name.clone();
             let pick = pick_mention.clone();
             let id = gpui::ElementId::from(SharedString::from(format!("comment-reply-mention-{name}")));
-            list = list.child(LabelButton::new(id, name).secondary().on_click(move |window, cx| pick(&picked, window, cx)));
+            list = list.child(
+                LabelButton::new(id, name.clone()).secondary().selected(i == mention_sel).on_click(move |window, cx| pick(&picked, window, cx)),
+            );
         }
         composer = composer.child(list);
     }

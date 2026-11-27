@@ -1145,6 +1145,13 @@ impl CanvasView {
                 e.active = Some(uid);
             }
         }
+        drop(wins);
+        // A document opened by a drop/file-dialog makes the old comment/publish popup target a
+        // different document. Close it rather than let its IDs resolve in the new one.
+        if matches!(&self.popup, Some(Popup::LibraryPublish { .. } | Popup::CommentDraft { .. } | Popup::CommentThread { .. })) {
+            self.popup = None;
+            self.fields.comment_ui().borrow_mut().open = None;
+        }
     }
 
     /// `authoritative`：**事件**处理时为 true —— 事件来自哪个窗口，那个窗口的文档就必须成为
@@ -1278,10 +1285,11 @@ impl CanvasView {
             }
         }
         self.close_home();
-        // A publish selection is document-owned: never let it outlive the document it was built
-        // from (its IDs would otherwise publish into the newly active document).
-        if matches!(&self.popup, Some(Popup::LibraryPublish { .. })) {
+        // Publish selections and comment drafts/replies are bound to the document they were
+        // created against; never let them submit into a newly active document.
+        if matches!(&self.popup, Some(Popup::LibraryPublish { .. } | Popup::CommentDraft { .. } | Popup::CommentThread { .. })) {
             self.popup = None;
+            self.fields.comment_ui().borrow_mut().open = None;
         }
         cx.notify();
     }
@@ -2683,13 +2691,26 @@ impl CanvasView {
         let Some(x) = data.get("x").and_then(serde_json::Value::as_f64) else { return };
         let Some(y) = data.get("y").and_then(serde_json::Value::as_f64) else { return };
         let field = self.new_popup_field(268.0, tr("Add a comment…"), cx);
-        let state = Rc::new(RefCell::new(comments::DraftState { page, x, y, text: String::new(), field: field.clone(), focus: true, caret: 0 }));
+        let state = Rc::new(RefCell::new(comments::DraftState {
+            page,
+            x,
+            y,
+            text: String::new(),
+            field: field.clone(),
+            focus: true,
+            caret: 0,
+            mention_sel: 0,
+            mention_dismissed: None,
+        }));
         {
             let weak = Rc::downgrade(&state);
             field.update(cx, |tf, _| {
                 tf.set_on_change(move |text, _, _| {
                     if let Some(state) = weak.upgrade() {
-                        state.borrow_mut().text = text.to_string();
+                        let mut s = state.borrow_mut();
+                        s.text = text.to_string();
+                        s.mention_sel = 0;
+                        s.mention_dismissed = None;
                     }
                 })
             });
@@ -2736,13 +2757,19 @@ impl CanvasView {
             more: false,
             reacting: None,
             caret: 0,
+            mention_sel: 0,
+            mention_dismissed: None,
+            reply_backup: None,
         }));
         {
             let weak = Rc::downgrade(&state);
             field.update(cx, |tf, _| {
                 tf.set_on_change(move |text, _, _| {
                     if let Some(state) = weak.upgrade() {
-                        state.borrow_mut().reply = text.to_string();
+                        let mut s = state.borrow_mut();
+                        s.reply = text.to_string();
+                        s.mention_sel = 0;
+                        s.mention_dismissed = None;
                     }
                 })
             });
@@ -2766,20 +2793,25 @@ impl CanvasView {
         };
         match self.app.session.execute(cmd, &params) {
             Ok(_) => {
-                let mut s = state.borrow_mut();
-                s.reply.clear();
-                s.editing = None;
-                drop(s);
-                field.update(cx, |tf, cx| {
-                    tf.edit().update(cx, |edit, _| edit.set_draft_text(""));
-                });
+                let restore = {
+                    let mut s = state.borrow_mut();
+                    let restore = if s.editing.is_some() { s.reply_backup.take() } else { None };
+                    s.editing = None;
+                    restore
+                };
+                if let Some(restore) = restore {
+                    state.borrow_mut().reply = restore.clone();
+                    field.update(cx, |tf, cx| {
+                        tf.edit().update(cx, |edit, _| edit.set_draft_text(restore));
+                    });
+                }
                 cx.notify();
             }
             Err(e) => self.toast(e.to_string(), cx),
         }
     }
 
-    fn delete_thread_message(&mut self, id: u64, reply: Option<usize>, cx: &mut Context<Self>) {
+    fn delete_thread_message(&mut self, id: u64, reply: Option<usize>, state: &Rc<RefCell<comments::ThreadState>>, cx: &mut Context<Self>) {
         let params = match reply {
             Some(index) => serde_json::json!({ "id": id, "reply": index }),
             None => serde_json::json!({ "id": id }),
@@ -2788,11 +2820,77 @@ impl CanvasView {
             Ok(_) => {
                 if reply.is_none() {
                     self.close_popup(cx);
+                } else if let Some(index) = reply {
+                    let deleted = index + 1;
+                    let mut restore = None;
+                    {
+                        let mut s = state.borrow_mut();
+                        if let Some(editing) = s.editing {
+                            if editing == deleted {
+                                s.editing = None;
+                                if let Some(text) = s.reply_backup.take() {
+                                    s.reply = text.clone();
+                                    restore = Some((s.field.clone(), text));
+                                }
+                            } else if editing > deleted {
+                                s.editing = Some(editing - 1);
+                            }
+                        }
+                    }
+                    if let Some((field, text)) = restore {
+                        field.update(cx, |tf, cx| {
+                            tf.edit().update(cx, |edit, _| edit.set_draft_text(text));
+                        });
+                    }
                 }
                 cx.notify();
             }
             Err(e) => self.toast(e.to_string(), cx),
         }
+    }
+
+    fn cancel_thread_edit(&mut self, state: &Rc<RefCell<comments::ThreadState>>, cx: &mut Context<Self>) {
+        let (field, restore) = {
+            let mut s = state.borrow_mut();
+            s.editing = None;
+            let restore = s.reply_backup.take();
+            if let Some(text) = restore.clone() {
+                s.reply = text;
+            }
+            (s.field.clone(), restore)
+        };
+        if let Some(text) = restore {
+            field.update(cx, |tf, cx| {
+                tf.edit().update(cx, |edit, _| edit.set_draft_text(text));
+            });
+        }
+        cx.notify();
+    }
+
+    fn pick_draft_mention(&mut self, state: &Rc<RefCell<comments::DraftState>>, name: &str, cx: &mut Context<Self>) {
+        let (field, text) = {
+            let mut s = state.borrow_mut();
+            let range = comments::mention_query(&s.text, s.caret).unwrap_or((s.caret, s.caret));
+            comments::insert_mention(&mut s.text, range, name);
+            s.mention_sel = 0;
+            s.mention_dismissed = None;
+            (s.field.clone(), s.text.clone())
+        };
+        field.update(cx, |tf, cx| tf.edit().update(cx, |edit, _| edit.set_draft_text(text)));
+        cx.notify();
+    }
+
+    fn pick_thread_mention(&mut self, state: &Rc<RefCell<comments::ThreadState>>, name: &str, cx: &mut Context<Self>) {
+        let (field, text) = {
+            let mut s = state.borrow_mut();
+            let range = comments::mention_query(&s.reply, s.caret).unwrap_or((s.caret, s.caret));
+            comments::insert_mention(&mut s.reply, range, name);
+            s.mention_sel = 0;
+            s.mention_dismissed = None;
+            (s.field.clone(), s.reply.clone())
+        };
+        field.update(cx, |tf, cx| tf.edit().update(cx, |edit, _| edit.set_draft_text(text)));
+        cx.notify();
     }
 
     fn mark_thread_unread(&mut self, id: u64, cx: &mut Context<Self>) {
@@ -9125,8 +9223,9 @@ impl Render for CanvasView {
                     };
                     let delete = {
                         let me = me.clone();
+                        let state = state.clone();
                         Rc::new(move |reply: Option<usize>, _window: &mut Window, cx: &mut App| {
-                            me.update(cx, |cv, cx| cv.delete_thread_message(id, reply, cx));
+                            me.update(cx, |cv, cx| cv.delete_thread_message(id, reply, &state, cx));
                         })
                     };
                     let action = {
@@ -9990,6 +10089,138 @@ impl Render for CanvasView {
                     this.stamp_ui_requests();
                     cx.notify();
                     cx.stop_propagation();
+                }
+            }))
+            // The comment/cursor/publish composers live under `popup_el`, not in the canvas
+            // subtree. Capture their keys at the root before the editor sees them: Escape can
+            // cancel an edit and Enter can submit without the editor's blur-commit path.
+            .capture_key_down(cx.listener(|this: &mut CanvasView, e: &KeyDownEvent, window, cx| {
+                this.bind_window_document(window, true, cx);
+                if !matches!(
+                    &this.popup,
+                    Some(Popup::CommentDraft { .. } | Popup::CommentThread { .. } | Popup::CursorChat { .. } | Popup::LibraryPublish { .. })
+                ) {
+                    return;
+                }
+                let key = canonical_key(&e.keystroke.key);
+                // The mention picker owns arrows, Enter/Tab and Escape while it is visible.
+                let draft_state = match &this.popup {
+                    Some(Popup::CommentDraft { state }) => Some(state.clone()),
+                    _ => None,
+                };
+                if let Some(state) = draft_state {
+                    let (text, caret, sel, dismissed) = {
+                        let s = state.borrow();
+                        (s.text.clone(), s.caret, s.mention_sel, s.mention_dismissed)
+                    };
+                    let range = comments::mention_query(&text, caret);
+                    let names = if range.map(|r| r.0) == dismissed { Vec::new() } else { comments::mention_names(&this.app, &text, caret) };
+                    if !names.is_empty() {
+                        let sel = sel.min(names.len() - 1);
+                        match key.as_str() {
+                            "ArrowDown" | "ArrowUp" => {
+                                let mut s = state.borrow_mut();
+                                s.mention_sel = if key == "ArrowDown" { (sel + 1) % names.len() } else { (sel + names.len() - 1) % names.len() };
+                                window.refresh();
+                                cx.stop_propagation();
+                                return;
+                            }
+                            "Escape" => {
+                                if let Some((start, _)) = range {
+                                    state.borrow_mut().mention_dismissed = Some(start);
+                                }
+                                window.refresh();
+                                cx.stop_propagation();
+                                return;
+                            }
+                            "Enter" | "Tab" if !e.keystroke.modifiers.shift => {
+                                this.pick_draft_mention(&state, &names[sel].clone(), cx);
+                                cx.stop_propagation();
+                                return;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                let thread_state = match &this.popup {
+                    Some(Popup::CommentThread { state }) => Some(state.clone()),
+                    _ => None,
+                };
+                if let Some(state) = thread_state {
+                    let (text, caret, sel, dismissed) = {
+                        let s = state.borrow();
+                        (s.reply.clone(), s.caret, s.mention_sel, s.mention_dismissed)
+                    };
+                    let range = comments::mention_query(&text, caret);
+                    let names = if range.map(|r| r.0) == dismissed { Vec::new() } else { comments::mention_names(&this.app, &text, caret) };
+                    if !names.is_empty() {
+                        let sel = sel.min(names.len() - 1);
+                        match key.as_str() {
+                            "ArrowDown" | "ArrowUp" => {
+                                let mut s = state.borrow_mut();
+                                s.mention_sel = if key == "ArrowDown" { (sel + 1) % names.len() } else { (sel + names.len() - 1) % names.len() };
+                                window.refresh();
+                                cx.stop_propagation();
+                                return;
+                            }
+                            "Escape" => {
+                                if let Some((start, _)) = range {
+                                    state.borrow_mut().mention_dismissed = Some(start);
+                                }
+                                window.refresh();
+                                cx.stop_propagation();
+                                return;
+                            }
+                            "Enter" | "Tab" if !e.keystroke.modifiers.shift => {
+                                this.pick_thread_mention(&state, &names[sel].clone(), cx);
+                                cx.stop_propagation();
+                                return;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                if e.keystroke.key == "escape" {
+                    let editing_state = match &this.popup {
+                        Some(Popup::CommentThread { state }) if state.borrow().editing.is_some() => Some(state.clone()),
+                        _ => None,
+                    };
+                    if let Some(state) = editing_state {
+                        this.cancel_thread_edit(&state, cx);
+                    } else {
+                        this.close_popup(cx);
+                    }
+                    cx.notify();
+                    cx.stop_propagation();
+                    return;
+                }
+                if e.keystroke.key == "enter" && !e.keystroke.modifiers.shift {
+                    let draft = match &this.popup {
+                        Some(Popup::CommentDraft { state }) => Some(state.clone()),
+                        _ => None,
+                    };
+                    if let Some(state) = draft {
+                        this.post_comment_draft(&state, cx);
+                        cx.stop_propagation();
+                        return;
+                    }
+                    let thread = match &this.popup {
+                        Some(Popup::CommentThread { state }) => Some(state.clone()),
+                        _ => None,
+                    };
+                    if let Some(state) = thread {
+                        this.post_thread_reply(&state, cx);
+                        cx.stop_propagation();
+                        return;
+                    }
+                    let chat = match &this.popup {
+                        Some(Popup::CursorChat { state }) => Some(state.clone()),
+                        _ => None,
+                    };
+                    if let Some(state) = chat {
+                        this.submit_cursor_chat(&state, cx);
+                        cx.stop_propagation();
+                    }
                 }
             }))
             .on_key_down(cx.listener(|this: &mut CanvasView, e: &KeyDownEvent, window, cx| {
