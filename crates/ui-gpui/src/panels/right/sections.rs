@@ -3099,9 +3099,15 @@ pub(crate) fn appearance(
 ) -> PanelSection {
     let visible = d.visible.unwrap_or(true);
     let eye = icon_cmd(if visible { Icon::Eye } else { Icon::EyeOff }, "object.toggleVisible", json!({}), f, false);
-    // ⛔ 这里**没有**变量按钮：egui `right.rs::appearance_header` 只有两颗 —— Show/Hide 与
-    // Blend mode（`buttons = [(0, 1, …), (1, 0, …)]`）。之前多画了一颗 `variables_window_button`，
-    // 用户 2026-11-16 指出「原版设计里没有这个东西」。
+    // 上游 `paints.rs::appearance` 的 header 是 Eye / Variable / Blend 三颗；Variable 把
+    // visible 绑到布尔变量（`variable.bind {field:"visible"}`），2026-11-16 曾按误判移除，
+    // 本次按上游 main 补回。
+    let visible_var = variables_window_button(
+        f,
+        "appearance-var",
+        Icon::Variable,
+        d.bool_variables.iter().map(|v| (v.clone(), "variable.bind", json!({ "field": "visible", "variable": v }))).collect(),
+    );
     // egui `paints.rs::appearance`：blend 按钮（索引 2）**不推命令**——它只翻转本地 `blend_open`
     // 标记来展开/收起下方的 blend-mode 下拉行；blend 值由那一行里的下拉选定（→ `node.set`）。
     // GPUI 必须一致：点这个按钮只是切换显隐，而不是直接弹 `node.set` 菜单。
@@ -3151,7 +3157,7 @@ pub(crate) fn appearance(
     // 组件内图层的「可见性绑定」按钮（lizard `visibility_value_ui` 的 `value_binding_button`）：
     // 布尔属性在组件里就是它所绑图层的可见性；不绑定时设置可见性只影响这一层，绑了之后
     // 实例上的布尔属性就能让这一层出现 / 消失。之前 Monet 完全没有这颗按钮。
-    let mut trail = vec![eye.into_any_element()];
+    let mut trail = vec![eye.into_any_element(), visible_var];
     if let Some(b) = &d.binding {
         if !b.in_instance && b.owner.is_some() {
             trail.push(visibility_bind_button(f, b));
