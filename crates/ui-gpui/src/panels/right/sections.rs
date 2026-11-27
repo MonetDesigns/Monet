@@ -6049,24 +6049,6 @@ fn local_style_row(
         )
 }
 
-/// 页面级「Open variables ({count})」：打开变量编辑器整表（egui `page_section` 的那颗下拉）。
-fn page_open_variables_button(f: &RightFields, d: &PanelData, count: usize) -> gpui::AnyElement {
-    let popups = f.popups();
-    let queue = f.queue();
-    let data = d.variables.clone();
-    let label = format!("{} ({count})", tr("Open variables"));
-    let mut dd = Dropdown::new(label, 200.0, Some(crate::widgets::dropdown::DropLead::Icon(Icon::Variables))).fill();
-    dd = dd.on_click(move |anchor: Bounds<Pixels>, _window, cx: &mut App| {
-        let data = data.clone();
-        let popups_inner = popups.clone();
-        let queue = queue.clone();
-        open_detached_with(popups.clone(), "page-open-variables", Some(anchor.origin.y), cx, move |pos, _cx| {
-            crate::popovers::WindowState::variables_table(queue.clone(), pos, data.clone(), Some(popups_inner.clone()))
-        });
-    });
-    dd.into_any_element()
-}
-
 pub(crate) fn page(f: &RightFields, d: &PanelData, row_w: f32, n: &mut usize, window: &mut Window, cx: &mut App) -> Vec<Section> {
     let Some(p) = d.page.as_ref() else { return Vec::new() };
     let mut sec = PanelSection::new(tr("Page"));
@@ -6141,14 +6123,10 @@ pub(crate) fn page(f: &RightFields, d: &PanelData, row_w: f32, n: &mut usize, wi
         PanelSection::new(tr("Color profile")).child(field_row_full(pick_dropdown(f, p.profile.clone(), row_w, profiles))),
     ));
 
-    // ④ Local variables（egui：空集合标题置灰；下拉打开变量编辑器）。
-    out.push(Section::Full(
-        PanelSection::new(tr("Local variables"))
-            .variant(if p.local_variables == 0 { SectionHeaderVariant::Dim } else { SectionHeaderVariant::Normal })
-            .child(field_row_full(page_open_variables_button(f, d, p.local_variables))),
-    ));
-
-    // ⑤ Local styles（egui `style_picker::local_styles`）──────────────────────────────────
+    // ④ Local styles（egui `style_picker::local_styles`）──────────────────────────────────
+    // ⛔ 不要把上游 `page_section` 的 `Open variables` / `Local variables` 小节整段抄回来：
+    // 用户 2026-11-13 已确认删除（81b9c772b）；变量编辑器仍从 Appearance / Typography
+    // 的变量入口打开，Page 空选区不需要第二个整表入口。
     // 整张列表作为一个 free block：24 pt 行、8/16/16 分组间距、圆形色板、整行拖动排序
     // 都由 `local_styles_block` 按 `LS_*` 自己排版，不套统一网格的 32 pt 行 / 24 pt trailing 列。
     // 分组顺序与 egui `StyleSlot` 一致：Text / Fill(Color) / Effect / Grid。
@@ -6161,7 +6139,7 @@ pub(crate) fn page(f: &RightFields, d: &PanelData, row_w: f32, n: &mut usize, wi
     };
     out.push(styles_sec);
 
-    // ── ③ Export（egui `export_panel::page_section`）──────────────────────────────────────
+    // ── ⑤ Export（egui `export_panel::page_section`）──────────────────────────────────────
     // 与图层导出共用同一条 Export 节：尺寸 / 后缀 / 格式 / `+` / 预览 / 导出按钮都在。
     // 页面模式只列静态图片格式（PNG/JPG/SVG/PDF/WebP/XML）；选中图层时仍保留 Motion 格式。
     out.push(export(f, d, row_w, n, cx, false));
