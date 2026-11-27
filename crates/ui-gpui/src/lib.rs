@@ -1177,6 +1177,13 @@ impl CanvasView {
         self.app.key_box = self.pane.key_box;
         self.app.key_box_doc = self.pane.key_box_doc;
         self.app.pick = self.pane.pick;
+        // Dev Mode is window-private: `sync_dev_mode` writes it from the rendering window's
+        // right tab, so a command dispatched from another window must re-derive it here or the
+        // gate can read the wrong window's mode (Delete allowed in Design, edit refused in
+        // Inspect).
+        let dev = self.fields.right_tab() == 2;
+        self.app.dev_inspect = dev;
+        self.app.session.tool.dev_mode = dev;
         // display_doc 是跨窗口共享的，只在渲染时由 sync_motion 写。换入新 pane 后必须
         // 按这份 pane 的 motion 状态刷新，否则一个窗口的运动预览会被另一个窗口的
         // 命中几何使用（点击落空 / 选错对象，CodeRabbit PR#28）。
@@ -1981,11 +1988,14 @@ impl CanvasView {
 
         let ready = self.fields.dev_ready_filter();
         let key = (ds.uid, ds.revision, page, ds.selection.clone(), ready);
-        let dev = match self.dev_cache.borrow().as_ref().filter(|(k, _)| k == &key).map(|(_, d)| d.clone()) {
+        // End the immutable `Ref` before the miss arm takes `borrow_mut`: matching on a
+        // `Ref::map` temporary keeps it alive through the arm in Rust 2024 and panics.
+        let cached = self.dev_cache.borrow().as_ref().filter(|(k, _)| k == &key).map(|(_, d)| d.clone());
+        let dev = match cached {
             Some(d) => d,
             None => {
                 let d = panels::right::data::read_dev(&ds.doc, &ds.selection, page, ready);
-                *self.dev_cache.borrow_mut() = Some((key, d.clone()));
+                *self.pane.dev_cache.borrow_mut() = Some((key, d.clone()));
                 d
             }
         };
@@ -2921,13 +2931,24 @@ impl CanvasView {
         crate::widgets::TextField::build(cx, width, move |tf, _| tf.set_placeholder(placeholder))
     }
 
+    /// A taller popover editor for comment text: explicit paragraphs, Shift+Enter for a break.
+    fn new_comment_editor(&mut self, placeholder: &str, cx: &mut Context<Self>) -> Entity<crate::widgets::TextEdit> {
+        let placeholder = placeholder.to_string();
+        crate::widgets::TextEdit::build(cx, move |edit, _| {
+            edit.set_multiline(true);
+            edit.set_placeholder(placeholder);
+            edit.set_inset_left(0.0);
+            edit.set_right_pad(0.0);
+        })
+    }
+
     /// `comment.new`: open the inline composer at the request's page point and keep the page
     /// pinned to the click, so switching pages cannot retarget the comment.
     fn open_comment_draft(&mut self, data: &serde_json::Value, cx: &mut Context<Self>) {
         let Some(page) = data.get("page").and_then(serde_json::Value::as_u64).map(NodeId) else { return };
         let Some(x) = data.get("x").and_then(serde_json::Value::as_f64) else { return };
         let Some(y) = data.get("y").and_then(serde_json::Value::as_f64) else { return };
-        let field = self.new_popup_field(268.0, tr("Add a comment…"), cx);
+        let field = self.new_comment_editor(tr("Add a comment…"), cx);
         let state = Rc::new(RefCell::new(comments::DraftState {
             page,
             x,
@@ -2984,7 +3005,7 @@ impl CanvasView {
     /// `comment.open`: open a floating thread popover. The popover only stores the id; its pin
     /// position is recomputed every frame so it follows canvas pan/zoom.
     fn open_comment_thread(&mut self, id: u64, cx: &mut Context<Self>) {
-        let field = self.new_popup_field(288.0, tr("Reply…"), cx);
+        let field = self.new_comment_editor(tr("Reply…"), cx);
         let state = Rc::new(RefCell::new(comments::ThreadState {
             id,
             reply: String::new(),
@@ -3045,13 +3066,15 @@ impl CanvasView {
                 if was_editing {
                     if let Some(restore) = restore {
                         state.borrow_mut().reply = restore.clone();
-                        field.update(cx, |tf, cx| {
-                            tf.edit().update(cx, |edit, _| edit.set_draft_text(restore));
+                        field.update(cx, |edit, cx| {
+                            edit.set_draft_text(restore);
+                            cx.notify();
                         });
                     }
                 } else {
-                    field.update(cx, |tf, cx| {
-                        tf.edit().update(cx, |edit, _| edit.set_draft_text(""));
+                    field.update(cx, |edit, cx| {
+                        edit.set_draft_text("");
+                        cx.notify();
                     });
                 }
                 cx.notify();
@@ -3087,8 +3110,9 @@ impl CanvasView {
                         }
                     }
                     if let Some((field, text)) = restore {
-                        field.update(cx, |tf, cx| {
-                            tf.edit().update(cx, |edit, _| edit.set_draft_text(text));
+                        field.update(cx, |edit, cx| {
+                            edit.set_draft_text(text);
+                            cx.notify();
                         });
                     }
                 }
@@ -3109,8 +3133,9 @@ impl CanvasView {
             (s.field.clone(), restore)
         };
         if let Some(text) = restore {
-            field.update(cx, |tf, cx| {
-                tf.edit().update(cx, |edit, _| edit.set_draft_text(text));
+            field.update(cx, |edit, cx| {
+                edit.set_draft_text(text);
+                cx.notify();
             });
         }
         cx.notify();
@@ -3125,7 +3150,10 @@ impl CanvasView {
             s.mention_dismissed = None;
             (s.field.clone(), s.text.clone())
         };
-        field.update(cx, |tf, cx| tf.edit().update(cx, |edit, _| edit.set_draft_text(text)));
+        field.update(cx, |edit, cx| {
+            edit.set_draft_text(text);
+            cx.notify();
+        });
         cx.notify();
     }
 
@@ -3138,7 +3166,10 @@ impl CanvasView {
             s.mention_dismissed = None;
             (s.field.clone(), s.reply.clone())
         };
-        field.update(cx, |tf, cx| tf.edit().update(cx, |edit, _| edit.set_draft_text(text)));
+        field.update(cx, |edit, cx| {
+            edit.set_draft_text(text);
+            cx.notify();
+        });
         cx.notify();
     }
 
@@ -8406,13 +8437,9 @@ impl Render for CanvasView {
                     return;
                 }
 
-                // 键盘选择框激活：方向键移动/改大小、Enter 选中、Escape 取消（上游
-                // `shortcuts.rs::key_box`）。必须早于 arrow_key，否则框的方向键会去移动图层。
-                if key_box_key(&mut this.app, &canonical_key(&e.keystroke.key), &e.keystroke.modifiers) {
-                    cx.notify();
-                    cx.stop_propagation();
-                    return;
-                }
+                // 键盘选择框/点选在右键菜单与弹层之后统一处理（见下方
+                // `popup_context_key` 之后的分支），否则 Shift+F10 打开的菜单会被框选先吃掉
+                // ArrowDown/Escape。
 
                 // 焦点在图层面板：方向键走图层导航，不移动画布选区。
                 if this.layer_tree.focused
@@ -9584,14 +9611,15 @@ impl Render for CanvasView {
                     if focus {
                         let field = state.borrow().field.clone();
                         window.defer(cx, move |window, cx| {
-                            field.update(cx, |tf, cx| {
-                                tf.edit().update(cx, |edit, _| edit.focus_editor(window));
+                            field.update(cx, |edit, cx| {
+                                edit.focus_editor(window);
+                                cx.notify();
                             });
                         });
                     }
                     // The mention query ends at the editor's live caret, not necessarily at EOF.
                     let caret_field = state.borrow().field.clone();
-                    let caret_chars = caret_field.read(cx).edit().read(cx).draft_caret();
+                    let caret_chars = caret_field.read(cx).draft_caret();
                     let caret_text = state.borrow().text.clone();
                     let caret_byte = caret_text.char_indices().nth(caret_chars).map(|(i, _)| i).unwrap_or(caret_text.len());
                     state.borrow_mut().caret = caret_byte;
@@ -9612,15 +9640,14 @@ impl Render for CanvasView {
                                 comments::insert_mention(&mut s.text, range, name);
                                 (s.field.clone(), s.text.clone())
                             };
-                            field.update(cx, |tf, cx| {
-                                tf.edit().update(cx, |edit, _| {
-                                    edit.set_draft_text(text);
-                                    edit.focus_editor(window);
-                                });
+                            field.update(cx, |edit, cx| {
+                                edit.set_draft_text(text);
+                                edit.focus_editor(window);
+                                cx.notify();
                             });
                         })
                     };
-                    els.push(comments::draft_popover(&self.app, &state, self.dock().canvas_origin(), vp, dismiss.clone(), submit, pick));
+                    els.push(comments::draft_popover(&self.app, &state, self.dock().canvas_origin(), vp, cx, dismiss.clone(), submit, pick));
                 }
 
                 Popup::CommentThread { state } => {
@@ -9635,13 +9662,14 @@ impl Render for CanvasView {
                     if focus {
                         let field = state.borrow().field.clone();
                         window.defer(cx, move |window, cx| {
-                            field.update(cx, |tf, cx| {
-                                tf.edit().update(cx, |edit, _| edit.focus_editor(window));
+                            field.update(cx, |edit, cx| {
+                                edit.focus_editor(window);
+                                cx.notify();
                             });
                         });
                     }
                     let caret_field = state.borrow().field.clone();
-                    let caret_chars = caret_field.read(cx).edit().read(cx).draft_caret();
+                    let caret_chars = caret_field.read(cx).draft_caret();
                     let caret_text = state.borrow().reply.clone();
                     let caret_byte = caret_text.char_indices().nth(caret_chars).map(|(i, _)| i).unwrap_or(caret_text.len());
                     state.borrow_mut().caret = caret_byte;
@@ -9662,11 +9690,10 @@ impl Render for CanvasView {
                                 comments::insert_mention(&mut s.reply, range, name);
                                 (s.field.clone(), s.reply.clone())
                             };
-                            field.update(cx, |tf, cx| {
-                                tf.edit().update(cx, |edit, _| {
-                                    edit.set_draft_text(text);
-                                    edit.focus_editor(window);
-                                });
+                            field.update(cx, |edit, cx| {
+                                edit.set_draft_text(text);
+                                edit.focus_editor(window);
+                                cx.notify();
                             });
                         })
                     };
@@ -9710,6 +9737,7 @@ impl Render for CanvasView {
                         &state,
                         self.dock().canvas_origin(),
                         vp,
+                        cx,
                         dismiss.clone(),
                         submit,
                         resolve,
@@ -9748,6 +9776,7 @@ impl Render for CanvasView {
                         &state,
                         Point { x: at.x + px(16.0), y: at.y + px(16.0) },
                         vp,
+                        cx,
                         dismiss.clone(),
                         submit,
                     ));
@@ -9763,7 +9792,7 @@ impl Render for CanvasView {
                             me.update(cx, |cv, cx| cv.publish_library(&state, cx));
                         })
                     };
-                    els.push(followups::library_publish_popover(&self.app, &state, vp, dismiss.clone(), publish));
+                    els.push(followups::library_publish_popover(&self.app, &state, vp, cx, dismiss.clone(), publish));
                 }
 
                 Popup::Share { anchor } => {

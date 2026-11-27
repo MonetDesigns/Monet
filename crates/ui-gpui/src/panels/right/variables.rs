@@ -529,9 +529,14 @@ fn bulk_menu_items(rows: &[(String, String, VarKind)], groups: &[String]) -> Vec
     }
     let mut scopes: Vec<(&'static str, &'static str)> =
         rows.first().map(|(_, _, kind)| figcraft_doc::styles::scopes_for(kind.doc_type()).to_vec()).unwrap_or_default();
+    // egui offers the union of every selected kind's scopes; `scope_item` already skips rows
+    // whose kind cannot take that scope, so an intersection needlessly hides valid controls.
     for (_, _, kind) in rows.iter().skip(1) {
-        let kind_scopes = figcraft_doc::styles::scopes_for(kind.doc_type());
-        scopes.retain(|(id, _)| kind_scopes.iter().any(|(sid, _)| sid == id));
+        for (id, label) in figcraft_doc::styles::scopes_for(kind.doc_type()) {
+            if !scopes.iter().any(|(existing, _)| *existing == *id) {
+                scopes.push((id, label));
+            }
+        }
     }
     let scope_item = |label: String, value: Option<&'static str>| {
         let steps: Vec<Value> = rows
@@ -4339,14 +4344,15 @@ mod tests {
     }
 
     #[test]
-    fn bulk_menu_scopes_only_what_every_type_supports() {
+    fn bulk_menu_scopes_are_the_union_of_every_selected_type() {
         let rows = vec![
             ("1".to_string(), "Brand/Primary".to_string(), VarKind::Color),
             ("2".to_string(), "Flag/On".to_string(), VarKind::Boolean),
         ];
         let items = bulk_menu_items(&rows, &[]);
-        // Colour scopes and boolean scopes do not overlap, so only the generic entries stay.
-        assert!(!items.iter().any(|i| i.label.starts_with("Scope: only")), "{:?}", items.iter().map(|i| &i.label).collect::<Vec<_>>());
+        // egui offers every scope supported by *any* selected kind; a boolean has no scopes, so
+        // the colour scopes stay visible and the scope action skips the boolean row.
+        assert!(items.iter().any(|i| i.label.starts_with("Scope: only")), "{:?}", items.iter().map(|i| &i.label).collect::<Vec<_>>());
         assert!(items.iter().any(|i| i.label == "Scope: hidden from pickers"));
         assert!(items.iter().any(|i| i.label == "Scope: all supported properties"));
     }
