@@ -3838,6 +3838,7 @@ pub(crate) fn typography(f: &RightFields, d: &PanelData, cx: &mut App, n: &mut u
         if t.path_start.is_none() {
             start_field.update(cx, |te, _| te.set_placeholder(tr("Mixed")));
         }
+        start_field.update(cx, |te, _| te.set_numeric("%", 1.0));
         let flip = icon_cmd(Icon::FlipV, "text.pathOptions", json!({ "ids": d.text_ids, "flip": !t.path_flip }), f, t.path_flip);
         let detach = icon_cmd(Icon::Detach, "text.removeFromPath", json!({ "ids": d.text_ids }), f, false);
         sec = sec.child(field_row(vec![start_field], vec![flip, detach]));
@@ -3928,6 +3929,7 @@ pub(crate) fn vector_points(f: &RightFields, d: &PanelData, cx: &mut App, n: &mu
                 paint_color: None,
             },
         );
+        tf.update(cx, |te, _| te.set_numeric("%", 1.0));
         let wf = f.row_field(
             cx,
             slot(n),
