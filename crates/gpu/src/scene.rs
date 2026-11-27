@@ -411,18 +411,23 @@ impl Scene {
         Self { width, height, clear, items: Vec::new(), unsupported: Vec::new() }
     }
 
-    /// Collapse a run of consecutive, same-paint, axis-aligned plain rectangles that share an edge
-    /// into one rectangle. Two separate SDF rectangles each return partial coverage on the shared
-    /// pixel; source-over then leaves `1 - (1-a)(1-b)` instead of full coverage, a one-pixel seam at
-    /// fractional zoom. One rectangle has no internal edge, matching the CPU's merged fill.
+    /// Collapse a run of consecutive, same-paint, axis-aligned plain rectangles that **abut** along an
+    /// edge. Two separate SDF rectangles each return partial coverage on the shared pixel; source-over
+    /// then leaves `1 - (1-a)(1-b)` instead of full coverage, a one-pixel seam at fractional zoom.
+    /// Painting the union once has no internal edge, matching the CPU's merged fill.
     ///
-    /// Runs are only joined while the union stays a rectangle: equal top/bottom (side by side) or
-    /// equal left/right (stacked). Anything else keeps its original items and painter's order.
+    /// A union that is still a rectangle stays an SDF shape. Anything else — an L, a cross, a frame
+    /// with a hole, unequal spans — becomes one tessellated mesh so the internal edges disappear too.
+    /// Rects join only through another rect of the same run; a gap, a positive-area overlap, a
+    /// different paint, clip or opacity, or any item in between ends the run and keeps painter's
+    /// order.
     pub fn merge_adjacent_plain_rectangles(&mut self) {
         const EPS: f32 = 1e-3;
-        fn plain(shape: &ShapeNode) -> Option<[f32; 4]> {
+
+        fn plain(shape: &ShapeNode) -> Option<([f32; 4], Rgba)> {
             let ShapeKind::RoundedRect { radii } = shape.shape else { return None };
-            if !matches!(shape.paint, Paint::Solid(_)) || radii.iter().any(|r| *r > 0.0) || shape.mat[1].abs() > EPS || shape.mat[2].abs() > EPS {
+            let Paint::Solid(color) = &shape.paint else { return None };
+            if radii.iter().any(|r| *r > 0.0) || shape.mat[1].abs() > EPS || shape.mat[2].abs() > EPS {
                 return None;
             }
             let (sx, sy) = (shape.mat[0], shape.mat[3]);
@@ -430,19 +435,94 @@ impl Scene {
                 return None;
             }
             let rect = [shape.mat[4], shape.mat[5], shape.size[0] * sx, shape.size[1] * sy];
-            (rect[2] > 0.0 && rect[3] > 0.0 && rect.iter().all(|v| v.is_finite())).then_some(rect)
+            (rect[2] > 0.0 && rect[3] > 0.0 && rect.iter().all(|v| v.is_finite())).then_some((rect, *color))
         }
-        fn same_row(a: [f32; 4], b: [f32; 4], eps: f32) -> bool {
-            (a[1] - b[1]).abs() <= eps && (a[3] - b[3]).abs() <= eps
+
+        fn overlap(a: [f32; 4], b: [f32; 4]) -> (f32, f32) {
+            let w = (a[0] + a[2]).min(b[0] + b[2]) - a[0].max(b[0]);
+            let h = (a[1] + a[3]).min(b[1] + b[3]) - a[1].max(b[1]);
+            (w, h)
         }
-        fn same_column(a: [f32; 4], b: [f32; 4], eps: f32) -> bool {
-            (a[0] - b[0]).abs() <= eps && (a[2] - b[2]).abs() <= eps
+
+        /// Touches along one edge with a positive-length shared span. A corner-only touch does not
+        /// count, and a positive-area overlap is rejected separately: compositing two translucent
+        /// copies over each other must stay two paints.
+        fn abuts(a: [f32; 4], b: [f32; 4]) -> bool {
+            let (w, h) = overlap(a, b);
+            let x_touch = (a[0] + a[2] - b[0]).abs() <= EPS || (b[0] + b[2] - a[0]).abs() <= EPS;
+            let y_touch = (a[1] + a[3] - b[1]).abs() <= EPS || (b[1] + b[3] - a[1]).abs() <= EPS;
+            (x_touch && h > EPS) || (y_touch && w > EPS)
         }
-        fn touches_x(a: [f32; 4], b: [f32; 4], eps: f32) -> bool {
-            ((a[0] + a[2]) - b[0]).abs() <= eps || ((b[0] + b[2]) - a[0]).abs() <= eps
+
+        fn overlaps(a: [f32; 4], b: [f32; 4]) -> bool {
+            let (w, h) = overlap(a, b);
+            w > EPS && h > EPS
         }
-        fn touches_y(a: [f32; 4], b: [f32; 4], eps: f32) -> bool {
-            ((a[1] + a[3]) - b[1]).abs() <= eps || ((b[1] + b[3]) - a[1]).abs() <= eps
+
+        fn edges(mut values: Vec<f32>) -> Vec<f32> {
+            values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            values.dedup_by(|a, b| (*a - *b).abs() <= EPS);
+            values
+        }
+
+        /// The rectilinear union on a compressed grid. `covered` is row-major over `xs × ys` cells.
+        struct Union {
+            xs: Vec<f32>,
+            ys: Vec<f32>,
+            covered: Vec<bool>,
+        }
+
+        impl Union {
+            fn new(rects: &[[f32; 4]]) -> Self {
+                let xs = edges(rects.iter().flat_map(|r| [r[0], r[0] + r[2]]).collect());
+                let ys = edges(rects.iter().flat_map(|r| [r[1], r[1] + r[3]]).collect());
+                let mut covered = vec![false; (xs.len() - 1) * (ys.len() - 1)];
+                for (row, y) in ys.windows(2).enumerate() {
+                    let my = (y[0] + y[1]) * 0.5;
+                    for (col, x) in xs.windows(2).enumerate() {
+                        let mx = (x[0] + x[1]) * 0.5;
+                        covered[row * (xs.len() - 1) + col] =
+                            rects.iter().any(|r| mx >= r[0] - EPS && mx <= r[0] + r[2] + EPS && my >= r[1] - EPS && my <= r[1] + r[3] + EPS);
+                    }
+                }
+                Self { xs, ys, covered }
+            }
+
+            fn is_rectangle(&self) -> bool {
+                self.covered.iter().all(|c| *c)
+            }
+
+            /// One quad per horizontal run of covered cells; a hole stays uncovered.
+            fn quads(&self) -> Vec<[f32; 4]> {
+                let cols = self.xs.len() - 1;
+                let mut quads = Vec::new();
+                for row in 0..self.ys.len() - 1 {
+                    let mut run: Option<usize> = None;
+                    for col in 0..=cols {
+                        let covered = col < cols && self.covered[row * cols + col];
+                        match (run, covered) {
+                            (None, true) => run = Some(col),
+                            (Some(start), false) => {
+                                quads.push([self.xs[start], self.ys[row], self.xs[col] - self.xs[start], self.ys[row + 1] - self.ys[row]]);
+                                run = None;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                quads
+            }
+        }
+
+        fn mesh(quads: &[[f32; 4]], color: Rgba, opacity: f32, clip: Clip) -> MeshNode {
+            let mut verts = Vec::with_capacity(quads.len() * 4);
+            let mut indices = Vec::with_capacity(quads.len() * 6);
+            for [x, y, w, h] in quads.iter().copied() {
+                let base = verts.len() as u32;
+                verts.extend_from_slice(&[[x, y], [x + w, y], [x + w, y + h], [x, y + h]]);
+                indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+            }
+            MeshNode { verts: std::sync::Arc::from(verts), indices: std::sync::Arc::from(indices), color, opacity, clip }
         }
 
         let old = std::mem::take(&mut self.items);
@@ -454,47 +534,44 @@ impl Scene {
                 i += 1;
                 continue;
             };
-            let Some(mut union) = plain(seed) else {
+            let Some((seed_rect, seed_color)) = plain(seed) else {
                 out.push(old[i].clone());
                 i += 1;
                 continue;
             };
-            let mut horizontal: Option<bool> = None;
+            let mut rects = vec![seed_rect];
             let mut j = i + 1;
             while j < old.len() {
                 let Item::Shape(next) = &old[j] else { break };
-                let Some(next_rect) = plain(next) else { break };
+                let Some((next_rect, _)) = plain(next) else { break };
                 if seed.paint != next.paint || seed.clip != next.clip || seed.opacity != next.opacity {
                     break;
                 }
-                let h = same_row(union, next_rect, EPS) && touches_x(union, next_rect, EPS);
-                let v = same_column(union, next_rect, EPS) && touches_y(union, next_rect, EPS);
-                match horizontal {
-                    None if h => horizontal = Some(true),
-                    None if v => horizontal = Some(false),
-                    Some(true) if h => {}
-                    Some(false) if v => {}
-                    _ => break,
+                if rects.iter().any(|rect| overlaps(*rect, next_rect)) || !rects.iter().any(|rect| abuts(*rect, next_rect)) {
+                    break;
                 }
-                let (old_x1, old_y1) = (union[0] + union[2], union[1] + union[3]);
-                let (next_x1, next_y1) = (next_rect[0] + next_rect[2], next_rect[1] + next_rect[3]);
-                union[0] = union[0].min(next_rect[0]);
-                union[1] = union[1].min(next_rect[1]);
-                union[2] = old_x1.max(next_x1) - union[0];
-                union[3] = old_y1.max(next_y1) - union[1];
+                rects.push(next_rect);
                 j += 1;
             }
-            if j == i + 1 {
+            if rects.len() == 1 {
                 out.push(old[i].clone());
             } else {
-                out.push(Item::Shape(ShapeNode {
-                    mat: [1.0, 0.0, 0.0, 1.0, union[0], union[1]],
-                    size: [union[2], union[3]],
-                    shape: ShapeKind::RoundedRect { radii: [0.0; 4] },
-                    paint: seed.paint.clone(),
-                    clip: seed.clip,
-                    opacity: seed.opacity,
-                }));
+                let union = Union::new(&rects);
+                let (x, y) = (union.xs[0], union.ys[0]);
+                let w = union.xs[union.xs.len() - 1] - x;
+                let h = union.ys[union.ys.len() - 1] - y;
+                if union.is_rectangle() {
+                    out.push(Item::Shape(ShapeNode {
+                        mat: [1.0, 0.0, 0.0, 1.0, x, y],
+                        size: [w, h],
+                        shape: ShapeKind::RoundedRect { radii: [0.0; 4] },
+                        paint: Paint::Solid(seed_color),
+                        clip: seed.clip,
+                        opacity: seed.opacity,
+                    }));
+                } else {
+                    out.push(Item::Mesh(mesh(&union.quads(), seed_color, seed.opacity, seed.clip)));
+                }
             }
             i = j;
         }
@@ -761,14 +838,23 @@ mod tests {
     }
 
     #[test]
-    fn only_equal_spans_and_plain_paint_merge() {
+    fn unequal_spans_merge_into_one_mesh() {
         let green = Paint::Solid(Rgba::new(0.2, 0.6, 0.4, 1.0));
-        let mut different_span = Scene::new(100, 100);
-        different_span.push(plain(10.0, 20.0, 30.0, 40.0, green.clone()));
-        different_span.push(plain(40.0, 20.0, 20.0, 30.0, green));
-        different_span.merge_adjacent_plain_rectangles();
-        assert_eq!(different_span.items.len(), 2);
+        let mut s = Scene::new(100, 100);
+        s.push(plain(10.0, 20.0, 30.0, 40.0, green.clone()));
+        s.push(plain(40.0, 20.0, 20.0, 30.0, green));
+        s.merge_adjacent_plain_rectangles();
+        assert_eq!(s.items.len(), 1);
+        let [Item::Mesh(mesh)] = s.items.as_slice() else {
+            assert_eq!(s.items.len(), 1, "one mesh");
+            return;
+        };
+        assert!(mesh.indices.len() >= 12, "the L is at least two quads");
+    }
 
+    #[test]
+    fn only_plain_paint_merges() {
+        let green = Paint::Solid(Rgba::new(0.2, 0.6, 0.4, 1.0));
         let gradient = Paint::Gradient {
             kind: GradientKind::Linear,
             from: [0.0, 0.0],
@@ -781,6 +867,34 @@ mod tests {
         gradient_edge.push(plain(40.0, 20.0, 30.0, 40.0, gradient));
         gradient_edge.merge_adjacent_plain_rectangles();
         assert_eq!(gradient_edge.items.len(), 2);
+
+        let mut clipped = Scene::new(100, 100);
+        clipped.push(plain(10.0, 20.0, 30.0, 40.0, green.clone()));
+        let mut other = plain(40.0, 20.0, 30.0, 40.0, green);
+        other.clip = Clip([10.0, 10.0, 50.0, 50.0], [0.0; 4]);
+        clipped.push(other);
+        clipped.merge_adjacent_plain_rectangles();
+        assert_eq!(clipped.items.len(), 2);
+    }
+
+    #[test]
+    fn a_gap_keeps_two_rectangles() {
+        let green = Paint::Solid(Rgba::new(0.2, 0.6, 0.4, 1.0));
+        let mut s = Scene::new(100, 100);
+        s.push(plain(10.0, 20.0, 20.0, 40.0, green.clone()));
+        s.push(plain(40.0, 20.0, 20.0, 40.0, green));
+        s.merge_adjacent_plain_rectangles();
+        assert_eq!(s.items.len(), 2);
+    }
+
+    #[test]
+    fn overlapping_same_paint_rectangles_stay_separate() {
+        let green = Paint::Solid(Rgba::new(0.2, 0.6, 0.4, 0.5));
+        let mut s = Scene::new(100, 100);
+        s.push(plain(10.0, 20.0, 30.0, 40.0, green.clone()));
+        s.push(plain(30.0, 20.0, 30.0, 40.0, green));
+        s.merge_adjacent_plain_rectangles();
+        assert_eq!(s.items.len(), 2, "two translucent fills overlap and must compose, not become one");
     }
 
     #[test]

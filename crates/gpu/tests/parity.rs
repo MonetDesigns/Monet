@@ -145,6 +145,44 @@ fn abutting_same_paint_rectangles_do_not_seam() {
 }
 
 #[test]
+fn l_shaped_same_paint_rectangles_do_not_seam() {
+    let mut doc = Document::default();
+    let page = doc.pages[0];
+    transparent_page(&mut doc, page);
+    let green = Paint::solid(Color::new(0.18431373, 0.6392157, 0.41960785, 1.0));
+    rect(&mut doc, page, "Seam Left", 40.0, 20.0, 240.0, 140.0, 0.0, green.clone());
+    // Half the height of its neighbour: the union is an L, not a rectangle, and still one fill.
+    rect(&mut doc, page, "Seam Right", 280.0, 20.0, 240.0, 70.0, 0.0, green);
+
+    let view = View { origin: (0.0, 0.0), scale: 2.94, width: 1700, height: 600 };
+    let vp = Viewport { origin: view.origin, scale: view.scale, width: view.width, height: view.height };
+    let scene = doc_scene::build(&doc, page, &vp);
+    assert_eq!(scene.items.iter().filter(|item| matches!(item, figcraft_gpu::scene::Item::Mesh(_))).count(), 1, "the L merges into one mesh");
+    assert_eq!(scene.items.iter().filter(|item| matches!(item, figcraft_gpu::scene::Item::Shape(_))).count(), 0, "no separate rectangles remain");
+
+    let cpu = cpu_pixels_in(&doc, page, &view);
+    let Some(gpu) = gpu_pixels_in(&doc, page, &vp) else {
+        eprintln!("SKIP: no adapter");
+        return;
+    };
+    // The shared edge is interior in the tall half: opaque green, matching the CPU.
+    for x in 820..=826 {
+        let (cpu_px, gpu_px) = (pixel(&cpu, 1700, x, 100).expect("in bounds"), pixel(&gpu, 1700, x, 100).expect("in bounds"));
+        for k in 0..4 {
+            assert!(cpu_px[k].abs_diff(gpu_px[k]) <= 1, "seam pixel x={x} differs: cpu={cpu_px:?} gpu={gpu_px:?}");
+        }
+        assert!(gpu_px[3] == 255 && gpu_px[1] > 150, "the seam must be opaque green, not a blend with the background: {gpu_px:?}");
+    }
+    // The missing lower-right quarter stays empty.
+    let (cpu_px, gpu_px) = (pixel(&cpu, 1700, 1176, 353).expect("in bounds"), pixel(&gpu, 1700, 1176, 353).expect("in bounds"));
+    assert_eq!(cpu_px[3], 0, "the CPU leaves the L's notch empty: {cpu_px:?}");
+    assert_eq!(gpu_px[3], 0, "the mesh must keep the L's notch empty: {gpu_px:?}");
+
+    let report = compare(&cpu, &gpu, Tolerance::EDGE).expect("comparable buffers");
+    assert!(report.passes(Tolerance::EDGE), "{}", report.summary());
+}
+
+#[test]
 fn gradients_match_the_cpu() {
     let mut doc = Document::default();
     let page = doc.pages[0];
