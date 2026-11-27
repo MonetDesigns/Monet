@@ -331,6 +331,10 @@ match figcraft_gpu::render::Renderer::global().render(&scene) { Ok(rgba) => …,
   `SKIP: no adapter`，不算通过也不算失败。非 Normal 混合模式尚未进组合回归（Alpha 蒙版已并入
   feature-zoo）。
 - 新增特性必须同时提交：`doc_scene` 支持判定、WGSL 实现、diff 用例、Unsupported 回退用例。
+- **代码清理（已落地）**：混合快照 `Target.under` 改为按需创建、无混合帧释放；混合组不再同时创建
+  普通 composite 的 bind group 与 opacity uniform；组层/蒙版 runs 的子树判定由三趟扫描合并为一趟
+  `SubtreeTraits`；`walk` 的裁剪、组层与阴影分支拆成独立函数，效果列表一次归类；`figcraft-gpu`
+  在 `--all-targets` 下 clippy 无 error/warning（依赖 crate 的既有 lint 不计）。
 - **验收**：`cargo test -p figcraft-gpu --features wgpu` 全绿；`--no-default-features` 下纯逻辑测试全绿。
 
 ## 5. 跨平台

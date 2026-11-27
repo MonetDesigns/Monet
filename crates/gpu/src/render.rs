@@ -629,9 +629,15 @@ struct Target {
     resolve: wgpu::Texture,
     view: wgpu::TextureView,
     /// A snapshot of the resolved frame for blend modes that need what is already under the layer.
-    under: wgpu::Texture,
-    under_view: wgpu::TextureView,
+    /// Allocated only for frames that contain a non-normal blend.
+    under: Option<(wgpu::Texture, wgpu::TextureView)>,
     readback: wgpu::Buffer,
+}
+
+impl Target {
+    fn under_view(&self) -> Option<&wgpu::TextureView> {
+        self.under.as_ref().map(|(_, view)| view)
+    }
 }
 
 /// An offscreen 4× MSAA layer for a group: the pass draws into `msaa_view`, resolves into
@@ -645,12 +651,11 @@ struct GroupTarget {
     view: wgpu::TextureView,
 }
 
-/// A prepared group layer: its texture, the composite bind group and the opacity uniform.
+/// A prepared group layer: its texture and one composite bind group (normal or blend).
 struct GroupResources {
     _target: GroupTarget,
-    bind: wgpu::BindGroup,
-    #[allow(dead_code)]
-    opacity: wgpu::Buffer,
+    /// The source-over composite for a normal layer; `None` for a blend, which uses `blend`.
+    bind: Option<wgpu::BindGroup>,
     /// Present for a non-normal blend; the shader reads the frame snapshot under the layer.
     blend: Option<wgpu::BindGroup>,
 }
@@ -1819,6 +1824,78 @@ impl Renderer {
         Some(BackdropResources { _ping: ping, ping_view, _pong: pong, pong_view, blur_binds, _blur_params: blur_params, draw_bind })
     }
 
+    /// Size the frame targets once per size, and attach the blend snapshot only when a blend needs
+    /// it. A frame without a blend also releases the snapshot, so a mixed export does not retain a
+    /// full-size texture between blended frames.
+    fn ensure_target(&mut self, w: u32, h: u32, needs_under: bool) -> Result<(), RenderError> {
+        let unpadded = w * 4;
+        let padded = unpadded.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        if self.target.as_ref().is_none_or(|t| t.width != w || t.height != h) {
+            let size = wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 };
+            let msaa = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("target-msaa"),
+                size,
+                mip_level_count: 1,
+                sample_count: SAMPLES,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+            let msaa_view = msaa.create_view(&wgpu::TextureViewDescriptor::default());
+            let resolve = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("target"),
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            let view = resolve.create_view(&wgpu::TextureViewDescriptor::default());
+            let under = if needs_under { Some(self.make_under(w, h)) } else { None };
+            let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("readback"),
+                size: u64::from(padded) * u64::from(h),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            self.target = Some(Target { width: w, height: h, msaa, msaa_view, resolve, view, under, readback });
+            return Ok(());
+        }
+        if !needs_under {
+            if let Some(target) = self.target.as_mut() {
+                target.under = None;
+            }
+            return Ok(());
+        }
+        if self.target.as_ref().and_then(Target::under_view).is_none() {
+            let under = Some(self.make_under(w, h));
+            if let Some(target) = self.target.as_mut() {
+                target.under = under;
+            }
+        }
+        Ok(())
+    }
+
+    /// The frame snapshot a non-normal blend reads under its layer. Created lazily so frames
+    /// without a blend do not pay for another full-size texture.
+    fn make_under(&self, width: u32, height: u32) -> (wgpu::Texture, wgpu::TextureView) {
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("target-under"),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        (texture, view)
+    }
+
     /// A full-frame 4× MSAA layer for a group. Resolve is sampleable by the composite pass.
     fn group_target(&self, width: u32, height: u32) -> Option<GroupTarget> {
         use wgpu::TextureUsages as U;
@@ -1849,7 +1926,7 @@ impl Renderer {
     }
 
     /// The composite bind group for one resolved layer.
-    fn group_bind(&self, view: &wgpu::TextureView, opacity: f32) -> Option<(wgpu::Buffer, wgpu::BindGroup)> {
+    fn group_bind(&self, view: &wgpu::TextureView, opacity: f32) -> Option<wgpu::BindGroup> {
         let opacity = opacity.clamp(0.0, 1.0);
         let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("group-opacity"),
@@ -1867,7 +1944,7 @@ impl Renderer {
                 wgpu::BindGroupEntry { binding: 2, resource: buffer.as_entire_binding() },
             ],
         });
-        Some((buffer, bind))
+        Some(bind)
     }
 
     /// The bind group that blends a resolved layer over a frame snapshot.
@@ -2048,9 +2125,12 @@ impl Renderer {
                     let Some(res) = groups.get(index).and_then(Option::as_ref) else {
                         continue;
                     };
+                    let Some(bind) = res.bind.as_ref() else {
+                        continue;
+                    };
                     pass.set_pipeline(&self.composite_pipeline);
                     pass.set_bind_group(0, &self.bind_globals, &[]);
-                    pass.set_bind_group(1, &res.bind, &[]);
+                    pass.set_bind_group(1, bind, &[]);
                     pass.draw(0..3, 0..1);
                     bound_shapes = false;
                     bound_mesh = false;
@@ -2211,6 +2291,10 @@ impl Renderer {
             masks,
         } = list;
 
+        // Size the frame targets before the instance buffer borrows `self` for the rest of the run.
+        let needs_under = groups.iter().any(|group| needs_blend(group.blend));
+        self.ensure_target(w, h, needs_under)?;
+
         // The instance buffer (at least one record: an empty storage binding is not allowed everywhere).
         let bytes: Vec<u8> =
             if instances.is_empty() { bytemuck::bytes_of(&GpuInstance::zeroed()).to_vec() } else { bytemuck::cast_slice(&instances).to_vec() };
@@ -2326,49 +2410,6 @@ impl Renderer {
 
         let unpadded = w * 4;
         let padded = unpadded.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        if self.target.as_ref().is_none_or(|t| t.width != w || t.height != h) {
-            let size = wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 };
-            let msaa = self.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("target-msaa"),
-                size,
-                mip_level_count: 1,
-                sample_count: SAMPLES,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                view_formats: &[],
-            });
-            let msaa_view = msaa.create_view(&wgpu::TextureViewDescriptor::default());
-            let resolve = self.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("target"),
-                size,
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            });
-            let view = resolve.create_view(&wgpu::TextureViewDescriptor::default());
-            let under = self.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("target-under"),
-                size,
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            });
-            let under_view = under.create_view(&wgpu::TextureViewDescriptor::default());
-            let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("readback"),
-                size: u64::from(padded) * u64::from(h),
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                mapped_at_creation: false,
-            });
-            self.target = Some(Target { width: w, height: h, msaa, msaa_view, resolve, view, under, under_view, readback });
-        }
         let Some(target) = self.target.as_ref() else {
             return Err(RenderError::Device("the render target was not created".into()));
         };
@@ -2499,12 +2540,24 @@ impl Renderer {
             let Some(layer_target) = self.group_target(w, h) else {
                 return Err(RenderError::Device("the group layer could not be created".into()));
             };
-            let Some((opacity, composite_bind)) = self.group_bind(&layer_target.view, plan.opacity) else {
-                return Err(RenderError::Device("the group composite bind group could not be created".into()));
+            let blend_mode = needs_blend(plan.blend);
+            let composite_bind = if blend_mode {
+                None
+            } else {
+                let Some(bind) = self.group_bind(&layer_target.view, plan.opacity) else {
+                    return Err(RenderError::Device("the group composite bind group could not be created".into()));
+                };
+                Some(bind)
             };
-            let blend =
-                if needs_blend(plan.blend) { self.blend_bind(&layer_target.view, &target.under_view, plan.opacity, plan.blend) } else { None };
-            if needs_blend(plan.blend) && blend.is_none() {
+            let blend = if blend_mode {
+                let Some(under_view) = target.under_view() else {
+                    return Err(RenderError::Device("the blend frame snapshot was not created".into()));
+                };
+                self.blend_bind(&layer_target.view, under_view, plan.opacity, plan.blend)
+            } else {
+                None
+            };
+            if blend_mode && blend.is_none() {
                 return Err(RenderError::Device("the group blend bind group could not be created".into()));
             }
             self.draw_group(
@@ -2521,10 +2574,10 @@ impl Renderer {
                 &texture_binds,
                 &group_resources,
                 &mask_resources,
-                &bind,
+                bind,
                 shadow_bind.as_ref().map(|(_, bind)| bind),
             );
-            group_resources[index] = Some(GroupResources { _target: layer_target, bind: composite_bind, opacity, blend });
+            group_resources[index] = Some(GroupResources { _target: layer_target, bind: composite_bind, blend });
         }
 
         // Mask runs need two layers. Nested masks were appended after their parent too, so build
@@ -2552,7 +2605,7 @@ impl Renderer {
                     &texture_binds,
                     &group_resources,
                     &mask_resources,
-                    &bind,
+                    bind,
                     shadow_bind.as_ref().map(|(_, bind)| bind),
                 );
             }
@@ -2745,6 +2798,9 @@ impl Renderer {
                             // resume over the same samples; the shader replaces every pixel with
                             // the composited result, so no BlendState is needed.
                             drop(pass);
+                            let Some((under, _)) = target.under.as_ref() else {
+                                return Err(RenderError::Device("the blend frame snapshot was not created".into()));
+                            };
                             encoder.copy_texture_to_texture(
                                 wgpu::TexelCopyTextureInfo {
                                     texture: &target.resolve,
@@ -2753,7 +2809,7 @@ impl Renderer {
                                     aspect: wgpu::TextureAspect::All,
                                 },
                                 wgpu::TexelCopyTextureInfo {
-                                    texture: &target.under,
+                                    texture: under,
                                     mip_level: 0,
                                     origin: wgpu::Origin3d::ZERO,
                                     aspect: wgpu::TextureAspect::All,
@@ -2777,9 +2833,12 @@ impl Renderer {
                             pass.set_bind_group(0, blend_bind, &[]);
                             pass.draw(0..3, 0..1);
                         } else {
+                            let Some(bind) = res.bind.as_ref() else {
+                                continue;
+                            };
                             pass.set_pipeline(&self.composite_pipeline);
                             pass.set_bind_group(0, &self.bind_globals, &[]);
-                            pass.set_bind_group(1, &res.bind, &[]);
+                            pass.set_bind_group(1, bind, &[]);
                             pass.draw(0..3, 0..1);
                         }
                         bound_shapes = false;
@@ -2844,26 +2903,6 @@ pub fn global() -> Option<&'static Mutex<Renderer>> {
     GLOBAL.get_or_init(|| Renderer::new().map(Mutex::new)).as_ref()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::box_radii;
-
-    #[test]
-    fn small_sigmas_mean_no_blur() {
-        assert_eq!(box_radii(0.0), [0, 0, 0]);
-        assert_eq!(box_radii(0.3), [0, 0, 0]);
-    }
-
-    #[test]
-    fn the_three_box_widths_follow_the_cpu_approximation() {
-        // The same arithmetic as `figcraft_render::fx::box_sizes`, checked independently here so a
-        // change on either side breaks the parity test.
-        assert_eq!(box_radii(1.0), [0, 0, 1]);
-        assert_eq!(box_radii(5.0), [4, 4, 5]);
-        assert_eq!(box_radii(10.0), [9, 9, 10]);
-    }
-}
-
 /// Draw one frame on the GPU when `effective()` says so; `None` means "draw it on the CPU".
 ///
 /// The scene's own unsupported list, a missing adapter, a lost device and any readback failure all
@@ -2892,4 +2931,24 @@ pub fn render_document_if_gpu(doc: &Document, id: NodeId, viewport: &Viewport) -
 /// A document-space matrix as the affine helper `scene` expects, for callers that build scenes.
 pub fn affine_of(m: [f32; 6]) -> Affine {
     Affine::new([f64::from(m[0]), f64::from(m[1]), f64::from(m[2]), f64::from(m[3]), f64::from(m[4]), f64::from(m[5])])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::box_radii;
+
+    #[test]
+    fn small_sigmas_mean_no_blur() {
+        assert_eq!(box_radii(0.0), [0, 0, 0]);
+        assert_eq!(box_radii(0.3), [0, 0, 0]);
+    }
+
+    #[test]
+    fn the_three_box_widths_follow_the_cpu_approximation() {
+        // The same arithmetic as `figcraft_render::fx::box_sizes`, checked independently here so a
+        // change on either side breaks the parity test.
+        assert_eq!(box_radii(1.0), [0, 0, 1]);
+        assert_eq!(box_radii(5.0), [4, 4, 5]);
+        assert_eq!(box_radii(10.0), [9, 9, 10]);
+    }
 }

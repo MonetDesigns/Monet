@@ -9,6 +9,8 @@
 //! to differ. Interiors are checked separately with the strict tolerance.
 
 #![cfg(feature = "wgpu")]
+// A parity test fails by panicking with the document it could not render.
+#![allow(clippy::panic)]
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -32,7 +34,7 @@ fn viewport() -> Viewport {
 
 fn cpu_pixels(doc: &Document, page: NodeId) -> Vec<u8> {
     let opts = Options { background: None, ..Default::default() };
-    let pix = figcraft_render::render_view(doc, page, &view(), &opts).expect("the CPU renders this document");
+    let pix = figcraft_render::render_view(doc, page, &view(), &opts).unwrap_or_else(|| panic!("the CPU renders this document"));
     pix.data().to_vec()
 }
 
@@ -47,7 +49,7 @@ fn gpu_pixels(doc: &Document, page: NodeId) -> Option<Vec<u8>> {
     let scene = doc_scene::build(doc, page, &viewport());
     assert!(scene.is_supported(), "the test scene must be expressible: {:?}", scene.unsupported_features());
     let mut renderer = figcraft_gpu::render::Renderer::new()?;
-    Some(renderer.render(&scene).expect("the GPU draws this scene"))
+    Some(renderer.render(&scene).unwrap_or_else(|error| panic!("the GPU draws this scene: {error}")))
 }
 
 /// A transparent page background, so both sides leave the area outside the shapes empty.
@@ -60,7 +62,7 @@ fn transparent_page(doc: &mut Document, page: NodeId) {
 }
 
 fn rect(doc: &mut Document, parent: NodeId, name: &str, x: f64, y: f64, w: f64, h: f64, radius: f64, paint: Paint) -> NodeId {
-    let id = doc.create(parent, NodeKind::Rectangle, name, x, y, w, h).expect("a rectangle");
+    let id = doc.create(parent, NodeKind::Rectangle, name, x, y, w, h).unwrap_or_else(|error| panic!("a rectangle: {error}"));
     if let Ok(n) = doc.get_mut(id) {
         n.fills = vec![paint];
         n.corners.radii = [radius; 4];

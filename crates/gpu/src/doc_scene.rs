@@ -109,19 +109,39 @@ fn can_leaf_opacity(n: &Node) -> bool {
     paints == 1 && !n.effects.iter().any(|e| e.visible)
 }
 
-/// Whether this subtree carries any visible effect. Rounded clipping is only modelled by the shape
-/// and mesh shaders; effects paint through full-frame passes that would need their own rounded
-/// mask, so a frame that combines them falls back instead of clipping them with a plain rectangle.
-fn subtree_has_visible_effects(doc: &Document, id: NodeId) -> bool {
-    doc.subtree(id).into_iter().any(|id| doc.node(id).is_some_and(|n| n.effects.iter().any(|e| e.visible)))
+/// The subtree facts a group or mask run needs before it can become an isolated layer. One walk
+/// answers all of them; asking each question separately re-walked every child list three times.
+#[derive(Default, Clone, Copy)]
+struct SubtreeTraits {
+    visible_mask: bool,
+    non_normal_blend: bool,
+    backdrop: bool,
+    visible_effect: bool,
 }
 
-/// Whether this subtree carries a background blur. A group layer has no document behind it, so a
-/// backdrop effect inside one would read the layer's own transparent pixels instead of the page.
-fn subtree_has_backdrop(doc: &Document, id: NodeId) -> bool {
-    doc.subtree(id)
-        .into_iter()
-        .any(|id| doc.node(id).is_some_and(|n| n.effects.iter().any(|e| e.visible && matches!(e.kind, figcraft_doc::EffectKind::BackgroundBlur(_)))))
+impl SubtreeTraits {
+    fn merge(&mut self, other: Self) {
+        self.visible_mask |= other.visible_mask;
+        self.non_normal_blend |= other.non_normal_blend;
+        self.backdrop |= other.backdrop;
+        self.visible_effect |= other.visible_effect;
+    }
+}
+
+/// Scan `id`'s subtree once. `include_root_blend` is false when the root's own blend is composited
+/// by the layer itself, so it must not disqualify that layer.
+fn subtree_traits(doc: &Document, id: NodeId, include_root_blend: bool) -> SubtreeTraits {
+    let mut traits = SubtreeTraits::default();
+    for node_id in doc.subtree(id) {
+        let Some(node) = doc.node(node_id) else {
+            continue;
+        };
+        traits.visible_mask |= node.is_mask && node.visible;
+        traits.visible_effect |= node.effects.iter().any(|e| e.visible);
+        traits.backdrop |= node.effects.iter().any(|e| e.visible && matches!(e.kind, EffectKind::BackgroundBlur(_)));
+        traits.non_normal_blend |= (include_root_blend || node_id != id) && !matches!(node.blend, BlendMode::Normal | BlendMode::PassThrough);
+    }
+    traits
 }
 
 /// Whether a group can be drawn as one isolated layer: it has no own paint, stroke, clip, mask or
@@ -135,18 +155,8 @@ fn can_layer_group(doc: &Document, n: &Node) -> bool {
     if n.effects.iter().any(|e| e.visible) {
         return false;
     }
-    if doc.subtree(n.id).into_iter().any(|id| doc.node(id).is_some_and(|c| c.is_mask && c.visible)) {
-        return false;
-    }
-    if n.children.iter().any(|id| subtree_has_non_normal_blend(doc, *id)) {
-        return false;
-    }
-    !subtree_has_backdrop(doc, n.id)
-}
-
-/// Whether a subtree carries a blend that is not plain source-over.
-fn subtree_has_non_normal_blend(doc: &Document, id: NodeId) -> bool {
-    doc.subtree(id).into_iter().any(|id| doc.node(id).is_some_and(|n| !matches!(n.blend, BlendMode::Normal | BlendMode::PassThrough)))
+    let traits = subtree_traits(doc, n.id, false);
+    !traits.visible_mask && !traits.non_normal_blend && !traits.backdrop
 }
 
 /// Whether a node kind only carries children (and possibly its own box fill).
@@ -161,6 +171,139 @@ fn is_container(kind: &NodeKind) -> bool {
             | NodeKind::ComponentSet { .. }
             | NodeKind::Instance { .. }
     )
+}
+
+/// The visible effects of one node, grouped by kind in document order. Collecting them once keeps
+/// `walk` from re-filtering the effect list for every pass.
+struct NodeEffects<'a> {
+    drops: Vec<&'a figcraft_doc::Shadow>,
+    inners: Vec<&'a figcraft_doc::Shadow>,
+    blurs: Vec<&'a figcraft_doc::Blur>,
+    backdrops: Vec<&'a figcraft_doc::Blur>,
+    noises: Vec<&'a figcraft_doc::Noise>,
+    textures: Vec<&'a figcraft_doc::Texture>,
+    unsupported: bool,
+}
+
+fn collect_effects(n: &Node) -> NodeEffects<'_> {
+    let mut effects = NodeEffects {
+        drops: Vec::new(),
+        inners: Vec::new(),
+        blurs: Vec::new(),
+        backdrops: Vec::new(),
+        noises: Vec::new(),
+        textures: Vec::new(),
+        unsupported: false,
+    };
+    for effect in n.effects.iter().filter(|e| e.visible) {
+        match &effect.kind {
+            EffectKind::DropShadow(shadow) => effects.drops.push(shadow),
+            EffectKind::InnerShadow(shadow) => effects.inners.push(shadow),
+            EffectKind::LayerBlur(blur) => effects.blurs.push(blur),
+            EffectKind::BackgroundBlur(blur) => {
+                if blur.max_radius() > 0.0 {
+                    effects.backdrops.push(blur);
+                }
+            }
+            EffectKind::Noise(noise) => effects.noises.push(noise),
+            EffectKind::Texture(texture) => effects.textures.push(texture),
+            _ => effects.unsupported = true,
+        }
+    }
+    effects
+}
+
+/// Narrow `clip` by this node's clip, or record why that clip cannot be expressed. A rotated or
+/// rounded-against-another clip is left unapplied and reported, so the frame falls back to the CPU.
+fn resolve_clip(doc: &Document, n: &Node, m: Affine, w: f64, h: f64, clip: Clip, scene: &mut Scene) -> Clip {
+    if !n.clip || !(w > 0.0 && h > 0.0) {
+        return clip;
+    }
+    let (b, c) = (m.as_coeffs()[1], m.as_coeffs()[2]);
+    if b.abs() > 1e-6 || c.abs() > 1e-6 {
+        scene.unsupported("rotated-clip", format!("`{}` clips with a rotated frame", n.name));
+        return clip;
+    }
+    let (x0, y0) = map_point(m, 0.0, 0.0);
+    let (x1, y1) = map_point(m, w, h);
+    let rect = [x0.min(x1) as f32, y0.min(y1) as f32, (x1 - x0).abs() as f32, (y1 - y0).abs() as f32];
+    let radii = n.corners.radii;
+    if !radii.iter().any(|r| *r > 0.0) {
+        if clip.has_radii() {
+            scene.unsupported("rounded-clip-intersection", format!("`{}` adds a rectangular clip under a rounded one", n.name));
+            return clip;
+        }
+        return clip.intersect(rect);
+    }
+    // A rounded rect can only be intersected with nothing: an outer clip or a nested clip would
+    // produce a shape no single rounded rect describes.
+    if !clip.is_none() || clip.has_radii() {
+        scene.unsupported("rounded-clip-intersection", format!("`{}` clips with rounded corners under another clip", n.name));
+        return clip;
+    }
+    if subtree_traits(doc, n.id, false).visible_effect {
+        scene.unsupported("rounded-clip-effect", format!("`{}` clips rounded content with a visible effect", n.name));
+        return clip;
+    }
+    let sx = (m.as_coeffs()[0] * m.as_coeffs()[0] + m.as_coeffs()[1] * m.as_coeffs()[1]).sqrt();
+    let sy = (m.as_coeffs()[2] * m.as_coeffs()[2] + m.as_coeffs()[3] * m.as_coeffs()[3]).sqrt();
+    if (sx - sy).abs() > 1e-6 * sx.max(sy).max(1.0) {
+        scene.unsupported("rounded-clip-scale", format!("`{}` clips with rounded corners under a non-uniform scale", n.name));
+        return clip;
+    }
+    let limit = 0.5 * rect[2].min(rect[3]);
+    Clip::rounded(rect, radii.map(|r| (r as f32 * sx as f32).clamp(0.0, limit)))
+}
+
+/// Draw a group with opacity or a non-normal blend as one isolated layer. Also records why the
+/// group cannot be layered when it cannot, so the whole frame falls back to the CPU.
+#[allow(clippy::too_many_arguments)]
+fn emit_group_layer(doc: &Document, n: &Node, view_xf: Affine, scale: f64, inner: Clip, depth: usize, layerable: bool, scene: &mut Scene) {
+    if layerable {
+        let mut group = Scene::new(scene.width, scene.height);
+        walk_list(doc, &n.children, view_xf, scale, inner, 1.0, &mut group, depth + 1);
+        if group.is_supported() {
+            scene.push_group(GroupNode { items: group.items, opacity: n.opacity.clamp(0.0, 1.0), blend: n.blend });
+            return;
+        }
+        scene.absorb_unsupported(group.unsupported_features());
+        scene.unsupported("group-opacity", format!("`{}` contains content the GPU cannot draw in a group layer", n.name));
+        return;
+    }
+    scene.unsupported("group-opacity", format!("`{}` is a group at {} opacity that cannot be flattened onto one leaf", n.name, n.opacity));
+}
+
+/// Emit one node's drop or inner shadows from its SDF box, or record why its silhouette cannot
+/// cast them. `inner` selects the CPU's inner-shadow capability rule.
+#[allow(clippy::too_many_arguments)]
+fn emit_shadow_layer(
+    n: &Node,
+    shadows: &[&figcraft_doc::Shadow],
+    shape: Option<ShapeKind>,
+    m: Affine,
+    w: f64,
+    h: f64,
+    scale: f64,
+    clip: Clip,
+    inner: bool,
+    scene: &mut Scene,
+) {
+    if shadows.is_empty() {
+        return;
+    }
+    let allowed = if shape.is_some() && if inner { can_cast_inner_shadow(n, shadows) } else { can_cast_shadow(n, shadows) } { shape } else { None };
+    let Some(shape) = allowed else {
+        let message = if inner {
+            format!("`{}` casts an inner shadow this build cannot draw", n.name)
+        } else {
+            format!("`{}` casts a drop shadow this build cannot draw", n.name)
+        };
+        scene.unsupported("effect", message);
+        return;
+    };
+    for shadow in shadows {
+        emit_shadow(shape, m, w, h, scale, clip, shadow, inner, scene);
+    }
 }
 
 fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, opacity: f32, scene: &mut Scene, depth: usize, allow_mask: bool) {
@@ -180,39 +323,22 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, opa
         return;
     }
     let container = is_container(&n.kind);
-    let drop_shadows: Vec<&figcraft_doc::Shadow> =
-        n.effects.iter().filter(|e| e.visible).filter_map(|e| if let EffectKind::DropShadow(s) = &e.kind { Some(s) } else { None }).collect();
-    let inner_shadows: Vec<&figcraft_doc::Shadow> =
-        n.effects.iter().filter(|e| e.visible).filter_map(|e| if let EffectKind::InnerShadow(s) = &e.kind { Some(s) } else { None }).collect();
-    let layer_blurs: Vec<&figcraft_doc::Blur> =
-        n.effects.iter().filter(|e| e.visible).filter_map(|e| if let EffectKind::LayerBlur(b) = &e.kind { Some(b) } else { None }).collect();
-    let backdrops: Vec<&figcraft_doc::Blur> = n
-        .effects
-        .iter()
-        .filter(|e| e.visible)
-        .filter_map(|e| if let EffectKind::BackgroundBlur(b) = &e.kind { Some(b) } else { None })
-        .filter(|b| b.max_radius() > 0.0)
-        .collect();
-    let noises: Vec<&figcraft_doc::Noise> =
-        n.effects.iter().filter(|e| e.visible).filter_map(|e| if let EffectKind::Noise(nz) = &e.kind { Some(nz) } else { None }).collect();
-    let textures: Vec<&figcraft_doc::Texture> =
-        n.effects.iter().filter(|e| e.visible).filter_map(|e| if let EffectKind::Texture(t) = &e.kind { Some(t) } else { None }).collect();
-    if n.effects.iter().any(|e| {
-        e.visible
-            && !matches!(
-                e.kind,
-                EffectKind::DropShadow(_)
-                    | EffectKind::InnerShadow(_)
-                    | EffectKind::LayerBlur(_)
-                    | EffectKind::BackgroundBlur(_)
-                    | EffectKind::Noise(_)
-                    | EffectKind::Texture(_)
-            )
-    }) {
+    let effects = collect_effects(n);
+    if effects.unsupported {
         scene.unsupported("effect", format!("`{}` has a visible effect this build cannot draw", n.name));
     }
+    let drop_shadows = effects.drops;
+    let inner_shadows = effects.inners;
+    let layer_blurs = effects.blurs;
+    let backdrops = effects.backdrops;
+    let noises = effects.noises;
+    let textures = effects.textures;
     let non_normal_blend = !matches!(n.blend, BlendMode::Normal | BlendMode::PassThrough);
-    if non_normal_blend && !(container && can_layer_group(doc, n)) {
+    // A group layer is considered once: the capability check is a subtree scan, and asking it
+    // again inside `emit_group_layer` would walk the same children twice.
+    let needs_layer = container && (n.opacity < 0.999 || non_normal_blend) && !can_group_opacity(doc, n);
+    let layerable = needs_layer && can_layer_group(doc, n);
+    if non_normal_blend && !layerable {
         scene.unsupported("blend", format!("`{}` blends with {:?}", n.name, n.blend));
     }
     // A mask node is only drawn in the mask layer; its run is assembled by `walk_list`.
@@ -236,57 +362,12 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, opa
     let sized = w > 0.0 && h > 0.0;
 
     // A clipping node narrows what it and everything under it may paint.
-    let mut inner = clip;
-    if n.clip && sized {
-        let (b, c) = (m.as_coeffs()[1], m.as_coeffs()[2]);
-        if b.abs() > 1e-6 || c.abs() > 1e-6 {
-            scene.unsupported("rotated-clip", format!("`{}` clips with a rotated frame", n.name));
-        } else {
-            let (x0, y0) = map_point(m, 0.0, 0.0);
-            let (x1, y1) = map_point(m, w, h);
-            let rect = [x0.min(x1) as f32, y0.min(y1) as f32, (x1 - x0).abs() as f32, (y1 - y0).abs() as f32];
-            let radii = n.corners.radii;
-            if radii.iter().any(|r| *r > 0.0) {
-                // A rounded rect can only be intersected with nothing: an outer clip or a nested
-                // clip would produce a shape no single rounded rect describes.
-                if !inner.is_none() || inner.has_radii() {
-                    scene.unsupported("rounded-clip-intersection", format!("`{}` clips with rounded corners under another clip", n.name));
-                } else if subtree_has_visible_effects(doc, id) {
-                    scene.unsupported("rounded-clip-effect", format!("`{}` clips rounded content with a visible effect", n.name));
-                } else {
-                    let sx = (m.as_coeffs()[0] * m.as_coeffs()[0] + m.as_coeffs()[1] * m.as_coeffs()[1]).sqrt();
-                    let sy = (m.as_coeffs()[2] * m.as_coeffs()[2] + m.as_coeffs()[3] * m.as_coeffs()[3]).sqrt();
-                    if (sx - sy).abs() > 1e-6 * sx.max(sy).max(1.0) {
-                        scene.unsupported("rounded-clip-scale", format!("`{}` clips with rounded corners under a non-uniform scale", n.name));
-                    } else {
-                        let limit = 0.5 * rect[2].min(rect[3]);
-                        let radii = radii.map(|r| (r as f32 * sx as f32).clamp(0.0, limit as f32));
-                        inner = Clip::rounded(rect, radii);
-                    }
-                }
-            } else if inner.has_radii() {
-                scene.unsupported("rounded-clip-intersection", format!("`{}` adds a rectangular clip under a rounded one", n.name));
-            } else {
-                inner = inner.intersect(rect);
-            }
-        }
-    }
+    let inner = resolve_clip(doc, n, m, w, h, clip, scene);
 
     // Group opacity or a non-normal blend becomes an isolated layer. Children draw transparent,
     // then one composite applies the group alpha and blend mode exactly once.
-    if container && (n.opacity < 0.999 || non_normal_blend) && !can_group_opacity(doc, n) {
-        if can_layer_group(doc, n) {
-            let mut group = Scene::new(scene.width, scene.height);
-            walk_list(doc, &n.children, view_xf, scale, inner, 1.0, &mut group, depth + 1);
-            if group.is_supported() {
-                scene.push_group(GroupNode { items: group.items, opacity: n.opacity.clamp(0.0, 1.0) as f32, blend: n.blend });
-                return;
-            }
-            scene.absorb_unsupported(group.unsupported_features());
-            scene.unsupported("group-opacity", format!("`{}` contains content the GPU cannot draw in a group layer", n.name));
-            return;
-        }
-        scene.unsupported("group-opacity", format!("`{}` is a group at {} opacity that cannot be flattened onto one leaf", n.name, n.opacity));
+    if needs_layer {
+        emit_group_layer(doc, n, view_xf, scale, inner, depth, layerable, scene);
         return;
     }
 
@@ -295,23 +376,14 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, opa
     let shape = if sized { sdf_shape(n, &m, w, h) } else { None };
     backdrop(n, &backdrops, &layer_blurs, shape, clip, m, w, h, scale, scene);
     let blurred = layer_blur(n, &layer_blurs, shape, clip, m, w, h, scale, scene.width, scene.height, scene);
-    if !drop_shadows.is_empty() {
-        match shape {
-            Some(shape) if can_cast_shadow(n, &drop_shadows) => {
-                for shadow in &drop_shadows {
-                    emit_shadow(shape, m, w, h, scale, clip, shadow, false, scene);
-                }
-            }
-            _ => scene.unsupported("effect", format!("`{}` casts a drop shadow this build cannot draw", n.name)),
-        }
-    }
+    emit_shadow_layer(n, &drop_shadows, shape, m, w, h, scale, clip, false, scene);
 
     // A texture replaces the layer's pixels with whole-pixel-scattered copies of the fill. Only a
     // one-fill SDF box is accepted, so its layer content is exactly that fill; the normal fill is
     // skipped when the texture is active, exactly like a blurred layer.
     let texture_ok = !textures.is_empty() && shape.is_some() && can_texture(n, &textures, clip);
     let texture_node = match (texture_ok, shape) {
-        (true, Some(shape)) => make_texture(id, n, &textures[0], shape, m, w, h, clip, scale),
+        (true, Some(shape)) => make_texture(id, n, textures[0], shape, m, w, h, clip, scale),
         _ => None,
     };
     let textured = texture_node.is_some();
@@ -334,7 +406,7 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, opa
     if !noises.is_empty() {
         match shape {
             Some(shape) if can_noise(n, &noises, clip) => {
-                emit_noise(id, n, &noises[0], shape, m, w, h, clip, scene);
+                emit_noise(id, n, noises[0], shape, m, w, h, clip, scene);
             }
             _ => scene.unsupported("effect", format!("`{}` carries a noise effect this build cannot draw", n.name)),
         }
@@ -347,16 +419,7 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, opa
     }
 
     // Inner shadows paint over the fills, under the children and the stroke, like the CPU.
-    if !inner_shadows.is_empty() {
-        match shape {
-            Some(shape) if can_cast_inner_shadow(n, &inner_shadows) => {
-                for shadow in &inner_shadows {
-                    emit_shadow(shape, m, w, h, scale, clip, shadow, true, scene);
-                }
-            }
-            _ => scene.unsupported("effect", format!("`{}` casts an inner shadow this build cannot draw", n.name)),
-        }
-    }
+    emit_shadow_layer(n, &inner_shadows, shape, m, w, h, scale, clip, true, scene);
 
     // Boolean children are operands, not layers: the CPU draws the folded result and skips them.
     if !matches!(n.kind, NodeKind::BooleanOp { .. }) {
@@ -402,7 +465,7 @@ fn sdf_shape(n: &Node, m: &Affine, w: f64, h: f64) -> Option<ShapeKind> {
         }
         NodeKind::Polygon { count } => (3..=32).contains(count).then_some(ShapeKind::Polygon { count: *count }),
         NodeKind::Star { count, inner_ratio } => {
-            (3..=32).contains(count).then(|| ShapeKind::Star { count: *count, inner_ratio: *inner_ratio as f32 })
+            (3..=32).contains(count).then_some(ShapeKind::Star { count: *count, inner_ratio: *inner_ratio as f32 })
         }
         NodeKind::Line | NodeKind::Vector { .. } | NodeKind::Text(_) | NodeKind::BooleanOp { .. } | NodeKind::Icon { .. } | NodeKind::Slice => None,
     }
@@ -688,7 +751,7 @@ fn noise_fill_alpha(n: &Node) -> f32 {
     let Some(color) = fill.solid_color() else {
         return 0.0;
     };
-    (color.a * n.opacity.clamp(0.0, 1.0)).clamp(0.0, 1.0) as f32
+    (color.a * n.opacity.clamp(0.0, 1.0)).clamp(0.0, 1.0)
 }
 
 /// Emit the CPU's grains: one full-screen quad masked by the node's box, hashed per document
@@ -772,9 +835,7 @@ fn make_texture(
         return None;
     }
     let (gx, gy) = texture.grain();
-    let Some(fill) = n.fills.iter().find(|f| f.visible).and_then(|f| f.solid_color()) else {
-        return None;
-    };
+    let fill = n.fills.iter().find(|f| f.visible).and_then(|f| f.solid_color())?;
     Some(TextureNode {
         mat: crate::scene::matrix(m),
         size: [w as f32, h as f32],
@@ -1042,17 +1103,21 @@ fn walk_list(doc: &Document, children: &[NodeId], view_xf: Affine, scale: f64, c
             i = end;
             continue;
         }
+        let mut run_traits = SubtreeTraits::default();
+        for id in std::iter::once(children[i]).chain(children[start..end].iter().copied()) {
+            run_traits.merge(subtree_traits(doc, id, true));
+        }
         // The CPU draws the run in an `Under { clip: mask }` context, so a backdrop inside the
         // mask or the content reads the frame clipped by it. The two isolated layers here have
         // no such under-layer, so those runs stay on the CPU.
-        if std::iter::once(children[i]).chain(children[start..end].iter().copied()).any(|id| subtree_has_backdrop(doc, id)) {
+        if run_traits.backdrop {
             scene.unsupported("mask-backdrop", format!("`{}` masks a backdrop", node.name));
             i = end;
             continue;
         }
         // Mask layers draw their groups with plain source-over; a non-normal blend inside would
         // need the mask layer's own under-frame, which does not exist.
-        if std::iter::once(children[i]).chain(children[start..end].iter().copied()).any(|id| subtree_has_non_normal_blend(doc, id)) {
+        if run_traits.non_normal_blend {
             scene.unsupported("mask-blend", format!("`{}` masks a blended layer", node.name));
             i = end;
             continue;
@@ -1583,8 +1648,7 @@ mod tests {
             let rect = doc.create(page, NodeKind::Rectangle, "Grain", 10.0, 10.0, 60.0, 40.0).expect("rect");
             if let Ok(n) = doc.get_mut(rect) {
                 n.fills = vec![DocPaint::solid(Color::new(0.2, 0.6, 0.3, 1.0))];
-                let mut noise = figcraft_doc::Noise::default();
-                noise.mode = mode;
+                let noise = figcraft_doc::Noise { mode, ..Default::default() };
                 n.effects = vec![figcraft_doc::Effect { kind: EffectKind::Noise(noise), visible: true }];
             }
             let scene = build(&doc, page, &view());

@@ -59,7 +59,7 @@ impl Report {
 /// Compare two premultiplied RGBA8 buffers. `None` when they cannot be compared (different lengths or
 /// not a whole number of pixels).
 pub fn compare(cpu: &[u8], gpu: &[u8], tolerance: Tolerance) -> Option<Report> {
-    if cpu.len() != gpu.len() || cpu.len() % 4 != 0 {
+    if cpu.len() != gpu.len() || !cpu.len().is_multiple_of(4) {
         return None;
     }
     let pixels = cpu.len() / 4;
