@@ -2785,22 +2785,27 @@ pub(crate) fn right_panel(
             if data.can_align {
                 let h_el = if data.position_readonly { h.build().opacity(0.45).into_any_element() } else { h.into_any_element() };
                 let v_el = if data.position_readonly { v.build().opacity(0.45).into_any_element() } else { v.into_any_element() };
-                pos_sec = pos_sec
-                    .child(sublabel_row(tr("Alignment")))
-                    .child(field_row(vec![h_el, v_el], Vec::<IconButton>::new()));
+                let mut align_row = field_row(vec![h_el, v_el], Vec::<IconButton>::new());
+                if data.position_readonly {
+                    align_row = align_row.tip(tr("Layers in an instance take their position from the main component"));
+                }
+                pos_sec = pos_sec.child(sublabel_row(tr("Alignment"))).child(align_row);
             }
             // 参考实现把 Constraints 挂在 Rotation 之后，**没有展开按钮**：只要 `in_frame`
             // （frame 子层、父级无 auto layout 或自身 absolute）就画出来。旧实现用一颗
             // `LayoutGrid` 切换按钮先折叠，等于默认把约束藏起来，与本轮对齐目标相反。
-            pos_sec = pos_sec.child(sublabel_row(tr("Position"))).child(field_row(
-                vec![f.x.clone().into_any_element(), f.y.clone().into_any_element()],
-                Vec::<IconButton>::new(),
-            ));
+            let mut xy_row = field_row(vec![f.x.clone().into_any_element(), f.y.clone().into_any_element()], Vec::<IconButton>::new());
+            if data.position_readonly {
+                xy_row = xy_row.tip(tr("Layers in an instance take their position from the main component"));
+            }
+            pos_sec = pos_sec.child(sublabel_row(tr("Position"))).child(xy_row);
             // 顺序照参考实现 `position_fields`：align → X/Y → rotation → constraints。
             let rot_el = if data.position_readonly { rotate.build().opacity(0.45).into_any_element() } else { rotate.into_any_element() };
-            let pos_sec = pos_sec
-                .child(sublabel_row(tr("Rotation")))
-                .child(field_row(vec![f.rotation.clone().into_any_element(), rot_el], Vec::<IconButton>::new()));
+            let mut rot_row = field_row(vec![f.rotation.clone().into_any_element(), rot_el], Vec::<IconButton>::new());
+            if data.position_readonly {
+                rot_row = rot_row.tip(tr("Layers in an instance take their position from the main component"));
+            }
+            let pos_sec = pos_sec.child(sublabel_row(tr("Rotation"))).child(rot_row);
 
             // ── Constraints（egui `right.rs::position_fields`：仅 frame 子层、自身无自动布局或为
             // absolute 时才显示；`in_frame` 的逻辑与 egui `common` 后的 `all(...)` 完全一致）。──
@@ -2848,7 +2853,7 @@ pub(crate) fn right_panel(
                 } else {
                     right::sections::pick_dropdown_lead(f, pretty_v(data.constraints_v), col, v_opts, Some(Icon::AlignTop))
                 };
-                let body = pos_sec.child(sublabel_row(tr("Constraints"))).child(crate::widgets::field_row_h(
+                let mut constraints_row = crate::widgets::field_row_h(
                     vec![
                         div()
                             .w_full()
@@ -2863,7 +2868,11 @@ pub(crate) fn right_panel(
                     ],
                     Vec::<IconButton>::new(),
                     56.0,
-                ));
+                );
+                if data.position_readonly {
+                    constraints_row = constraints_row.tip(tr("Layers in an instance take their position from the main component"));
+                }
+                let body = pos_sec.child(sublabel_row(tr("Constraints"))).child(constraints_row);
                 body
             } else {
                 pos_sec
@@ -3021,7 +3030,11 @@ pub(crate) fn auto_layout_section(
             })
         };
         let dir_el = if sel.in_instance { dir.build().opacity(0.45).into_any_element() } else { dir.into_any_element() };
-        sec = sec.child(sublabel_row(tr("Layout"))).child(field_row_full(dir_el));
+        let mut dir_row = field_row_full(dir_el);
+        if sel.in_instance {
+            dir_row = dir_row.tip(tr("In an instance, this comes from the main component"));
+        }
+        sec = sec.child(sublabel_row(tr("Layout"))).child(dir_row);
     }
 
     if with_dimensions {
