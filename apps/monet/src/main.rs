@@ -52,9 +52,9 @@ Options:
   -h, --help        Print this help
   -V, --version     Print the version
 
-Files may be plain paths or file:// URLs. A figcraft:// link is handed to the live-session
-flow, never opened as a document. Finder and `open -a` documents arrive through GPUI's macOS
-open_urls callback rather than this command line.
+Files may be plain paths or file:// URLs. A figcraft:// link is recognized as an invite, never
+opened as a document; this GPUI build has no join dialog yet. Finder and `open -a` documents
+arrive through GPUI's macOS open_urls callback rather than this command line.
 
 The document engine and the egui front-end live upstream at storytold/figcraft; this binary
 ships the GPUI front-end."
