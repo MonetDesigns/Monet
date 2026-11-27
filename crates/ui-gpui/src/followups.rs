@@ -45,6 +45,7 @@ pub(crate) fn cursor_chat_popover(
     state: &Rc<RefCell<CursorChatState>>,
     at: Point<Pixels>,
     viewport: Size<Pixels>,
+    cx: &mut App,
     dismiss: Rc<dyn Fn(&mut Window, &mut App)>,
     submit: Rc<dyn Fn(&mut Window, &mut App)>,
 ) -> AnyElement {
@@ -57,7 +58,7 @@ pub(crate) fn cursor_chat_popover(
             .items_center()
             .justify_between()
             .child(div().text_size(px(10.0)).text_color(rgba(t.text_tertiary)).child(tr("Type to send")))
-            .child(LabelButton::new("cursor-chat-send", tr("Send")).on_click({
+            .child(LabelButton::new("cursor-chat-send", tr("Send")).focusable(cx).on_click({
                 let submit = submit.clone();
                 move |window, cx| submit(window, cx)
             })),
@@ -78,6 +79,7 @@ pub(crate) fn library_publish_popover(
     app: &crate::CanvasApp,
     state: &Rc<RefCell<LibraryPublishState>>,
     viewport: Size<Pixels>,
+    cx: &mut App,
     dismiss: Rc<dyn Fn(&mut Window, &mut App)>,
     publish: Rc<dyn Fn(&mut Window, &mut App)>,
 ) -> AnyElement {
@@ -131,16 +133,12 @@ pub(crate) fn library_publish_popover(
                 .child(div().w_full().child(field)),
         );
     }
-    body = body.child(
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_end()
-            .gap(px(8.0))
-            .mt(px(4.0))
-            .child(LabelButton::new("library-publish", tr("Publish")).disabled(!any).on_click(move |window, cx| publish(window, cx))),
-    );
+    body =
+        body.child(
+            div().flex().flex_row().items_center().justify_end().gap(px(8.0)).mt(px(4.0)).child(
+                LabelButton::new("library-publish", tr("Publish")).disabled(!any).focusable(cx).on_click(move |window, cx| publish(window, cx)),
+            ),
+        );
 
     popover_window(Open::At(Point { x: px(crate::panels::RAIL_W + 24.0), y: px(116.0) }))
         .width(320.0)
