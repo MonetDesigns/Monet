@@ -6,8 +6,8 @@
 > `auto/gpu/cpu` 三档偏好（引擎命令 + Preferences ▸ Rendering）、场景 IR、实例化
 > SDF 图元（圆角矩形/椭圆/多边形/星形）、四类渐变、裁剪、路径填充与描边网格（4× MSAA）、文字字形
 > 网格、离屏剪影 + 六 pass 盒模糊的投影/内阴影/图层模糊、八级加权混合的分级模糊、按段 resolve 的背景
-> 模糊回读、逐 cell 64 位哈希的 Mono/Duo/Multi 颗粒、整像素散射的纹理粗糙边、单叶组透明度、CPU↔GPU
-> 像素 diff（17 项对照测试），UI 画布已接线并整帧回退。**所有内置效果按产品计划弃用，后续效果转到外置 WGSL，
+> 模糊回读、逐 cell 64 位哈希的 Mono/Duo/Multi 颗粒、整像素散射的纹理粗糙边、单叶组透明度、动画导出
+> 切到 `figcraft-gpu`、CPU↔GPU 像素 diff（17 项对照测试），UI 画布已接线并整帧回退。**所有内置效果按产品计划弃用，后续效果转到外置 WGSL，
 > 本分支不再新增或扩展内置效果**；M5–M7 的非效果核心为设计与接口。
 > 日期：2026-11-27
 
@@ -265,11 +265,14 @@ match figcraft_gpu::render::Renderer::global().render(&scene) { Ok(rgba) => …,
 
 ### M6 导出链路
 
-- GPU 出帧 → 回读（`COPY_BYTES_PER_ROW_ALIGNMENT` 处理）→ 直接交编码器（PNG/JPEG/WebP/视频）。
+- **已落地（过渡）**：动画导出的 `set_export_frame_hook` 从旧 `ui-gpui::gpu` 的纯色矩形场景切到
+  `figcraft-gpu`：`doc_scene::build_subtree` 判支持度、`render::render_if_gpu` 出帧，再包成
+  `Pixmap` 交给原编码链路。用户强制 CPU 或无适配器时仍回落 CPU。带外置材质的区域导出继续走
+  CPU 多 pass + `shade_gpu`，两条路径互不替代。
 - 大图分块：超过 `max_texture_dimension_2d` 时按 band 渲染再拼；导出进度回调 + 取消令牌
-  （`AtomicBool`），取消后释放纹理。
-- 与 `render::set_export_frame_hook` 的既有钩子合并：动画导出只保留一条 GPU 路径。
-- **验收**：同一文档 GPU 导出与 CPU 导出 diff 达标；取消在 1 帧内生效；4K/8K 不 OOM。
+  （`AtomicBool`），取消后释放纹理（**未做**）。
+- **验收**：同一文档 GPU 导出与 CPU 导出 diff 达标（椭圆帧已加对照）；取消在 1 帧内生效；
+  4K/8K 不 OOM（**未做**）。
 
 ### M7 一致性
 
