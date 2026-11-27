@@ -464,24 +464,25 @@ pub fn frosted_backdrop(back: &Pixmap, radius: f32) -> Pixmap {
     let want = (l0 + 1.0).min(top);
     let mut chain = vec![back.clone()];
     while (chain.len() as f32 - 1.0) < want {
-        let Some(next) = half(chain.last().expect("chain starts with the backdrop")) else { break };
+        let Some(last) = chain.last() else { break };
+        let Some(next) = half(last) else { break };
         chain.push(next);
     }
     let i0 = (l0 as usize).min(chain.len() - 1);
     let i1 = (i0 + 1).min(chain.len() - 1);
     let Some(mut fine) = upsample(&chain[i0], w, h) else { return back.clone() };
-    if i1 != i0 {
-        if let Some(coarse) = upsample(&chain[i1], w, h) {
-            let cd = coarse.data();
-            let fd = fine.data_mut();
-            for y in 0..h {
-                for x in 0..w {
-                    let i = ((y * w + x) * 4) as usize;
-                    for c in 0..4 {
-                        let a = f32::from(fd[i + c]);
-                        let b = f32::from(cd[i + c]);
-                        fd[i + c] = (a * (1.0 - t) + b * t).round().clamp(0.0, 255.0) as u8;
-                    }
+    if i1 != i0
+        && let Some(coarse) = upsample(&chain[i1], w, h)
+    {
+        let cd = coarse.data();
+        let fd = fine.data_mut();
+        for y in 0..h {
+            for x in 0..w {
+                let i = ((y * w + x) * 4) as usize;
+                for c in 0..4 {
+                    let a = f32::from(fd[i + c]);
+                    let b = f32::from(cd[i + c]);
+                    fd[i + c] = (a * (1.0 - t) + b * t).round().clamp(0.0, 255.0) as u8;
                 }
             }
         }

@@ -76,15 +76,12 @@ impl DeviceVariant {
 
     /// The screen rectangle for an orientation, falling back to any orientation.
     pub fn screen_rect(&self, orientation: &str) -> Option<[f64; 4]> {
-        self.screen_rects.get(orientation).copied()
-            .or_else(|| self.screen_rects.values().next().copied())
+        self.screen_rects.get(orientation).copied().or_else(|| self.screen_rects.values().next().copied())
     }
 
     /// Corner radii for an orientation, falling back to any orientation.
     pub fn radii(&self, orientation: &str) -> (f64, f64) {
-        let pick = |m: &std::collections::BTreeMap<String, f64>| {
-            m.get(orientation).copied().or_else(|| m.values().next().copied()).unwrap_or(0.0)
-        };
+        let pick = |m: &std::collections::BTreeMap<String, f64>| m.get(orientation).copied().or_else(|| m.values().next().copied()).unwrap_or(0.0);
         (pick(&self.screen_radii), pick(&self.outer_radii))
     }
 }
@@ -153,10 +150,8 @@ impl DeviceCatalog {
     /// Resolve a document's `device` + `variant` pair. Old documents store a variant name in
     /// `device`; those keep working by finding its family. `None` / `Custom size` are not here.
     pub fn resolve(&self, device: &str, variant: Option<&str>) -> Option<&DeviceVariant> {
-        if let Some(v) = variant.filter(|v| !v.is_empty()) {
-            if let Some(found) = self.variant(v) {
-                return Some(found);
-            }
+        if let Some(found) = variant.filter(|v| !v.is_empty()).and_then(|v| self.variant(v)) {
+            return Some(found);
         }
         if let Some(f) = self.family(device) {
             return f.variants.first();
@@ -239,6 +234,16 @@ pub fn load_dir(dir: &Path) -> Result<usize, String> {
     Ok(n)
 }
 
+/// The standard macOS app layout: `Monet.app/Contents/Resources/assets/devices`.
+///
+/// Kept as a pure path function so it can be tested on any host. It returns `None` when the
+/// manifest is absent; callers only use it on macOS, where this layout is what packaging writes.
+fn macos_bundle_dir(exe: &Path) -> Option<PathBuf> {
+    let contents = exe.parent()?.parent()?;
+    let d = contents.join("Resources").join("assets").join("devices");
+    d.join(MANIFEST_FILE).is_file().then_some(d)
+}
+
 /// Locate the bundled factory directory (an asset beside the executable, or the repository's
 /// `assets/devices` in a development build). Never compiled in.
 fn bundled_dir() -> Option<PathBuf> {
@@ -251,6 +256,12 @@ fn bundled_dir() -> Option<PathBuf> {
     if let Ok(exe) = std::env::current_exe()
         && let Some(parent) = exe.parent()
     {
+        // A packaged Monet.app keeps the catalogue under Contents/Resources, not next to the
+        // Mach-O. Try that before the development-tree fallbacks so an installed app never
+        // depends on the build machine's source path.
+        if let Some(d) = macos_bundle_dir(&exe) {
+            return Some(d);
+        }
         let d = parent.join("assets").join("devices");
         if d.join(MANIFEST_FILE).is_file() {
             return Some(d);
@@ -383,5 +394,17 @@ mod tests {
         assert_eq!(c.families.len(), 13);
         assert_eq!(c.variant_names().len(), 25);
         assert!(!c.resolve("iPhone 17", Some("iPhone 17 Pro")).unwrap().colors.is_empty());
+    }
+
+    #[test]
+    fn macos_bundle_catalogue_is_found_from_contents_macos() {
+        let root = std::env::temp_dir().join(format!("monet-devices-bundle-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let devices = root.join("Contents").join("Resources").join("assets").join("devices");
+        std::fs::create_dir_all(&devices).unwrap();
+        std::fs::write(devices.join(MANIFEST_FILE), JSON.as_bytes()).unwrap();
+        let exe = root.join("Contents").join("MacOS").join("Monet");
+        assert_eq!(macos_bundle_dir(&exe), Some(devices));
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

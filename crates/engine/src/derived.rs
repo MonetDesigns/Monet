@@ -30,6 +30,8 @@ fn test_panic() {}
 
 /// Keep derived state consistent after edits: text boxes resize to their content, groups wrap
 /// their children, instances follow their main components, auto layout re-flows.
+// Ordered passes over the same dirty set; each pass reads what the previous one wrote.
+#[allow(clippy::cognitive_complexity)]
 pub fn normalize(doc: &mut Document, before: &Document) {
     test_panic();
     // Only what was touched since the last normalisation (edited, added or removed).
@@ -133,7 +135,6 @@ pub fn normalize(doc: &mut Document, before: &Document) {
     touched.extend(doc.take_dirty());
     // 4. Auto layout for frames where something that sizes or places layers changed.
     let moved: Vec<NodeId> = live(doc, &touched).into_iter().filter(|id| affects_layout(before, doc, *id)).collect();
-    let unchanged_box = |a: &Node, b: &Node| a.transform == b.transform && a.width == b.width && a.height == b.height && a.parent == b.parent;
     let run = |frames: BTreeSet<NodeId>, doc: &mut Document| {
         let mut frames: Vec<NodeId> = frames.into_iter().collect();
         frames.sort_by_key(|id| std::cmp::Reverse(doc.ancestors(*id).len()));

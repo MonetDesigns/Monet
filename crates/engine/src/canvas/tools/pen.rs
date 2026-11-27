@@ -529,10 +529,10 @@ impl Session {
         }
         // A finished pen path leaves the drawing selection behind; `edit_vector_with` (Escape /
         // Enter) re-establishes a proper edit session, so only clear the Pen-drawing one here.
-        if let Ok(ds) = self.ds_mut() {
-            if ds.vector_edit.as_ref().is_some_and(|ve| ve.tool == VTool::Pen) {
-                ds.vector_edit = None;
-            }
+        if let Ok(ds) = self.ds_mut()
+            && ds.vector_edit.as_ref().is_some_and(|ve| ve.tool == VTool::Pen)
+        {
+            ds.vector_edit = None;
         }
         Ok(())
     }

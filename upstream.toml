@@ -1,0 +1,13 @@
+# Upstream anchor for `cargo xtask upstream-report` and `docs/upstream-sync.md`.
+# Update `commit`, `commit_date`, `mirror_commit` and `audited` after each sync PR.
+# `mirror` is the local remote ref that mirrors storytold/figcraft main (`git fetch benchmark`).
+
+[upstream]
+repository = "https://github.com/storytold/figcraft"
+commit = "e1361cb15a6dad1f84234c7edc00ac8acf6cfa26"
+commit_date = "2026-11-26"
+mirror = "benchmark/main"
+compare = "upstream/main"
+mirror_commit = "b45255bb6fe2f90953c4f4e71ea9e40ab500af09"
+mirror_date = "2026-11-18"
+audited = "2026-11-26"

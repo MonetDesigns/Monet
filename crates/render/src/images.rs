@@ -84,7 +84,9 @@ impl PixmapCache {
 }
 
 /// The sides image `hash` is decoded at in the cache (any filters and profile), smallest first.
+// Its test module (`large_image_tests`) is not declared in `lib.rs`, so this helper is unused.
 #[cfg(test)]
+#[allow(dead_code)]
 pub(crate) fn cached_sides(hash: &str) -> Vec<u32> {
     let c = cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut sides: Vec<u32> = c.map.keys().filter(|k| k.0 == hash).map(|k| k.3).collect();

@@ -1,0 +1,7 @@
+# One toolchain for every checkout: `stable` with the lint/format components the gate needs.
+# The numbers in docs/known-failures.md were measured with stable 1.99.1 (2026-10-13); when a new
+# stable changes them, re-measure and update that file in the same PR.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

@@ -180,7 +180,8 @@ fn known_device(name: &str) -> Option<String> {
     if ["None", PrototypeSettings::CUSTOM_DEVICE].iter().any(|d| d.eq_ignore_ascii_case(name)) {
         return Some(if name.eq_ignore_ascii_case("None") { "None".into() } else { PrototypeSettings::CUSTOM_DEVICE.into() });
     }
-    crate::devices::family_names().into_iter()
+    crate::devices::family_names()
+        .into_iter()
         .chain(crate::devices::family_names().iter().flat_map(|f| crate::devices::variant_names(f)).collect::<Vec<_>>())
         .find(|d| d.eq_ignore_ascii_case(name))
 }
@@ -234,9 +235,10 @@ fn settings(s: &mut Session, p: &Value) -> Result<Value> {
                 // Variant names are globally unique in the catalogue, so a variant can be
                 // picked regardless of which family is current (the preview menu does this).
                 let cat = figcraft_devices::catalog();
-                let found = cat.variant(name).map(|x| x.name.clone()).or_else(|| {
-                    PrototypeSettings::fallback_devices().into_iter().find(|d| d.name.eq_ignore_ascii_case(name)).map(|d| d.name)
-                });
+                let found = cat
+                    .variant(name)
+                    .map(|x| x.name.clone())
+                    .or_else(|| PrototypeSettings::fallback_devices().into_iter().find(|d| d.name.eq_ignore_ascii_case(name)).map(|d| d.name));
                 match found {
                     Some(x) => Some(x),
                     None => return Err(bad(cmd, format!("variant: unknown device variant {name}"))),
@@ -276,10 +278,11 @@ fn settings(s: &mut Session, p: &Value) -> Result<Value> {
     }
     if let Some(v) = var {
         // Picking a variant also selects its family when no family is chosen yet.
-        if !v.is_empty() && (next.device == "None" || next.device.is_empty()) {
-            if let Some(fam) = figcraft_devices::catalog().family_of(&v) {
-                next.device = fam.name.clone();
-            }
+        if !v.is_empty()
+            && (next.device == "None" || next.device.is_empty())
+            && let Some(fam) = figcraft_devices::catalog().family_of(&v)
+        {
+            next.device = fam.name.clone();
         }
         next.variant = v;
     }

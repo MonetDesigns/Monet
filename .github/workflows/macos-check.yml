@@ -1,0 +1,47 @@
+name: macOS check
+
+# A lightweight macOS compile check, not the release packager. macOS is deliberately absent from
+# the default gate (the upstream playbook): runners are shared with release builds. This job runs
+# only when a PR carries the `full-ci` label, or by manual dispatch. The real DMG/sign/notarize
+# path stays in release.yml behind the `release` environment.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-check-${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'full-ci') && (github.event.action != 'labeled' || github.event.label.name == 'full-ci') && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    name: Monet compile (aarch64)
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (contains(github.event.pull_request.labels.*.name, 'full-ci') &&
+       (github.event.action != 'labeled' || github.event.label.name == 'full-ci'))
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@v2.23.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: step-security/dtolnay-rust-toolchain@v1.0.0
+        with:
+          toolchain: stable
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Check the desktop app
+        run: cargo check --locked -p monet
+      - name: Test the external device catalogue
+        run: cargo test --locked -p figcraft-devices --lib

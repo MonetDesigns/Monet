@@ -225,14 +225,14 @@ MacBook Air/Neo/Pro/Pro XDR 和 iMac。
 需要较新的稳定版 Rust 工具链（edition 2024，`rust-version = 1.95`）。Windows 上需 MSVC 工具链。
 
 ```sh
-cargo run -p figcraft-ui-gpui --example run
+cargo run -p monet
 ```
 
 GPU 现在默认开启。外置 WGSL 材质既在画布上执行，也会按导出倍率烘进 PNG、JPG、WebP——玻璃卡片导出的就是玻璃，不再是它的平涂底色。只有显式关掉默认 feature 才是纯 CPU 构建（不执行 shader）：
 
 ```sh
-cargo run -p figcraft-ui-gpui --example run                        # 默认 GPU
-cargo run -p figcraft-ui-gpui --example run --no-default-features  # 纯 CPU
+cargo run -p monet                                  # 默认 GPU
+cargo run -p monet --no-default-features            # 纯 CPU
 ```
 
 测试：

@@ -232,10 +232,9 @@ fn display_grids(v: &Value, warnings: &mut Vec<String>) -> Vec<LayoutGrid> {
             }
         };
         let mut native = match kind {
-            GridKind::Grid => LayoutGrid::default(),
             GridKind::Columns => LayoutGrid::columns(),
             GridKind::Rows => LayoutGrid::rows(),
-            GridKind::Diagonal | GridKind::Rings => unreachable!("Penpot import only yields square/column/row grids"),
+            _ => LayoutGrid::default(),
         };
         native.kind = kind;
         native.visible = grid.get("display").and_then(Value::as_bool) != Some(false);

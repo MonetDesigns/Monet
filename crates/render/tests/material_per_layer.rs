@@ -11,6 +11,8 @@
 //! No GPU is needed: we stand in for the backend by putting an opaque magenta raster under the
 //! request's own key, then assert frame 2 paints magenta over the node at every zoom.
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::collections::HashMap;
 use std::sync::Arc;
 

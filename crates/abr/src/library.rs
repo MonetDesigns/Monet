@@ -235,17 +235,29 @@ pub fn import(path: &Path) -> Result<usize, String> {
 /// The bundled file is installed whenever it differs from the user's copy, not only on first run:
 /// returning early because *some* `.abr` was there left an old factory file in place for ever, so
 /// a fixed preset never reached anyone who had launched the app once.
+/// The standard macOS app layout: `Monet.app/Contents/Resources/assets/brushes/monet-defaults.abr`.
+fn macos_bundle_default(exe: &Path) -> Option<PathBuf> {
+    let contents = exe.parent()?.parent()?;
+    let p = contents.join("Resources").join("assets").join("brushes").join("monet-defaults.abr");
+    p.is_file().then_some(p)
+}
+
 pub fn bootstrap() -> Result<usize, String> {
     let dir = brushes_dir();
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Some(p) = std::env::var_os("MONET_ASSETS_DIR") {
         candidates.push(PathBuf::from(p).join("brushes").join("monet-defaults.abr"));
     }
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(parent) = exe.parent()
-    {
-        candidates.push(parent.join("assets").join("brushes").join("monet-defaults.abr"));
-        candidates.push(parent.join("..").join("assets").join("brushes").join("monet-defaults.abr"));
+    if let Ok(exe) = std::env::current_exe() {
+        // The .app keeps resources under Contents/Resources; this must win over the source-tree
+        // fallback when Monet is installed.
+        if let Some(p) = macos_bundle_default(&exe) {
+            candidates.push(p);
+        }
+        if let Some(parent) = exe.parent() {
+            candidates.push(parent.join("assets").join("brushes").join("monet-defaults.abr"));
+            candidates.push(parent.join("..").join("assets").join("brushes").join("monet-defaults.abr"));
+        }
     }
     candidates.push(PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/brushes/monet-defaults.abr")));
     for p in candidates {

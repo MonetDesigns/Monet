@@ -430,11 +430,8 @@ impl VectorNetwork {
     /// the profile of a smoothed polygon's corners (`figcraft_geom::smoothed_corner`). Other
     /// rounded points (on open branches, or next to a curved segment) keep the plain arc, and a
     /// point without a radius stays sharp. Without smoothing this is [`Self::rounded`].
-    pub fn rounded_smoothed(&self, smoothing: f64) -> Option<VectorNetwork> {
-        if !self.vertices.iter().any(|v| v.radius > 0.0) {
-            return None;
-        }
-        let smoothing = if smoothing.is_finite() { smoothing.clamp(0.0, 1.0) } else { 0.0 };
+    /// Which segments meet each vertex, and at which end (`true` for `a`, `false` for `b`).
+    fn incident_segments(&self) -> Vec<Vec<(usize, bool)>> {
         let mut incident: Vec<Vec<(usize, bool)>> = vec![Vec::new(); self.vertices.len()];
         for (i, s) in self.segments.iter().enumerate() {
             for (v, at_a) in [(s.a, true), (s.b, false)] {
@@ -443,6 +440,15 @@ impl VectorNetwork {
                 }
             }
         }
+        incident
+    }
+
+    pub fn rounded_smoothed(&self, smoothing: f64) -> Option<VectorNetwork> {
+        if !self.vertices.iter().any(|v| v.radius > 0.0) {
+            return None;
+        }
+        let smoothing = if smoothing.is_finite() { smoothing.clamp(0.0, 1.0) } else { 0.0 };
+        let incident = self.incident_segments();
         // The segments that bound a closed region, where corners take smoothing. A segment
         // inferred as a loop's close is walked as part of that loop below, so its end corners
         // take smoothing too — whether or not deletion has already put it in the loop.
@@ -455,10 +461,10 @@ impl VectorNetwork {
         }
         if smoothing > 0.0 {
             for lp in self.regions.iter().flat_map(|r| r.loops.iter()) {
-                if let Some(c) = self.closing_segment(lp, &index) {
-                    if let Some(x) = on_loop.get_mut(c) {
-                        *x = true;
-                    }
+                if let Some(c) = self.closing_segment(lp, &index)
+                    && let Some(x) = on_loop.get_mut(c)
+                {
+                    *x = true;
                 }
             }
         }
@@ -635,12 +641,7 @@ impl VectorNetwork {
         let own = |at_a: bool, t: f64| if at_a { t } else { 1.0 - t };
         let closed = |s: usize| on_loop.get(s).copied().unwrap_or(false);
         // A point's own smoothing overrides the layer's; both are clamped to 0..=1.
-        let smoothing = self
-            .vertices
-            .get(v)
-            .and_then(|x| x.smoothing)
-            .unwrap_or(smoothing)
-            .clamp(0.0, 1.0);
+        let smoothing = self.vertices.get(v).and_then(|x| x.smoothing).unwrap_or(smoothing).clamp(0.0, 1.0);
         if smoothing > 0.0
             && is_line(&c1)
             && is_line(&c2)

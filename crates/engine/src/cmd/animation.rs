@@ -5,6 +5,8 @@
 //! the geometry.
 
 use super::CommandSpec;
+// Animation commands read every parameter through the shared command helpers.
+#[allow(clippy::wildcard_imports)]
 use crate::params::*;
 use crate::{EngineError, Result, Session, bad, spec};
 use figcraft_doc::anim::motion::{self, AnimProperty, Clip, ClipKind, ClipMode, Ease, NodeMotion};
@@ -221,7 +223,7 @@ fn motion_keyframe(s: &mut Session, p: &Value) -> Result<Value> {
             property.map_or_else(|| doc.node(*id).map(|n| n.motion.tracks.iter().map(|t| t.property).collect()).unwrap_or_default(), |p| vec![p]);
         let mut keys: Vec<(AnimProperty, motion::AnimValue)> = Vec::new();
         for prop in props {
-            let v = value.clone().or_else(|| doc.node(*id).and_then(|n| motion::keyframed_value_at(n, prop, time as f64)));
+            let v = value.or_else(|| doc.node(*id).and_then(|n| motion::keyframed_value_at(n, prop, time as f64)));
             if let Some(v) = v {
                 keys.push((prop, v));
             }
@@ -310,10 +312,10 @@ fn motion_keyframe_copy(s: &mut Session, p: &Value) -> Result<Value> {
     // Optional explicit property list; otherwise every animated track participates.
     let props: Option<Vec<AnimProperty>> =
         p.get("properties").and_then(Value::as_array).map(|arr| arr.iter().filter_map(|v| v.as_str().and_then(property_of)).collect());
-    if let Some(list) = &props {
-        if list.is_empty() {
-            return Err(bad(cmd, "`properties` is empty or has no known animatable property"));
-        }
+    if let Some(list) = &props
+        && list.is_empty()
+    {
+        return Err(bad(cmd, "`properties` is empty or has no known animatable property"));
     }
     let ids = req_targets(cmd, s, p)?;
     let doc = s.doc_mut()?;

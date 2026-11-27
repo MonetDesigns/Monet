@@ -645,17 +645,17 @@ impl<'a> Expr<'a> {
         // An export followed by a swizzle (`nodeSize.y`, `quad.w`) selects one component. This is
         // what lets a 0..100 control express a ratio of the component's own size instead of an
         // absolute pixel value.
-        if let Some((name, swizzle)) = t.split_once('.') {
-            if let Some(vals) = self.exports.get(name) {
-                let idx = match swizzle {
-                    "x" | "r" => 0,
-                    "y" | "g" => 1,
-                    "z" | "b" => 2,
-                    "w" | "a" => 3,
-                    _ => return Err(Error::Parse(format!("bad export swizzle: {swizzle}"))),
-                };
-                return Ok(vals.get(idx).copied().unwrap_or(0.0));
-            }
+        if let Some((name, swizzle)) = t.split_once('.')
+            && let Some(vals) = self.exports.get(name)
+        {
+            let idx = match swizzle {
+                "x" | "r" => 0,
+                "y" | "g" => 1,
+                "z" | "b" => 2,
+                "w" | "a" => 3,
+                _ => return Err(Error::Parse(format!("bad export swizzle: {swizzle}"))),
+            };
+            return Ok(vals.get(idx).copied().unwrap_or(0.0));
         }
         if let Some(vals) = self.exports.get(&t) {
             return Ok(vals.first().copied().unwrap_or(0.0));

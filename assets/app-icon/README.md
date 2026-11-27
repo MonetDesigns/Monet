@@ -28,7 +28,7 @@ the project owner. License: see `LICENSE.txt`.
 - `monet-small.svg`: lighter trace; also the hicolor scalable icon.
 - `monet-<size>.png` (16–1024): renders on the macOS grid; `packaging/macos/package.sh` builds
   the `.icns` from them.
-- `monet.ico`: Windows icon, 16–256 px, embedded in the `.exe` by `apps/figcraft/build.rs`.
+- `monet.ico`: Windows icon, 16–256 px, embedded in `monet.exe` by `apps/monet/build.rs`.
 - `hicolor/<size>/apps/app.monet.design.png` (16–512) and `hicolor/scalable/...svg`:
   Linux icon theme; the 256 px one is also the runtime window icon off macOS.
 

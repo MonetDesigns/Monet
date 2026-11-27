@@ -24,7 +24,7 @@ fn inside(kind: usize, x: f64, y: f64) -> bool {
     let u = x + 0.5; // stretch shapes span x 0..1 along the path
     match kind {
         // taper: a lens, blunt at both ends.
-        0 => u >= 0.0 && u <= 1.0 && y.abs() <= 0.5 * (PI * u).sin().max(0.0).powf(0.8),
+        0 => (0.0..=1.0).contains(&u) && y.abs() <= 0.5 * (PI * u).sin().max(0.0).powf(0.8),
         // ink: a blunt start, uneven edges and a long tail.
         1 => {
             if !(0.0..=1.0).contains(&u) {
@@ -36,7 +36,7 @@ fn inside(kind: usize, x: f64, y: f64) -> bool {
             y >= top.min(bottom) && y <= top.max(bottom)
         }
         // ribbon: edges that cross three times.
-        2 => u >= 0.0 && u <= 1.0 && y.abs() <= (0.5 * (1.5 * PI * u).cos()).abs(),
+        2 => (0.0..=1.0).contains(&u) && y.abs() <= (0.5 * (1.5 * PI * u).cos()).abs(),
         // bristle: four thin strands with ragged ends.
         3 => {
             if !(0.0..=1.0).contains(&u) {
@@ -107,7 +107,7 @@ fn raster(kind: usize) -> Vec<u8> {
     out
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let out = std::env::args().nth(1).unwrap_or_else(|| "assets/brushes/monet-defaults.abr".to_string());
     let brushes: Vec<LegacyBrush> = NAMES
         .iter()
@@ -119,12 +119,13 @@ fn main() {
             tip: LegacyTip::Sampled(AbrSample { id: String::new(), width: EDGE, height: EDGE, depth: 8, data: raster(i) }),
         })
         .collect();
-    let bytes = write_v12(2, &brushes, true).expect("the factory brush file can be written");
+    let bytes = write_v12(2, &brushes, true).map_err(std::io::Error::other)?;
     if let Some(parent) = std::path::Path::new(&out).parent()
         && !parent.as_os_str().is_empty()
     {
-        std::fs::create_dir_all(parent).expect("create the output directory");
+        std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&out, &bytes).expect("write the factory brush file");
+    std::fs::write(&out, &bytes)?;
     println!("{out}: {} brushes, {} bytes", brushes.len(), bytes.len());
+    Ok(())
 }

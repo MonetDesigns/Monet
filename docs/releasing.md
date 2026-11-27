@@ -1,25 +1,37 @@
-# Releasing FigCraft
+# Releasing Monet
 
-Every push to the `release` branch runs `.github/workflows/release.yml`. The workflow builds
-installers for macOS, Windows, Linux and the web, plus a FreeBSD tarball and the collaboration
-server for Linux, then creates or updates a **draft** GitHub Release named `FigCraft v<version>`.
-Nobody sees a draft until a maintainer publishes it.
+> **Status: desktop packaging migrated; dry run pending.** `packaging/` now builds `-p monet` and
+> every desktop artifact is named `monet`. The web front-end, headless CLI and collaboration server
+> are still the upstream `figcraft-*` crates, so their release channels are switched off in
+> `.github/workflows/release.yml` until each carries its own Monet name. Automatic releases stay off
+> until one `workflow_dispatch` dry run produces a draft that installs and starts.
 
-This is FigCraft's [release playbook](release-playbook.md). User-facing names say **FigCraft**.
-Files, binaries and ids stay
-lowercase (`figcraft-<version>-<platform>-<arch>.<ext>`, `app.monet.design`).
+`workflow_dispatch` builds the unsigned desktop channels (Linux, Flatpak, Windows) without creating
+a release; macOS and the draft job need the `release` environment and are skipped off that branch.
+A manual run is a dry run until the checklist below passes.
 
-## FigCraft's names
+## Monet's names
 
 | Thing | Value |
 |---|---|
-| Display name | FigCraft |
-| Packages / binaries | `figcraft` (app), `figcraft-cli` (headless CLI), `figcraft-web` (browser) |
-| Bundle / app id | `app.monet.design` (CLI signing identifier `app.monet.design-cli`) |
+| Display name | Monet |
+| Desktop package / binary | `monet` |
+| Bundle / app id | `app.monet.design` |
 | Native document | `.figcraft`, MIME `application/x-figcraft`, UTI `app.monet.design.document` |
 | Also opens | `.svg`, `.png`, `.jpg`/`.jpeg` ("Open with", never the default app) |
 | WiX UpgradeCode | `7F8B9827-D065-41B7-A514-2A454B21F484` (fixed forever; never reuse it in another app) |
 | Linux categories | `Graphics;2DGraphics;VectorGraphics;X-Design;` (`Design` isn't a registered freedesktop category, so `desktop-file-validate` rejects it) |
+
+Legacy names that are **not** release targets yet:
+
+| Thing | Current name | Why it is off |
+|---|---|---|
+| Headless CLI | `figcraft-cli` | its clap name, help, man pages and completion files still say figcraft |
+| Collaboration server | `figcraft-server` | its crate, service units, install paths and docs still say figcraft |
+| Browser build | `figcraft-web` | no Monet web front-end exists; the tree is the port reference |
+
+Do not stage any of them into a Monet installer until the rename lands: `packaging/env.sh` builds
+only `monet`, and `release.yml` sets `has-web`, `has-server` and `has-freebsd` to false.
 
 ## Cutting a release
 
@@ -27,138 +39,110 @@ lowercase (`figcraft-<version>-<platform>-<arch>.<ext>`, `app.monet.design`).
    `Cargo.toml`:
 
    ```sh
-   cargo run -p xtask -- version              # prints the current version, e.g. 0.1.0
-   cargo run -p xtask -- version set 0.2.0    # or 0.2.0-rc.1; updates Cargo.toml and Cargo.lock
+   cargo run -p xtask -- version              # prints the current version, e.g. 2648.15.0
+   cargo run -p xtask -- version set 2648.16.0 # or 2648.16.0-rc.1; updates Cargo.toml and Cargo.lock
    ```
 
-   (`cargo xtask …` is the same once `.cargo/config.toml` has the `xtask = "run -p xtask --"`
-   alias.) Commit `Cargo.toml` + `Cargo.lock`.
-2. **Fast-forward `release` to `main`** and push (release managers only; the ruleset enforces it).
-   The workflow starts by itself.
-3. **Wait for the draft** (`FigCraft v0.2.0`, tagged `v0.2.0` on the pushed commit) with every
-   artifact and `SHA256SUMS.txt`. Notes are generated from the merged PRs.
-4. **Check it.** Any `::warning::` in the job summaries means a signing secret was missing and
-   that artifact is unsigned: fix the secret and re-run, don't publish.
-5. **Publish** the draft. Versions with a pre-release suffix (`-rc.1`) are marked pre-release.
+   Commit `Cargo.toml` + `Cargo.lock`.
+2. **Run the workflow manually** until automatic releases are re-enabled:
+   `gh workflow run release.yml --ref <branch> -f version=2648.16.0-rc.1`.
+3. **Check the draft** (`Monet v2648.16.0`, tagged `v2648.16.0` on the pushed commit) with every artifact
+   and `SHA256SUMS.txt`. Warnings in the job summaries mean a signing secret was missing.
+4. **Install and start each package** before publishing: the AppImage/deb/rpm on Linux, the MSI and
+   portable zip on Windows, the DMG on macOS. Launch the app, then check `monet --version` exits 0
+   (release Windows builds have no console output; the About window shows the same version).
+5. **Publish** the draft, then re-enable `push: branches: [release]` in `release.yml`.
 
 Pushing to `release` again before publishing rebuilds the same draft and replaces its assets.
 After the draft is published, the workflow refuses to touch that version again, so bump first.
 
-**Dry runs:** `gh workflow run release.yml --ref <branch> -f version=0.2.0-rc.1` builds every
-unsigned platform (Linux, Flatpak, FreeBSD, Web, the server) on any branch. Only the macOS,
-Windows and draft-release jobs declare `environment: release`; off the `release` branch the
-environment refuses them (0 steps) and no release is created. The `version` input is applied with
-`xtask version set` before building, so the binaries report it too.
+## Build variables
 
-## The default server
+`packaging/env.sh` reads `MONET_VERSION`, `MONET_BUILD_SHA` and `MONET_BUILD_DATE`, with the old
+`FIGCRAFT_*` names accepted as fallbacks for one transition. The shared release action exports the
+`MONET_*` names because `app-name` is `monet`.
 
-Share ▸ Online uses the server in Preferences, which starts as the public one built into the app
-(`figcraft_engine::live::DEFAULT_SERVER`). Distributions that would rather not ship that default
-set `FIGCRAFT_DEFAULT_SERVER` when building: to their own server's address (`wss://host/`), or to
-nothing for a build with no default, where online sharing stays off until the user enters a
-server (sharing on the local network works either way):
+The engine and document crates still read their upstream build variables:
 
 ```sh
-FIGCRAFT_DEFAULT_SERVER= cargo build --release -p figcraft          # no default server
-FIGCRAFT_DEFAULT_SERVER=wss://design.example.org/ cargo build --release -p figcraft
+FIGCRAFT_DEFAULT_SERVER= cargo build --release -p monet          # no default server
+FIGCRAFT_DEFAULT_SERVER=wss://design.example.org/ cargo build --release -p monet
+FIGCRAFT_DEFAULT_FONT="Noto Sans Thai" cargo build --release -p monet
 ```
 
-The release workflow leaves it unset. The public server's terms are in
-[`online-sharing-terms.md`](online-sharing-terms.md).
-
-## The default font
-
-New text starts in Inter (`figcraft_doc::DEFAULT_FONT`). A distribution whose users mostly write a
-script Inter lacks (Thai, say) can name another family with `FIGCRAFT_DEFAULT_FONT` when building;
-unset or empty means Inter. Pick a family the build embeds from craft-fonts (the web build has no
-other fonts) or one its users have installed:
-
-```sh
-FIGCRAFT_DEFAULT_FONT="Noto Sans Thai" cargo build --release -p figcraft
-```
-
-Files record each text's family, so the variable only changes what new text starts in: a file
-saved by one build keeps its fonts in a build with another default. Like any other family, it
-renders only where it is available (embedded or installed); elsewhere the text falls back to the
-faces that are. The release workflow leaves it unset.
+The release workflow leaves them unset.
 
 ## What gets built
 
-| Platform | Artifacts | Built on |
+| Platform | Artifact | Built on |
 |---|---|---|
-| macOS 11+ (universal) | `figcraft-<v>-macos-universal.dmg`, `figcraft-cli-<v>-macos-universal.zip` | `macos-15-xlarge` |
-| Windows 10+ x64 / x86 / arm64 | `figcraft-<v>-windows-<arch>.msi`, `figcraft-<v>-windows-<arch>-portable.zip` | `windows-latest` (arm64 cross-compiled) |
-| Linux x86_64 / aarch64 | `figcraft-<v>-linux-<arch>.{AppImage,AppImage.zsync,deb,rpm,tar.gz,flatpak}` | `ubuntu-22.04` / `ubuntu-22.04-arm` (Flatpak: 24.04) |
-| Linux riscv64 | `figcraft-<v>-linux-riscv64.tar.gz` (CLI smoke-tested under QEMU; needs glibc ≥ 2.39) | cross-compiled on `ubuntu-24.04` against ports.ubuntu.com riscv64 libraries |
-| FreeBSD 14 x86_64 | `figcraft-<v>-freebsd-x86_64.tar.gz` | FreeBSD 14.3 VM on `ubuntu-latest` |
-| Web | `figcraft-web-<v>.zip` (static site; [`packaging/web/README.md`](../packaging/web/README.md)) | `ubuntu-latest` |
-| Server, Linux x86_64 / aarch64 | `figcraft-server-<v>-linux-<arch>.tar.gz` (the collaboration server; [`server.md`](server.md)) | `ubuntu-22.04` / `ubuntu-22.04-arm` |
+| macOS 11+ (universal) | `monet-<v>-macos-universal.dmg` | `macos-15-xlarge` |
+| Windows 10+ x64 / x86 / arm64 | `monet-<v>-windows-<arch>.msi`, `monet-<v>-windows-<arch>-portable.zip` | `windows-latest` (arm64 cross-compiled) |
+| Linux x86_64 / aarch64 | `monet-<v>-linux-<arch>.{AppImage,AppImage.zsync,deb,rpm,tar.gz,flatpak}` | `ubuntu-22.04` / `ubuntu-22.04-arm` (Flatpak: 24.04) |
+| Linux riscv64 | `monet-<v>-linux-riscv64.tar.gz` (needs glibc ≥ 2.39) | cross-compiled on `ubuntu-24.04` against ports.ubuntu.com riscv64 libraries |
 
-`figcraft-cli` ships in every desktop package (and its own macOS zip) when `apps/figcraft-cli`
-is in the workspace: `packaging/env.sh` sets `BINS`/`HAS_CLI` from that, and `package.ps1`,
-`figcraft.wxs` (`HasCli`), `nfpm.yaml` (`#cli` lines) and the Flatpak bundle follow it.
+`monet --version` exits 0 on every platform (Windows release builds are GUI-subsystem, so they
+print nothing to a console; use a debug `cargo run -p monet -- --version` to read the string).
+Desktop packages ship no `figcraft-cli`.
 
-`figcraft --version` prints the version and, in CI builds, the commit (`FIGCRAFT_BUILD_SHA`,
-read by `apps/figcraft/build.rs`).
-
-**The collaboration server** (`apps/figcraft-server`, binary `figcraft-server`, see
-[`server.md`](server.md)) is built by the `server` job with `packaging/server/package.sh`: a
-headless binary, so not part of `BINS` (which every desktop package installs) and no installer,
-desktop file or fonts. Its archive holds the binary, the licences, `server.md` and the deployment
-examples from `packaging/server/` (systemd unit, Caddyfile, nginx; the Dockerfile builds from
-the sources). Linux only for now; elsewhere operators build it with
-`cargo build --release -p figcraft-server`.
-
-**Fonts.** Every build job, the web one included (`web-craft-fonts`), checks out
-the `craft-fonts` build input at `craft-fonts-ref` (in `release.yml`) and
-builds with `CRAFT_FONTS_DIR` and `CRAFT_FONTS_REQUIRED=1`, so releases embed its fonts and fail
-rather than ship without them. The browser has no system fonts, so a web build without craft-fonts
-can't draw text.
-`crates/text/build.rs` reads both `fonts/manifest.txt` and `fonts/latin-manifest.txt`, so the pin
-must combine the Latin presentation catalog and the current core UI faces. Required web builds
-validate the emitted Inter Regular/SemiBold and Noto Sans Georgian Regular faces after filtering;
-a missing required face, style or asset fails the required web build. Excluded Adobe rows
-are skipped before resolving their asset paths.
-Native builds retain the permitted Latin presentation faces. Source Sans 3 and Source Serif 4
-are filtered on every target under FigCraft's asset policy. The web build keeps its smaller
-allowlist: Inter, Noto Sans Georgian and Archivo SemiBold when supplied. A distribution whose
-users write another script adds the manifest families it needs, comma-separated, with
-`FIGCRAFT_WEB_FONTS` (`FIGCRAFT_WEB_FONTS="Noto Sans Thai" trunk build --release`); a named family
-the build doesn't embed gets a warning, and each one adds its size to the wasm, which must stay
-under the size gate in `packaging/web/package.sh`. Packages carry each embedded font's licence as `OFL-<family>.txt`
+**Fonts.** Every build job checks out the `craft-fonts` build input at `craft-fonts-ref` and builds
+with `CRAFT_FONTS_DIR` and `CRAFT_FONTS_REQUIRED=1`, so releases embed its fonts and fail rather
+than ship without them. `crates/text/build.rs` reads both `fonts/manifest.txt` and
+`fonts/latin-manifest.txt`, so the pin must combine the Latin presentation catalog and the current
+core UI faces. Packages carry each embedded font's licence as `OFL-<family>.txt`
 (`copy_font_licences` in `packaging/env.sh`; `Contents/Resources/Licenses` in the macOS app).
 
 ### macOS
 
 `packaging/macos/package.sh [--arch universal|aarch64|x86_64]` builds both Apple targets with
-`MACOSX_DEPLOYMENT_TARGET=11.0`, joins them with `lipo` and assembles `FigCraft.app`
-(`Contents/MacOS/FigCraft`, `Contents/Resources/FigCraft.icns`, `Info.plist` from
-`Info.plist.in`). The `.icns` is generated at packaging time with `iconutil` from the committed
-`assets/app-icon/figcraft-<size>.png` (made by `cargo xtask icon`); it is never committed.
+`MACOSX_DEPLOYMENT_TARGET=11.0`, joins them with `lipo` and assembles `Monet.app`
+(`Contents/MacOS/Monet`, `Contents/Resources/Monet.icns`, `Info.plist` from `Info.plist.in`).
+The `.icns` is generated at packaging time with `iconutil` from the committed
+`assets/app-icon/monet-<size>.png` (made by `cargo xtask icon`); it is never committed.
+
+The app reads external runtime files, so the bundle also carries
+`Contents/Resources/assets/devices` (156 files, 101.16 MiB), `Contents/Resources/assets/brushes`
+(`monet-defaults.abr`, 74.7 KB) and `Contents/Resources/assets/wgsl` (`glass.wgsl`, 17.9 KB).
+`Contents/Resources/NOTICE` and `Contents/Resources/ATTRIBUTION.md` travel with them so the binary's
+third-party notice stays inside the distributable.
+The devices are third-party device-frame artwork; `ATTRIBUTION.md` currently marks their
+redistribution licence **UNCONFIRMED**, and `--require-signing` refuses a release build until that
+entry is replaced with the real source/licence. Local ad-hoc builds may still include them for
+development.
+
 Signing goes inside-out with the hardened runtime and a timestamp (empty entitlements), then the
 app is notarized and stapled, put on a DMG with an `Applications` link (`hdiutil makehybrid` +
-`convert`), and the DMG is signed, notarized and stapled. The CLI is signed with the same
-identity and notarized as a zip. `packaging/macos/verify.sh` checks the artifacts as shipped
-(strict with secrets, warnings without).
+`convert`), and the DMG is signed, notarized and stapled. `packaging/macos/verify.sh` mounts the
+DMG, checks the inner `Monet.app` architecture with `lipo`, verifies its code signature, `Info.plist`
+identity/version keys and the three asset folders, and runs `Contents/MacOS/Monet --version` in
+addition to the DMG's own signature, notarization and Gatekeeper checks.
+
+Finder double-clicks, Open With, Dock drops and `open -a Monet.app file.figcraft` arrive through
+GPUI's macOS `open_urls` callback. Command-line files and `file://` URLs are parsed by
+`apps/monet/src/args.rs`; `figcraft://` links never open as documents. The GPUI front-end currently
+has no join dialog, so an invite link is reported instead of silently opening a bogus tab.
 
 Locally (no certificates: ad-hoc signature, no notarization):
 
 ```sh
 packaging/macos/package.sh --arch aarch64     # quick, host-only; omit --arch for universal
 packaging/macos/verify.sh --arch aarch64
-hdiutil attach -nobrowse -readonly dist/release/figcraft-*-macos-aarch64.dmg   # inspect, then detach
+hdiutil attach -nobrowse -readonly dist/release/monet-*-macos-aarch64.dmg   # inspect, then detach
 ```
+
+Release builds must use `--require-signing` (or `MONET_REQUIRE_SIGNING=1`, which
+`packaging/env.sh` sets for GitHub Actions). Missing Apple secrets or an unconfirmed device-art
+licence then fail before an ad-hoc or unreleasable package is produced.
 
 ### Windows
 
 `packaging/windows/package.ps1 -Arch x64|x86|arm64` builds with `+crt-static` (no VC++
-redistributable), checks each exe's PE machine and subsystem (app GUI, CLI console), signs the
-exes, builds the MSI with WiX v5 (`figcraft.wxs`: per-machine, Start Menu shortcut, owner of
+redistributable), checks the exe's PE machine and GUI subsystem, signs it, builds the MSI with WiX
+v5 (`monet.wxs`: per-user default with optional machine scope, Start Menu shortcut, owner of
 `.figcraft`, "Open with" for SVG/PNG/JPEG, App Paths, setup wizard with art drawn from the app
-icon), validates ICE50, signs the MSI and zips a portable build. `sign.ps1` uses a `.pfx`
-(`WINDOWS_CERTIFICATE*`) or Azure Trusted Signing (`AZURE_*`), else warns and leaves files
-unsigned. `apps/figcraft/build.rs` embeds the icon and version info with `winresource`.
-`.github/workflows/windows-arm64.yml` installs the arm64 MSI on real ARM64 hardware nightly.
+icon), validates ICE50, signs the MSI and zips a portable build. `sign.ps1` uses a `.pfx` (`WINDOWS_CERTIFICATE*`) or Azure Trusted
+Signing (`AZURE_*`), else warns and leaves files unsigned. `.github/workflows/windows-arm64.yml`
+installs the arm64 MSI on real ARM64 hardware nightly.
 
 Locally on Windows: `dotnet tool install -g wix --version 5.0.2`,
 `wix extension add -g WixToolset.UI.wixext/5.0.2 WixToolset.Util.wixext/5.0.2`, then
@@ -166,48 +150,30 @@ Locally on Windows: `dotnet tool install -g wix --version 5.0.2`,
 
 ### Linux
 
-`packaging/linux/package.sh [--formats "appimage deb rpm tar"]` stages one FHS tree (binaries,
-`app.monet.design.desktop`, hicolor icons 16–512 px, AppStream metainfo, a
-shared-mime-info file for `.figcraft`) and builds every format from it: `.tar.gz`; `.deb` and
-`.rpm` with [nfpm](https://nfpm.goreleaser.com/) (`nfpm.yaml` lists the dlopen'd runtime
-libraries as dependencies); and an `.AppImage` with update information and a `.zsync`, whose
-`AppRun` registers the desktop entry and icons on launch so Wayland docks show the right icon
-(`FIGCRAFT_NO_DESKTOP_INTEGRATION=1` opts out; covered by `apprun-test.sh`) and runs the bundled
-`figcraft-cli` for `FigCraft.AppImage cli <args>`.
+`packaging/linux/package.sh [--formats "appimage deb rpm tar"]` stages one FHS tree (the `monet`
+binary, `app.monet.design.desktop`, hicolor icons 16–512 px, AppStream metainfo, a shared-mime-info
+file for `.figcraft`) and builds every format from it: `.tar.gz`; `.deb` and `.rpm` with
+[nfpm](https://nfpm.goreleaser.com/) (`nfpm.yaml` lists the dlopen'd runtime libraries as
+dependencies); and an `.AppImage` with update information and a `.zsync`, whose `AppRun` registers
+the desktop entry and icons on launch so Wayland docks show the right icon
+(`MONET_NO_DESKTOP_INTEGRATION=1` opts out; covered by `apprun-test.sh`).
 `flatpak-bundle.sh` repackages the tarball into a `.flatpak` with
-`flatpak/app.monet.design.bundle.yml` (freedesktop 26.08). `flatpak/app.monet.design.yml`
-is the from-source manifest for a Flathub submission (not built in CI; vendor crates with
+`flatpak/app.monet.design.bundle.yml` (freedesktop 26.08). `flatpak/app.monet.design.yml` is the
+from-source manifest for a Flathub submission (not built in CI; vendor crates with
 `flatpak-cargo-generator.py` first). Both manifests keep the same runtime and `finish-args`
-(packaging-lint checks). Binaries are built on Ubuntu 22.04 and need glibc ≥ 2.35.
-The `linux-riscv64` job cross-compiles with `CROSS_ARCH`/`CROSS_TARGET`/`CROSS_COMPILE` and
+(packaging-lint checks). Binaries are built on Ubuntu 22.04 and need glibc ≥ 2.35. The
+`linux-riscv64` job cross-compiles with `CROSS_ARCH`/`CROSS_TARGET`/`CROSS_COMPILE` and
 `EMULATOR=qemu-riscv64` and packages only the tarball (`--formats tar`).
 
-### FreeBSD
+### FreeBSD, web and server
 
-The `freebsd` job runs `packaging/freebsd/package.sh` in a FreeBSD 14.3 VM
-(`vmactions/freebsd-vm`, pinned by commit) and writes a `/usr/local`-style tarball.
-`packaging/freebsd/package.sh --dry-run` checks the layout on any OS with stub binaries
-(packaging-lint runs it). `.github/workflows/freebsd.yml` builds, tests and packages nightly.
+These channels are disabled in `release.yml` and their packaging still carries upstream names:
 
-```sh
-tar -xzf figcraft-<v>-freebsd-x86_64.tar.gz --strip-components 1 -C /usr/local
-```
-
-### Web
-
-`packaging/web/package.sh` runs `trunk build --release` in `apps/figcraft-web` (`Trunk.toml`:
-`public_url = "./"`, output `dist/web`), fails if a `.wasm` exceeds 24 MiB, and zips the site
-with sample `_headers`/`.htaccess` and the hosting guide. The app uses WebGPU with a WebGL2
-fallback; `?webgl` forces WebGL2. 0.1.0: wasm 17.7 MiB raw, 6.7 MiB gzip, 4.4 MiB Brotli.
-`apps/figcraft-web/.cargo/config.toml` builds it with wasm SIMD (`+simd128`), which keeps the
-glyph rasterizer's scalar fallback out of the module.
-
-The wasm is built with the size-optimised `web-release` Cargo profile (`opt-level = "s"`, fat
-LTO, one codegen unit; `data-cargo-profile` in `apps/figcraft-web/index.html`) and then
-`wasm-opt -Oz`, which needs the wasm features rustc emits by default passed explicitly
-(`data-wasm-opt-params`). Sizes: 0.2.0 21.1 MiB and 0.3.0 25.8 MiB (failed the gate; the plugin
-interpreter and collaboration code landed) with the desktop `release` profile; 0.3.1 17.2 MiB
-with `web-release`. The desktop builds keep `release`.
+- `packaging/freebsd/package.sh` now stages `monet` and passes `--dry-run`, but the shared FreeBSD
+  action expects `ai.storyteller.monet.desktop`; keep `has-freebsd: false` until the action or the
+  desktop file naming is reconciled.
+- `packaging/web/package.sh` builds `apps/figcraft-web`; there is no Monet web front-end.
+- `packaging/server/package.sh` builds `figcraft-server`; see [`server.md`](server.md).
 
 ## Secrets
 
@@ -216,14 +182,20 @@ never repo or org secrets. Names (identical in every app): `APPLE_CERTIFICATE`,
 `APPLE_CERTIFICATE_PASSWORD`, `KEYCHAIN_PASSWORD`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`,
 `WINDOWS_CERTIFICATE`, `WINDOWS_CERTIFICATE_PASSWORD`, `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`,
 `AZURE_CLIENT_SECRET`, `AZURE_SIGNING_ENDPOINT`, `AZURE_SIGNING_ACCOUNT`, `AZURE_CERT_PROFILE`.
-Each is optional: a missing one gives an unsigned artifact and a `::warning::`. An org admin
-provisions the environment, ruleset and secrets, and
-adds the repo to the org's Default runner group so `macos-15-xlarge` can pick up the job.
+The Apple set is required for a macOS release: `MONET_REQUIRE_SIGNING=1` in GitHub Actions and
+`package.sh` / `verify.sh --require-signing` fail instead of producing an ad-hoc, unnotarized
+DMG. The Windows and Linux signing sets remain optional until their channels are enabled.
+An org admin provisions the environment, ruleset and secrets, and adds the repo to the org's
+Default runner group so `macos-15-xlarge` can pick up the job.
 
 ## Checks
 
 - `.github/workflows/ci.yml` (PRs and `main`, Linux only): fmt, clippy `-D warnings`, tests,
-  layering, asset attribution, wasm32 check. No macOS in CI (playbook).
+  layering, asset attribution, wasm32 check. The default gate deliberately stays Linux-only
+  (upstream playbook).
+- `.github/workflows/macos-check.yml`: a lightweight `cargo check -p monet` on `macos-15`, only
+  for PRs labelled `full-ci` or `workflow_dispatch`; it is not a required check and does not build
+  a DMG. The real package path is the macOS job in `release.yml`.
 - `.github/workflows/packaging-lint.yml` (changes to `packaging/` or workflows): actionlint,
   shellcheck, the AppRun test, a PowerShell parse, the MSI icon check, the FreeBSD dry run, a
   grep for other products' names, xmllint, `desktop-file-validate`, `appstreamcli validate` and

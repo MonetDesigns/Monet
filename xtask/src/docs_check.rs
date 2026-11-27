@@ -1,16 +1,26 @@
 //! Progress docs damaged by merges: a table row that appears twice, or a status line (`**Change:**
 //! kind (…; …)`) that lists the same item twice. Both happen when a merge keeps both sides of a
 //! conflict; they are never wanted.
+//!
+//! `docs/gaps.md` and `docs/target-app-parity.md` are **upstream reference documents** (see
+//! `docs/development-model.md`): their status lines are refreshed wholesale from upstream, and a
+//! duplicate there is upstream's to fix, not this repository's. They are skipped.
 
 use std::collections::HashMap;
 use std::path::Path;
 
-/// Checks `ROADMAP.md` and `docs/*.md` under `root`; prints each repeat and returns whether there
-/// were none.
+/// Docs copied from upstream whose internal status lines are not maintained here.
+fn upstream_reference(path: &Path) -> bool {
+    matches!(path.file_name().and_then(|n| n.to_str()), Some("gaps.md" | "target-app-parity.md"))
+}
+
+/// Checks `ROADMAP.md` and the maintained `docs/*.md` under `root`; prints each repeat and returns
+/// whether there were none.
 pub fn check(root: &Path) -> bool {
     let mut files = vec![root.join("ROADMAP.md")];
     if let Ok(rd) = std::fs::read_dir(root.join("docs")) {
-        let mut docs: Vec<_> = rd.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "md")).collect();
+        let mut docs: Vec<_> =
+            rd.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "md") && !upstream_reference(p)).collect();
         docs.sort();
         files.extend(docs);
     }

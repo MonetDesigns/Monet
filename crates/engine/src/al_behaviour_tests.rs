@@ -379,7 +379,7 @@ fn cross_axis_fill_survives_a_hugging_parent() {
     let mut s = Session::new();
     let f = al_frame(&mut s, json!({"sizingH": "hug", "sizingV": "hug"}));
     let a = rect(&mut s, f, 4.0, 20.0, "#FF0000");
-    let b = rect(&mut s, f, 50.0, 40.0, "#0000FF");
+    let _b = rect(&mut s, f, 50.0, 40.0, "#0000FF");
     assert_eq!(sizing(&s, f), (Sizing::Hug, Sizing::Hug));
     // Across the flow (horizontal row → vertical Fill): a non-Fill sibling is left,
     // so the parent keeps hugging and the child stays Fill.

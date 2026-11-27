@@ -4,7 +4,7 @@ The desktop app can be driven by other programs (tests, scripts, `figcraft-cli m
 sibling Crafting Apps) through a loopback socket:
 
 ```sh
-cargo run -p figcraft -- --control 7979 [file.figcraft|file.svg|image]
+cargo run -p monet -- --control 7979 [file.figcraft|file.svg|image]
 ```
 
 The app listens on `127.0.0.1:<port>` only. Each connection carries **newline-delimited JSON**:

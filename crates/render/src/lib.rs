@@ -257,6 +257,9 @@ pub fn render_view(doc: &Document, page: NodeId, view: &View, opts: &Options) ->
 
 /// [`render_view`] for a part of a view a retained render redraws: in parallel bands however few
 /// pixels it has, along its longer side (rows of a tall strip, columns of a wide one).
+// Kept for the retained-render path: the GPUI canvas redraws through `render_view` today, so
+// nothing in this workspace calls these band helpers yet.
+#[allow(dead_code)]
 pub(crate) fn render_part(doc: &Document, page: NodeId, view: &View, opts: &Options) -> Option<Pixmap> {
     start_render();
     #[cfg(not(target_arch = "wasm32"))]
@@ -278,6 +281,7 @@ pub(crate) fn render_part(doc: &Document, page: NodeId, view: &View, opts: &Opti
 
 /// [`render_bands`] across: `bands` columns, overlapping by what background blurs read.
 #[cfg(not(target_arch = "wasm32"))]
+#[allow(dead_code)]
 fn render_columns(doc: &Document, page: NodeId, view: &View, opts: &Options, bands: u32) -> Option<Pixmap> {
     use rayon::prelude::*;
     let band_w = view.width.div_ceil(bands.max(1));

@@ -181,6 +181,13 @@ pub struct WgslFile {
     pub path: PathBuf,
 }
 
+/// The standard macOS app layout: `Monet.app/Contents/Resources/assets/wgsl`.
+fn macos_bundle_material_dir(exe: &std::path::Path) -> Option<PathBuf> {
+    let contents = exe.parent()?.parent()?;
+    let p = contents.join("Resources").join("assets").join("wgsl");
+    p.is_dir().then_some(p)
+}
+
 /// The folder scanned for `.wgsl` files.
 ///
 /// `$FIGCRAFT_WGSL_DIR` wins while it exists. Otherwise the first existing candidate is used: the working
@@ -199,11 +206,16 @@ pub fn material_dir() -> PathBuf {
     }
     let cwd = std::env::current_dir().unwrap_or_default();
     let mut candidates = vec![cwd.join("assets").join("wgsl"), cwd.join("crates/ui-gpui/assets/wgsl")];
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(dir) = exe.parent()
-    {
-        candidates.push(dir.join("assets/wgsl"));
-        candidates.push(dir.join("../../../assets/wgsl"));
+    if let Ok(exe) = std::env::current_exe() {
+        // The packaged app keeps the default material under Contents/Resources. A working-directory
+        // `assets/wgsl` intentionally still wins: that is the documented external-material folder.
+        if let Some(dir) = macos_bundle_material_dir(&exe) {
+            candidates.push(dir);
+        }
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join("assets/wgsl"));
+            candidates.push(dir.join("../../../assets/wgsl"));
+        }
     }
     candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/wgsl"));
     candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/wgsl"));
