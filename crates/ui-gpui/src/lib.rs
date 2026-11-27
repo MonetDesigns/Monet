@@ -2366,6 +2366,16 @@ impl CanvasView {
                     cx.notify();
                     continue;
                 }
+                // F11 / View ▸ Full screen：gpui 只有 toggle，按 `on` 对齐到目标状态。
+                "window.fullscreen" => {
+                    let want = r.data.get("on").and_then(serde_json::Value::as_bool);
+                    let now = window.is_fullscreen();
+                    if want.map_or(true, |w| w != now) {
+                        window.toggle_fullscreen();
+                    }
+                    cx.notify();
+                    continue;
+                }
                 // A21：区域导航由 UI 侧维护，引擎只发 step。
                 "focus.region" => {
                     self.a11y.step(r.data.get("step").and_then(serde_json::Value::as_i64).unwrap_or(1));
