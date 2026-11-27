@@ -757,6 +757,13 @@ pub struct PaneState {
 
     pick: Option<(u64, NodeId)>,
 
+    /// 平台全屏切换是排队执行的（Windows gpui 0.2.2）：记住尚未落地的目标状态，避免同一帧
+    /// 内两个 `window.fullscreen {on:true}` 都读到旧状态而各排一次 toggle。
+    ///
+    /// 目标状态属于窗口，不属于共享的 `CanvasView`：A 窗排了 toggle 后 B 窗不能拿 A 的
+    /// 目标去吞掉自己的请求（CodeRabbit PR#40）。
+    fullscreen_target: Option<bool>,
+
     /// 当前修饰键状态（GPUI 不给「当前状态」，只能从事件里记）。
     mods: Modifiers,
 
@@ -1108,6 +1115,8 @@ impl CanvasView {
                 p.key_box = None;
                 p.key_box_doc = None;
                 p.pick = None;
+                // A brand-new window has no pending platform fullscreen transition of its own.
+                p.fullscreen_target = None;
                 // TabDragState 包着 Rc<RefCell<_>>：clone 会和源窗口共享拖拽记录，
                 // 另一个窗口的标签渲染会把本窗口正在拖的目标清掉（CodeRabbit PR#27/#28）。
                 p.tabs.drag = Default::default();
@@ -1505,6 +1514,8 @@ impl CanvasView {
 
             pick: None,
 
+            fullscreen_target: None,
+
             mods: Modifiers::default(),
 
             space: false,
@@ -1686,7 +1697,6 @@ impl CanvasView {
             pane_wid: 0,
 
             pick_owner: None,
-
             control_queue: Arc::new(std::sync::Mutex::new(Vec::new())),
 
             pane,
@@ -2372,6 +2382,19 @@ impl CanvasView {
                     // 分别借出去，绝不能再 `root.read/update`（会 double-lease panic）。
                     if let Err(e) = windows::requests(&self.windows, cx, root, &mut self.app.session, &r.kind, &r.data) {
                         self.toast(e, cx);
+                    }
+                    cx.notify();
+                    continue;
+                }
+                // F11 / View ▸ Full screen：gpui 只有 toggle，按 `on` 对齐到目标状态。
+                "window.fullscreen" => {
+                    let want = r.data.get("on").and_then(serde_json::Value::as_bool);
+                    let now = window.is_fullscreen();
+                    let target = self.fullscreen_target.unwrap_or(now);
+                    let next = want.unwrap_or(!target);
+                    if next != target {
+                        self.fullscreen_target = Some(next);
+                        window.toggle_fullscreen();
                     }
                     cx.notify();
                     continue;
@@ -7292,6 +7315,9 @@ impl Render for CanvasView {
         }
         // A16：绑定本窗口的文档（含 active 回写，见 bind_window_document）。
         self.bind_window_document(window, false, cx);
+        if self.fullscreen_target == Some(window.is_fullscreen()) {
+            self.fullscreen_target = None;
+        }
         let a11y_focused = window.focused(cx);
         let a11y_scale = window.scale_factor();
         for (_, command) in a11y::commit_frame("Monet", a11y_focused.as_ref(), a11y_scale, window, cx) {
@@ -8911,6 +8937,10 @@ impl Render for CanvasView {
                         return;
                     }
                     if run_binding(&mut this.app, id) {
+                        // Keyboard-issued UI requests must belong to the window that handled
+                        // the key; otherwise F11 in window B can toggle window A if A renders
+                        // first (CodeRabbit PR#40).
+                        this.stamp_ui_requests();
                         cx.notify();
                         // CodeRabbit PR#20/#22/#23: the root handler has the same keymap fallback;
                         // without stopping propagation a handled canvas shortcut (undo/redo, delete…)
