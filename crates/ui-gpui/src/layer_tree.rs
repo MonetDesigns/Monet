@@ -261,6 +261,8 @@ pub struct LayerTreeState {
     pub last_doc: Option<usize>,
     /// A row press in the list owns its own viewport position; skip the reveal on that change.
     pub suppress_reveal: bool,
+    /// 键盘焦点在图层面板里（点过行、还没点画布）：方向键走 `layer_key_nav` 而不是移动图层。
+    pub focused: bool,
     clock: Instant,
 }
 
@@ -279,6 +281,7 @@ impl Default for LayerTreeState {
             last_selection: Vec::new(),
             last_doc: None,
             suppress_reveal: false,
+            focused: false,
             clock: Instant::now(),
         }
     }
@@ -1296,6 +1299,7 @@ impl CanvasView {
     fn layer_on_row_mouse_down(&mut self, id: NodeId, e: &MouseDownEvent) {
         // Keep the modifiers: on release they decide plain select / toggle / range.
         self.layer_tree.candidate = Some((id, e.position, e.modifiers));
+        self.layer_tree.focused = true;
     }
 
     fn layer_toggle_expand(&mut self, id: NodeId, cx: &mut Context<Self>) {
@@ -1384,6 +1388,94 @@ impl CanvasView {
             vec![id]
         };
         (new_sel, set_anchor)
+    }
+
+    /// 图层面板聚焦时的方向键导航（上游 `panels/layers.rs::key_nav`）：
+    /// ↑↓ 沿可见行走、Shift 从锚点扩范围、← 收起或选父层、→ 展开或进子层。
+    /// 返回 `true` 表示消费了这次按键。
+    pub(crate) fn layer_key_nav(&mut self, key: &str, m: Modifiers, cx: &mut Context<Self>) -> bool {
+        // 先把要用到的值拷出来，避免在持有 `rows` / `ds` 借用时执行 `select.set`。
+        let nav = match key {
+            "ArrowUp" | "up" => -1i64,
+            "ArrowDown" | "down" => 1,
+            _ => 0,
+        };
+        let rows: Vec<NodeId> = self.layer_tree.rows.iter().map(|r| r.id).collect();
+        let (sel, page) = match self.app.session.ds() {
+            Ok(ds) => (ds.selection.iter().copied().collect::<Vec<_>>(), ds.page),
+            Err(_) => return false,
+        };
+        let anchor = self.layer_tree.anchor;
+
+        if nav != 0 {
+            let found = sel.last().and_then(|c| rows.iter().position(|r| *r == *c));
+            let Some(i) = found else {
+                // 没有可见行被选中：↓ 从头、↑ 从尾开始。
+                let first = if nav < 0 { rows.last() } else { rows.first() };
+                if let Some(r) = first {
+                    self.layer_tree.anchor = Some(*r);
+                    let _ = self.app.session.execute("select.set", &json!({ "ids": [*r] }));
+                    cx.notify();
+                }
+                return true;
+            };
+            let j = if nav < 0 { i.checked_sub(1) } else { Some(i + 1).filter(|j| *j < rows.len()) };
+            let Some(j) = j else { return true };
+            let ids: Vec<NodeId> = if m.shift {
+                let a = anchor.filter(|a| sel.contains(a)).and_then(|a| rows.iter().position(|r| *r == a)).unwrap_or(i);
+                let ids: Vec<NodeId> = if a <= j {
+                    rows.get(a..=j).unwrap_or_default().to_vec()
+                } else {
+                    rows.get(j..=a).unwrap_or_default().iter().rev().copied().collect()
+                };
+                ids
+            } else {
+                vec![rows[j]]
+            };
+            let a = if m.shift { anchor.filter(|a| sel.contains(a)).unwrap_or(rows[i]) } else { rows[j] };
+            self.layer_tree.anchor = Some(a);
+            let _ = self.app.session.execute("select.set", &json!({ "ids": ids }));
+            cx.notify();
+            return true;
+        }
+
+        let Some(cur) = sel.last().copied() else { return false };
+        // has_children / depth 先拷出来，后面不再借 `rows`。
+        let cur_row = self.layer_tree.rows.iter().find(|r| r.id == cur).map(|r| (r.has_children, r.depth));
+        match key {
+            "ArrowLeft" | "left" => {
+                let expanded = self.layer_tree.expanded.contains(&cur);
+                if cur_row.is_some_and(|(kids, _)| kids) && expanded {
+                    self.layer_tree.expanded.remove(&cur);
+                    cx.notify();
+                } else if let Some(p) = self.app.session.ds().ok().and_then(|d| d.doc.node(cur).and_then(|n| n.parent)).filter(|p| *p != page) {
+                    self.layer_tree.anchor = Some(p);
+                    let _ = self.app.session.execute("select.set", &json!({ "ids": [p] }));
+                    cx.notify();
+                }
+                true
+            }
+            "ArrowRight" | "right" => {
+                let Some((kids, depth)) = cur_row else { return true };
+                if !kids {
+                    return true;
+                }
+                if !self.layer_tree.expanded.contains(&cur) {
+                    self.layer_tree.expanded.insert(cur);
+                    cx.notify();
+                } else {
+                    let at = self.layer_tree.rows.iter().position(|r| r.id == cur);
+                    let child = at.and_then(|i| self.layer_tree.rows.iter().skip(i + 1).find(|r| r.depth == depth + 1).map(|r| r.id));
+                    if let Some(c) = child {
+                        self.layer_tree.anchor = Some(c);
+                        let _ = self.app.session.execute("select.set", &json!({ "ids": [c] }));
+                        cx.notify();
+                    }
+                }
+                true
+            }
+            _ => false,
+        }
     }
 
     fn layer_select(&mut self, id: NodeId, cx: &mut Context<Self>) {

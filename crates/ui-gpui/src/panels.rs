@@ -239,10 +239,31 @@ impl Prop {
             _ => v,
         }
     }
+    /// 图层上这个字段当前显示的值（与 `selected_values` 的读数规则一致）。相对编辑
+    /// （`+10` / `*2`）要靠它按**每层自己的值**结算，而不是把同一个绝对值发给全部层。
+    pub(crate) fn shown(self, doc: &figcraft_doc::Document, n: &figcraft_doc::Node) -> Option<f64> {
+        let r2 = |v: f64| (v * 100.0).round() / 100.0;
+        Some(match self {
+            Prop::X => r2(doc.frame_relative(n.id).as_coeffs()[4]),
+            Prop::Y => r2(doc.frame_relative(n.id).as_coeffs()[5]),
+            Prop::W => r2(n.width),
+            Prop::H => r2(n.height),
+            Prop::Rotation => r2(figcraft_geom::rotation_degrees(n.transform)),
+            Prop::Opacity => (f64::from(n.opacity) * 100.0).round(),
+            Prop::Corner => r2(n.corners.uniform()?),
+            Prop::ArcStart => match &n.kind { figcraft_doc::NodeKind::Ellipse { start, .. } => r2(start.to_degrees()), _ => return None },
+            Prop::ArcSweep => match &n.kind { figcraft_doc::NodeKind::Ellipse { sweep, .. } => r2(sweep.to_degrees()), _ => return None },
+            Prop::ArcInner => match &n.kind { figcraft_doc::NodeKind::Ellipse { inner, .. } => (inner * 100.0).round(), _ => return None },
+            // PointCount / StarRatio 的显示值由面板专用字段提供，这里没有单一读数。
+            Prop::PointCount | Prop::StarRatio | Prop::FontSize | Prop::StrokeWeight => return None,
+        })
+    }
 }
 
-/// Fields push `(prop, document value)` here on commit; the view drains it and runs `node.set`.
-pub(crate) type Pending = std::rc::Rc<std::cell::RefCell<Vec<(Prop, f64)>>>;
+
+/// 右栏数字框的待提交队列。携带 `field_math::Typed` 而不只是 f64，这样 `+10` / `*2`
+/// 这类相对编辑能传到提交处，按每个图层自己的当前值结算（上游 `Edit::Each`）。
+pub(crate) type Pending = std::rc::Rc<std::cell::RefCell<Vec<(Prop, crate::field_math::Typed)>>>;
 /// A panel command raised against the selection: an id plus an optional extra params object that is
 /// merged into `{"ids": ids}` when executed. egui runs `app.run(cmd, {"ids": ids})`, but several
 /// commands need more — `effect.add {type:"dropShadow"}`, `grid.add`, `layout.add`, … — so the
@@ -895,12 +916,13 @@ fn nf(
     TextField::build(cx, DEFAULT_COL, move |tf, _| {
         tf.set_value(shown);
         tf.set_lead(Slot::Text(SharedString::from(lead)));
+        let percent_unit = suffix == "%";
         tf.set_numeric(suffix, step);
         if let Some(prop) = prop {
             let (lo, hi) = prop.range();
             tf.set_range(lo, hi);
-            tf.set_on_commit(move |text, _window, _cx| {
-                if let Ok(v) = text.trim().parse::<f64>() {
+            tf.set_on_commit_draft(move |text, _window, _cx| {
+                if let Some(v) = crate::field_math::parse(&text, percent_unit) {
                     pending.borrow_mut().push((prop, v));
                     wake();
                 }
@@ -1437,8 +1459,8 @@ impl RightFields {
                 te.set_value("100");
                 // `paint_alpha`: the number is right-aligned in its 44 pt cell.
                 te.set_align(crate::widgets::input::TextAlign::Right);
-                te.set_on_commit(move |text, _window, _cx| {
-                    if let Ok(v) = text.trim().parse::<f64>() {
+                te.set_on_commit_draft(move |text, _window, _cx| {
+                    if let Some(v) = crate::field_math::parse(&text, true) {
                         pending.borrow_mut().push((Prop::Opacity, v));
                         wake();
                     }
@@ -3786,6 +3808,22 @@ mod visibility_tests {
     }
 
     #[test]
+    /// 混合选区相对编辑：`+10` / `*2` / `50%` 要解析成 `Typed::Rel`，并按每层当前值结算，
+    /// 而不是先解析成绝对值（上游 `field_of` 的 `Edit::Each`）。
+    #[test]
+    fn field_typed_keeps_relative_edits_for_each_layer() {
+        use crate::field_math::{Rel, Typed, parse};
+        let cur = [10.0, 20.0, 40.0];
+        let add = match parse("+10", false) { Some(Typed::Rel(r)) => r, other => panic!("+10 must be relative: {other:?}") };
+        let got: Vec<f64> = cur.iter().map(|v| add.apply(*v).unwrap()).collect();
+        assert_eq!(got, vec![20.0, 30.0, 50.0], "each layer starts from its own value");
+        let mul = match parse("50%", false) { Some(Typed::Rel(r)) => r, other => panic!("50% must be relative: {other:?}") };
+        assert_eq!(mul, Rel::Mul(0.5));
+        let got: Vec<f64> = cur.iter().map(|v| mul.apply(*v).unwrap()).collect();
+        assert_eq!(got, vec![5.0, 10.0, 20.0]);
+        assert_eq!(parse("12.5", false), Some(Typed::Value(12.5)), "plain numbers stay absolute");
+    }
+
     fn point_axis_typing_is_a_value_or_a_relative_edit() {
         use serde_json::json;
         assert_eq!(point_axis_value("12.5"), Some(json!(12.5)));
