@@ -808,6 +808,9 @@ pub struct PaneState {
     /// 拖动弹窗时右栏数据不变，复用上一帧的 PanelData（省掉每帧 collect / 读列表的开销）。
     last_panel: Option<panels::right::data::PanelData>,
 
+    /// Dev 节按 `(uid, revision, page, selection, ready_filter)` 缓存；其余节仍每帧重读。
+    dev_cache: Option<(DevCacheKey, panels::right::data::DevModeData)>,
+
     /// 工具栏里打开着的飞出菜单（组的 key）；`None` 表示没开。
     tool_flyout: Option<&'static str>,
 
@@ -981,6 +984,9 @@ struct CanvasPane {
     canvas: CanvasState,
     worker: Worker,
 }
+
+/// `(uid, revision, page, selection, ready_filter)` for the cached Dev section.
+type DevCacheKey = (u64, u64, Option<figcraft_doc::NodeId>, Vec<figcraft_doc::NodeId>, usize);
 
 /// 画布视图：引擎会话 + 画布状态 + 交互状态。
 pub struct CanvasView {
@@ -1505,6 +1511,8 @@ impl CanvasView {
 
             last_panel: None,
 
+            dev_cache: None,
+
             tool_flyout: None,
 
             vector_more: false,
@@ -1934,12 +1942,23 @@ impl CanvasView {
 
     /// 右栏列表数据的快照（照 egui 面板每帧读 `Document` 的同构做法）。
 
-    fn panel_data(&self) -> panels::right::data::PanelData {
+    fn panel_data(&mut self) -> panels::right::data::PanelData {
         let Ok(ds) = self.app.session.ds() else { return Default::default() };
 
         let page = self.app.session.page().ok();
 
-        let mut d = panels::right::data::read(&ds.doc, &ds.selection, page, self.fields.dev_ready_filter());
+        let ready = self.fields.dev_ready_filter();
+        let key = (ds.uid, ds.revision, page, ds.selection.clone(), ready);
+        let dev = match &self.dev_cache {
+            Some((k, d)) if k == &key => d.clone(),
+            _ => {
+                let d = panels::right::data::read_dev(&ds.doc, &ds.selection, page, ready);
+                self.dev_cache = Some((key, d.clone()));
+                d
+            }
+        };
+
+        let mut d = panels::right::data::read_with_dev(&ds.doc, &ds.selection, page, ready, Some(dev));
 
         // 文本范围填充（egui `paints.rs::range_fill`）：编辑态选区来自 session，文档快照来自 ds。
         let text_range = figcraft_engine::textedit::selected_range(&self.app.session);
