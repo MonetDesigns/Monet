@@ -257,7 +257,7 @@ feat(engine): Scale 工具在实例上保留变量绑定的长度，其它层烘
    - 先逐条对照 GPUI 是否「有实现无测试」，再决定补测试还是补行为。
    - 进展（2026-11-27）：测试从 4 条补到 17 条并全部通过，新增普通点击、失效锚点的 Shift、Escape 清选、批量删除/移动/改 scope、混合类型 scope、分组复制（含子组唯一命名与继承成员跳过）、分组重命名/嵌套、40 组批量菜单、scope 逐项勾选等用例。其中四条补齐/修正了行为：批量改 scope 菜单原先把各类型的 scope 取**并集**（已改为交集）；分组右键菜单原先缺 **Duplicate group**（已补，按 egui `duplicate_group` 生成 `variable.duplicate` + `$ref` 改名的一步撤销批次）；分组重命名原先把 `/` 替换成 `-`、无法嵌套（已按 egui `group_renames` 支持斜杠嵌套并保留父路径）；详情面板原先只读展示已选 scope（已补逐项 checkbox，勾选/取消写 `variable.update`，全部取消即空数组=隐藏于取色器）。其余对照项（选中行颜色、Edit variables 的批量描边）仍为待补。
    - 注：右栏的 `visible` 绑定行、Layout grid 逐字段绑定、Page 级 Variable modes / Local variables 入口，已在 `docs/right-panel-visibility-parity-plan.md`（D25 / D14 / D10 / D11）单独立项，本计划不重复排期。
-4. GPUI 样式绑定入口（独立项，可另行排期）：`style.bind` 目前零引用；至少补 Text 样式的 `fontSize/lineHeight/letterSpacing/fontWeight/fontFamily/fontStyle`，Paint/Effect/Grid 次之。
+4. GPUI 样式绑定入口（独立项，可另行排期）：`style.bind` 目前零引用；至少补 Text 样式的 `fontSize/lineHeight/letterSpacing/fontWeight/fontFamily/fontStyle`，Paint/Effect/Grid 次之。**2026-11-27 核实**：GPUI 目前没有样式编辑器（`style.update/create` 零引用，Styles 菜单只做 `style.apply`），所以这不是补一个绑定点，而是要先有 Text 样式字段编辑窗；建议单列任务，不在本 PR 内塞入半套编辑器。
 
 ### 批次 5 · P3 上游化（可选）
 
@@ -409,6 +409,6 @@ cargo xtask ci   # fmt + clippy -D warnings + tests + layers + assets + wasm
 - 合并 `origin/main`（`599f89187`），解决 6 处冲突：`library.rs`（bake 与时间线复制并存）、`clipboard.rs`/`overlays.rs`/`paste_motion_tests.rs`（取 origin 新版）、`app.rs`（`opacity_digit` 与 `key_box_doc`/`pick` 并存）、`ui-gpui/lib.rs`（`annotation.new` 与 `selectArea`、`layers.collapseAll`/`contextMenu`、Developer Mode 拒绝与取色归属并存）。
 - 合并后发现并修复重复的 `key_box_key` 与 `selectArea` 分支（`c0b2d42dd`）；`cargo check -p figcraft-engine`、`cargo check -p figcraft-ui-gpui` 均通过。
 - 批次 5 上游化草稿：`docs/upstream-variable-binding-proposal.md`。
-- 2026-11-27 续：合并远端 `a369c2853`（Dev Mode 缓存/审计、text-wrap、导出格式等 14 文件）无冲突；`cargo check -p figcraft-ui-gpui` 通过。GPUI 变量面板测试 9/9 通过，并修复批量改 scope 菜单把各类型 scope 取并集的 bug（改为交集）。推送后最新 head `0e2c633b`，PR Ready、`mergeable=clean`，38 commits；CI 已触发，等待结果。
+- 2026-11-27 续：合并远端 `a369c2853` 及后续 TextEdit multiline / presentation 等提交均无冲突；`cargo check -p figcraft-ui-gpui` 通过。GPUI 变量面板测试从 4 条补到 **17/17 通过**，并修复批量改 scope 取并集、分组右键缺 Duplicate group、分组改名不支持斜杠嵌套、详情 scope 只读四处行为；剩余选中行颜色与批量描边属 UI 夹具/样式编辑器范畴。PR 保持 Ready、`mergeable=true`；远端分支仍在被并发推进，CI 每次推送会重新排队，head 以远端为准。
 
 
