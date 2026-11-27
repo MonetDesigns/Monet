@@ -799,6 +799,9 @@ pub(crate) struct WindowState {
     cmds: Cmds,
     rows: Vec<Row>,
     settings: Rc<RefCell<Vec<Setting>>>,
+    /// 标题栏里的下拉（效果设置窗把「类型」/「材质」从正文移到标题）：
+    /// `Some(Setting::Dropdown)` 时标题位置画下拉，正文不再重复这一行。
+    header_dropdown: Option<Setting>,
     /// 「创建组件属性」弹窗的草稿；`Some` 时走专用 body（Name/Value/Preferred + Create 按钮）。
     prop_create: Option<PropertyCreateState>,
     /// 平滑圆角小窗的当前值（0..1，拖动时由通用滑条写回）；`Some` 时才画那条滑条。
@@ -1035,6 +1038,7 @@ impl WindowState {
             cmds,
             rows: Vec::new(),
             settings: Rc::new(RefCell::new(Vec::new())),
+            header_dropdown: None,
             prop_create: None,
             smoothing: None,
             tabs: None,
@@ -1791,7 +1795,8 @@ impl WindowState {
             .collect();
         let current: SharedString =
             figcraft_doc::Effect::TYPES.iter().find(|(_, t)| *t == ty).map(|(l, _)| tr(*l).into()).unwrap_or_else(|| label.clone());
-        settings.push(Setting::Dropdown {
+        // 类型下拉移到标题栏：标题位置直接就是这颗下拉，正文不再重复「Type」一行。
+        w.header_dropdown = Some(Setting::Dropdown {
             tab: 0,
             label: tr("Type").into(),
             current: Rc::new(RefCell::new(current)),
@@ -1803,6 +1808,76 @@ impl WindowState {
         // 否则「先改 X 再改 Y」时 Y 的 effect.set 会带着开窗时的旧 X 把 X 冲掉。
         let shared = Rc::new(RefCell::new(effect.clone()));
         settings.extend(effect_setting_rows(cx, &cmds, index, &shared, &ty));
+        w.settings = Rc::new(RefCell::new(settings));
+        w
+    }
+
+    /// 外置 WGSL 材质的设置窗：点 Effects 节里的材质行弹出。标题栏是「材质」下拉
+    /// （列出固定目录里的全部 `.wgsl` + None），正文只放该 shader 声明的参数。
+    ///
+    /// 与内置效果设置窗共用 `WindowKind::EffectSettings` 与同一套标题栏下拉，所以
+    /// 换材质后关窗重建、参数行不会拿着旧材质的键写回。
+    pub(crate) fn wgsl_material(
+        cmds: Cmds,
+        cx: &mut App,
+        anchor: Point<Pixels>,
+        name: SharedString,
+        binding: crate::wgsl_material::WgslMaterialBinding,
+    ) -> Self {
+        let mut w = Self::base(WindowKind::EffectSettings, name.clone(), cmds.clone(), Open::Anchor(anchor));
+        w.width = 248.0;
+        w.height = 320.0;
+        w.pad = 12.0;
+
+        // 标题栏下拉：和右栏 `+` 菜单同源，每次开窗现扫材质目录；末尾 None 解绑。
+        let mut items: Vec<(String, &'static str, Value)> = crate::wgsl_material::scan_material_dir()
+            .iter()
+            .map(|wf| {
+                let path = wf.path.to_string_lossy().into_owned();
+                let b = crate::wgsl_material::binding_for(&path);
+                (wf.name.clone(), "node.set", crate::wgsl_material::write_binding_params(Some(&b)))
+            })
+            .collect();
+        if !items.iter().any(|(label, _, _)| label == &name.to_string()) {
+            let b = crate::wgsl_material::binding_for(&binding.path);
+            items.push((name.to_string(), "node.set", crate::wgsl_material::write_binding_params(Some(&b))));
+        }
+        items.push((tr("None").to_string(), "node.set", crate::wgsl_material::write_binding_params(None)));
+        let options = items.into_iter().map(|(label, cmd, params)| Opt::new(label, cmd, params)).collect();
+        w.header_dropdown =
+            Some(Setting::Dropdown { tab: 0, label: tr("Material").into(), current: Rc::new(RefCell::new(name)), anchor: Rc::new(RefCell::new(None)), options });
+
+        // 正文：shader 的每个非 host 参数一行；任何一次提交都从最新 binding 起改，再整体写回。
+        let specs: Vec<figcraft_render::wgsl_effect::ParamSpec> =
+            crate::wgsl_material::params_for(&binding.path).into_iter().filter(|p| !p.host).collect();
+        let shared = Rc::new(RefCell::new(binding.clone()));
+        let mut settings: Vec<Setting> = Vec::new();
+        if specs.is_empty() {
+            settings.push(Setting::SubLabel { tab: 0, text: tr("This material has no parameters").into() });
+        }
+        for spec in &specs {
+            let value = binding.params.get(&spec.field).copied().unwrap_or(spec.default);
+            let field = number_field_ranged(cx, 100.0, Some(value), "", spec.step, Slot::None, Some(spec.min), Some(spec.max));
+            let live = shared.clone();
+            let queue = cmds.clone();
+            let field_name = spec.field.clone();
+            let (min, max) = (spec.min, spec.max);
+            field.update(cx, move |tf, _| {
+                tf.set_on_commit(move |text, _, _| {
+                    let Ok(v) = text.trim().parse::<f64>() else { return };
+                    if !v.is_finite() {
+                        return;
+                    }
+                    let v = v.clamp(min, max);
+                    let mut b = live.borrow().clone();
+                    b.params.insert(field_name.clone(), v);
+                    *live.borrow_mut() = b.clone();
+                    queue.push(Cmd { id: "node.set", params: Some(crate::wgsl_material::write_binding_params(Some(&b))) });
+                });
+            });
+            settings.push(Setting::Number { tab: 0, label: spec.label.clone().into(), field });
+        }
+        w.height = HEADER_H + (settings.len() as f32) * 28.0 + 24.0;
         w.settings = Rc::new(RefCell::new(settings));
         w
     }
@@ -3038,6 +3113,47 @@ impl WindowState {
         self.overlay_dismiss.borrow_mut().push(dismiss);
     }
 
+    /// 标题栏下拉的菜单：与正文 `Setting::Dropdown` 同一套 `menu_popup_in`，但选中后
+    /// 关掉整个设置窗（效果类型 / WGSL 材质都换了，旧参数行不能继续用）。
+    fn push_header_dropdown_overlay(
+        &self,
+        rect: Bounds<Pixels>,
+        current: Rc<RefCell<SharedString>>,
+        anchor: Rc<RefCell<Option<Bounds<Pixels>>>>,
+        options: Vec<Opt>,
+    ) {
+        let rows: Vec<MenuRow> = options
+            .iter()
+            .enumerate()
+            .map(|(i, o)| MenuRow::row(o.label.clone()).key(i.to_string()).checked(Some(o.label == *current.borrow())))
+            .collect();
+        let opts = options;
+        let cmds = self.cmds.clone();
+        let cur_state = current;
+        let at2 = anchor.clone();
+        let wake2 = self.cmds.clone();
+        let close_window = self.dismiss.borrow().clone();
+        let on_pick = Rc::new(move |picked: &str, w: &mut Window, cx: &mut App| {
+            let chosen = picked.parse::<usize>().ok().and_then(|i| opts.get(i));
+            if let Some(o) = chosen {
+                *cur_state.borrow_mut() = o.label.clone();
+                cmds.push(Cmd { id: o.cmd, params: Some(o.now()) });
+            }
+            *at2.borrow_mut() = None;
+            wake2.wake();
+            if let Some(cb) = &close_window {
+                cb(w, cx);
+            }
+        });
+        let at3 = anchor;
+        let wake3 = self.cmds.clone();
+        let dismiss = Rc::new(move |_w: &mut Window, _cx: &mut App| {
+            *at3.borrow_mut() = None;
+            wake3.wake();
+        });
+        self.push_overlay(menu_popup_in(rect, None, rows, on_pick, dismiss.clone(), 0.0, 0.0), dismiss);
+    }
+
     pub(crate) fn color(
         cx: &mut App,
         origin: Point<Pixels>,
@@ -3458,9 +3574,27 @@ impl WindowState {
             }
             // 变量编辑器把「标题 + 计数」画进自己的工具条：整窗一个插槽，顶部只有一行。
             WindowKind::VariablesTable => div().into_any_element(),
+            // 效果设置窗（内置效果 / 外置 WGSL）：标题栏直接就是「类型 / 材质」下拉，
+            // 不再在正文里画一条带标签的 Type 行（用户 2026-11-27）。
+            WindowKind::EffectSettings => {
+                if let Some(Setting::Dropdown { current, anchor, options, .. }) = &self.header_dropdown {
+                    let cur = current.borrow().clone();
+                    let at = anchor.clone();
+                    let wake = self.cmds.clone();
+                    let key = format!("effect-settings-title-{}", self.title);
+                    let trigger = dropdown(cur, 196.0, None).menu(key).on_click(move |rect, _window, _cx| {
+                        *at.borrow_mut() = Some(rect);
+                        wake.wake();
+                    });
+                    if let Some(rect) = *anchor.borrow() {
+                        self.push_header_dropdown_overlay(rect, current.clone(), anchor.clone(), options.clone());
+                    }
+                    return trigger.into_any_element();
+                }
+                title_text(self.title.clone()).into_any_element()
+            }
             WindowKind::Layout
             | WindowKind::Stroke
-            | WindowKind::EffectSettings
             | WindowKind::StyleEditor
             | WindowKind::CornerSmoothing
             | WindowKind::ComponentProperty
