@@ -22,6 +22,7 @@ mod registry;
 mod tree;
 
 pub(crate) use element::{A11yExt, Meta};
+pub(crate) use registry::focus_for;
 
 use gpui::{App, FocusHandle, Window, prelude::*};
 

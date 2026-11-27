@@ -2085,19 +2085,22 @@ fn wgsl_material_rows(f: &RightFields, d: &PanelData, col: f32, cx: &mut App) ->
     let Some(path) = d.wgsl.path.as_deref() else { return Vec::new() };
     let name = std::path::Path::new(path).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string());
     let binding = crate::wgsl_material::WgslMaterialBinding { path: path.to_string(), params: d.wgsl.params.clone() };
+    let ids = d.ids.clone();
 
     let popups = f.popups();
     let cmds = f.cmds.clone();
     let label = SharedString::from(name.clone());
+    let minus_ids = ids.clone();
     let dd = Dropdown::new(label, col, None).fill().on_click(move |bounds, _window, cx: &mut App| {
         let name = name.clone();
         let binding = binding.clone();
         let cmds = cmds.clone();
+        let ids = ids.clone();
         open_detached_with(popups.clone(), "wgsl-material-settings", Some(bounds.origin.y), cx, move |anchor, cx| {
-            crate::popovers::WindowState::wgsl_material(cmds.clone(), cx, anchor, SharedString::from(name.clone()), binding.clone())
+            crate::popovers::WindowState::wgsl_material(cmds.clone(), cx, anchor, SharedString::from(name.clone()), binding.clone(), ids.clone())
         });
     });
-    let minus = icon_cmd(Icon::Minus, "node.set", crate::wgsl_material::write_binding_params(None), f, false);
+    let minus = icon_cmd(Icon::Minus, "node.set", crate::wgsl_material::write_binding_params_for(&minus_ids, None), f, false);
     vec![sublabel_row(tr("External WGSL")), field_row_full_trailing(dd, vec![minus])]
 }
 

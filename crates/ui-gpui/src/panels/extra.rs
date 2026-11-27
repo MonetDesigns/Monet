@@ -562,6 +562,9 @@ fn time_ago(unix_secs: u64) -> String {
     } else {
         (diff / 31_556_952, "year")
     };
+    if unit == "second" {
+        return tr("Just now").to_string();
+    }
     let key = match unit {
         "minute" => "{n} minutes ago",
         "hour" => "{n} hours ago",
@@ -1569,7 +1572,7 @@ mod tests {
     fn shortcuts_come_from_the_engine_keymap() {
         let all = shortcut_rows(None, "");
         assert!(all.len() > 50, "引擎 KEYS + GESTURES 应给出完整清单");
-        assert!(all.iter().any(|r| r.label.to_lowercase().contains("dev mode")), "Shift+D 在表里");
+        assert!(all.iter().any(|r| r.label.to_lowercase().contains("developer mode")), "Shift+D 在表里");
         assert!(all.iter().any(|r| !r.keys.is_empty()), "至少有一行带 keycap");
         let essential = shortcut_rows(Some(Group::Essential), "");
         assert!(!essential.is_empty() && essential.len() < all.len());

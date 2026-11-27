@@ -6,8 +6,6 @@
 //   - 调试边框（FC_DEBUG_LAYOUT）一律按「字形墨盒」绘制，不得退回行盒（ascent+descent）。
 //   - 小标题（sublabels / sublabels2）字形上方保留 pt(4.0) 留白，不得删除。
 //   - 统一网格（segmented、sublabels2 空列、field 行）一律 w_full + flex_1，禁止手算列宽。
-// 2026-11-27 补充：用户批准 P2-6「扩 TextEdit 支持 multiline」，本文件增加可选的多行
-// buffer 语义；`multiline=false` 时 Enter 仍直接 Submit，原单行行为不变。
 // ============================================================================
 //! `EditBuffer` — the shared text-editing kernel for **every** GPUI text input.
 //!
@@ -65,9 +63,7 @@ impl Composed {
     }
 }
 
-/// A text buffer with caret, selection anchor and an IME composition. It is single-line by
-/// default; `set_multiline(true)` additionally lets the caret move across `\n` and lets editing
-/// insert line breaks. All existing single-line callers keep the old behaviour.
+/// A text buffer with caret, selection anchor and an IME composition.
 #[derive(Clone, Debug, Default)]
 pub struct EditBuffer {
     /// The committed text.
@@ -80,7 +76,7 @@ pub struct EditBuffer {
     preedit: Option<(String, usize)>,
     /// True while a pointer drag is extending the selection.
     selecting: bool,
-    /// Allow `\n` insertion and line-wise caret motion. Off for every ordinary field.
+    /// Keep `\n` when text is inserted (multiline editors); single-line fields flatten it.
     multiline: bool,
 }
 
@@ -90,6 +86,20 @@ impl EditBuffer {
         b.caret = b.len();
         b.anchor = b.caret;
         b
+    }
+
+    /// Whether inserted text keeps paragraph breaks. Single-line fields flatten them, as before.
+    pub fn set_multiline(&mut self, multiline: bool) {
+        self.multiline = multiline;
+    }
+
+    /// Drop control characters, normalise CRLF/CR to `\n`, and keep `\n` only when asked.
+    /// `insert` asks for it in multiline mode; platform replacements do not, because the
+    /// Shift+Enter key handler already inserts the paragraph break and the platform's WM_CHAR
+    /// would otherwise add a second one.
+    fn sanitize(&self, text: &str, keep_newlines: bool) -> String {
+        let normalised = text.replace("\r\n", "\n").replace('\r', "\n");
+        normalised.chars().filter(|c| *c >= ' ' || *c == '\t' || (keep_newlines && *c == '\n')).collect()
     }
 
     // ── basics ──────────────────────────────────────────────────────────────────────────────
@@ -118,14 +128,6 @@ impl EditBuffer {
     }
     pub fn set_selecting(&mut self, v: bool) {
         self.selecting = v;
-    }
-    /// Turn line-break editing on/off. Ordinary fields stay single-line (the default); the
-    /// Developer Mode note (2 rows) and code-connect template (3 rows) opt in.
-    pub fn set_multiline(&mut self, on: bool) {
-        self.multiline = on;
-    }
-    pub fn is_multiline(&self) -> bool {
-        self.multiline
     }
     /// Replace the committed text (a document value pushing into the field, or a commit).
     pub fn set_text(&mut self, text: impl Into<String>) {
@@ -187,46 +189,6 @@ impl EditBuffer {
     }
 
     // ── caret & selection ───────────────────────────────────────────────────────────────────
-    /// Character range of the visual line containing `ci` (the `\n` itself is not included).
-    pub fn line_bounds(&self, ci: usize) -> Range<usize> {
-        let chars: Vec<char> = self.text.chars().collect();
-        let ci = ci.min(chars.len());
-        let start = chars[..ci].iter().rposition(|c| *c == '\n').map_or(0, |i| i + 1);
-        let end = chars[ci..].iter().position(|c| *c == '\n').map_or(chars.len(), |i| ci + i);
-        start..end
-    }
-    /// Zero-based visual line number of `ci`.
-    pub fn line_index(&self, ci: usize) -> usize {
-        let ci = ci.min(self.len());
-        self.text.chars().take(ci).filter(|c| *c == '\n').count()
-    }
-    pub fn line_count(&self) -> usize {
-        self.text.chars().filter(|c| *c == '\n').count() + 1
-    }
-    /// Start index of visual line `line` (clamped to the last line).
-    pub fn line_start_at(&self, line: usize) -> usize {
-        let last = self.line_count().saturating_sub(1);
-        let line = line.min(last);
-        if line == 0 {
-            return 0;
-        }
-        let mut seen = 0;
-        for (i, c) in self.text.chars().enumerate() {
-            if c == '\n' {
-                seen += 1;
-                if seen == line {
-                    return i + 1;
-                }
-            }
-        }
-        self.len()
-    }
-    /// Character index at column `col` of visual line `line`, clamped to that line's end.
-    pub fn index_at_line_col(&self, line: usize, col: usize) -> usize {
-        let start = self.line_start_at(line);
-        let end = self.line_bounds(start).end;
-        (start + col).min(end)
-    }
     /// Collapse the selection to `ci` (a click without Shift).
     pub fn move_to(&mut self, ci: usize) {
         let ci = ci.min(self.len());
@@ -315,16 +277,9 @@ impl EditBuffer {
         self.caret = self.word_right(ci);
         self.preedit = None;
     }
-    /// Select the whole visual line (a triple-click); in a single-line buffer that is all of it.
+    /// Select the whole line (a triple-click; a single-line buffer is all of it).
     pub fn select_line(&mut self) {
-        if self.multiline {
-            let r = self.line_bounds(self.caret());
-            self.anchor = r.start;
-            self.caret = r.end;
-            self.preedit = None;
-        } else {
-            self.select_all();
-        }
+        self.select_all();
     }
 
     // ── editing ─────────────────────────────────────────────────────────────────────────────
@@ -344,12 +299,7 @@ impl EditBuffer {
     /// Insert text at the selection, replacing it (keyboard, paste, IME commit).
     pub fn insert(&mut self, text: &str) {
         let r = self.range();
-        // A single-line field never accepts a line break (even from paste); a multiline field
-        // keeps `\n` while stripping the other control characters, exactly like egui's TextEdit.
-        let clean: String = text
-            .chars()
-            .filter(|c| *c >= ' ' || *c == '\t' || (self.multiline && *c == '\n'))
-            .collect();
+        let clean = self.sanitize(text, self.multiline);
         self.replace_chars(r.start, r.end, &clean);
     }
     /// Replace a platform (UTF-16) range, or the selection when `None`.
@@ -366,7 +316,8 @@ impl EditBuffer {
                 }
             }
         };
-        self.replace_chars(a, b, text);
+        let clean = self.sanitize(text, false);
+        self.replace_chars(a, b, &clean);
         self.preedit = None;
     }
     pub fn delete_backward(&mut self) {
@@ -386,15 +337,16 @@ impl EditBuffer {
         let r = self.range();
         let cur = self.caret();
         match key {
-            "enter" if !self.multiline => return EditOutcome::Submit,
-            "enter" => self.insert("\n"),
+            "enter" => return EditOutcome::Submit,
             "escape" => return EditOutcome::Cancel,
             "tab" => return EditOutcome::None,
             "backspace" => self.delete_backward(),
             "delete" => self.delete_forward(),
-            "arrowleft" => {
+            "arrowleft" | "home" => {
                 let target = if word {
                     self.word_left(cur)
+                } else if key == "home" {
+                    0
                 } else if !shift && r.start != r.end {
                     r.start
                 } else {
@@ -406,9 +358,11 @@ impl EditBuffer {
                     self.move_to(target);
                 }
             }
-            "arrowright" => {
+            "arrowright" | "end" => {
                 let target = if word {
                     self.word_right(cur)
+                } else if key == "end" {
+                    self.len()
                 } else if !shift && r.start != r.end {
                     r.end
                 } else {
@@ -420,53 +374,19 @@ impl EditBuffer {
                     self.move_to(target);
                 }
             }
-            "home" => {
-                let target = if word {
-                    self.word_left(cur)
-                } else if self.multiline {
-                    self.line_bounds(cur).start
-                } else {
-                    0
-                };
-                if shift {
-                    self.select_to(target);
-                } else {
-                    self.move_to(target);
-                }
-            }
-            "end" => {
-                let target = if word {
-                    self.word_right(cur)
-                } else if self.multiline {
-                    self.line_bounds(cur).end
-                } else {
-                    self.len()
-                };
-                if shift {
-                    self.select_to(target);
-                } else {
-                    self.move_to(target);
-                }
-            }
             "arrowup" | "pageup" => {
-                if self.multiline && key == "arrowup" {
-                    self.move_vertical(-1, shift);
-                } else if shift {
+                if shift {
                     self.select_to(0);
                 } else {
                     self.move_to(0);
                 }
             }
             "arrowdown" | "pagedown" => {
-                if self.multiline && key == "arrowdown" {
-                    self.move_vertical(1, shift);
+                let n = self.len();
+                if shift {
+                    self.select_to(n);
                 } else {
-                    let n = self.len();
-                    if shift {
-                        self.select_to(n);
-                    } else {
-                        self.move_to(n);
-                    }
+                    self.move_to(n);
                 }
             }
             _ => {
@@ -478,24 +398,6 @@ impl EditBuffer {
             }
         }
         EditOutcome::Changed
-    }
-
-    /// ArrowUp/ArrowDown in a multiline buffer: keep the column, clamp to the target line's
-    /// length. A selection collapses to its edge first, then moves, like every native editor.
-    fn move_vertical(&mut self, delta: i32, shift: bool) {
-        let cur = if shift { self.caret() } else {
-            let r = self.range();
-            if delta < 0 { r.start } else { r.end }
-        };
-        let line = self.line_index(cur);
-        let col = cur.saturating_sub(self.line_bounds(cur).start);
-        let target_line = if delta < 0 { line.saturating_sub(delta.unsigned_abs() as usize) } else { (line + delta as usize).min(self.line_count().saturating_sub(1)) };
-        let target = self.index_at_line_col(target_line, col);
-        if shift {
-            self.select_to(target);
-        } else {
-            self.move_to(target);
-        }
     }
 
     // ── IME composition ─────────────────────────────────────────────────────────────────────
@@ -609,6 +511,21 @@ mod tests {
     }
 
     #[test]
+    fn pasted_newlines_survive_only_in_multiline_mode() {
+        let mut single = EditBuffer::new("a");
+        single.insert("b\nc");
+        assert_eq!(single.text(), "abc", "single-line fields must keep flattening pastes");
+
+        let mut multi = EditBuffer::new("a");
+        multi.set_multiline(true);
+        multi.insert("b\r\nc\rd");
+        assert_eq!(multi.text(), "ab\nc\nd", "CRLF and CR are normalised to paragraph breaks");
+
+        multi.replace_utf16(None, "e\r\nf");
+        assert_eq!(multi.text(), "ab\nc\ndef", "platform replacements flatten, so the key handler owns Enter");
+    }
+
+    #[test]
     fn grapheme_boundaries_keep_emoji_and_marks_atomic() {
         let mut b = EditBuffer::new("a😀b");
         b.move_to(3);
@@ -690,38 +607,5 @@ mod tests {
         assert_eq!(b.text(), "xyz");
         b.delete_backward();
         assert_eq!(b.text(), "xy");
-    }
-
-    #[test]
-    fn multiline_keeps_newlines_and_moves_by_line() {
-        let mut b = EditBuffer::new("one\ntwo\nthree");
-        b.set_multiline(true);
-        assert_eq!(b.line_count(), 3);
-        assert_eq!(b.line_bounds(5), 4..7);
-        b.move_to(1);
-        assert_eq!(b.key("enter", false, false), EditOutcome::Changed);
-        assert_eq!(b.text(), "o\nne\ntwo\nthree");
-        // Vertical motion keeps the column and clamps to the target line.
-        b.move_to(0);
-        assert_eq!(b.key("arrowdown", false, false), EditOutcome::Changed);
-        assert_eq!(b.caret(), 2);
-        b.move_to(8);
-        assert_eq!(b.key("arrowdown", false, false), EditOutcome::Changed);
-        assert_eq!(b.caret(), 12);
-        // Home/End are line-local, and Shift extends from the anchor.
-        b.move_to(6);
-        assert_eq!(b.key("home", false, false), EditOutcome::Changed);
-        assert_eq!(b.caret(), 5);
-        assert_eq!(b.key("end", false, false), EditOutcome::Changed);
-        assert_eq!(b.caret(), 8);
-        b.select_line();
-        assert_eq!(b.range(), 5..8);
-    }
-
-    #[test]
-    fn single_line_still_rejects_newlines_from_paste() {
-        let mut b = EditBuffer::new("ab");
-        b.insert("c\nd");
-        assert_eq!(b.text(), "abcd");
     }
 }

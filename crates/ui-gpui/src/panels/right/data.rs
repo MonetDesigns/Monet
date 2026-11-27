@@ -2754,6 +2754,11 @@ pub fn read_with_dev(
         .filter(|i| doc.node(*i).is_some_and(|n| matches!(n.kind, NodeKind::Text(_))))
         .collect();
     d.text_ids = text_ids.clone();
+    // Eligibility uses the **full** selection: one text plus one path. It must be computed
+    // before `ids` is narrowed to text targets for the typography values.
+    let can_put_on_path = text_ids.len() == 1
+        && ids.len() == 2
+        && ids.iter().find(|i| !text_ids.contains(*i)).and_then(|i| doc.node(*i)).is_some_and(|n| figcraft_doc::geometry::stroke_geometry(n).is_some());
     let text = if !text_ids.is_empty() {
         let ids = text_ids.as_slice();
         fn text_of(n: &figcraft_doc::Node) -> Option<&figcraft_doc::TextData> {
@@ -2765,9 +2770,6 @@ pub fn read_with_dev(
         let has_path = ids.iter().all(|i| doc.node(*i).and_then(|n| text_of(n)).and_then(|t| t.path.as_ref()).is_some());
         let path_start = common(doc, ids, |n| text_of(n).and_then(|t| t.path.as_ref()).map(|p| p.start())).flatten();
         let path_flip = ids.iter().all(|i| doc.node(*i).and_then(|n| text_of(n)).and_then(|t| t.path.as_ref()).is_some_and(|p| p.flip));
-        let can_put_on_path = text_ids.len() == 1
-            && ids.len() == 2
-            && ids.iter().find(|i| !text_ids.contains(*i)).and_then(|i| doc.node(*i)).is_some_and(|n| figcraft_doc::geometry::stroke_geometry(n).is_some());
         Some(TextData {
             font_family: common(doc, ids, |n| text_of(n).map(|t| t.style.font_family.clone())).flatten(),
             font_style: common(doc, ids, |n| text_of(n).map(|t| t.style.font_style.clone())).flatten(),
