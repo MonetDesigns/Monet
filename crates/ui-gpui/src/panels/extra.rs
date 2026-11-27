@@ -1129,12 +1129,47 @@ pub(crate) fn assets_body(
     } else {
         assets_styles(doc, cmds, &q)
     };
-    wrap_header(body, header)
+    let updates = pending_library_updates(app, doc);
+    let banner = (updates > 0).then(|| updates_banner(cmds));
+    wrap_header(body, header, banner)
+}
+
+/// Enabled libraries whose cached copy is newer than the document's copies (egui
+/// `build_listing` -> `updates`). Unread libraries simply contribute nothing until loaded.
+fn pending_library_updates(app: &CanvasApp, doc: &figcraft_doc::Document) -> usize {
+    doc.libraries
+        .enabled
+        .iter()
+        .filter_map(|l| app.session.libraries.cached(&l.path))
+        .filter_map(std::result::Result::ok)
+        .map(|lib| figcraft_engine::library::pending(doc, lib).count())
+        .sum()
+}
+
+/// “Library updates available” with the `library.acceptUpdates` button (egui `updates_banner`).
+fn updates_banner(cmds: &Cmds) -> Div {
+    let t = tokens();
+    let c = cmds.clone();
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(pt(8.0))
+        .w_full()
+        .h(px(40.0))
+        .pl(pt(10.0))
+        .pr(pt(6.0))
+        .rounded(pt(6.0))
+        .bg(rgba(t.selected_row))
+        .child(div().flex_1().min_w(px(0.0)).text_size(pt(11.0)).text_color(rgba(t.text)).child(tr("Library updates available")))
+        .child(pill(tr("Update"), true, move |_e, _w, _cx| {
+            c.push(Cmd { id: "library.acceptUpdates", params: Some(json!({})) });
+        }))
 }
 
 /// 把标题栏 + 搜索接到 body 前面（避免每个分支重复）。
-fn wrap_header(body: Div, header: Div) -> Div {
-    div().flex().flex_col().w_full().gap(pt(12.0)).p(pt(16.0)).child(header).child(body)
+fn wrap_header(body: Div, header: Div, banner: Option<Div>) -> Div {
+    div().flex().flex_col().w_full().gap(pt(12.0)).p(pt(16.0)).child(header).children(banner).child(body)
 }
 
 /// Components tab：本地组件/组件集缩略图网格（2 列，GPUI 无 flex_wrap），点一下创建实例。

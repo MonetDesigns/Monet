@@ -2745,6 +2745,9 @@ impl CanvasView {
                     // egui `panel.assets` opens the left panel; a collapsed GPUI panel must not
                     // swallow the request.
                     self.left_collapsed = false;
+                    if tab == 1 {
+                        self.refresh_libraries(cx);
+                    }
                 }
 
                 panels::extra::UiAction::ToggleLeftSidebar => {
@@ -3755,6 +3758,18 @@ impl CanvasView {
                         // A23：导出命令没给路径时引擎只回 base64，UI 负责弹保存对话框落盘。
                         self.deliver_download(c.id, &result, cx);
 
+                        if c.id == "library.acceptUpdates" {
+                            let components = result.get("components").and_then(serde_json::Value::as_u64).unwrap_or(0) as usize;
+                            let styles = result.get("styles").and_then(serde_json::Value::as_u64).unwrap_or(0) as usize;
+                            let components = figcraft_i18n::trn("{n} components", components, &[]);
+                            let styles = figcraft_i18n::trn("{n} styles", styles, &[]);
+                            let text = figcraft_i18n::trf(
+                                "Updated {components} and {styles}",
+                                &[("components", &components), ("styles", &styles)],
+                            );
+                            self.toast(text, cx);
+                        }
+
                         // 图片替换成功：原位刷新打开中的取色器 paint / 预览。
                         if c.id == "image.replace" {
                             self.refresh_picker_image();
@@ -4637,6 +4652,17 @@ impl CanvasView {
 
     /// Developer Mode's single refusal gate: the policy lives in the engine, the toast lives here.
     /// Every command entry (menus, toolbar, context menu, right panel, shortcuts) calls this.
+    /// Re-read enabled library files when the Assets tab opens: the update banner counts from
+    /// `session.libraries`' cache (egui `refresh_libraries`), so an unread library cannot show
+    /// its pending updates. `library.updates` is a read-only command and fills that cache.
+    fn refresh_libraries(&mut self, cx: &mut Context<Self>) {
+        let enabled = self.app.session.ds().is_ok_and(|ds| !ds.doc.libraries.enabled.is_empty());
+        if enabled {
+            let _ = self.app.session.execute("library.updates", &serde_json::json!({}));
+            cx.notify();
+        }
+    }
+
     fn dev_refuses(&mut self, id: &str, cx: &mut Context<Self>) -> bool {
         self.dev_refuses_command(id, &serde_json::Value::Null, cx)
     }
@@ -8610,6 +8636,7 @@ impl Render for CanvasView {
                     cv.left_tab = 0; // 再次点击收起回图层
                 } else {
                     cv.left_tab = 1;
+                    cv.refresh_libraries(cx);
                 }
 
                 cv.extra = None;

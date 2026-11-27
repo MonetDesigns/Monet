@@ -1266,7 +1266,9 @@ token 双向核对。**2026-11-27 P2-6 复验**：在 `main` 的 detach worktree
 属于既有的窗口尺寸/键盘表测试，不是 P2-6 回归。**2026-11-27 P1-6 复验**：`devmode_tests` 扩到 13 条
 （原有的 Status/闸门/Playground 策略 6 条 + Ready/Categories/Annotations/Dev resources/Measurements/
 非实例 Playground 的数据 6 条 + annotation 聚焦请求只接受已选中层 1 条），全部通过；`dev_gate` 3/3、
-`parity_contract` 4/4 仍通过。全量为 558 passed / 13 failed，仍是既有窗口尺寸/键盘表 13 条。**2026-11-27 早前复验**：先备份 `main` 与 `sync/variable-binding-2026-11`，在 `main` 的 detach
+`parity_contract` 4/4 仍通过。全量为 558 passed / 13 failed，仍是既有窗口尺寸/键盘表 13 条。**2026-11-27 资源面板补齐**：左栏 Assets 打开时用 `library.updates` 填充 `session.libraries` 缓存，缓存里有更新时显示
+“Library updates available / Update”横幅；按钮走 `library.acceptUpdates`，完成后 toast
+`Updated {components} and {styles}`，Dev Mode 仍由闸门拒绝该命令。**2026-11-27 早前复验**：先备份 `main` 与 `sync/variable-binding-2026-11`，在 `main` 的 detach
 worktree 合并 PR head 后 `cargo check -p figcraft-ui-gpui --features test-support` 通过，`devmode` 6/6、
 `dev_gate` 3/3、`parity_contract` 4/4 通过；工作树未在功能分支构建。P2-1 的 codegen golden 与 P2-3 的缓存
 性能回归尚未单独跑。
