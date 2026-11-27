@@ -1547,7 +1547,16 @@ pub(crate) fn paints(
                 .map(|c| c.to_hex())
                 .or_else(|| rf.paint.as_ref().map(|p| crate::widgets::swatch::paint_name(p)))
                 .unwrap_or_else(|| tr("Mixed").to_string());
-            let current = solid.map(crate::widgets::swatch::color32).unwrap_or(Color32::BLACK);
+            let current = rf
+                .paint
+                .as_ref()
+                .and_then(|p| match &p.kind {
+                    figcraft_color::PaintKind::Solid { color } => Some(*color),
+                    figcraft_color::PaintKind::Gradient(g) => g.stops.first().map(|s| s.color),
+                    _ => None,
+                })
+                .map(crate::widgets::swatch::color32)
+                .unwrap_or(Color32::BLACK);
             let trigger = format!("range-fill-{:?}-{}-{}", rf.id, rf.start, rf.end);
             let trigger_click = trigger.clone();
             let swatch_paint = rf.paint.clone().unwrap_or_else(|| {
@@ -1569,6 +1578,21 @@ pub(crate) fn paints(
                     })),
                 });
             });
+            // A gradient range fill needs the whole paint, not just a stop colour: the paint
+            // picker writes `textFills: [paint]` through the same `text.style` range command.
+            let paint_write_cmds = f.cmds.clone();
+            let paint_write = Rc::new(move |p: figcraft_color::Paint, _w: &mut Window, _cx: &mut App| {
+                paint_write_cmds.push(Cmd {
+                    id: "text.style",
+                    params: Some(json!({ "id": id, "start": start, "end": end, "textFills": [p] })),
+                });
+            });
+            let picker = crate::popovers::PaintPicker {
+                paint: swatch_paint.clone(),
+                on_write: paint_write,
+                styles: Vec::new(),
+                extras: crate::popovers::PaintPickerExtras { ids: vec![rf.id], fills: true, index: 0, ..Default::default() },
+            };
             let swatch_btn = crate::popovers::with_window_trigger(
                 div()
                     .w(pt(24.0))
@@ -1586,12 +1610,13 @@ pub(crate) fn paints(
                         let queue = queue.clone();
                         let contrast = contrast.clone();
                         let on_pick = on_pick.clone();
+                        let picker = picker.clone();
                         open_detached_with(root, trigger_click, Some(top), cx, move |anchor, cx| {
                             crate::popovers::WindowState::color(
                                 cx,
                                 anchor,
                                 current,
-                                None,
+                                Some(picker.clone()),
                                 contrast,
                                 on_pick,
                                 queue,
