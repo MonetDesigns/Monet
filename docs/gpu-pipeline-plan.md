@@ -299,9 +299,18 @@ match figcraft_gpu::render::Renderer::global().render(&scene) { Ok(rgba) => …,
   缓冲。纯图元/网格/文字/组层可以安全切分（组层按格建全帧层，合成语义逐像素可分离）；投影、
   图层/分级/背景模糊、颗粒与纹理读格外的像素或按设备坐标锚定图案，整帧登记 `tiled-effect` 回退
   CPU，避免接缝与图案漂移。对照测试用 64px 格切 200px 文档，与不切分 GPU 结果逐字节一致。
-- 取消令牌（`AtomicBool`）与导出进度回调（**未做**）；取消后释放纹理。
-- **验收**：同一文档 GPU 导出与 CPU 导出 diff 达标（椭圆帧已加对照）；分块与整帧逐字节一致
-  （已加两组对照：可切分文档、含投影拒绝切分）；取消在 1 帧内生效、4K/8K 不 OOM（**未做**）。
+- **已落地（库接口）**：导出取消与进度。`Renderer::render_document_tiled_with` 接受
+  `ExportControl { cancel: Option<&AtomicBool>, progress: Option<&mut dyn FnMut(ExportProgress)> }`：
+  开始时报 `(0, total)`，每个 tile 完成报一次；`total = ceil(w/max) * ceil(h/max)`。令牌在**每个
+  tile 构建前与 render 前**各采样一次，已提交的 tile 允许画完；命中后返回 `RenderError::Cancelled`
+  并丢弃整帧 MSAA/resolve/readback 纹理，不让 4K/8K 的导出继续占显存。原
+  `render_document_tiled` 仍以空控制调用，行为不变。UI 的一次性动画导出 hook 尚未携带令牌与进度条
+  （需要导出对话框的取消按钮接线）。
+- **验收**：`a_tiled_export_reports_progress_and_stops_between_tiles`（64px 格切 200px，首 tile
+  完成后置位令牌，只报 `(0,16)`/`(1,16)` 后返回 `Cancelled`；预置令牌只报零）与
+  `a_tiled_export_reports_every_tile`（无取消时逐 tile 报 `0..=16` 并返回整帧）；同一文档 GPU
+  导出与 CPU 导出 diff 达标（椭圆帧已加对照）；分块与整帧逐字节一致（已加两组对照：可切分文档、
+  含投影拒绝切分）；4K/8K 显存 OOM 压测**未做**。
 
 ### M7 一致性
 

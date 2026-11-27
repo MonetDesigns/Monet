@@ -10,11 +10,14 @@
 
 #![cfg(feature = "wgpu")]
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use figcraft_color::{Color, Gradient, GradientKind, Paint};
 use figcraft_doc::{Document, NodeId, NodeKind, StrokeJoin};
 use figcraft_gpu::Viewport;
 use figcraft_gpu::diff::{Tolerance, compare, compare_interiors, pixel};
 use figcraft_gpu::doc_scene;
+use figcraft_gpu::render::{ExportControl, RenderError};
 use figcraft_render::{Options, View};
 
 const SIZE: u32 = 200;
@@ -1141,6 +1144,65 @@ fn a_luminance_mask_matches_the_cpu() {
         assert!(cpu_mid[k].abs_diff(gpu_mid[k]) <= 2, "luminance-masked interior differs: {cpu_mid:?} vs {gpu_mid:?}");
     }
     assert!(cpu_mid[3] < 140 && cpu_mid[3] > 120, "the CPU halved the content alpha: {cpu_mid:?}");
+}
+
+#[test]
+fn a_tiled_export_reports_progress_and_stops_between_tiles() {
+    let Some(mut renderer) = figcraft_gpu::render::Renderer::new() else {
+        eprintln!("SKIP: no adapter");
+        return;
+    };
+    let mut doc = Document::default();
+    let page = doc.pages[0];
+    transparent_page(&mut doc, page);
+    rect(&mut doc, page, "Card", 20.0, 20.0, 160.0, 160.0, 12.0, Paint::solid(Color::new(0.2, 0.5, 0.8, 1.0)));
+
+    let cancel = AtomicBool::new(false);
+    let mut seen = Vec::new();
+    let mut progress = |p: figcraft_gpu::render::ExportProgress| {
+        seen.push((p.done, p.total));
+        if p.done == 1 {
+            cancel.store(true, Ordering::Relaxed);
+        }
+    };
+    let control = ExportControl { cancel: Some(&cancel), progress: Some(&mut progress) };
+    let err = renderer.render_document_tiled_with(&doc, page, &viewport(), 64, control).expect_err("the second tile must not start after the cancel");
+    assert_eq!(err, RenderError::Cancelled);
+    assert_eq!(seen.first(), Some(&(0, 16)), "the bar starts at zero");
+    assert!(seen.iter().all(|&(_, total)| total == 16), "{seen:?}");
+    assert_eq!(seen.last(), Some(&(1, 16)), "exactly the finished tile is reported");
+
+    // A token already set stops before the first tile, with only the zero report.
+    let cancel = AtomicBool::new(true);
+    let mut seen = Vec::new();
+    let mut progress = |p: figcraft_gpu::render::ExportProgress| seen.push((p.done, p.total));
+    let err = renderer
+        .render_document_tiled_with(&doc, page, &viewport(), 64, ExportControl { cancel: Some(&cancel), progress: Some(&mut progress) })
+        .expect_err("a set token stops at once");
+    assert_eq!(err, RenderError::Cancelled);
+    assert_eq!(seen, [(0, 16)]);
+}
+
+#[test]
+fn a_tiled_export_reports_every_tile() {
+    let Some(mut renderer) = figcraft_gpu::render::Renderer::new() else {
+        eprintln!("SKIP: no adapter");
+        return;
+    };
+    let mut doc = Document::default();
+    let page = doc.pages[0];
+    transparent_page(&mut doc, page);
+    rect(&mut doc, page, "Card", 20.0, 20.0, 160.0, 160.0, 12.0, Paint::solid(Color::new(0.9, 0.4, 0.2, 1.0)));
+
+    let mut seen = Vec::new();
+    let mut progress = |p: figcraft_gpu::render::ExportProgress| seen.push((p.done, p.total));
+    let pixels = renderer
+        .render_document_tiled_with(&doc, page, &viewport(), 64, ExportControl { cancel: None, progress: Some(&mut progress) })
+        .expect("a plain tiled export");
+    assert_eq!(pixels.len(), (SIZE as usize) * (SIZE as usize) * 4);
+    let done: Vec<u32> = seen.iter().map(|&(done, _)| done).collect();
+    assert_eq!(done, (0..=16).collect::<Vec<_>>(), "one report per tile, after the zero");
+    assert!(seen.iter().all(|&(_, total)| total == 16));
 }
 
 #[test]

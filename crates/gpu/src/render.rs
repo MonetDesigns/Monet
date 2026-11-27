@@ -14,6 +14,7 @@
 //! A scene that lists an unsupported feature is refused here, not drawn "best effort": the caller
 //! (canvas or export) then renders the same frame with `figcraft-render` on the CPU.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use bytemuck::{Pod, Zeroable};
@@ -35,6 +36,31 @@ pub enum RenderError {
     Size(String),
     /// The device was lost or a submission failed.
     Device(String),
+    /// The caller asked to stop, checked between tiles.
+    Cancelled,
+}
+
+/// How many tiles of a tiled export have finished.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ExportProgress {
+    pub done: u32,
+    pub total: u32,
+}
+
+/// A tiled export's stop button and progress bar.
+///
+/// The token is sampled between tiles, before the next build and render; a tile already on the
+/// GPU finishes first. Cancelling drops the renderer's frame-sized textures before returning.
+#[derive(Default)]
+pub struct ExportControl<'a> {
+    pub cancel: Option<&'a AtomicBool>,
+    pub progress: Option<&'a mut dyn FnMut(ExportProgress)>,
+}
+
+impl ExportControl<'_> {
+    fn is_cancelled(&self) -> bool {
+        self.cancel.is_some_and(|flag| flag.load(Ordering::Relaxed))
+    }
 }
 
 impl std::fmt::Display for RenderError {
@@ -45,6 +71,7 @@ impl std::fmt::Display for RenderError {
                 write!(f, "GPU cannot draw this frame: {}", features.join(", "))
             }
             Self::Size(s) | Self::Device(s) => f.write_str(s),
+            Self::Cancelled => f.write_str("the export was cancelled"),
         }
     }
 }
@@ -516,7 +543,6 @@ impl CommandList {
                 Item::Mask(mask) => {
                     if self.instances.len() > batch {
                         cmds.push(Cmd::Shapes { first: batch as u32, count: (self.instances.len() - batch) as u32 });
-                        batch = self.instances.len();
                     }
                     let index = self.masks.len();
                     self.masks.push(MaskPlan { content: Vec::new(), mask: Vec::new(), kind: mask.kind });
@@ -1934,6 +1960,20 @@ impl Renderer {
     /// effects read across tile bounds are refused so the CPU keeps them: tiling a blurred or
     /// grained frame would leave seams or shifted patterns.
     pub fn render_document_tiled(&mut self, doc: &Document, id: NodeId, viewport: &Viewport, max_side: u32) -> Result<Vec<u8>, RenderError> {
+        self.render_document_tiled_with(doc, id, viewport, max_side, ExportControl::default())
+    }
+
+    /// [`render_document_tiled`](Self::render_document_tiled) with a cancel token and progress
+    /// callback. The token is sampled before each tile; cancelling drops the frame textures and
+    /// returns [`RenderError::Cancelled`].
+    pub fn render_document_tiled_with(
+        &mut self,
+        doc: &Document,
+        id: NodeId,
+        viewport: &Viewport,
+        max_side: u32,
+        mut control: ExportControl<'_>,
+    ) -> Result<Vec<u8>, RenderError> {
         let (w, h) = (viewport.width, viewport.height);
         if w == 0 || h == 0 {
             return Err(RenderError::Size("the frame has no drawable size".into()));
@@ -1941,13 +1981,37 @@ impl Renderer {
         if viewport.scale <= 0.0 {
             return Err(RenderError::Size("the viewport has no positive scale".into()));
         }
+        let max = max_side.max(1);
+        let cols = w.div_ceil(max);
+        let rows = h.div_ceil(max);
+        let total = cols.saturating_mul(rows);
+        let report = |control: &mut ExportControl<'_>, done: u32| {
+            if let Some(cb) = control.progress.as_mut() {
+                cb(ExportProgress { done, total });
+            }
+        };
+        let cancel = |this: &mut Self, control: &ExportControl<'_>| {
+            if control.is_cancelled() {
+                // The exporter is stopping; do not hold a frame-sized MSAA/resolve/readback set.
+                this.target = None;
+                Some(RenderError::Cancelled)
+            } else {
+                None
+            }
+        };
+        report(&mut control, 0);
+        if let Some(err) = cancel(self, &control) {
+            return Err(err);
+        }
+
         let full = doc_scene::build_subtree(doc, id, viewport);
         if !full.is_supported() {
             return Err(RenderError::Unsupported(full.unsupported_features().to_vec()));
         }
-        let max = max_side.max(1);
         if w <= max && h <= max {
-            return self.render(&full);
+            let pixels = self.render(&full)?;
+            report(&mut control, 1);
+            return Ok(pixels);
         }
         if full.has_tile_unsafe_effects() {
             return Err(RenderError::Unsupported(vec![Unsupported {
@@ -1957,8 +2021,12 @@ impl Renderer {
         }
 
         let mut out = vec![0u8; (w as usize) * (h as usize) * 4];
+        let mut done = 0u32;
         for y in (0..h).step_by(max as usize) {
             for x in (0..w).step_by(max as usize) {
+                if let Some(err) = cancel(self, &control) {
+                    return Err(err);
+                }
                 let tw = max.min(w - x);
                 let th = max.min(h - y);
                 let tile = Viewport {
@@ -1978,6 +2046,8 @@ impl Renderer {
                     let dst = (y as usize + row) * dst_stride + (x as usize) * 4;
                     out[dst..dst + src_stride].copy_from_slice(&pixels[row * src_stride..(row + 1) * src_stride]);
                 }
+                done += 1;
+                report(&mut control, done);
             }
         }
         Ok(out)
