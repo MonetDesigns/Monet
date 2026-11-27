@@ -2211,7 +2211,16 @@ fn paint_pattern_sources(doc: &Document, ids: &[NodeId], page: Option<NodeId>) -
 }
 
 fn paint_rows(doc: &Document, ids: &[NodeId], page: Option<NodeId>, fills: bool) -> Option<Vec<PaintRow>> {
-    let list = common(doc, ids, |n| if fills { n.fills.clone() } else { n.strokes.clone() })?;
+    // 文本的 Fill 是“字符实际显示的 fills”：各 span 共享一份时取那一份，不共享就是 Mixed。
+    // 非文本节点 `character_fills` 直接返回图层 fills，所以这里可以统一走它。
+    let list = common(doc, ids, |n| {
+        if fills {
+            figcraft_engine::cmd::lists::character_fills(n)
+        } else {
+            Some(n.strokes.clone())
+        }
+    })
+    .flatten()?;
     let color_vars: Vec<String> =
         doc.variables.variables.iter().filter(|v| v.kind == figcraft_doc::VariableType::Color).map(|v| v.name.clone()).collect();
     let pattern_sources = paint_pattern_sources(doc, ids, page);

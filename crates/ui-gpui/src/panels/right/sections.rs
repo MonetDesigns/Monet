@@ -374,14 +374,21 @@ fn y_to_constraint(y: f32) -> &'static str {
 
 /// 字体族选择按钮：外观沿用 `Dropdown`，但点击打开一个带字体预览的窗口（每项用它自己的
 /// 字体渲染名称），而不是纯文本菜单。
-fn font_picker_button(f: &RightFields, label: impl Into<SharedString>, width: f32, current: Option<String>, ids: Vec<figcraft_doc::NodeId>) -> Dropdown {
+fn font_picker_button(
+    f: &RightFields,
+    label: impl Into<SharedString>,
+    width: f32,
+    current: Option<String>,
+    ids: Vec<figcraft_doc::NodeId>,
+    range: Option<(figcraft_doc::NodeId, usize, usize)>,
+) -> Dropdown {
     let popups = f.popups();
     let queue = f.queue();
     let mut d = Dropdown::new(label, width, None).fill();
     d = d.on_click(move |anchor: Bounds<Pixels>, _window, cx: &mut App| {
         let ids = ids.clone();
         open_detached_with(popups.clone(), "font-picker", Some(anchor.origin.y), cx, |pos, cx| {
-            crate::popovers::WindowState::font_picker(queue.clone(), cx, current.as_deref(), pos, Some(ids))
+            crate::popovers::WindowState::font_picker(queue.clone(), cx, current.as_deref(), pos, Some(ids), range)
         });
     });
     d
@@ -3588,26 +3595,49 @@ fn text_style_chip(f: &RightFields, d: &PanelData, name: SharedString) -> crate:
     field_row_full_trailing(body, vec![detach])
 }
 
+/// 文本属性的写回命令：编辑文本选区时走 `text.style {id,start,end}`，只改选中字符；
+/// 否则走 `node.set {ids: text_ids}`，只改选中的文本节点（不会误伤同选的矩形）。
+fn text_prop_command(
+    range: Option<(NodeId, usize, usize)>,
+    ids: &[NodeId],
+    prop: &str,
+    value: Value,
+) -> (&'static str, Value) {
+    if let Some((id, start, end)) = range {
+        let mut p = serde_json::Map::new();
+        p.insert("id".into(), json!(id));
+        p.insert("start".into(), json!(start));
+        p.insert("end".into(), json!(end));
+        p.insert(prop.into(), value);
+        ("text.style", Value::Object(p))
+    } else {
+        let mut props = serde_json::Map::new();
+        props.insert(prop.into(), value);
+        ("node.set", json!({ "ids": ids, "props": props }))
+    }
+}
+
 /// Typography 的三个池化字段（字号 / 行高 / 字距）原本走 `node.set` 的整选区 pending；
 /// 文本选区里必须只提交 `text_ids`（egui `commit_text` / `apply_style`）。这三个字段只在本节
 /// 使用，所以在这里把 commit 回调重新绑定到当前文本 ids，避免“文本 + 矩形”混选时误伤矩形。
 fn retarget_text_edits(f: &RightFields, d: &PanelData, cx: &mut App) {
+    let range = d.selected_text_range;
+    let text_ids = d.text_ids.clone();
+
     let cmds = f.cmds.clone();
-    let size_ids = d.text_ids.clone();
+    let size_ids = text_ids.clone();
     f.font_size.update(cx, move |tf, _| {
         let cmds = cmds.clone();
         let ids = size_ids.clone();
         tf.set_on_commit(move |text, _w, _cx| {
             if let Ok(v) = text.trim().parse::<f64>() {
-                cmds.push(Cmd {
-                    id: "node.set",
-                    params: Some(json!({ "ids": ids, "props": { "fontSize": v } })),
-                });
+                let (id, params) = text_prop_command(range, &ids, "fontSize", json!(v));
+                cmds.push(Cmd { id, params: Some(params) });
             }
         });
     });
 
-    let line_ids = d.text_ids.clone();
+    let line_ids = text_ids.clone();
     let line_cmds = f.cmds.clone();
     f.line_height.update(cx, move |tf, _| {
         let cmds = line_cmds.clone();
@@ -3625,14 +3655,12 @@ fn retarget_text_edits(f: &RightFields, d: &PanelData, cx: &mut App) {
             } else {
                 return;
             };
-            cmds.push(Cmd {
-                id: "node.set",
-                params: Some(json!({ "ids": ids, "props": { "lineHeight": val } })),
-            });
+            let (id, params) = text_prop_command(range, &ids, "lineHeight", val);
+            cmds.push(Cmd { id, params: Some(params) });
         });
     });
 
-    let ls_ids = d.text_ids.clone();
+    let ls_ids = text_ids;
     let ls_cmds = f.cmds.clone();
     f.letter_spacing.update(cx, move |tf, _| {
         let cmds = ls_cmds.clone();
@@ -3650,10 +3678,8 @@ fn retarget_text_edits(f: &RightFields, d: &PanelData, cx: &mut App) {
             } else {
                 return;
             };
-            cmds.push(Cmd {
-                id: "node.set",
-                params: Some(json!({ "ids": ids, "props": { "letterSpacing": val } })),
-            });
+            let (id, params) = text_prop_command(range, &ids, "letterSpacing", val);
+            cmds.push(Cmd { id, params: Some(params) });
         });
     });
 }
@@ -3698,6 +3724,7 @@ pub(crate) fn typography(f: &RightFields, d: &PanelData, cx: &mut App, n: &mut u
             240.0,
             t.font_family.clone(),
             d.text_ids.clone(),
+            d.selected_text_range,
         )));
 
         // ── 字重 / 样式 + 字号 ──
@@ -3707,9 +3734,8 @@ pub(crate) fn typography(f: &RightFields, d: &PanelData, cx: &mut App, n: &mut u
             Some(fam) => figcraft_text::family_styles(fam)
                 .into_iter()
                 .map(|s| {
-                    let mut q = json!({ "props": { "fontStyle": s.clone() } });
-                    q["ids"] = json!(d.text_ids);
-                    (s, "node.set", q)
+                    let (cmd, q) = text_prop_command(d.selected_text_range, &d.text_ids, "fontStyle", json!(s.clone()));
+                    (s, cmd, q)
                 })
                 .collect(),
             None => Vec::new(),

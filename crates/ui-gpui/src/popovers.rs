@@ -2389,6 +2389,7 @@ impl WindowState {
         current: Option<&str>,
         anchor: Point<Pixels>,
         ids: Option<Vec<figcraft_doc::NodeId>>,
+        range: Option<(figcraft_doc::NodeId, usize, usize)>,
     ) -> Self {
         let mut w = Self::base(WindowKind::FontPicker, tr("Font family"), cmds, Open::Anchor(anchor));
         // Figma `typePanel.fontFamily.fontPickerWindow`：宽 `15rem`(=240)，窗口背景是
@@ -2402,11 +2403,16 @@ impl WindowState {
         w.rows = figcraft_text::family_names()
             .into_iter()
             .map(|fam| {
-                let mut params = json!({ "props": { "fontFamily": fam.clone() } });
-                if let Some(ids) = &ids {
-                    params["ids"] = json!(ids);
-                }
-                let mut row = Row::new(fam.clone(), "node.set", params).font_family(fam.clone());
+                let (cmd, params) = if let Some((id, start, end)) = range {
+                    ("text.style", json!({ "id": id, "start": start, "end": end, "fontFamily": fam.clone() }))
+                } else {
+                    let mut params = json!({ "props": { "fontFamily": fam.clone() } });
+                    if let Some(ids) = &ids {
+                        params["ids"] = json!(ids);
+                    }
+                    ("node.set", params)
+                };
+                let mut row = Row::new(fam.clone(), cmd, params).font_family(fam.clone());
                 if Some(fam.as_str()) == current {
                     row = row.trail("✓");
                 }
