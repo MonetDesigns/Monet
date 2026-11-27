@@ -333,6 +333,54 @@ fn an_inner_shadow_matches_the_cpu_blur() {
 }
 
 #[test]
+fn two_drop_shadows_on_a_rotated_card_match_the_cpu() {
+    let mut doc = Document::default();
+    let page = doc.pages[0];
+    transparent_page(&mut doc, page);
+    let card = rect(&mut doc, page, "Card", 60.0, 50.0, 60.0, 40.0, 10.0, Paint::solid(Color::new(0.95, 0.95, 0.95, 1.0)));
+    if let Ok(n) = doc.get_mut(card) {
+        n.transform = figcraft_geom::Affine::rotate(0.25);
+        n.effects = vec![
+            figcraft_doc::Effect {
+                kind: figcraft_doc::EffectKind::DropShadow(figcraft_doc::Shadow {
+                    color: Color::new(0.0, 0.0, 0.0, 0.45),
+                    offset: (8.0, 10.0),
+                    radius: 9.0,
+                    spread: 0.0,
+                    blend: figcraft_color::BlendMode::Normal,
+                    show_behind: false,
+                }),
+                visible: true,
+            },
+            figcraft_doc::Effect {
+                kind: figcraft_doc::EffectKind::DropShadow(figcraft_doc::Shadow {
+                    color: Color::new(0.8, 0.1, 0.1, 0.3),
+                    offset: (-6.0, 4.0),
+                    radius: 4.0,
+                    spread: 0.0,
+                    blend: figcraft_color::BlendMode::Normal,
+                    show_behind: false,
+                }),
+                visible: true,
+            },
+        ];
+    }
+
+    let scene = doc_scene::build(&doc, page, &viewport());
+    assert!(scene.is_supported(), "{:?}", scene.unsupported_features());
+    assert_eq!(scene.shadow_count(), 2);
+
+    let cpu = cpu_pixels(&doc, page);
+    let Some(gpu) = gpu_pixels(&doc, page) else {
+        eprintln!("SKIP: no adapter");
+        return;
+    };
+    let tol = Tolerance { per_channel: 2, max_bad_ratio: 0.02 };
+    let report = compare_interiors(&cpu, &gpu, SIZE as usize, SIZE as usize, tol).expect("comparable");
+    assert!(report.passes(tol), "{}", report.summary());
+}
+
+#[test]
 fn text_glyphs_match_the_cpu() {
     let mut doc = Document::default();
     let page = doc.pages[0];
