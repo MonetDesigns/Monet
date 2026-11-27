@@ -36,6 +36,9 @@ const GIF_MAX_FPS: u32 = 50;
 /// Ceiling on export render threads; one more than the machine's cores rarely helps and each
 /// worker holds its own scratch document.
 const MAX_RENDER_THREADS: usize = 32;
+/// Shared cap on raw RGBA frames queued across all export workers. A 8192² frame is 256 MiB,
+/// so this admits one such frame while allowing dozens of ordinary 1080p frames.
+const MAX_IN_FLIGHT_FRAME_BYTES: usize = 256 * 1024 * 1024;
 
 /// How many worker threads a frame-parallel export uses.
 fn render_threads() -> usize {
@@ -243,25 +246,29 @@ impl Animation {
         F: FnMut(usize, figcraft_motion_codec::FrameRgba) -> std::result::Result<(), String>,
     {
         std::thread::scope(|scope| -> std::result::Result<(), String> {
-            // One channel per worker, read in the same round-robin order the workers produce in,
-            // so frames reach `sink` in timeline order and each worker's queue stays small.
-            let mut senders = Vec::with_capacity(threads);
-            let mut receivers = Vec::with_capacity(threads);
-            for _ in 0..threads {
-                let (tx, rx) = mpsc::sync_channel::<std::result::Result<figcraft_motion_codec::FrameRgba, String>>(2);
-                senders.push(tx);
-                receivers.push(rx);
-            }
-            for (w, tx) in senders.drain(..).enumerate() {
+            // A single shared queue bounds frames in flight across every worker. Counting slots
+            // per worker is not enough at 8192²: one RGBA frame is 256 MiB, so 32 workers × 2
+            // slots could hold 24 GiB before any encoder buffer. The queue capacity comes from
+            // the frame size and a shared byte budget; `threads` frames can also be in progress.
+            let frame_bytes = (self.size.0 as usize).saturating_mul(self.size.1 as usize).saturating_mul(4).max(1);
+            let budget_frames = (MAX_IN_FLIGHT_FRAME_BYTES / frame_bytes).max(1);
+            let capacity = budget_frames.saturating_sub(threads).max(1);
+            let (tx, rx) = mpsc::sync_channel::<(usize, std::result::Result<figcraft_motion_codec::FrameRgba, String>)>(capacity);
+            for w in 0..threads {
+                let tx = tx.clone();
                 scope.spawn(move || self.render_worker(times, threads, w, tx));
             }
-            // Returning early drops `receivers`, which unblocks any worker still waiting on a full
-            // channel so the scope can join instead of deadlocking.
-            for i in 0..times.len() {
-                match receivers[i % threads].recv() {
-                    Ok(Ok(frame)) => sink(i, frame)?,
-                    Ok(Err(e)) => return Err(e),
-                    Err(_) => return Err("a frame failed to render".to_string()),
+            // The main thread must drop its sender or `recv` never observes all workers finishing.
+            drop(tx);
+            let mut pending: std::collections::BTreeMap<usize, figcraft_motion_codec::FrameRgba> = std::collections::BTreeMap::new();
+            let mut next = 0;
+            while next < times.len() {
+                let (i, frame) = rx.recv().map_err(|_| "a frame failed to render".to_string())?;
+                let frame = frame?;
+                pending.insert(i, frame);
+                while let Some(frame) = pending.remove(&next) {
+                    sink(next, frame)?;
+                    next += 1;
                 }
             }
             Ok(())
@@ -269,13 +276,13 @@ impl Animation {
     }
 
     /// Renders this worker's share of the frames (`start`, `start + threads`, ...) in order.
-    fn render_worker(&self, times: &[f64], threads: usize, start: usize, tx: mpsc::SyncSender<std::result::Result<figcraft_motion_codec::FrameRgba, String>>) {
+    fn render_worker(&self, times: &[f64], threads: usize, start: usize, tx: mpsc::SyncSender<(usize, std::result::Result<figcraft_motion_codec::FrameRgba, String>)>) {
         let mut player = MotionPlayer::new(&self.base, self.page);
         let mut i = start;
         while i < times.len() {
             let frame = self.frame_rgba(&mut player, times[i]);
             let failed = frame.is_err();
-            if tx.send(frame).is_err() || failed {
+            if tx.send((i, frame)).is_err() || failed {
                 break;
             }
             i += threads;

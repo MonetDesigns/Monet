@@ -12,4 +12,4 @@ unsafe_code = "allow"
 
 [target.'cfg(windows)'.dependencies]
 figcraft-motion-codec = { workspace = true }
-windows = { version = "0.62", default-features = false, features = ["Win32_Media_MediaFoundation"] }
+windows = { version = "0.62", default-features = false, features = ["Win32_Media_MediaFoundation", "Win32_System_Com"] }

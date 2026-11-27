@@ -21,6 +21,7 @@ use std::{
 
 use figcraft_motion_codec::{FrameRgba, Mp4Options, rgba_to_yuv420_into, yuv_sizes};
 use windows::{
+    Win32::Foundation::RPC_E_CHANGED_MODE,
     Win32::Media::MediaFoundation::{
         CODECAPI_AVEncCommonQuality, CODECAPI_AVEncCommonRateControlMode, IMFAttributes, IMFByteStream, IMFSinkWriter, IMFTransform,
         MF_MT_AVG_BITRATE, MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_MPEG2_PROFILE,
@@ -30,13 +31,44 @@ use windows::{
         MFT_FRIENDLY_NAME_Attribute, MFVideoFormat_H264, MFVideoFormat_NV12, MFVideoInterlace_Progressive, MFVideoPrimaries_BT709,
         MFVideoTransFunc_709, MFVideoTransferMatrix_BT709, eAVEncCommonRateControlMode_Quality, eAVEncH264VProfile_High,
     },
+    Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize},
     core::{GUID, HSTRING, Interface},
 };
+
+/// Owns one successful `CoInitializeEx` on the encoder thread. `S_FALSE` (already initialized on
+/// this thread) still has to be balanced with `CoUninitialize`; a pre-existing apartment with a
+/// different threading model is left untouched.
+struct ComGuard {
+    owned: bool,
+}
+
+impl ComGuard {
+    fn new() -> Result<Self, String> {
+        let hr = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+        if hr == RPC_E_CHANGED_MODE {
+            // Another apartment already owns this thread; MFStartup can still work, and balancing
+            // an initialisation we did not perform would corrupt that apartment.
+            return Ok(Self { owned: false });
+        }
+        hr.ok().map_err(|e| format!("CoInitializeEx: {e}"))?;
+        Ok(Self { owned: true })
+    }
+}
+
+impl Drop for ComGuard {
+    fn drop(&mut self) {
+        if self.owned {
+            unsafe { CoUninitialize() };
+        }
+    }
+}
 
 /// A Media Foundation sink writer configured for H.264 in MP4. Frames are straight RGBA8 and
 /// are converted to NV12 on the caller's thread; opaque H.264 is the export target, so alpha is
 /// flattened onto `background` exactly like the CPU encoder.
 pub struct MfMp4Encoder {
+    /// Thread-scoped COM apartment, released after the sink writer on drop.
+    com: ComGuard,
     writer: Option<IMFSinkWriter>,
     stream: u32,
     path: PathBuf,
@@ -62,6 +94,7 @@ impl MfMp4Encoder {
         if w < 256 || h < 256 {
             return Err("Media Foundation H.264 needs a picture of at least 256x256".into());
         }
+        let com = ComGuard::new()?;
         mf_startup()?;
 
         let mut cleanup = TempFile { path: temp_path(), keep: false };
@@ -134,6 +167,7 @@ impl MfMp4Encoder {
         let (ys, cs) = yuv_sizes(w as usize, h as usize);
         cleanup.keep = true;
         Ok(Self {
+            com,
             writer: Some(writer),
             stream,
             path,
