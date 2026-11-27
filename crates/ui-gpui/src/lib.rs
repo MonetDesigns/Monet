@@ -757,6 +757,13 @@ pub struct PaneState {
 
     pick: Option<(u64, NodeId)>,
 
+    /// 平台全屏切换是排队执行的（Windows gpui 0.2.2）：记住尚未落地的目标状态，避免同一帧
+    /// 内两个 `window.fullscreen {on:true}` 都读到旧状态而各排一次 toggle。
+    ///
+    /// 目标状态属于窗口，不属于共享的 `CanvasView`：A 窗排了 toggle 后 B 窗不能拿 A 的
+    /// 目标去吞掉自己的请求（CodeRabbit PR#40）。
+    fullscreen_target: Option<bool>,
+
     /// 当前修饰键状态（GPUI 不给「当前状态」，只能从事件里记）。
     mods: Modifiers,
 
@@ -1044,10 +1051,6 @@ pub struct CanvasView {
     /// 才丢弃它发起的待处理取样。它不属于 `PaneState`，新窗口 clone 不会继承。
     pick_owner: Option<u64>,
 
-    /// 平台全屏切换是排队执行的（Windows gpui 0.2.2）：记住尚未落地的目标状态，避免同一帧
-    /// 内两个 `window.fullscreen {on:true}` 都读到旧状态而各排一次 toggle。
-    fullscreen_target: Option<bool>,
-
     /// 控制通道的请求队列（`--control <port>` 时由 [`control_server`] 往里塞）。
     control_queue: control::Queue,
 
@@ -1112,6 +1115,8 @@ impl CanvasView {
                 p.key_box = None;
                 p.key_box_doc = None;
                 p.pick = None;
+                // A brand-new window has no pending platform fullscreen transition of its own.
+                p.fullscreen_target = None;
                 // TabDragState 包着 Rc<RefCell<_>>：clone 会和源窗口共享拖拽记录，
                 // 另一个窗口的标签渲染会把本窗口正在拖的目标清掉（CodeRabbit PR#27/#28）。
                 p.tabs.drag = Default::default();
@@ -1509,6 +1514,8 @@ impl CanvasView {
 
             pick: None,
 
+            fullscreen_target: None,
+
             mods: Modifiers::default(),
 
             space: false,
@@ -1690,8 +1697,6 @@ impl CanvasView {
             pane_wid: 0,
 
             pick_owner: None,
-            fullscreen_target: None,
-
             control_queue: Arc::new(std::sync::Mutex::new(Vec::new())),
 
             pane,
