@@ -475,7 +475,7 @@ fn link_field(
     placeholder: &'static str,
     rows: usize,
 ) -> gpui::Entity<crate::widgets::TextEdit> {
-    let field = f.row_field(
+    let field = f.row_field_multiline(
         cx,
         slot(n),
         value,
@@ -491,11 +491,9 @@ fn link_field(
             nest: None,
             nest_key: None,
         },
+        rows,
     );
-    field.update(cx, |te, _| {
-        te.set_placeholder(placeholder);
-        te.set_multiline(rows);
-    });
+    field.update(cx, |te, _| te.set_placeholder(placeholder));
     field
 }
 

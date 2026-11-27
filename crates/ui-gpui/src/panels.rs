@@ -1857,6 +1857,16 @@ impl RightFields {
     /// 认领一个列表行编辑器：绑定本帧的提交目标，且只在显示值变化时写入。
     /// 返回可用于 `ColorField` 等组件的 `TextEdit` 实体。
     pub(crate) fn row_field(&self, cx: &mut App, slot: usize, value: &str, ctx: RowEditCtx) -> Entity<TextEdit> {
+        self.row_field_with_rows(cx, slot, value, ctx, 0)
+    }
+
+    /// 同 [`RightFields::row_field`]，但本行是多行编辑器。池里的编辑器会在普通行与多行行之间
+    /// 复用；每次认领时直接设置目标行数，避免先 reset 成 0 再把多行值冲成单行。
+    pub(crate) fn row_field_multiline(&self, cx: &mut App, slot: usize, value: &str, ctx: RowEditCtx, rows: usize) -> Entity<TextEdit> {
+        self.row_field_with_rows(cx, slot, value, ctx, rows)
+    }
+
+    fn row_field_with_rows(&self, cx: &mut App, slot: usize, value: &str, ctx: RowEditCtx, rows: usize) -> Entity<TextEdit> {
         // 只有「透明度」这一行是 0..100 的百分比、且尾部带可拖的「%」；其余数值行（时长、
         // 宽高、内边距…）范围各异，绝不能套 0..100，保持原来的纯文本提交即可。
         let opacity = !ctx.string_value && ctx.key == "opacity" && (ctx.scale - 100.0).abs() < f64::EPSILON;
@@ -1869,7 +1879,7 @@ impl RightFields {
         if let Some(e) = self.row_editors.get(slot) {
             e.update(cx, |te, _| {
                 te.set_readonly(false);
-                te.set_multiline(0);
+                te.set_multiline(rows);
                 if opacity {
                     // 与样式编辑器共用同一套透明度配置（拖动「%」、0..100 夹紧、可编辑）。
                     crate::widgets::ColorField::configure_opacity_editor(te, value);
