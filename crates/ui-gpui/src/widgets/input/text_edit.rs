@@ -177,6 +177,20 @@ impl TextEdit {
         }
         self.input.buffer.set_text(self.value.clone());
     }
+
+    /// Replace the visible draft too (mention insertion is a programmatic edit while the field
+    /// is active). `set_value` deliberately keeps a live draft; this does not change that rule
+    /// for document pushes.
+    pub(crate) fn set_draft_text(&mut self, v: impl Into<String>) {
+        let v = v.into();
+        self.value = v.clone();
+        self.kept = v.clone();
+        self.input.buffer.set_text(v);
+    }
+    /// The live caret position as a character index (the mention query ends here, not at EOF).
+    pub(crate) fn draft_caret(&self) -> usize {
+        self.input.buffer.range().end
+    }
     pub fn set_placeholder(&mut self, p: impl Into<SharedString>) {
         self.input.set_placeholder(p);
     }
@@ -685,12 +699,14 @@ impl Render for TextEdit {
                             if !s.is_empty() {
                                 cx.write_to_clipboard(ClipboardItem::new_string(s));
                                 this.input.buffer.insert("");
+                                this.notify_change(window, cx);
                             }
                         }
                         "v" => {
                             let text = cx.read_from_clipboard().and_then(|i| i.text().map(|s| s.to_string()));
                             if let Some(s) = text {
                                 this.input.buffer.insert(&s);
+                                this.notify_change(window, cx);
                             }
                         }
                         _ => return,
