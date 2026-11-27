@@ -51,6 +51,7 @@ mod tests {
             "page.delete",
             "page.add",
             "instance.create",
+            "library.acceptUpdates",
             "style.apply",
             "file.revert",
         ] {

@@ -410,7 +410,7 @@ fn shortcuts_body(state: &ExtraState, cmds: &Cmds, _cx: &mut App) -> Div {
             .w_full()
             .child(group_dd)
             .child(state.search.clone())
-            .child(div().text_size(pt(10.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(format!("{} shortcuts", list.len())))),
+            .child(div().text_size(pt(10.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(figcraft_i18n::trn("{n} shortcuts", list.len(), &[])))),
     );
     if list.is_empty() {
         return body.child(div().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(tr("No shortcuts match")));
@@ -461,7 +461,15 @@ fn time_ago(unix_secs: u64) -> String {
     } else {
         (diff / 31_556_952, "year")
     };
-    if n <= 1 { format!("{unit} ago") } else { format!("{n} {unit}s ago") }
+    let key = match unit {
+        "minute" => "{n} minutes ago",
+        "hour" => "{n} hours ago",
+        "day" => "{n} days ago",
+        "week" => "{n} weeks ago",
+        "month" => "{n} months ago",
+        _ => "{n} years ago",
+    };
+    figcraft_i18n::trn(key, n as usize, &[])
 }
 
 /// 小号文本按钮（主要=accent 底白字，次要=field 底）。
@@ -542,7 +550,7 @@ fn versions_body(
                                 .text_size(pt(11.0))
                                 .font_weight(crate::panels::UI_FONT_REGULAR)
                                 .text_color(rgba(t.text))
-                                .child(SharedString::from(format!("Viewing “{nm}”"))),
+                                .child(SharedString::from(figcraft_i18n::trf("Viewing “{name}”", &[("name", &nm)])),
                         )
                         .child(div().text_size(pt(10.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(time_ago(p.time)))),
                 )
@@ -631,7 +639,7 @@ fn versions_body(
                             .min_w(px(0.0))
                             .text_size(pt(11.0))
                             .text_color(rgba(t.text))
-                            .child(SharedString::from(format!("Delete “{}”? This can't be undone.", v.name))),
+                            .child(SharedString::from(figcraft_i18n::trf("Delete “{name}”? This can't be undone.", &[("name", &v.name)])),
                     )
                     .child(yes)
                     .child(no),
@@ -639,7 +647,7 @@ fn versions_body(
             continue;
         }
 
-        let label = if v.auto { format!("{} (auto)", v.name) } else { v.name.clone() };
+        let label = if v.auto { figcraft_i18n::trf("{name} (auto)", &[("name", &v.name)]) } else { v.name.clone() };
         // 整行点击 = 预览（与 egui 一致）；按钮带 stop_propagation 防止冒泡。
         let vcp = vid.clone();
         let cm_preview = cmds.clone();
@@ -829,13 +837,16 @@ fn compare_body(
     let before = before_doc.as_ref().and_then(|b| render_thumb(b, id));
 
     let mut body = div().flex().flex_col().w_full().h_full().gap(pt(8.0)).p(pt(12.0));
-    let summary = format!("{} · {} added · {} removed · {} modified", cmp.name, cmp.added, cmp.removed, cmp.modified);
+    let summary = figcraft_i18n::trf(
+        "{name} · {added} added · {removed} removed · {modified} modified",
+        &[("name", &cmp.name), ("added", &cmp.added), ("removed", &cmp.removed), ("modified", &cmp.modified)],
+    );
     body =
         body.child(div().text_size(pt(12.0)).font_weight(crate::panels::UI_FONT_REGULAR).text_color(rgba(t.text)).child(SharedString::from(summary)));
     if let Some(v) = &chosen {
         if let Some(name) = ds.versions.iter().find(|x| &x.id == v).map(|x| x.name.clone()) {
             body = body
-                .child(div().text_size(pt(10.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(format!("Compared to version {name}"))));
+                .child(div().text_size(pt(10.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(figcraft_i18n::trf("Compared to version {name}", &[("name", &name)]))));
         }
     }
 
@@ -996,7 +1007,7 @@ fn compare_body(
             .text_size(pt(11.0))
             .font_weight(crate::panels::UI_FONT_REGULAR)
             .text_color(rgba(t.text))
-            .child(SharedString::from(format!("{} changes", cmp.changes.len()))),
+            .child(SharedString::from(figcraft_i18n::trn("{n} changes", cmp.changes.len(), &[]))),
     );
     for c in &cmp.changes {
         let cid = c.id;
@@ -1125,9 +1136,9 @@ fn assets_components(doc: &figcraft_doc::Document, cmds: &Cmds, q: &str, root: O
     let mut grid = div().flex().flex_col().w_full().gap(pt(10.0));
     if comps.is_empty() {
         return grid.child(note(if q.is_empty() {
-            "No local components. Create one with Component ▸ Create component."
+            tr("No local components. Create one with Component ▸ Create component.")
         } else {
-            "No components match your search."
+            tr("No components match your search.")
         }));
     }
     for chunk in comps.chunks(2) {

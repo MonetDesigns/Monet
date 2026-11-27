@@ -1239,7 +1239,7 @@ C2、C3（文案规范待全面对齐）。
 | ID | 节 | 落点 | 状态 |
 |---|---|---|---|
 | DM1 | 入口 `view.devMode` / Shift+D | `panels/extra.rs`、`lib.rs` | ✅ |
-| DM2 | 只读闸门（命令、菜单、快捷键、图层/画布/拖放） | `dev_gate.rs`、`lib.rs`、`layer_tree.rs`、`canvas/{handles,selection_spacing}.rs` | ✅ |
+| DM2 | 只读闸门（命令、菜单、快捷键、图层/画布/拖放、写插件） | `dev_gate.rs`、`lib.rs`、`layer_tree.rs`、`canvas/{handles,selection_spacing}.rs` | ✅ `plugin.run` 按插件 access 额外判断 |
 | DM3 | 拒绝提示 | `dev_gate::message`、中英 i18n | ✅ |
 | DM4 | Status 参数链与 Focus / Compare 三态 | `panels/right/inspect.rs::status_actions`、`data.rs::SectionData` | ✅ |
 | DM5 | Compare 版本菜单 | `panels/extra.rs`、`open_dropdown_menu` | ✅ |
@@ -1250,15 +1250,16 @@ C2、C3（文案规范待全面对齐）。
 | DM10 | Code 语言与复制 | `inspect.rs::code_sec`、`CodeLang::ALL` | ✅ |
 | DM11 | Connect to code | `inspect.rs::connect_section` | ✅ |
 | DM12 | 只读插件命令 | `inspect.rs::plugin_section`、`data.rs::PluginRunRow` | ✅ |
-| P1-6 | 面板级测试 / 契约 | `dev_gate` 2 条、`devmode_tests` 6 条、`parity_contract` DM1–DM12 | 策略层与源码契约已接；GPUI 交互点击用例待补 |
-| P2-1 | 引擎 CSS/Tailwind 同步 | `codegen/css.rs`、`codegen/tailwind.rs` | 🟡 文本渐变裁剪、多层 background、Tailwind layered / `bg-clip-text` / `text-transparent` 已回补；`codegen.rs` 主体 376 行差异与 anim 合并待做 |
+| P1-6 | 面板级测试 / 契约 | `dev_gate` 3 条、`devmode_tests` 6 条、`parity_contract` DM1–DM12 | 策略层与源码契约已接；GPUI 交互点击用例待补 |
+| P2-1 | 引擎 CSS/Tailwind 同步 | `codegen/css.rs`、`codegen/tailwind.rs` | 🟡 文本渐变裁剪、多层 background、Tailwind layered / `bg-clip-text` / `text-transparent` 已回补；**2026-11-27 审计确认仍缺逐段 `text-wrap` 与 mobile `max-width` 保留**，`codegen.rs` 主体差异主要是格式与 anim 合并 |
 | P2-2 | Motion 出码入口 | `codegen::motion_code_for`、`InspectData::motion_code`、`inspect.rs::motion_section` | ✅ Code 节按 css/swiftui/compose 显示动画块，无动画不显示 |
 | P2-3 | 面板快照缓存 | `lib.rs::panel_data` | ⬜ 仅拖动时复用 `last_panel`；按 revision/selection/filter 的缓存待做 |
 | P2-4 | 资产导出对齐 | `inspect.rs::asset_row` / `export_all` | ✅ 逐项「另存为」+ `file.exportLayers` 多资产已接；格式参数细节待核 |
 | P2-5 | `code_connect` 缓存 | `code_connect.rs::import` | ✅ 同一组件多条 link 只 `describe` 一次 |
 | P2-6 | 多行输入 | `widgets/**` | ⬜ 需单独决策：扩 `TextEdit::multiline` 或把便签/模板改弹层，不在 Dev 面板局部 hack |
 
-**验证**：`cargo check -p figcraft-ui-gpui`（A 盘 target）通过；`dev_gate` / `devmode` 测试在
-`--features test-support` 下运行；`parity_contract` 的 `PARITY_CONTRACT_STATUS` 块已加 DM1–DM12，
-由 `capabilities()` 从源码派生 token 双向核对。
+**验证**：历史记录：`cargo check -p figcraft-ui-gpui` 曾在 A 盘 target 通过，`dev_gate` / `devmode` 测试曾在
+`--features test-support` 下运行；`parity_contract` 的 `PARITY_CONTRACT_STATUS` 块由 `capabilities()` 从源码派生
+token 双向核对。**2026-11-27 审计时当前 checkout 为 `sync/variable-binding-2026-11`，按项目规则未在功能分支构建；
+P2 与审计补丁待带入本地 `main` 后重新编译验证，本表状态不等于编译通过。**
 

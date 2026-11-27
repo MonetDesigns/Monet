@@ -3381,7 +3381,10 @@ impl CanvasView {
 
         let can_step = list.len() > usize::from(at.is_some());
 
-        let pos = at.map_or_else(|| format!("{} ready", list.len()), |k| format!("{} of {}", k + 1, list.len()));
+        let pos = at.map_or_else(
+            || figcraft_i18n::trn("{n} ready", list.len(), &[]),
+            |k| figcraft_i18n::trf("{n} of {total}", &[("n", &(k + 1)), ("total", &list.len())]),
+        );
 
         // 一行里：图标 / 名字 / 状态徽标 / 按钮。
 
@@ -3485,7 +3488,7 @@ impl CanvasView {
                 // The right panel goes through the same Developer Mode gate as the menus: a
                 // button that would edit the design must not reach the engine (EGUI's
                 // `menus::dev_mode_refuses`, called from every panel).
-                if self.dev_refuses(&c.id, cx) {
+                if self.dev_refuses_command(&c.id, c.params.as_ref().unwrap_or(&serde_json::Value::Null), cx) {
                     continue;
                 }
                 // ⛔ 只能操作**本窗口拥有**的文档：否则第二个窗口能切到 / 关掉第一个窗口的文件
@@ -4201,7 +4204,7 @@ impl CanvasView {
     fn run_command(&mut self, id: &str, params: serde_json::Value, cx: &mut Context<Self>) {
         // Developer Mode refuses design edits from every entry (menus, toolbar, context menu,
         // dialogs, the layers panel). The engine owns the allow-list; the toast explains why.
-        if self.dev_refuses(id, cx) {
+        if self.dev_refuses_command(id, &params, cx) {
             return;
         }
         // The colour picker's eyedropper and direct pick command both use the session-wide
@@ -4416,7 +4419,12 @@ impl CanvasView {
     /// Developer Mode's single refusal gate: the policy lives in the engine, the toast lives here.
     /// Every command entry (menus, toolbar, context menu, right panel, shortcuts) calls this.
     fn dev_refuses(&mut self, id: &str, cx: &mut Context<Self>) -> bool {
-        if !dev_gate::refuses(&self.app, id) {
+        self.dev_refuses_command(id, &serde_json::Value::Null, cx)
+    }
+
+    /// [`Self::dev_refuses`] with parameters: `plugin.run` needs the plugin's access to be checked.
+    fn dev_refuses_command(&mut self, id: &str, params: &serde_json::Value, cx: &mut Context<Self>) -> bool {
+        if !dev_gate::refuses_command(&self.app, id, params) {
             return false;
         }
         self.toast(dev_gate::message(), cx);
@@ -4530,6 +4538,7 @@ impl CanvasView {
                 };
                 let dir = dir.path().to_path_buf();
 
+                let count = files.len();
                 for (name, bytes) in files {
                     let path = dir.join(name);
 
@@ -4543,7 +4552,10 @@ impl CanvasView {
                     }
                 }
 
-                let _ = this.update(cx, |_, cx| cx.notify());
+                let _ = this.update(cx, |view, cx| {
+                    let text = figcraft_i18n::trf("Exported {count} files", &[("count", &count.to_string())]);
+                    view.toast(text, cx);
+                });
                 return;
             }
 
@@ -5720,7 +5732,7 @@ impl CanvasView {
 
         // A19：带 "…" 的菜单命令先要输入。直接 execute 会用默认参数静默导出 / 查找，
         // 界面上什么都不会出现；先开通用对话框，由它的按钮带字段值提交同一条命令。
-        if self.dev_refuses(cmd, cx) {
+        if self.dev_refuses_command(cmd, &params, cx) {
             return;
         }
 
@@ -7940,7 +7952,8 @@ impl Render for CanvasView {
 
                 if e.keystroke.key == "escape" && this.extra.is_some() {
                     this.extra = None;
-
+                    // The panel owns Escape: closing Compare must not also leave Focus view.
+                    cx.stop_propagation();
                     cx.notify();
 
                     return;
