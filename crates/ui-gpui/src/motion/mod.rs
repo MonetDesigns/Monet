@@ -147,6 +147,10 @@ pub struct MotionUi {
     /// Last play mode observed in the document. Undo/redo can change it while playing; the next
     /// frame rebases `clock_ms` so it does not keep counting under the old mode.
     pub mode: Option<motion::PlayMode>,
+    /// Last timeline duration observed while playing. A duration edit keeps the same mode, so
+    /// the mode check alone would map the old reverse clock against the new duration and jump
+    /// the playhead.
+    pub last_duration_ms: Option<u32>,
     pub drag_duration: Option<u32>,
     pub scroll_x: f32,
     /// Horizontal timeline magnification over the fit-to-width scale. `0` means "not touched yet"
@@ -193,15 +197,19 @@ impl MotionUi {
         }
         let now = Instant::now();
         let mode = settings.play_mode();
-        if self.mode.is_some_and(|prev| prev != mode) {
-            // Undo/redo (or another window) changed the stored mode mid-play. The clock counts
-            // up, so reverse must count from the end of the current playhead, not continue the
-            // forward clock.
-            let d = settings.duration_ms as f64;
+        let duration = settings.duration_ms;
+        let mode_changed = self.mode.is_some_and(|prev| prev != mode);
+        let duration_changed = self.last_duration_ms.is_some_and(|prev| prev != duration);
+        if mode_changed || (mode == motion::PlayMode::Reverse && duration_changed) {
+            // Undo/redo (or another window) changed the stored mode, or the reverse timeline's
+            // duration changed, mid-play. The clock counts up, so reverse must count from the
+            // end of the current playhead, not continue the old clock.
+            let d = duration as f64;
             self.clock_ms = if mode == motion::PlayMode::Reverse { (d - self.playhead_ms).max(0.0) } else { self.playhead_ms };
             self.last_tick = None;
         }
         self.mode = Some(mode);
+        self.last_duration_ms = Some(duration);
         let dt = self.last_tick.map(|t| now.duration_since(t).as_secs_f64() * 1000.0).unwrap_or(0.0);
         self.last_tick = Some(now);
         self.clock_ms += dt;
@@ -1184,6 +1192,22 @@ mod tests {
         let reverse = figcraft_doc::anim::motion::TimelineSettings { duration_ms: 1000, reverse: true, ..Default::default() };
         ui.advance(reverse);
         assert!((ui.clock_ms - 700.0).abs() <= 1.0, "reverse starts counting from the current playhead: {}", ui.clock_ms);
+        assert!((ui.playhead_ms - 300.0).abs() <= 1.0, "the displayed playhead must not jump: {}", ui.playhead_ms);
+    }
+
+    #[test]
+    fn a_duration_change_while_reversing_keeps_the_playhead_in_place() {
+        let mut ui = MotionUi {
+            playing: true,
+            playhead_ms: 300.0,
+            clock_ms: 700.0,
+            mode: Some(motion::PlayMode::Reverse),
+            last_duration_ms: Some(1000),
+            ..Default::default()
+        };
+        let longer = figcraft_doc::anim::motion::TimelineSettings { duration_ms: 2000, reverse: true, ..Default::default() };
+        ui.advance(longer);
+        assert!((ui.clock_ms - 1700.0).abs() <= 1.0, "the reverse clock rebases against the new end: {}", ui.clock_ms);
         assert!((ui.playhead_ms - 300.0).abs() <= 1.0, "the displayed playhead must not jump: {}", ui.playhead_ms);
     }
 
