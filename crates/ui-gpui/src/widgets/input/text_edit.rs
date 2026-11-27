@@ -281,6 +281,7 @@ impl TextEdit {
 
     /// 把当前内容交给 `on_change`。
     fn notify_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.input.clear_vertical_target();
         let Some(cb) = self.on_change.clone() else { return };
         let text = self.input.buffer.text().to_string();
         cb(&text, window, cx);
@@ -321,6 +322,7 @@ impl TextEdit {
 
     // ── edit lifecycle (egui's `text_field_edit`) ───────────────────────────────────────────
     fn begin_edit(&mut self, window: &mut Window, select_all: bool) {
+        self.input.clear_vertical_target();
         let was = self.editing;
         self.editing = true;
         if !was {
@@ -666,6 +668,12 @@ impl Render for TextEdit {
                     "down" => "arrowdown",
                     k => k,
                 };
+                // A run of Up/Down keeps the column it started from. Every other key ends that
+                // run, so the next vertical move records a fresh x; Home/End read the current
+                // wrap-boundary affinity themselves.
+                if key != "arrowup" && key != "arrowdown" && key != "home" && key != "end" {
+                    this.input.clear_vertical_target();
+                }
                 if ctrl {
                     match key {
                         "a" => this.input.buffer.select_all(),
@@ -738,7 +746,7 @@ impl Render for TextEdit {
                         }
                         "arrowup" | "arrowdown" => {
                             let dir = if key == "arrowup" { -1 } else { 1 };
-                            if let Some(target) = this.input.vertical_target(this.input.buffer.range().end, dir) {
+                            if let Some(target) = this.input.vertical_target(this.input.buffer.caret(), dir) {
                                 if m.shift {
                                     this.input.buffer.select_to(target);
                                 } else {
@@ -750,7 +758,7 @@ impl Render for TextEdit {
                             return;
                         }
                         "home" | "end" => {
-                            if let Some((start, end)) = this.input.line_bounds(this.input.buffer.range().end) {
+                            if let Some((start, end)) = this.input.line_bounds(this.input.buffer.caret()) {
                                 let target = if key == "home" { start } else { end };
                                 if m.shift {
                                     this.input.buffer.select_to(target);
@@ -982,6 +990,77 @@ mod tests {
         view.update(window, |field, _| {
             assert_eq!(field.input.buffer.range().end, 2, "the caret should land at the end of 'ab'");
         });
+    }
+
+    /// Shift+Up twice must keep extending from the active caret, not jump back to the selection
+    /// end that the first step left behind.
+    #[gpui::test]
+    async fn repeated_shift_up_extends_the_selection(cx: &mut gpui::TestAppContext) {
+        let (view, window) = cx.add_window_view(|_window, cx| {
+            let mut field = TextEdit::new(cx);
+            field.set_value("aa\naa\naa");
+            field.set_multiline(true);
+            field.input.buffer.move_to(8);
+            field
+        });
+        window.simulate_resize(gpui::Size::new(px(300.0), px(90.0)));
+        view.update_in(window, |field, window, _cx| {
+            field.begin_edit(window, false);
+            window.focus(&field.focus);
+        });
+        window.simulate_keystrokes("shift-up");
+        view.update(window, |field, _| {
+            assert_eq!(field.input.buffer.range(), 5..8, "the first Shift+Up reaches the previous paragraph");
+            assert_eq!(field.input.buffer.caret(), 5, "the active caret moves even though the anchor stays at 8");
+        });
+        window.simulate_keystrokes("shift-up");
+        view.update(window, |field, _| {
+            assert_eq!(field.input.buffer.range(), 2..8, "the second Shift+Up must keep extending upward");
+        });
+    }
+
+    /// Consecutive Up/Down presses keep the column they started from even when an intermediate
+    /// paragraph is shorter.
+    #[gpui::test]
+    async fn consecutive_vertical_moves_keep_the_preferred_column(cx: &mut gpui::TestAppContext) {
+        let (view, window) = cx.add_window_view(|_window, cx| {
+            let mut field = TextEdit::new(cx);
+            field.set_value("mmmmmm\nm\nmmmmmm");
+            field.set_multiline(true);
+            field.input.buffer.move_to(15);
+            field
+        });
+        window.simulate_resize(gpui::Size::new(px(300.0), px(90.0)));
+        view.update_in(window, |field, window, _cx| {
+            field.begin_edit(window, false);
+            window.focus(&field.focus);
+        });
+        window.simulate_keystrokes("up");
+        view.update(window, |field, _| assert_eq!(field.input.buffer.caret(), 8, "the first Up clamps to the short row"));
+        window.simulate_keystrokes("up");
+        view.update(window, |field, _| assert_eq!(field.input.buffer.caret(), 6, "the second Up must return to the original column"));
+    }
+
+    /// At the outer rows, Up/Down still move to the document's start/end instead of doing nothing.
+    #[gpui::test]
+    async fn vertical_moves_reach_the_document_boundaries(cx: &mut gpui::TestAppContext) {
+        let (view, window) = cx.add_window_view(|_window, cx| {
+            let mut field = TextEdit::new(cx);
+            field.set_value("a\nb");
+            field.set_multiline(true);
+            field
+        });
+        window.simulate_resize(gpui::Size::new(px(300.0), px(90.0)));
+        view.update_in(window, |field, window, _cx| {
+            field.begin_edit(window, false);
+            field.input.buffer.move_to(1);
+            window.focus(&field.focus);
+        });
+        window.simulate_keystrokes("up");
+        view.update(window, |field, _| assert_eq!(field.input.buffer.caret(), 0, "Up on the first row reaches the document start"));
+        window.simulate_keystrokes("down");
+        window.simulate_keystrokes("down");
+        view.update(window, |field, _| assert_eq!(field.input.buffer.caret(), 3, "Down on the last row reaches the document end"));
     }
 
     /// 固定高度的 composer 也要真的能看全内容：长行软换行，行数超过可视高度时跟随光标滚动。

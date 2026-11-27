@@ -9,7 +9,7 @@
 // 2026-11-27 补充：用户明确要求给共享 TextEdit 增加多行能力（评论 composer 的 Shift+Enter
 // 换行），本文件按该指令解冻；以上 INVARIANT 仍保持不变。
 // ============================================================================
-//! `TextInput` — Monet's most primitive, reusable single-line GPUI input.
+//! `TextInput` — Monet's most primitive, reusable single-line and multiline GPUI input.
 //!
 //! GPUI 0.2.1 ships no built-in `TextInput` element, so this implements the editor from scratch:
 //! `WindowTextSystem::shape_line` for layout, `LineLayout::closest_index_for_x` for click-to-caret,
@@ -24,9 +24,9 @@ use crate::widgets::input::{EditBuffer, caret};
 use crate::widgets::{TEXT_PT, pt, rgba, tokens};
 use gpui::{
     App, Bounds, ElementInputHandler, Entity, EntityInputHandler, FocusHandle, Hsla, IntoElement, PaintQuad, Pixels, Point, ShapedLine, SharedString,
-    TextRun, UTF16Selection, Window, canvas, fill, point, prelude::*, px, size,
+    Task, TextRun, UTF16Selection, Window, canvas, fill, point, prelude::*, px, size,
 };
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ops::Range;
 use std::rc::Rc;
 
@@ -121,25 +121,75 @@ pub fn centred_line_origin(bounds: Bounds<Pixels>, line: &ShapedLine, _font_size
 }
 
 /// Blink state shared across every frame of one editor. The visible/hidden rhythm comes from the
-/// same `caret` module the canvas uses; `started` only keeps the repaint ticker from being spawned
-/// once per frame.
+/// same `caret` module the canvas uses. `active` names the one repaint ticker allowed to run for
+/// this editor: a render only starts a ticker when none is active, and a ticker stops on blur or
+/// when a newer ticker replaces it. Without that, every focused render would detach another
+/// notify loop.
 struct CaretBlink {
     started: std::cell::Cell<Option<std::time::Instant>>,
+    focused: std::cell::Cell<bool>,
+    generation: std::cell::Cell<u64>,
+    active: std::cell::Cell<Option<u64>>,
+    /// Dropping this task cancels the blink loop. The task captures a `Weak` reference to the
+    /// blink state, so the state and the task do not keep each other alive.
+    task: RefCell<Option<Task<()>>>,
 }
 
 impl CaretBlink {
+    fn new() -> Self {
+        Self {
+            started: std::cell::Cell::new(None),
+            focused: std::cell::Cell::new(false),
+            generation: std::cell::Cell::new(0),
+            active: std::cell::Cell::new(None),
+            task: RefCell::new(None),
+        }
+    }
+
     fn visible(&self) -> bool {
         caret::visible_since(self.started.get(), std::time::Instant::now())
     }
 
-    fn clear(&self) {
-        self.started.set(None);
+    /// Focus starts the visible phase; blur clears the phase and cancels the ticker immediately,
+    /// including when the editor leaves the tree without a final blur event.
+    fn set_focused(&self, focused: bool) {
+        self.focused.set(focused);
+        if focused {
+            if self.started.get().is_none() {
+                self.started.set(Some(std::time::Instant::now()));
+            }
+        } else {
+            self.started.set(None);
+            self.task.borrow_mut().take();
+            self.active.set(None);
+        }
     }
 
-    fn start(&self) {
-        if self.started.get().is_none() {
-            self.started.set(Some(std::time::Instant::now()));
+    /// Claim the single ticker slot. `None` means this render must not spawn another loop.
+    fn start_ticker(&self) -> Option<u64> {
+        if !self.focused.get() || self.active.get().is_some() {
+            return None;
         }
+        let generation = self.generation.get().wrapping_add(1);
+        self.generation.set(generation);
+        self.active.set(Some(generation));
+        Some(generation)
+    }
+
+    fn ticker_is_current(&self, generation: u64) -> bool {
+        self.focused.get() && self.active.get() == Some(generation)
+    }
+
+    fn ticker_stopped(&self, generation: u64) {
+        if self.active.get() == Some(generation) {
+            self.active.set(None);
+        }
+    }
+
+    /// Keep the running task here so it is cancelled when the editor drops or blurs instead of
+    /// being detached for the life of the process.
+    fn set_task(&self, task: Task<()>) {
+        let _previous = self.task.borrow_mut().replace(task);
     }
 }
 
@@ -161,6 +211,13 @@ pub struct TextInput {
     align: TextAlign,
     /// Shape every `\n`-separated paragraph on its own line. Single-line fields keep the old path.
     multiline: bool,
+    /// Which visual row the active caret was last placed on. A soft-wrap boundary belongs to two
+    /// rows, so navigation records the chosen row and the painter reuses it while the caret stays
+    /// at that character.
+    caret_row: Rc<Cell<Option<(usize, usize)>>>,
+    /// The x column a run of Up/Down presses is aiming for. The first press records the caret's
+    /// current x; later presses reuse it so a shorter intermediate row cannot pull the caret left.
+    vertical_x: Cell<Option<Pixels>>,
     caret_blink: Rc<CaretBlink>,
 }
 
@@ -180,7 +237,9 @@ impl TextInput {
             dim: false,
             align: TextAlign::Left,
             multiline: false,
-            caret_blink: Rc::new(CaretBlink { started: std::cell::Cell::new(None) }),
+            caret_row: Rc::new(Cell::new(None)),
+            vertical_x: Cell::new(None),
+            caret_blink: Rc::new(CaretBlink::new()),
         }
     }
 
@@ -192,6 +251,18 @@ impl TextInput {
 
     pub fn is_multiline(&self) -> bool {
         self.multiline
+    }
+
+    /// End a vertical-move sequence. Typing, horizontal movement, Home/End and pointer placement
+    /// all reset the remembered column and the ambiguous wrap-boundary row; only consecutive
+    /// Up/Down keep the column.
+    pub(crate) fn clear_vertical_target(&self) {
+        self.vertical_x.set(None);
+        self.caret_row.set(None);
+    }
+
+    fn visual_row_for_caret(&self, lines: &[CachedLine], caret: usize) -> usize {
+        line_index_for_char_hinted(lines, caret, self.caret_row.get())
     }
 
     /// Test hook: how many visual rows the last paint cached, and where it scrolled.
@@ -248,6 +319,13 @@ impl TextInput {
 
     /// Point (window coords) → character index. Outside the editor it clamps to the ends.
     pub fn index_for_point(&self, p: Point<Pixels>) -> usize {
+        self.clear_vertical_target();
+        self.index_for_point_impl(p, true)
+    }
+
+    /// `record_row` is false for read-only platform queries: those must not change caret
+    /// navigation state.
+    fn index_for_point_impl(&self, p: Point<Pixels>, record_row: bool) -> usize {
         let cache = self.cache.borrow();
         let Some(bounds) = cache.bounds else { return 0 };
         let text_x = cache.text_x.unwrap_or(bounds.origin.x);
@@ -259,10 +337,17 @@ impl TextInput {
             };
             let line = &cache.lines[line_ix];
             if p.x <= text_x {
+                if record_row {
+                    self.caret_row.set(Some((line.char_start, line_ix)));
+                }
                 return line.char_start;
             }
             let byte = line.line.closest_index_for_x(p.x - text_x);
-            return line.char_start + line.text.as_ref()[..byte].chars().count();
+            let caret = line.char_start + line.text.as_ref()[..byte].chars().count();
+            if record_row {
+                self.caret_row.set(Some((caret, line_ix)));
+            }
+            return caret;
         }
         if p.x <= text_x {
             return 0;
@@ -277,12 +362,14 @@ impl TextInput {
     /// The character range of the visual line containing `caret`. Used by Home/End in a
     /// multiline editor; single-line callers keep the buffer-wide behaviour.
     pub(crate) fn line_bounds(&self, caret: usize) -> Option<(usize, usize)> {
+        self.vertical_x.set(None);
         let cache = self.cache.borrow();
         if !cache.multiline || cache.lines.is_empty() {
             return None;
         }
-        let ix = line_index_for_char(&cache.lines, caret);
+        let ix = self.visual_row_for_caret(&cache.lines, caret);
         let line = &cache.lines[ix];
+        self.caret_row.set(Some((caret, ix)));
         Some((line.char_start, line.char_end))
     }
 
@@ -292,17 +379,28 @@ impl TextInput {
         if !cache.multiline || cache.lines.is_empty() {
             return None;
         }
-        let ix = line_index_for_char(&cache.lines, caret);
+        let ix = self.visual_row_for_caret(&cache.lines, caret);
         let line = &cache.lines[ix];
-        let local = caret.saturating_sub(line.char_start).min(line.char_end - line.char_start);
-        let x = line.line.x_for_index(byte_at(&line.text, local));
+        let x = match self.vertical_x.get() {
+            Some(x) => x,
+            None => {
+                let local = caret.saturating_sub(line.char_start).min(line.char_end - line.char_start);
+                let x = line.line.x_for_index(byte_at(&line.text, local));
+                self.vertical_x.set(Some(x));
+                x
+            }
+        };
         let target_ix = (ix as i32 + dir).clamp(0, cache.lines.len() as i32 - 1) as usize;
         if target_ix == ix {
-            return Some(caret);
+            let boundary = if dir < 0 { line.char_start } else { line.char_end };
+            self.caret_row.set(Some((boundary, ix)));
+            return Some(boundary);
         }
         let target = &cache.lines[target_ix];
         let byte = target.line.closest_index_for_x(x);
-        Some(target.char_start + target.text.as_ref()[..byte].chars().count())
+        let result = target.char_start + target.text.as_ref()[..byte].chars().count();
+        self.caret_row.set(Some((result, target_ix)));
+        Some(result)
     }
 
     // ── EntityInputHandler delegation (no editing logic duplicated) ─────────────────────────
@@ -316,12 +414,15 @@ impl TextInput {
         self.buffer.marked_utf16()
     }
     pub fn input_unmark(&mut self) {
+        self.clear_vertical_target();
         self.buffer.commit_preedit();
     }
     pub fn input_replace(&mut self, range: Option<Range<usize>>, text: &str) {
+        self.clear_vertical_target();
         self.buffer.replace_utf16(range, text);
     }
     pub fn input_replace_and_mark(&mut self, range: Option<Range<usize>>, new_text: &str, selected: Option<Range<usize>>) {
+        self.clear_vertical_target();
         self.buffer.replace_and_mark_utf16(range, new_text, selected);
     }
     pub fn input_bounds_for_range(&self, range: Range<usize>, element_bounds: Bounds<Pixels>) -> Option<Bounds<Pixels>> {
@@ -332,7 +433,7 @@ impl TextInput {
             }
             let start = self.buffer.utf16_to_char(range.start);
             let end = self.buffer.utf16_to_char(range.end);
-            let ix = line_index_for_char(&cache.lines, start);
+            let ix = line_index_for_char_hinted(&cache.lines, start, self.caret_row.get());
             let line = &cache.lines[ix];
             let local_start = start.saturating_sub(line.char_start).min(line.char_end - line.char_start);
             let local_end = end.saturating_sub(line.char_start).min(line.char_end - line.char_start);
@@ -360,7 +461,7 @@ impl TextInput {
             if cache.composed {
                 return None; // composition view has no stable mapping back to the committed text
             }
-            let ci = self.index_for_point(p);
+            let ci = self.index_for_point_impl(p, false);
             return Some(self.buffer.char_to_utf16(ci));
         }
         let bounds = cache.bounds.as_ref()?;
@@ -387,8 +488,6 @@ impl TextInput {
         }
         let (display, is_composed) = self.display(focused);
         let blink = self.caret_blink.clone();
-        let ticker_started = Rc::new(std::cell::Cell::new(false));
-        let prepaint_ticker = ticker_started.clone();
         let blink_entity = entity.clone();
         let font_size = self.font_size;
         // ⛔ 颜色**每帧从 `tokens()` 重新取**，不要用构造时存下来的 `self.color`：
@@ -425,7 +524,6 @@ impl TextInput {
         let cache = self.cache.clone();
 
         let prepaint = move |bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App| {
-            let ticker_started = prepaint_ticker.clone();
             let run = TextRun {
                 len: display.as_ref().len(),
                 font: window.text_style().font(),
@@ -456,23 +554,27 @@ impl TextInput {
             // Blink: one ticker per editor, 500 ms on / 500 ms off (gpui-kit's `CursorBlink`
             // default), restarted whenever the field gains focus and reset to visible when it
             // loses it.
-            if !focused {
-                blink.clear();
-            } else {
-                blink.start();
-                if !ticker_started.get() {
-                    ticker_started.set(true);
-                    let e = blink_entity.clone();
-                    cx.spawn(async move |cx: &mut gpui::AsyncApp| {
-                        loop {
-                            cx.background_executor().timer(caret::BLINK).await;
-                            if e.update(cx, |_, cx| cx.notify()).is_err() {
-                                break;
-                            }
+            blink.set_focused(focused);
+            if let Some(generation) = blink.start_ticker() {
+                let e = blink_entity.downgrade();
+                let ticker = Rc::downgrade(&blink);
+                let task = cx.spawn(async move |cx: &mut gpui::AsyncApp| {
+                    loop {
+                        cx.background_executor().timer(caret::BLINK).await;
+                        let Some(ticker) = ticker.upgrade() else { break };
+                        if !ticker.ticker_is_current(generation) {
+                            break;
                         }
-                    })
-                    .detach();
-                }
+                        let Some(e) = e.upgrade() else { break };
+                        if e.update(cx, |_, cx| cx.notify()).is_err() {
+                            break;
+                        }
+                    }
+                    if let Some(ticker) = ticker.upgrade() {
+                        ticker.ticker_stopped(generation);
+                    }
+                });
+                blink.set_task(task);
             }
             let caret_visible = blink.visible();
             // The caret shares the line box with the glyphs: same top, same height — both are
@@ -518,9 +620,9 @@ impl TextInput {
         }
     }
 
-    /// Multiline rendering. One shaped line per explicit `\n` paragraph; the parent composer gives
-    /// the editor its height and clips lines beyond it. No soft wrapping, so caret/selection
-    /// geometry stays byte-accurate per paragraph.
+    /// Multiline rendering. Each explicit `\n` paragraph is shaped as a whole, then split into
+    /// visual rows that fit the editor width (long words and CJK wrap too). The composer gives
+    /// the editor its height; `scroll_y` keeps the caret row inside it.
     fn multiline_element<V: EntityInputHandler + 'static>(
         &self,
         entity: Entity<V>,
@@ -530,8 +632,6 @@ impl TextInput {
     ) -> impl IntoElement {
         let (display, is_composed) = self.display(focused);
         let blink = self.caret_blink.clone();
-        let ticker_started = Rc::new(std::cell::Cell::new(false));
-        let prepaint_ticker = ticker_started.clone();
         let blink_entity = entity.clone();
         let font_size = self.font_size;
         let t = tokens();
@@ -558,9 +658,9 @@ impl TextInput {
         let caret = c.caret;
         let preedit = c.composing.then(|| (c.mark_start, c.mark_end));
         let cache = self.cache.clone();
+        let caret_row = self.caret_row.clone();
 
         let prepaint = move |bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App| {
-            let ticker_started = prepaint_ticker.clone();
             let previous_scroll = cache.borrow().scroll_y;
             let font = window.text_style().font();
             let mut cached = Vec::new();
@@ -571,6 +671,7 @@ impl TextInput {
             let wrap_width = bounds.size.width.max(px(1.0));
             for (ix, part) in display.split('\n').enumerate() {
                 let chars: Vec<char> = part.chars().collect();
+                let byte_offsets: Vec<usize> = part.char_indices().map(|(b, _)| b).chain(std::iter::once(part.len())).collect();
                 if chars.is_empty() {
                     let text = SharedString::new("");
                     let run = TextRun { len: 0, font: font.clone(), color, background_color: None, underline: None, strikethrough: None };
@@ -592,11 +693,11 @@ impl TextInput {
                 }
                 let mut start = 0;
                 while start < chars.len() {
-                    let byte_start = byte_at(part, start);
+                    let byte_start = byte_offsets[start];
                     let x0 = full.x_for_index(byte_start);
                     let mut fit = chars.len();
                     for end in start + 1..=chars.len() {
-                        if full.x_for_index(byte_at(part, end)) - x0 > wrap_width {
+                        if full.x_for_index(byte_offsets[end]) - x0 > wrap_width {
                             fit = end.saturating_sub(1);
                             break;
                         }
@@ -632,7 +733,7 @@ impl TextInput {
             let visible_h = bounds.size.height.max(px(1.0));
             let mut scroll_y = previous_scroll;
             if total_h > visible_h {
-                let caret_ix = line_index_for_char(&cached, caret);
+                let caret_ix = line_index_for_char_hinted(&cached, caret, caret_row.get());
                 let caret_top = line_height * caret_ix as f32;
                 if caret_top < scroll_y {
                     scroll_y = caret_top;
@@ -665,7 +766,7 @@ impl TextInput {
                 }
             }
             let caret_quad = if focused && blink.visible() && sel_a == sel_b {
-                let ix = line_index_for_char(&cached, caret);
+                let ix = line_index_for_char_hinted(&cached, caret, caret_row.get());
                 let line = &cached[ix];
                 let local = caret.saturating_sub(line.char_start).min(line.char_end - line.char_start);
                 let x = line.line.x_for_index(byte_at(&line.text, local));
@@ -693,23 +794,27 @@ impl TextInput {
                     color,
                 ))
             });
-            if !focused {
-                blink.clear();
-            } else {
-                blink.start();
-                if !ticker_started.get() {
-                    ticker_started.set(true);
-                    let e = blink_entity.clone();
-                    cx.spawn(async move |cx: &mut gpui::AsyncApp| {
-                        loop {
-                            cx.background_executor().timer(caret::BLINK).await;
-                            if e.update(cx, |_, cx| cx.notify()).is_err() {
-                                break;
-                            }
+            blink.set_focused(focused);
+            if let Some(generation) = blink.start_ticker() {
+                let e = blink_entity.downgrade();
+                let ticker = Rc::downgrade(&blink);
+                let task = cx.spawn(async move |cx: &mut gpui::AsyncApp| {
+                    loop {
+                        cx.background_executor().timer(caret::BLINK).await;
+                        let Some(ticker) = ticker.upgrade() else { break };
+                        if !ticker.ticker_is_current(generation) {
+                            break;
                         }
-                    })
-                    .detach();
-                }
+                        let Some(e) = e.upgrade() else { break };
+                        if e.update(cx, |_, cx| cx.notify()).is_err() {
+                            break;
+                        }
+                    }
+                    if let Some(ticker) = ticker.upgrade() {
+                        ticker.ticker_stopped(generation);
+                    }
+                });
+                blink.set_task(task);
             }
             *cache.borrow_mut() = LayoutCache {
                 line: None,
@@ -759,6 +864,23 @@ fn line_index_for_char(lines: &[CachedLine], caret: usize) -> usize {
     lines.iter().position(|l| caret < l.char_end || (caret == l.char_end && !l.wrapped)).unwrap_or(lines.len() - 1)
 }
 
+/// A soft-wrap boundary belongs to both rows. Navigation records which row the caret was moved
+/// onto; reuse that while the caret is still at the same character so End on one row and Home on
+/// the next paint where the user actually is.
+fn line_index_for_char_hinted(lines: &[CachedLine], caret: usize, hint: Option<(usize, usize)>) -> usize {
+    match hint {
+        Some((at, row))
+            if at == caret
+                && row < lines.len()
+                && lines[row].char_start <= caret
+                && caret <= lines[row].char_end =>
+        {
+            row
+        }
+        _ => line_index_for_char(lines, caret),
+    }
+}
+
 impl Default for TextInput {
     fn default() -> Self {
         Self::new()
@@ -777,6 +899,21 @@ mod tests {
         assert_eq!(byte_at(s, 2), 4);
         assert_eq!(byte_at(s, 3), 8);
         assert_eq!(byte_at(s, 99), s.len());
+    }
+
+    #[test]
+    fn one_blink_ticker_per_focus_session() {
+        let blink = CaretBlink::new();
+        blink.set_focused(true);
+        let first = blink.start_ticker().expect("the focused editor starts one ticker");
+        assert!(blink.start_ticker().is_none(), "later renders must reuse the active ticker");
+        assert!(blink.ticker_is_current(first));
+        blink.set_focused(false);
+        assert!(!blink.ticker_is_current(first), "blur makes the running ticker stale");
+        blink.set_focused(true);
+        let second = blink.start_ticker().expect("refocus starts a fresh ticker");
+        assert_ne!(first, second);
+        assert!(blink.ticker_is_current(second));
     }
 
     #[test]
