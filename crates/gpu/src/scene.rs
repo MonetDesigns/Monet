@@ -411,6 +411,96 @@ impl Scene {
         Self { width, height, clear, items: Vec::new(), unsupported: Vec::new() }
     }
 
+    /// Collapse a run of consecutive, same-paint, axis-aligned plain rectangles that share an edge
+    /// into one rectangle. Two separate SDF rectangles each return partial coverage on the shared
+    /// pixel; source-over then leaves `1 - (1-a)(1-b)` instead of full coverage, a one-pixel seam at
+    /// fractional zoom. One rectangle has no internal edge, matching the CPU's merged fill.
+    ///
+    /// Runs are only joined while the union stays a rectangle: equal top/bottom (side by side) or
+    /// equal left/right (stacked). Anything else keeps its original items and painter's order.
+    pub fn merge_adjacent_plain_rectangles(&mut self) {
+        const EPS: f32 = 1e-3;
+        fn plain(shape: &ShapeNode) -> Option<[f32; 4]> {
+            let ShapeKind::RoundedRect { radii } = shape.shape else { return None };
+            if !matches!(shape.paint, Paint::Solid(_)) || radii.iter().any(|r| *r > 0.0) || shape.mat[1].abs() > EPS || shape.mat[2].abs() > EPS {
+                return None;
+            }
+            let (sx, sy) = (shape.mat[0], shape.mat[3]);
+            if sx <= 0.0 || sy <= 0.0 {
+                return None;
+            }
+            let rect = [shape.mat[4], shape.mat[5], shape.size[0] * sx, shape.size[1] * sy];
+            (rect[2] > 0.0 && rect[3] > 0.0 && rect.iter().all(|v| v.is_finite())).then_some(rect)
+        }
+        fn same_row(a: [f32; 4], b: [f32; 4], eps: f32) -> bool {
+            (a[1] - b[1]).abs() <= eps && (a[3] - b[3]).abs() <= eps
+        }
+        fn same_column(a: [f32; 4], b: [f32; 4], eps: f32) -> bool {
+            (a[0] - b[0]).abs() <= eps && (a[2] - b[2]).abs() <= eps
+        }
+        fn touches_x(a: [f32; 4], b: [f32; 4], eps: f32) -> bool {
+            ((a[0] + a[2]) - b[0]).abs() <= eps || ((b[0] + b[2]) - a[0]).abs() <= eps
+        }
+        fn touches_y(a: [f32; 4], b: [f32; 4], eps: f32) -> bool {
+            ((a[1] + a[3]) - b[1]).abs() <= eps || ((b[1] + b[3]) - a[1]).abs() <= eps
+        }
+
+        let old = std::mem::take(&mut self.items);
+        let mut out = Vec::with_capacity(old.len());
+        let mut i = 0;
+        while i < old.len() {
+            let Item::Shape(seed) = &old[i] else {
+                out.push(old[i].clone());
+                i += 1;
+                continue;
+            };
+            let Some(mut union) = plain(seed) else {
+                out.push(old[i].clone());
+                i += 1;
+                continue;
+            };
+            let mut horizontal: Option<bool> = None;
+            let mut j = i + 1;
+            while j < old.len() {
+                let Item::Shape(next) = &old[j] else { break };
+                let Some(next_rect) = plain(next) else { break };
+                if seed.paint != next.paint || seed.clip != next.clip || seed.opacity != next.opacity {
+                    break;
+                }
+                let h = same_row(union, next_rect, EPS) && touches_x(union, next_rect, EPS);
+                let v = same_column(union, next_rect, EPS) && touches_y(union, next_rect, EPS);
+                match horizontal {
+                    None if h => horizontal = Some(true),
+                    None if v => horizontal = Some(false),
+                    Some(true) if h => {}
+                    Some(false) if v => {}
+                    _ => break,
+                }
+                let (old_x1, old_y1) = (union[0] + union[2], union[1] + union[3]);
+                let (next_x1, next_y1) = (next_rect[0] + next_rect[2], next_rect[1] + next_rect[3]);
+                union[0] = union[0].min(next_rect[0]);
+                union[1] = union[1].min(next_rect[1]);
+                union[2] = old_x1.max(next_x1) - union[0];
+                union[3] = old_y1.max(next_y1) - union[1];
+                j += 1;
+            }
+            if j == i + 1 {
+                out.push(old[i].clone());
+            } else {
+                out.push(Item::Shape(ShapeNode {
+                    mat: [1.0, 0.0, 0.0, 1.0, union[0], union[1]],
+                    size: [union[2], union[3]],
+                    shape: ShapeKind::RoundedRect { radii: [0.0; 4] },
+                    paint: seed.paint.clone(),
+                    clip: seed.clip,
+                    opacity: seed.opacity,
+                }));
+            }
+            i = j;
+        }
+        self.items = out;
+    }
+
     pub fn push(&mut self, node: ShapeNode) {
         self.items.push(Item::Shape(node));
     }
@@ -641,5 +731,70 @@ mod tests {
         s.unsupported("text", "a text layer");
         assert!(!s.is_supported());
         assert_eq!(s.into_supported().unwrap_err()[0].feature, "text");
+    }
+
+    fn plain(x: f32, y: f32, w: f32, h: f32, paint: Paint) -> ShapeNode {
+        ShapeNode {
+            mat: [1.0, 0.0, 0.0, 1.0, x, y],
+            size: [w, h],
+            shape: ShapeKind::RoundedRect { radii: [0.0; 4] },
+            paint,
+            clip: Clip::NONE,
+            opacity: 1.0,
+        }
+    }
+
+    #[test]
+    fn abutting_same_paint_rectangles_merge_along_their_edge() {
+        let green = Paint::Solid(Rgba::new(0.2, 0.6, 0.4, 1.0));
+        let mut s = Scene::new(100, 100);
+        s.push(plain(10.0, 20.0, 30.0, 40.0, green.clone()));
+        s.push(plain(40.0, 20.0, 20.0, 40.0, green));
+        s.merge_adjacent_plain_rectangles();
+        assert_eq!(s.items.len(), 1);
+        let [Item::Shape(merged)] = s.items.as_slice() else {
+            assert_eq!(s.items.len(), 1, "one shape");
+            return;
+        };
+        assert_eq!((merged.mat[4], merged.mat[5]), (10.0, 20.0));
+        assert_eq!(merged.size, [50.0, 40.0]);
+    }
+
+    #[test]
+    fn only_equal_spans_and_plain_paint_merge() {
+        let green = Paint::Solid(Rgba::new(0.2, 0.6, 0.4, 1.0));
+        let mut different_span = Scene::new(100, 100);
+        different_span.push(plain(10.0, 20.0, 30.0, 40.0, green.clone()));
+        different_span.push(plain(40.0, 20.0, 20.0, 30.0, green));
+        different_span.merge_adjacent_plain_rectangles();
+        assert_eq!(different_span.items.len(), 2);
+
+        let gradient = Paint::Gradient {
+            kind: GradientKind::Linear,
+            from: [0.0, 0.0],
+            to: [1.0, 0.0],
+            width: [0.0, 1.0],
+            stops: vec![Stop { at: 0.0, color: Rgba::new(0.0, 0.0, 0.0, 1.0) }, Stop { at: 1.0, color: Rgba::new(1.0, 1.0, 1.0, 1.0) }],
+        };
+        let mut gradient_edge = Scene::new(100, 100);
+        gradient_edge.push(plain(10.0, 20.0, 30.0, 40.0, gradient.clone()));
+        gradient_edge.push(plain(40.0, 20.0, 30.0, 40.0, gradient));
+        gradient_edge.merge_adjacent_plain_rectangles();
+        assert_eq!(gradient_edge.items.len(), 2);
+    }
+
+    #[test]
+    fn stacked_same_paint_rectangles_merge_too() {
+        let green = Paint::Solid(Rgba::new(0.2, 0.6, 0.4, 1.0));
+        let mut s = Scene::new(100, 100);
+        s.push(plain(10.0, 20.0, 30.0, 40.0, green.clone()));
+        s.push(plain(10.0, 60.0, 30.0, 20.0, green));
+        s.merge_adjacent_plain_rectangles();
+        assert_eq!(s.items.len(), 1);
+        let [Item::Shape(merged)] = s.items.as_slice() else {
+            assert_eq!(s.items.len(), 1, "one shape");
+            return;
+        };
+        assert_eq!(merged.size, [30.0, 60.0]);
     }
 }

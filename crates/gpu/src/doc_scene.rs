@@ -51,6 +51,7 @@ pub fn build(doc: &Document, page: NodeId, view: &Viewport) -> Scene {
         (c[0] * c[0] + c[1] * c[1]).sqrt()
     };
     walk_list(doc, &page_node.children, view_xf, scale, Clip::NONE, 1.0, &mut scene, 0);
+    scene.merge_adjacent_plain_rectangles();
     scene
 }
 
@@ -63,6 +64,7 @@ pub fn build_subtree(doc: &Document, id: NodeId, view: &Viewport) -> Scene {
         (c[0] * c[0] + c[1] * c[1]).sqrt()
     };
     walk(doc, id, view_xf, scale, Clip::NONE, 1.0, &mut scene, 0, false);
+    scene.merge_adjacent_plain_rectangles();
     scene
 }
 
@@ -262,6 +264,7 @@ fn emit_group_layer(doc: &Document, n: &Node, view_xf: Affine, scale: f64, inner
     if layerable {
         let mut group = Scene::new(scene.width, scene.height);
         walk_list(doc, &n.children, view_xf, scale, inner, 1.0, &mut group, depth + 1);
+        group.merge_adjacent_plain_rectangles();
         if group.is_supported() {
             scene.push_group(GroupNode { items: group.items, opacity: n.opacity.clamp(0.0, 1.0), blend: n.blend });
             return;
@@ -1128,6 +1131,8 @@ fn walk_list(doc: &Document, children: &[NodeId], view_xf: Affine, scale: f64, c
         for &child in &children[start..end] {
             walk(doc, child, view_xf, scale, clip, opacity, &mut content, depth + 1, false);
         }
+        mask_scene.merge_adjacent_plain_rectangles();
+        content.merge_adjacent_plain_rectangles();
         if mask_scene.is_supported() && content.is_supported() {
             let kind = match node.mask_type {
                 figcraft_doc::MaskType::Luminance => crate::scene::MaskKind::Luminance,

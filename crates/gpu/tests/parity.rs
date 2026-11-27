@@ -33,8 +33,12 @@ fn viewport() -> Viewport {
 }
 
 fn cpu_pixels(doc: &Document, page: NodeId) -> Vec<u8> {
+    cpu_pixels_in(doc, page, &view())
+}
+
+fn cpu_pixels_in(doc: &Document, page: NodeId, view: &View) -> Vec<u8> {
     let opts = Options { background: None, ..Default::default() };
-    let pix = figcraft_render::render_view(doc, page, &view(), &opts).unwrap_or_else(|| panic!("the CPU renders this document"));
+    let pix = figcraft_render::render_view(doc, page, view, &opts).unwrap_or_else(|| panic!("the CPU renders this document"));
     pix.data().to_vec()
 }
 
@@ -44,9 +48,13 @@ fn cpu_pixels(doc: &Document, page: NodeId) -> Vec<u8> {
 /// parallel test threads can wedge a driver (seen with a real font installed, which stops the text
 /// test from skipping early). CPU rendering still runs in parallel.
 fn gpu_pixels(doc: &Document, page: NodeId) -> Option<Vec<u8>> {
+    gpu_pixels_in(doc, page, &viewport())
+}
+
+fn gpu_pixels_in(doc: &Document, page: NodeId, viewport: &Viewport) -> Option<Vec<u8>> {
     static GPU: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _guard = GPU.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let scene = doc_scene::build(doc, page, &viewport());
+    let scene = doc_scene::build(doc, page, viewport);
     assert!(scene.is_supported(), "the test scene must be expressible: {:?}", scene.unsupported_features());
     let mut renderer = figcraft_gpu::render::Renderer::new()?;
     Some(renderer.render(&scene).unwrap_or_else(|error| panic!("the GPU draws this scene: {error}")))
@@ -96,6 +104,44 @@ fn solid_shapes_round_corners_and_rotation_match_the_cpu() {
     for k in 0..4 {
         assert!(cpu_mid[k].abs_diff(gpu_mid[k]) <= 1, "solid interior differs by more than rounding: {cpu_mid:?} vs {gpu_mid:?}");
     }
+}
+
+#[test]
+fn abutting_same_paint_rectangles_do_not_seam() {
+    let mut doc = Document::default();
+    let page = doc.pages[0];
+    transparent_page(&mut doc, page);
+    let green = Paint::solid(Color::new(0.18431373, 0.6392157, 0.41960785, 1.0));
+    rect(&mut doc, page, "Seam Left", 40.0, 20.0, 240.0, 140.0, 0.0, green.clone());
+    rect(&mut doc, page, "Seam Right", 280.0, 20.0, 240.0, 140.0, 0.0, green);
+
+    // 2.94× puts the shared edge between device pixels. Two independent SDF rectangles then each
+    // cover the same edge pixel half-way; source-over leaves 75% instead of 100% and a one-pixel
+    // line shows. Merged, the edge is interior and fully covered.
+    let view = View { origin: (0.0, 0.0), scale: 2.94, width: 1700, height: 600 };
+    let vp = Viewport { origin: view.origin, scale: view.scale, width: view.width, height: view.height };
+    let scene = doc_scene::build(&doc, page, &vp);
+    assert_eq!(
+        scene.items.iter().filter(|item| matches!(item, figcraft_gpu::scene::Item::Shape(_))).count(),
+        1,
+        "the two abutting rectangles merge into one shape"
+    );
+
+    let cpu = cpu_pixels_in(&doc, page, &view);
+    let Some(gpu) = gpu_pixels_in(&doc, page, &vp) else {
+        eprintln!("SKIP: no adapter");
+        return;
+    };
+    for x in 820..=826 {
+        let (cpu_px, gpu_px) = (pixel(&cpu, 1700, x, 100).expect("in bounds"), pixel(&gpu, 1700, x, 100).expect("in bounds"));
+        for k in 0..4 {
+            assert!(cpu_px[k].abs_diff(gpu_px[k]) <= 1, "seam pixel x={x} differs: cpu={cpu_px:?} gpu={gpu_px:?}");
+        }
+        assert!(gpu_px[3] == 255 && gpu_px[1] > 150, "the seam must be opaque green, not a blend with the background: {gpu_px:?}");
+    }
+
+    let report = compare(&cpu, &gpu, Tolerance::EDGE).expect("comparable buffers");
+    assert!(report.passes(Tolerance::EDGE), "{}", report.summary());
 }
 
 #[test]

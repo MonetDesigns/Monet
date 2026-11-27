@@ -335,6 +335,9 @@ match figcraft_gpu::render::Renderer::global().render(&scene) { Ok(rgba) => …,
   普通 composite 的 bind group 与 opacity uniform；组层/蒙版 runs 的子树判定由三趟扫描合并为一趟
   `SubtreeTraits`；`walk` 的裁剪、组层与阴影分支拆成独立函数，效果列表一次归类；`figcraft-gpu`
   在 `--all-targets` 下 clippy 无 error/warning（依赖 crate 的既有 lint 不计）。
+- **接缝修复（已落地）**：连续的、同色、零圆角、轴对齐矩形在同一扫描内合并成一个矩形实例。两个
+  独立 SDF 在共享边各出部分覆盖率，SourceOver 只剩 `1-(1-a)(1-b)`，分数缩放下会出现 1px 亮线；
+  合并后共享边成为内部边，覆盖率回到 100%。只合并并集仍为矩形的横排/竖排，改变绘制顺序的情形不合并。
 - **验收**：`cargo test -p figcraft-gpu --features wgpu` 全绿；`--no-default-features` 下纯逻辑测试全绿。
 
 ## 5. 跨平台
