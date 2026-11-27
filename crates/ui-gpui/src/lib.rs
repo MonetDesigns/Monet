@@ -3246,7 +3246,13 @@ impl CanvasView {
                     st.comment_draft = None;
                     present::clear_comment_field();
                 }
-                12 => st.preview = false,
+                12 => {
+                    st.preview = false;
+                    // Promote the floating preview with the options saved for a real
+                    // presentation; the preview itself kept its own defaults until now.
+                    let options = self.present_view.clone();
+                    options.apply_to(&mut st);
+                }
                 10 => {
                     st.device_open = !st.device_open;
                     st.scale_open = false;
