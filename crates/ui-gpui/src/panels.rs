@@ -1199,6 +1199,7 @@ impl RightFields {
                     r.bound.clone(),
                     r.number_variables.clone(),
                     r.string_variables.clone(),
+                    r.color_variables.clone(),
                     r.effects.clone(),
                     r.grids.clone(),
                     self.popups(),
