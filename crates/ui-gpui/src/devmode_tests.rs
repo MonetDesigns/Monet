@@ -7,9 +7,11 @@
 mod tests {
     use crate::app::CanvasApp;
     use crate::dev_gate;
-    use crate::panels::right::data::read_playground;
+    use crate::panels::right::data::{read_dev, read_playground};
     use crate::panels::right::inspect::{CompareWith, status_actions};
-    use figcraft_doc::Document;
+    use figcraft_doc::{Document, NodeId};
+    use figcraft_engine::Session;
+    use figcraft_engine::params::id_of;
     use serde_json::{Value, json};
 
     fn app() -> CanvasApp {
@@ -110,5 +112,85 @@ mod tests {
             .expect("valid values must build");
         assert!(changed.tried);
         assert!(changed.code.contains("Pay now") && changed.code != p.code, "code must follow the tried value");
+    }
+
+    /// The smallest real document used by the section tests: page, frame, child rectangle.
+    fn dev_doc() -> (Session, NodeId, NodeId, NodeId) {
+        let mut s = Session::new();
+        let id = |v: Value| id_of(&v["id"]).unwrap();
+        let page = s.page().unwrap();
+        let frame = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 300, "height": 200, "name": "Login"})).unwrap());
+        let rect = id(s.execute("shape.rectangle", &json!({"x": 20, "y": 20, "width": 120, "height": 40, "parent": frame, "props": {"fill": "#FF0000"}})).unwrap());
+        (s, page, frame, rect)
+    }
+
+    #[test]
+    fn ready_list_reads_the_engine_filter_and_status_color() {
+        let (mut s, page, frame, _) = dev_doc();
+        s.execute("node.set", &json!({"id": frame, "props": {"devStatus": "readyForDev"}})).unwrap();
+        let doc = s.doc().unwrap().clone();
+        let ready = read_dev(&doc, &[], Some(page), 0);
+        let row = ready.ready.iter().find(|r| r.id == frame).expect("the ready frame is listed");
+        assert!(row.changed || row.color == (0x08, 0x7D, 0x4F), "{row:?}");
+        let completed = read_dev(&doc, &[], Some(page), 2);
+        assert!(!completed.ready.iter().any(|r| r.id == frame), "the Completed filter must not list a ready frame");
+    }
+
+    #[test]
+    fn categories_section_reads_created_categories() {
+        let (mut s, page, _, _) = dev_doc();
+        let out = s.execute("annotation.addCategory", &json!({"name": "Motion", "color": "#FF0000"})).unwrap();
+        let cat_id = out["id"].as_str().unwrap().to_string();
+        let doc = s.doc().unwrap().clone();
+        let d = read_dev(&doc, &[], Some(page), 0);
+        let row = d.categories.iter().find(|c| c.id == cat_id).expect("the category is listed");
+        assert_eq!(row.name, "Motion");
+        assert!(row.color.eq_ignore_ascii_case("ff0000"), "{row:?}");
+    }
+
+    #[test]
+    fn annotations_section_reads_labels_pins_and_menu_entries() {
+        let (mut s, page, _, rect) = dev_doc();
+        s.execute("annotation.add", &json!({"id": rect, "label": "Tap target", "properties": ["width"]})).unwrap();
+        let doc = s.doc().unwrap().clone();
+        let d = read_dev(&doc, &[rect], Some(page), 0);
+        let row = d.annotations.first().expect("the note is listed on its layer");
+        assert_eq!(row.label, "Tap target");
+        assert_eq!(d.node, Some(rect));
+        assert_eq!(row.pins.first().map(|p| p.label.as_str()), Some("Width"), "{row:?}");
+        assert!(row.category_menu.iter().any(|(name, _, _)| name == "No category"));
+        assert!(d.can_add_annotation, "a layer below the annotation cap can add another note");
+    }
+
+    #[test]
+    fn dev_resources_section_reads_the_layer_resources() {
+        let (mut s, page, _, rect) = dev_doc();
+        s.execute("devResource.add", &json!({"id": rect, "url": "https://storybook.example.com/button", "name": "Button stories"}))
+            .unwrap();
+        let doc = s.doc().unwrap().clone();
+        let d = read_dev(&doc, &[rect], Some(page), 0);
+        let row = d.dev_resources.first().expect("the resource is listed");
+        assert_eq!(row.name, "Button stories");
+        assert_eq!(row.url, "https://storybook.example.com/button");
+        assert!(row.from.is_none(), "a local resource has no inherited source");
+        assert!(d.can_add_resource);
+    }
+
+    #[test]
+    fn measurements_section_reads_page_measurements_that_touch_the_selection() {
+        let (mut s, page, frame, rect) = dev_doc();
+        s.execute("devMode.addMeasurement", &json!({"from": rect, "to": frame})).unwrap();
+        let doc = s.doc().unwrap().clone();
+        let d = read_dev(&doc, &[rect, frame], Some(page), 0);
+        let row = d.measurements.first().expect("the measurement is listed for the selected layer");
+        assert!(row.value.contains(" · ") || !row.value.is_empty(), "{row:?}");
+        assert!(d.can_measure_between, "two ids enable the between-layers action");
+    }
+
+    #[test]
+    fn playground_is_absent_for_an_ordinary_layer() {
+        let (s, _, _, rect) = dev_doc();
+        let doc = s.doc().unwrap().clone();
+        assert!(read_playground(&doc, rect, &serde_json::Map::new(), figcraft_engine::codegen::CodeLang::React, 0).is_none());
     }
 }
