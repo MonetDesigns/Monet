@@ -1872,6 +1872,7 @@ impl WindowState {
         anchor: Point<Pixels>,
         name: SharedString,
         binding: crate::wgsl_material::WgslMaterialBinding,
+        ids: Vec<figcraft_doc::NodeId>,
     ) -> Self {
         let mut w = Self::base(WindowKind::EffectSettings, name.clone(), cmds.clone(), Open::Anchor(anchor));
         w.width = 248.0;
@@ -1884,14 +1885,14 @@ impl WindowState {
             .map(|wf| {
                 let path = wf.path.to_string_lossy().into_owned();
                 let b = crate::wgsl_material::binding_for(&path);
-                (wf.name.clone(), "node.set", crate::wgsl_material::write_binding_params(Some(&b)))
+                (wf.name.clone(), "node.set", crate::wgsl_material::write_binding_params_for(&ids, Some(&b)))
             })
             .collect();
         if !items.iter().any(|(label, _, _)| label == &name.to_string()) {
             let b = crate::wgsl_material::binding_for(&binding.path);
-            items.push((name.to_string(), "node.set", crate::wgsl_material::write_binding_params(Some(&b))));
+            items.push((name.to_string(), "node.set", crate::wgsl_material::write_binding_params_for(&ids, Some(&b))));
         }
-        items.push((tr("None").to_string(), "node.set", crate::wgsl_material::write_binding_params(None)));
+        items.push((tr("None").to_string(), "node.set", crate::wgsl_material::write_binding_params_for(&ids, None)));
         let options = items.into_iter().map(|(label, cmd, params)| Opt::new(label, cmd, params)).collect();
         w.header_dropdown =
             Some(Setting::Dropdown { tab: 0, label: tr("Material").into(), current: Rc::new(RefCell::new(name)), anchor: Rc::new(RefCell::new(None)), options });
@@ -1909,6 +1910,7 @@ impl WindowState {
             let field = number_field_ranged(cx, 100.0, Some(value), "", spec.step, Slot::None, Some(spec.min), Some(spec.max));
             let live = shared.clone();
             let queue = cmds.clone();
+            let queue_ids = ids.clone();
             let field_name = spec.field.clone();
             let (min, max) = (spec.min, spec.max);
             field.update(cx, move |tf, _| {
@@ -1921,7 +1923,7 @@ impl WindowState {
                     let mut b = live.borrow().clone();
                     b.params.insert(field_name.clone(), v);
                     *live.borrow_mut() = b.clone();
-                    queue.push(Cmd { id: "node.set", params: Some(crate::wgsl_material::write_binding_params(Some(&b))) });
+                    queue.push(Cmd { id: "node.set", params: Some(crate::wgsl_material::write_binding_params_for(&queue_ids, Some(&b))) });
                 });
             });
             settings.push(Setting::Number { tab: 0, label: spec.label.clone().into(), field });
@@ -3241,7 +3243,10 @@ impl WindowState {
             *at3.borrow_mut() = None;
             wake3.wake();
         });
-        self.push_overlay(menu_popup_in(rect, None, rows, on_pick, dismiss.clone(), 0.0, 0.0), dismiss);
+        self.push_overlay(
+            menu_popup_in(rect, None, rows, on_pick, dismiss.clone(), f32::from(self.viewport.width), f32::from(self.viewport.height)),
+            dismiss,
+        );
     }
 
     pub(crate) fn color(

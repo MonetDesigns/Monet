@@ -97,6 +97,19 @@ pub fn write_binding_params(binding: Option<&WgslMaterialBinding>) -> Value {
     json!({ "props": { "pluginData": { BINDING_KEY: value } } })
 }
 
+/// Like [`write_binding_params`], but pins the write to the node that opened the settings
+/// window. A retained settings window can outlive a selection change; without `ids` the engine
+/// would apply layer A's shader to layer B.
+pub fn write_binding_params_for(ids: &[NodeId], binding: Option<&WgslMaterialBinding>) -> Value {
+    let mut v = write_binding_params(binding);
+    if !ids.is_empty()
+        && let Some(obj) = v.as_object_mut()
+    {
+        obj.insert("ids".into(), json!(ids.iter().map(|id| id.0).collect::<Vec<_>>()));
+    }
+    v
+}
+
 /// Make sure the shader at `path` is scanned into the shared registry, and return its registry id.
 ///
 /// Both the panel (which needs [`fx::ParamSpec`]s to build input rows) and the GPU channel (which

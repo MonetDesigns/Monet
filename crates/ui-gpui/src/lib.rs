@@ -1177,6 +1177,13 @@ impl CanvasView {
         self.app.key_box = self.pane.key_box;
         self.app.key_box_doc = self.pane.key_box_doc;
         self.app.pick = self.pane.pick;
+        // Dev Mode is window-private: `sync_dev_mode` writes it from the rendering window's
+        // right tab, so a command dispatched from another window must re-derive it here or the
+        // gate can read the wrong window's mode (Delete allowed in Design, edit refused in
+        // Inspect).
+        let dev = self.fields.right_tab() == 2;
+        self.app.dev_inspect = dev;
+        self.app.session.tool.dev_mode = dev;
         // display_doc 是跨窗口共享的，只在渲染时由 sync_motion 写。换入新 pane 后必须
         // 按这份 pane 的 motion 状态刷新，否则一个窗口的运动预览会被另一个窗口的
         // 命中几何使用（点击落空 / 选错对象，CodeRabbit PR#28）。
@@ -1981,11 +1988,14 @@ impl CanvasView {
 
         let ready = self.fields.dev_ready_filter();
         let key = (ds.uid, ds.revision, page, ds.selection.clone(), ready);
-        let dev = match self.dev_cache.borrow().as_ref().filter(|(k, _)| k == &key).map(|(_, d)| d.clone()) {
+        // End the immutable `Ref` before the miss arm takes `borrow_mut`: matching on a
+        // `Ref::map` temporary keeps it alive through the arm in Rust 2024 and panics.
+        let cached = self.dev_cache.borrow().as_ref().filter(|(k, _)| k == &key).map(|(_, d)| d.clone());
+        let dev = match cached {
             Some(d) => d,
             None => {
                 let d = panels::right::data::read_dev(&ds.doc, &ds.selection, page, ready);
-                *self.dev_cache.borrow_mut() = Some((key, d.clone()));
+                *self.pane.dev_cache.borrow_mut() = Some((key, d.clone()));
                 d
             }
         };
@@ -8391,13 +8401,9 @@ impl Render for CanvasView {
                     return;
                 }
 
-                // 键盘选择框激活：方向键移动/改大小、Enter 选中、Escape 取消（上游
-                // `shortcuts.rs::key_box`）。必须早于 arrow_key，否则框的方向键会去移动图层。
-                if key_box_key(&mut this.app, &canonical_key(&e.keystroke.key), &e.keystroke.modifiers) {
-                    cx.notify();
-                    cx.stop_propagation();
-                    return;
-                }
+                // 键盘选择框/点选在右键菜单与弹层之后统一处理（见下方
+                // `popup_context_key` 之后的分支），否则 Shift+F10 打开的菜单会被框选先吃掉
+                // ArrowDown/Escape。
 
                 // 取色器渐变：选中某个断点时 Delete / Backspace 删除它（至少保留 2 个）。
                 if matches!(e.keystroke.key.as_str(), "delete" | "backspace")
