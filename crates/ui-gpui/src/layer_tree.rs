@@ -1408,7 +1408,7 @@ impl CanvasView {
         let anchor = self.layer_tree.anchor;
 
         if nav != 0 {
-            let found = sel.last().and_then(|c| rows.iter().position(|r| *r == *c));
+            let found = sel.iter().rev().find_map(|c| rows.iter().position(|r| *r == *c));
             let Some(i) = found else {
                 // 没有可见行被选中：↓ 从头、↑ 从尾开始。
                 let first = if nav < 0 { rows.last() } else { rows.first() };

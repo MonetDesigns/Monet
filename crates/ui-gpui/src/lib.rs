@@ -4225,10 +4225,12 @@ impl CanvasView {
                             // 相对编辑：按每层自己的当前值结算，放进一次交互提交（一个撤销步）。
                             // 上游 `field_of` 的同名行为；Mixed 字段没有旧值可解析，只能走这里。
                             field_math::Typed::Rel(rel) => {
-                                let Some((doc, _)) = snap.as_ref() else { continue };
+                                // 同一批 drain 里前面的 Value/Rel 已经写进文档；相对值必须基于
+                                // 写后的当前值结算，否则 `+10` 连着两次只加一次。
+                                let Some(doc) = self.app.session.ds().ok().map(|d| d.doc.clone()) else { continue };
                                 let mut values: Vec<(figcraft_doc::NodeId, f64)> = ids.iter().filter_map(|id| {
                                     let n = doc.node(*id)?;
-                                    let cur = prop.shown(doc, n)?;
+                                    let cur = prop.shown(&doc, n)?;
                                     rel.apply(cur).map(|v| (*id, prop.map(v)))
                                 }).collect();
                                 if prop.key() == "absoluteRotation" {
@@ -8414,7 +8416,9 @@ impl Render for CanvasView {
 
                 // 焦点在图层面板：方向键走图层导航，不移动画布选区。
                 if this.layer_tree.focused
+                    && !this.popup_owns_keyboard()
                     && !e.keystroke.modifiers.platform
+                    && !e.keystroke.modifiers.control
                     && !e.keystroke.modifiers.alt
                     && this.layer_key_nav(&canonical_key(&e.keystroke.key), e.keystroke.modifiers, cx)
                 {
@@ -10854,7 +10858,9 @@ impl Render for CanvasView {
                 {
                     // 焦点在图层面板（焦点在左栏行上）：方向键走图层导航。
                     if this.layer_tree.focused
+                        && !this.popup_owns_keyboard()
                         && !e.keystroke.modifiers.platform
+                        && !e.keystroke.modifiers.control
                         && !e.keystroke.modifiers.alt
                         && this.layer_key_nav(&canonical_key(&e.keystroke.key), e.keystroke.modifiers, cx)
                     {

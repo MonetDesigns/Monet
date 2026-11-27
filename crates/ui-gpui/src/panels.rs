@@ -222,7 +222,8 @@ impl Prop {
     pub(crate) fn range(self) -> (Option<f64>, Option<f64>) {
         match self {
             Prop::Opacity | Prop::ArcInner | Prop::StarRatio => (Some(0.0), Some(100.0)),
-            Prop::Corner | Prop::FontSize | Prop::StrokeWeight => (Some(0.0), None),
+            Prop::FontSize => (Some(1.0), Some(5000.0)),
+            Prop::Corner | Prop::StrokeWeight => (Some(0.0), None),
             Prop::PointCount => (Some(3.0), Some(60.0)),
             _ => (None, None),
         }
@@ -236,6 +237,8 @@ impl Prop {
             Prop::Corner => v.max(0.0),
             Prop::ArcInner | Prop::StarRatio => (v / 100.0).clamp(0.0, 1.0),
             Prop::PointCount => v.round().clamp(3.0, 60.0),
+            Prop::FontSize => v.clamp(1.0, 5000.0),
+            Prop::StrokeWeight => v.max(0.0),
             _ => v,
         }
     }
@@ -254,8 +257,19 @@ impl Prop {
             Prop::ArcStart => match &n.kind { figcraft_doc::NodeKind::Ellipse { start, .. } => r2(start.to_degrees()), _ => return None },
             Prop::ArcSweep => match &n.kind { figcraft_doc::NodeKind::Ellipse { sweep, .. } => r2(sweep.to_degrees()), _ => return None },
             Prop::ArcInner => match &n.kind { figcraft_doc::NodeKind::Ellipse { inner, .. } => (inner * 100.0).round(), _ => return None },
-            // PointCount / StarRatio 的显示值由面板专用字段提供，这里没有单一读数。
-            Prop::PointCount | Prop::StarRatio | Prop::FontSize | Prop::StrokeWeight => return None,
+            Prop::PointCount => match &n.kind {
+                figcraft_doc::NodeKind::Polygon { count, .. } | figcraft_doc::NodeKind::Star { count, .. } => *count as f64,
+                _ => return None,
+            },
+            Prop::StarRatio => match &n.kind {
+                figcraft_doc::NodeKind::Star { inner_ratio, .. } => (inner_ratio * 100.0).round(),
+                _ => return None,
+            },
+            Prop::FontSize => match &n.kind {
+                figcraft_doc::NodeKind::Text(t) => r2(t.style.font_size),
+                _ => return None,
+            },
+            Prop::StrokeWeight => r2(n.stroke.weight),
         })
     }
 }
@@ -3858,6 +3872,7 @@ mod visibility_tests {
         assert_eq!(parse("12.5", false), Some(Typed::Value(12.5)), "plain numbers stay absolute");
     }
 
+    #[test]
     fn point_axis_typing_is_a_value_or_a_relative_edit() {
         use serde_json::json;
         assert_eq!(point_axis_value("12.5"), Some(json!(12.5)));
