@@ -10,6 +10,7 @@ mod tests {
     use crate::app::CanvasApp;
     use crate::dev_gate;
     use crate::panels::right::data::{read_dev, read_playground};
+    use crate::panels::right::devmode::accepts_note_focus;
     use crate::panels::right::inspect::{CompareWith, status_actions};
     use figcraft_doc::{Document, NodeId};
     use figcraft_engine::Session;
@@ -187,6 +188,17 @@ mod tests {
         let row = d.measurements.first().expect("the measurement is listed for the selected layer");
         assert!(row.value.contains(" · ") || !row.value.is_empty(), "{row:?}");
         assert!(d.can_measure_between, "two ids enable the between-layers action");
+    }
+
+    #[test]
+    fn a_note_focus_request_is_dropped_for_a_layer_that_is_not_selected() {
+        let (mut s, _, _, rect) = dev_doc();
+        s.execute("select.set", &json!({"ids": []})).unwrap();
+        assert!(!accepts_note_focus(s.doc().unwrap(), s.selection().as_slice(), rect), "nothing selected yet");
+        s.execute("select.set", &json!({"ids": [rect]})).unwrap();
+        assert!(accepts_note_focus(s.doc().unwrap(), s.selection().as_slice(), rect));
+        s.execute("edit.delete", &json!({"ids": [rect]})).unwrap();
+        assert!(!accepts_note_focus(s.doc().unwrap(), s.selection().as_slice(), rect), "a deleted layer drops a stale request");
     }
 
     #[test]

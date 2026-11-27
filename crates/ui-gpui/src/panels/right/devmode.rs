@@ -24,6 +24,13 @@ use std::rc::Rc;
 /// egui `FILTERS`：Ready for dev 列表的四种过滤。
 const READY_FILTERS: [&str; 4] = [tr_noop("Ready for dev"), tr_noop("Changed"), tr_noop("Completed"), tr_noop("Any status")];
 
+/// Whether `annotation.new` may take the keyboard for `id`: only the selected, still-present
+/// layer. A request for another layer is dropped instead of waiting to steal focus later
+/// (egui `a_note_request_for_a_layer_that_is_not_selected_is_dropped`).
+pub(crate) fn accepts_note_focus(doc: &figcraft_doc::Document, selection: &[figcraft_doc::NodeId], id: figcraft_doc::NodeId) -> bool {
+    doc.contains(id) && selection.contains(&id)
+}
+
 // ───────────────────────────────────────────────────────────────────────────────────────────────
 // Ready for dev（无选中）
 // ───────────────────────────────────────────────────────────────────────────────────────────────

@@ -1250,7 +1250,7 @@ C2、C3（文案规范待全面对齐）。
 | DM10 | Code 语言与复制 | `inspect.rs::code_sec`、`CodeLang::ALL` | ✅ |
 | DM11 | Connect to code | `inspect.rs::connect_section` | ✅ |
 | DM12 | 只读插件命令 | `inspect.rs::plugin_section`、`data.rs::PluginRunRow` | ✅ |
-| P1-6 | 面板级测试 / 契约 | `devmode_tests.rs`（12 条）、`dev_gate` 3 条、`parity_contract` DM1–DM12 | ✅ 每个 Dev 节至少一条与面板同源的数据回归：Ready（筛选/颜色）、Categories、Annotations（pin/menu）、Dev resources、Measurements、Playground（非实例不出现）；真实 GPUI 指针点击仍不在无头 harness 覆盖范围，焦点/Escape 由引擎 `devfocus_tests` 覆盖 |
+| P1-6 | 面板级测试 / 契约 | `devmode_tests.rs`（13 条）、`dev_gate` 3 条、`parity_contract` DM1–DM12 | ✅ 每个 Dev 节至少一条与面板同源的数据回归：Ready（筛选/颜色）、Categories、Annotations（pin/menu）、Dev resources、Measurements、Playground（非实例不出现），另加 annotation 聚焦请求只接受已选中层的回归；真实 GPUI 指针点击仍不在无头 harness 覆盖范围，焦点/Escape 由引擎 `devfocus_tests` 覆盖 |
 | P2-1 | 引擎 CSS/Tailwind 同步 | `codegen/css.rs`、`codegen/tailwind.rs` | ✅ 逐段 `text-wrap` 与 mobile `max-width` 保留已对齐；剩余 `codegen.rs` 为格式/anim 差异，html/code_connect/devinspect 为本地有意扩展；`cargo check` 通过 |
 | P2-2 | Motion 出码入口 | `codegen::motion_code_for`、`InspectData::motion_code`、`inspect.rs::motion_section` | ✅ Code 节按 css/swiftui/compose 显示动画块，无动画不显示 |
 | P2-3 | 面板快照缓存 | `lib.rs::panel_data`、`panels/right/data.rs::read_with_dev` | ✅ Dev 节按 `(uid, revision, page, selection, ready_filter)` 缓存；`cargo check` 通过，缓存回归未单测 |
@@ -1263,9 +1263,10 @@ C2、C3（文案规范待全面对齐）。
 token 双向核对。**2026-11-27 P2-6 复验**：在 `main` 的 detach worktree 上复制改动后 `cargo check` 通过；
 `widgets::input` 21/21 通过（含 multiline buffer、TextInput 2 行、TextEdit 换行/提交）。全量
 `--lib --features test-support` 为 538 passed / 13 failed；同样的 13 条在未改动的 `e95f6315` 基线也失败，
-属于既有的窗口尺寸/键盘表测试，不是 P2-6 回归。**2026-11-27 P1-6 复验**：`devmode_tests` 扩到 12 条
+属于既有的窗口尺寸/键盘表测试，不是 P2-6 回归。**2026-11-27 P1-6 复验**：`devmode_tests` 扩到 13 条
 （原有的 Status/闸门/Playground 策略 6 条 + Ready/Categories/Annotations/Dev resources/Measurements/
-非实例 Playground 的数据 6 条），全部通过；`dev_gate` 3/3、`parity_contract` 4/4 仍通过。**2026-11-27 早前复验**：先备份 `main` 与 `sync/variable-binding-2026-11`，在 `main` 的 detach
+非实例 Playground 的数据 6 条 + annotation 聚焦请求只接受已选中层 1 条），全部通过；`dev_gate` 3/3、
+`parity_contract` 4/4 仍通过。全量为 558 passed / 13 failed，仍是既有窗口尺寸/键盘表 13 条。**2026-11-27 早前复验**：先备份 `main` 与 `sync/variable-binding-2026-11`，在 `main` 的 detach
 worktree 合并 PR head 后 `cargo check -p figcraft-ui-gpui --features test-support` 通过，`devmode` 6/6、
 `dev_gate` 3/3、`parity_contract` 4/4 通过；工作树未在功能分支构建。P2-1 的 codegen golden 与 P2-3 的缓存
 性能回归尚未单独跑。

@@ -2369,8 +2369,20 @@ impl CanvasView {
                 // request while already in Inspect must not toggle the tab away.
                 "annotation.new" => {
                     if let Some(id) = r.data.get("id").and_then(figcraft_engine::params::id_of) {
-                        self.fields.set_right_tab(2);
-                        self.fields.request_note_focus(id);
+                        // A request for a layer that isn't selected (or is gone) must not wait
+                        // around and steal the keyboard when that layer is selected later:
+                        // egui's `a_note_request_for_a_layer_that_is_not_selected_is_dropped`.
+                        let selected = self
+                            .app
+                            .session
+                            .ds()
+                            .is_ok_and(|ds| panels::right::devmode::accepts_note_focus(&ds.doc, &ds.selection, id));
+                        if selected {
+                            self.fields.set_right_tab(2);
+                            self.fields.request_note_focus(id);
+                        } else {
+                            self.fields.clear_note_focus();
+                        }
                     }
                     cx.notify();
                     continue;
