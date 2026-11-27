@@ -4958,6 +4958,9 @@ pub struct LocalStyleKeyRow {
     pub properties: Vec<String>,
     pub paints: Vec<figcraft_color::Paint>,
     pub text: Option<serde_json::Value>,
+    pub bound: Vec<(String, String)>,
+    pub number_variables: Vec<String>,
+    pub string_variables: Vec<String>,
     pub effects: Option<Vec<crate::panels::right::data::EffectRow>>,
     pub grids: Option<Vec<crate::panels::right::data::GridRow>>,
 }
@@ -5128,6 +5131,9 @@ fn local_styles_block(f: &RightFields, d: &PanelData, window: &mut Window, cx: &
                         properties: s.properties.clone(),
                         paints: s.paints.clone(),
                         text: s.text.clone(),
+                        bound: s.bound.clone(),
+                        number_variables: s.number_variables.clone(),
+                        string_variables: s.string_variables.clone(),
                         effects: s.effects.clone(),
                         grids: s.grids.clone(),
                     });
@@ -5763,6 +5769,9 @@ fn local_style_row(
         let props = s.properties.clone();
         let ps = s.paints.clone();
         let stext = s.text.clone();
+        let sbound = s.bound.clone();
+        let snum = s.number_variables.clone();
+        let sstr = s.string_variables.clone();
         let seff = s.effects.clone();
         let sgrid = s.grids.clone();
         Rc::new(move |window: &mut Window, cx: &mut App| {
@@ -5781,6 +5790,9 @@ fn local_style_row(
                     props.clone(),
                     ps.clone(),
                     stext.clone(),
+                    sbound.clone(),
+                    snum.clone(),
+                    sstr.clone(),
                     seff.clone(),
                     sgrid.clone(),
                     popups.clone(),
@@ -6224,6 +6236,9 @@ mod view_menu_tests {
             properties: Vec::new(),
             paints: Vec::new(),
             text: None,
+            bound: Vec::new(),
+            number_variables: Vec::new(),
+            string_variables: Vec::new(),
             effects: None,
             grids: None,
         });

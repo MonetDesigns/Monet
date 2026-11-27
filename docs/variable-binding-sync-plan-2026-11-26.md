@@ -258,7 +258,7 @@ feat(engine): Scale 工具在实例上保留变量绑定的长度，其它层烘
    - 进展（2026-11-27）：测试从 4 条补到 17 条并全部通过，新增普通点击、失效锚点的 Shift、Escape 清选、批量删除/移动/改 scope、混合类型 scope、分组复制（含子组唯一命名与继承成员跳过）、分组重命名/嵌套、40 组批量菜单、scope 逐项勾选等用例。其中四条补齐/修正了行为：批量改 scope 菜单原先把各类型的 scope 取**并集**（已改为交集）；分组右键菜单原先缺 **Duplicate group**（已补，按 egui `duplicate_group` 生成 `variable.duplicate` + `$ref` 改名的一步撤销批次）；分组重命名原先把 `/` 替换成 `-`、无法嵌套（已按 egui `group_renames` 支持斜杠嵌套并保留父路径）；详情面板原先只读展示已选 scope（已补逐项 checkbox，勾选/取消写 `variable.update`，全部取消即空数组=隐藏于取色器）。其余对照项（选中行颜色、Edit variables 的批量描边）仍为待补。
    - 注：右栏的 `visible` 绑定行、Layout grid 逐字段绑定、Page 级 Variable modes / Local variables 入口，已在 `docs/right-panel-visibility-parity-plan.md`（D25 / D14 / D10 / D11）单独立项，本计划不重复排期。
    - 2026-11-27 续：选中行颜色与「Edit variables」批量详情已补齐——Details 页签的 `Hide from publishing` 三态、Scope 页签只列所有选中类型共有的范围、每次点击对全部选中变量发 `variable.update` 并包成一步 `command.batch`；新增 2 条批量批次测试与 1 条选中行颜色集成测试，面板测试现为 **20/20 通过**。
-4. GPUI 样式绑定入口（独立项，可另行排期）：`style.bind` 目前零引用；至少补 Text 样式的 `fontSize/lineHeight/letterSpacing/fontWeight/fontFamily/fontStyle`，Paint/Effect/Grid 次之。**2026-11-27 核实**：GPUI 已有样式编辑器（`style.update/create` 均有入口），右栏已补 `fontSize`、`lineHeight`、`letterSpacing` 的绑定 chip，但仍无 `style.bind`，且 `fontFamily`/`fontStyle`/`fontWeight` 还没有 chip；需要在现有编辑窗上逐字段接绑定，不是补一个绑定点；建议单列任务，不在本 PR 内塞入半套编辑器。
+4. GPUI 样式绑定入口（Text 已做，Paint/Effect/Grid 另行排期）：`style.bind` 原先零引用；**2026-11-27 已补** Text 样式的 `fontFamily` / `fontStyle` / `fontWeight` / `fontSize` / `lineHeight` / `letterSpacing`——样式编辑器每个字段未绑定时是原控件 + 变量按钮，绑定后换成 chip（点击换变量、detach 解绑），选择只列对应类型的变量，命令统一走 `style.bind {style, field, variable}`（`null` 解绑）。节点级 `fontFamily` / `fontStyle` chip 已由右栏 `1901f2792` 补齐；节点级 `fontWeight` 仍按上游 Type settings 的现有形态不单独设字段。Paint / Effect / Grid 的样式级绑定暂不做。
 
 ### 批次 5 · P3 上游化（可选）
 
@@ -401,9 +401,10 @@ cargo xtask ci   # fmt + clippy -D warnings + tests + layers + assets + wasm
 留待拍板 / 后续：
 
 1. **C1**：`.fig` 仍未读写 `scale_factor`（跟随上游现状：导入不烘焙因子，导出不带）。JSON 存档的因子往返已有测试覆盖；若产品要求 `.fig` 往返，另开一项。
-2. **C4**：`ui-gpui` 现在已有样式编辑器（`style.update` / `style.create` 均有入口），右栏也已补 `lineHeight` / `letterSpacing` 的绑定 chip（远端 `80c4eb76e`），但 `style.bind` 仍为 0 处；`fontFamily` / `fontStyle` / `fontWeight` 的节点级 chip 与 Text 样式级绑定仍未接。按计划作为独立项另行排期，不塞进本 PR 的半套编辑器。
+2. **C4（Text 部分已完成）**：`ui-gpui` 的样式编辑器已接 `style.bind`，覆盖 Text 样式的 `fontFamily` / `fontStyle` / `fontWeight` / `fontSize` / `lineHeight` / `letterSpacing`；节点级 `fontFamily` / `fontStyle` 绑定 chip 已由右栏 `1901f2792` 补齐，`lineHeight` / `letterSpacing` 更早已补。节点级 `fontWeight` 仍按上游 Type settings 的现有形态不单独设字段；Paint / Effect / Grid 的样式级绑定留待后续。
 3. **A9**：已完成。从 `upstream/main:crates/engine/src/slot_tests.rs` 原样移植 6 条 slot 文本/布尔属性用例，本地引擎行为已支持，未需同步上游 `a6d9b74df` 的 `sync.rs` 改动；`cargo test -q -p figcraft-engine --lib slot` = **36/36 通过**。
 4. **批次 4 第 3 项（GPUI 变量面板测试）已完成**：补 `selected_rows_are_painted_with_the_selected_row_colour` 与「Edit variables」批量详情（Details/Scope 两页签、批量隐藏发布、批量 scope、单步 `command.batch` 撤销）；`cargo test -j 2 -p figcraft-ui-gpui --lib --features test-support variables::tests` = **20/20 通过**。
+5. **C4 Text 验证**：`style_bind_commands_bind_and_unbind_text_fields` 通过，确认 `style.bind {style, field, variable}` 与 `variable: null` 解绑契约；`cargo check -p figcraft-ui-gpui` 通过。
 
 ## 9. PR 与合并（2026-11-27）
 
