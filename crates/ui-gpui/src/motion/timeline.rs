@@ -209,6 +209,8 @@ enum HitKind {
     /// the selection (that is `HitKind::Clear` on the empty lane).
     Export,
     Clear,
+    /// 属性行的空白轨道区：单击开始框选，双击在该时间插入该节点/属性的关键帧。
+    PropertyLane(NodeId, AnimProperty),
     /// 面板顶边：上下拖动改整条时间轴的高度（egui `app/frame.rs::timeline_edge`）。
     ResizeH,
 }
@@ -497,22 +499,33 @@ fn build(
                         }
                     }
                     let edge = EDGE_HIT.min((x1 - x0).max(1.0) / 2.0);
-                    hits.push(Hit { rect: bar, kind: HitKind::LayerEdge(row.node, ClipEdge::Move) });
-                    hits.push(Hit {
-                        rect: Rect::from_min_max(pos2(x0, bar.min.y), pos2(x0 + edge, bar.max.y)),
-                        kind: HitKind::LayerEdge(row.node, ClipEdge::TrimStart),
-                    });
-                    hits.push(Hit {
-                        rect: Rect::from_min_max(pos2(x1 - edge, bar.min.y), pos2(x1, bar.max.y)),
-                        kind: HitKind::LayerEdge(row.node, ClipEdge::TrimEnd),
-                    });
+                    // Hit rectangles must not reach into the fixed left column: a bar scrolled
+                    // partly past `LEFT_W` would otherwise cover the fold/visibility controls.
+                    let left = x0.max(LEFT_W);
+                    if x1 > left {
+                        let hit = Rect::from_min_max(pos2(left, bar.min.y), pos2(x1, bar.max.y));
+                        hits.push(Hit { rect: hit, kind: HitKind::LayerEdge(row.node, ClipEdge::Move) });
+                        if x0 >= LEFT_W {
+                            hits.push(Hit {
+                                rect: Rect::from_min_max(pos2(x0, bar.min.y), pos2(x0 + edge, bar.max.y)),
+                                kind: HitKind::LayerEdge(row.node, ClipEdge::TrimStart),
+                            });
+                        }
+                        hits.push(Hit {
+                            rect: Rect::from_min_max(pos2(x1 - edge, bar.min.y), pos2(x1, bar.max.y)),
+                            kind: HitKind::LayerEdge(row.node, ClipEdge::TrimEnd),
+                        });
+                    }
                 }
             }
             RowData::Property { keys, visible } => {
-                // 命中优先级：整行「选轨道 / 清空」必须**先**入表（`hit_at` 取最后一个匹配），
-                // 否则它会把后面更具体的关键帧、segment 命中全遮住 —— 那正是「菱形拖不动、
-                // 两帧之间的线选不中」的根因。egui 里 `rresp` 也是先创建、seg/key 后创建。
+                // 命中优先级：左列「选轨道」先入表，轨道空白区的 `PropertyLane` 后入表；
+                // 关键帧/segment 再最后入表，`hit_at` 取最后一个匹配，所以菱形和线段仍然优先。
                 hits.push(Hit { rect: Rect::from_min_max(pos2(0.0, y), pos2(LEFT_W, y + ROW_H)), kind: HitKind::Track(row.node, prop_of(row)) });
+                hits.push(Hit {
+                    rect: Rect::from_min_max(pos2(LEFT_W, y), pos2(width, y + ROW_H)),
+                    kind: HitKind::PropertyLane(row.node, prop_of(row)),
+                });
                 // Only the left column selects the track; the track lane stays `Clear` so a drag
                 // there can start a marquee instead of being swallowed by a full-row hit.
                 text(
@@ -732,10 +745,14 @@ fn build(
         icons.push((Rect::from_center_size(r.center(), vec2(14.0, 14.0)), icon, t.icon));
         hits.push(Hit { rect: r, kind });
     }
-    // Three playback modes: 从头 / 从尾 / 循环. Each writes `motion.timeline {mode}`, one undo
-    // step; the active mode is tinted with the accent colour.
+    // Three playback modes: forward / reverse / loop. Each writes `motion.timeline {mode}`, one
+    // undo step; the active mode is tinted with the accent colour.
     let current_mode = settings.play_mode();
-    for (mode, label, cx) in [(PlayMode::Forward, "从头", 158.0), (PlayMode::Reverse, "从尾", 180.0), (PlayMode::Loop, "循环", 202.0)] {
+    for (mode, label, cx) in [
+        (PlayMode::Forward, tr("From start"), 158.0),
+        (PlayMode::Reverse, tr("From end"), 180.0),
+        (PlayMode::Loop, tr("Loop"), 202.0),
+    ] {
         let r = at(cx, 20.0, 22.0);
         if current_mode == mode {
             p.rect_filled(r, CornerRadius::same(5), t.accent.gamma_multiply(0.16));
@@ -1104,10 +1121,16 @@ pub fn bar(
                     // Ctrl/Cmd + wheel zooms about the pointer, preserving the time under it.
                     let o = BAR_ORIGIN.with(|o| *o.borrow());
                     let anchor_x = f32::from(e.position.x) - f32::from(o.x);
+                    // A wheel outside the track would clamp the anchor time to zero and jump the
+                    // whole view into the fixed left column; ignore it instead.
+                    if anchor_x < LEFT_W {
+                        return;
+                    }
                     let factor = (1.15_f32).powf(dy.clamp(-3.0, 3.0));
                     q.push(Act::ZoomBy { factor, anchor_x });
                 } else if e.modifiers.shift || dx.abs() > dy.abs() {
-                    q.push(Act::ScrollX(scroll_x + dx.abs().max(dy.abs())));
+                    let delta = if dx.abs() > dy.abs() { dx } else { dy };
+                    q.push(Act::ScrollX(scroll_x + delta));
                 } else {
                     q.push(Act::ScrollY(scroll - dy));
                 }
@@ -1150,13 +1173,16 @@ fn cursor_for(kind: HitKind) -> CursorStyle {
         | HitKind::Close
         | HitKind::Export
         | HitKind::Segment(..) => CursorStyle::PointingHand,
-        HitKind::Clear => CursorStyle::Arrow,
+        HitKind::Clear | HitKind::PropertyLane(..) => CursorStyle::Arrow,
     }
 }
 
 /// egui `time_of(p.x)` = (x - track_x - TIME_PAD + scroll) / scale.
 fn time_at(x: f32, scale: f32, scroll_x: f32) -> u32 {
-    (((x - LEFT_W - TIME_PAD + scroll_x) / scale.max(0.0001)).max(0.0)) as u32
+    if !(scale > 0.0) {
+        return 0;
+    }
+    (((x - LEFT_W - TIME_PAD + scroll_x) / scale).max(0.0)) as u32
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1268,6 +1294,17 @@ fn dispatch_down(
         // The arrow is the animation export entry; Motion mode opens the same Export dialog as
         // the File menu, now with the MP4 / GIF / WebM / PNG-sequence rows.
         HitKind::Export => q.push(Act::OpenExport),
+        HitKind::PropertyLane(n, p) => {
+            // Double-click on blank property-lane space inserts a keyframe there; a plain press
+            // still starts a marquee (the old full-row hit had this double-click behavior).
+            if double {
+                q.push(Act::AddKey(n, p, time_at(pos.x, scale, scroll_x)));
+                return None;
+            }
+            let base = if shift { MARQUEE_BASE.with(|b| b.borrow().clone()) } else { BTreeSet::new() };
+            MARQUEE.with(|m| *m.borrow_mut() = Some(Marquee { origin: pos, cur: pos, base, additive: shift, moved: false }));
+            return Some(DragKind::Marquee);
+        }
         HitKind::Clear => {
             // A press on the empty lane starts a marquee; a plain click that never travels
             // clears the selection on release (see `end_drag`). Shift keeps the base selection.
@@ -1578,6 +1615,38 @@ mod tests {
         assert_eq!(items.len(), 1, "only the key whose centre is inside the box");
         assert_eq!(items[0], a);
         assert_eq!(MARQUEE.with(|m| m.borrow().as_ref().map(|m| m.moved)), Some(true));
+    }
+
+    /// Double-click on blank property-lane space adds a keyframe for that node/property; the
+    /// plain press path still starts a marquee.
+    #[test]
+    fn double_click_on_a_property_lane_adds_a_key() {
+        reset_drag_state();
+        let (doc, id) = doc_with_keys();
+        let ui = MotionUi::default();
+        let settings = settings_of(&doc, doc.pages[0]);
+        let width = 1200.0;
+        let (_, _, hits, _, _) = build(&doc, &ui, &[id], doc.pages[0], width, 309.0, settings, None);
+        let scale = scale_of(LEFT_W, width, settings.duration_ms) * ui.zoom_factor();
+        let lane = hits
+            .iter()
+            .find(|h| matches!(h.kind, HitKind::PropertyLane(n, _) if n == id))
+            .expect("property row exposes a lane hit");
+        let pos = lane.rect.center();
+        assert!(
+            matches!(hit_at(&hits, pos).map(|h| h.kind), Some(HitKind::PropertyLane(n, _)) if n == id),
+            "blank lane must resolve to PropertyLane, got {:?}",
+            hit_at(&hits, pos).map(|h| h.kind)
+        );
+        let q = Queue::new(Rc::new(|| {}));
+        let hit = hit_at(&hits, pos);
+        let expected = time_at(pos.x, scale, 0.0);
+        begin_drag(&q, hit, pos, scale, false, 0.0, &doc, settings.duration_ms, false, true);
+        let acts = q.drain();
+        assert!(
+            acts.iter().any(|a| matches!(a, Act::AddKey(n, _, t) if *n == id && *t == expected)),
+            "double-click must insert a keyframe at the clicked time, got {acts:?}"
+        );
     }
 
     /// Zoom keeps the time under the anchor fixed: x_of(t) is the same before and after.

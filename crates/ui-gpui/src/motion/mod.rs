@@ -883,14 +883,22 @@ pub fn apply(app: &mut CanvasApp, ui: &mut MotionUi, acts: Vec<Act>) -> bool {
             Act::ToggleKey(n, p) => toggle_key(app, ui, n, p),
             Act::SetPlayMode(mode) => {
                 if let Some(pg) = page {
-                    let current = doc.as_ref().map(|d| settings_of(d, pg).play_mode()).unwrap_or(motion::PlayMode::Forward);
+                    // Read the effective mode from the document after earlier actions in this
+                    // drain: Forward→Reverse→Reverse must not skip the second write.
+                    let current = app
+                        .session
+                        .doc()
+                        .ok()
+                        .map(|d| settings_of(d, pg).play_mode())
+                        .unwrap_or(motion::PlayMode::Forward);
                     if current == mode {
                         continue;
                     }
-                    // Document state -> engine command, one undo step per mode change.
-                    let _ = app.session.execute("motion.timeline", &serde_json::json!({ "page": pg.0, "mode": mode.name() }));
-                    if ui.playing {
-                        let d = doc.as_ref().map(|d| settings_of(d, pg).duration_ms as f64).unwrap_or(0.0);
+                    // Document state -> engine command, one undo step per mode change. Only move
+                    // the playback clock when the write actually landed (read-only sessions reject).
+                    let ok = app.session.execute("motion.timeline", &serde_json::json!({ "page": pg.0, "mode": mode.name() })).is_ok();
+                    if ok && ui.playing {
+                        let d = app.session.doc().ok().map(|d| settings_of(d, pg).duration_ms as f64).unwrap_or(0.0);
                         ui.clock_ms = if mode == motion::PlayMode::Reverse { (d - ui.playhead_ms).max(0.0) } else { ui.playhead_ms };
                     }
                 }
@@ -1112,7 +1120,7 @@ pub fn apply(app: &mut CanvasApp, ui: &mut MotionUi, acts: Vec<Act>) -> bool {
             }
             Act::DragMove { x, pxms } => {
                 // Recompute from `orig` every move: no accumulated drift (egui's rule).
-                let to_ms = |dx_px: f32| (dx_px / pxms.max(0.0001)) as i64;
+                let to_ms = |dx_px: f32| if pxms > 0.0 { (dx_px / pxms) as i64 } else { 0 };
                 if let Some(d) = ui.clip_drag.clone() {
                     ui.seek_drag = true;
                     clip_dragged(app, ui, d.node, d.id, d.edge, to_ms(x - d.origin_x));
