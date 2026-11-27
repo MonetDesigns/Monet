@@ -255,7 +255,7 @@ feat(engine): Scale 工具在实例上保留变量绑定的长度，其它层烘
    - 已有 4 条（Ctrl/Shift 选择、批量菜单）；
    - 待补：Escape 清选、选中行颜色、批量删除/改分组/改 scope、40 组菜单滚动、分组复制/重命名/嵌套、Edit variables 的描边与隐藏发布、scope 页签的开关与布尔特例。
    - 先逐条对照 GPUI 是否「有实现无测试」，再决定补测试还是补行为。
-   - 进展（2026-11-27）：测试从 4 条补到 14 条并全部通过，新增普通点击、失效锚点的 Shift、Escape 清选、批量删除/移动/改 scope、混合类型 scope、分组复制（含子组唯一命名与继承成员跳过）、scope 逐项勾选等用例。其中三条补齐/修正了行为：批量改 scope 菜单原先把各类型的 scope 取**并集**（已改为交集）；分组右键菜单原先缺 **Duplicate group**（已补，按 egui `duplicate_group` 生成 `variable.duplicate` + `$ref` 改名的一步撤销批次）；详情面板原先只读展示已选 scope（已补逐项 checkbox，勾选/取消写 `variable.update`，全部取消即空数组=隐藏于取色器）。其余对照项（选中行颜色、40 组菜单滚动的 UI 用例、分组重命名/嵌套的 UI 用例）仍为待补。
+   - 进展（2026-11-27）：测试从 4 条补到 17 条并全部通过，新增普通点击、失效锚点的 Shift、Escape 清选、批量删除/移动/改 scope、混合类型 scope、分组复制（含子组唯一命名与继承成员跳过）、分组重命名/嵌套、40 组批量菜单、scope 逐项勾选等用例。其中四条补齐/修正了行为：批量改 scope 菜单原先把各类型的 scope 取**并集**（已改为交集）；分组右键菜单原先缺 **Duplicate group**（已补，按 egui `duplicate_group` 生成 `variable.duplicate` + `$ref` 改名的一步撤销批次）；分组重命名原先把 `/` 替换成 `-`、无法嵌套（已按 egui `group_renames` 支持斜杠嵌套并保留父路径）；详情面板原先只读展示已选 scope（已补逐项 checkbox，勾选/取消写 `variable.update`，全部取消即空数组=隐藏于取色器）。其余对照项（选中行颜色、Edit variables 的批量描边）仍为待补。
    - 注：右栏的 `visible` 绑定行、Layout grid 逐字段绑定、Page 级 Variable modes / Local variables 入口，已在 `docs/right-panel-visibility-parity-plan.md`（D25 / D14 / D10 / D11）单独立项，本计划不重复排期。
 4. GPUI 样式绑定入口（独立项，可另行排期）：`style.bind` 目前零引用；至少补 Text 样式的 `fontSize/lineHeight/letterSpacing/fontWeight/fontFamily/fontStyle`，Paint/Effect/Grid 次之。
 

@@ -250,6 +250,29 @@ fn cell_of(vars: &figcraft_doc::Variables, val: Option<&figcraft_doc::VariableVa
     }
 }
 
+/// Renaming group `group` to `new` (egui `group_renames`): `new` replaces the group's last path
+/// segment, and a `/` in it nests the group under a new parent. Each path part is trimmed and
+/// empty parts are dropped. Moves are returned deepest remainder first, so a variable moving into
+/// the group's own new path (`Orange` → `Orange/Warm`) never takes a name another still holds.
+/// `None` when nothing changes.
+fn group_renames(members: &[(String, String)], group: &str, new: &str) -> Option<(String, Vec<(String, String)>)> {
+    let new = new.split('/').map(str::trim).filter(|p| !p.is_empty()).collect::<Vec<_>>().join("/");
+    if new.is_empty() {
+        return None;
+    }
+    let renamed = match group.rsplit_once('/') {
+        Some((parent, _)) => format!("{parent}/{new}"),
+        None => new,
+    };
+    if renamed == group {
+        return None;
+    }
+    let prefix = format!("{group}/");
+    let mut moved: Vec<(&str, &str)> = members.iter().filter_map(|(id, rest)| Some((id.as_str(), rest.as_str()))).collect();
+    moved.sort_by_key(|(_, rest)| std::cmp::Reverse(rest.len()));
+    Some((renamed.clone(), moved.into_iter().map(|(id, rest)| (id.to_string(), format!("{renamed}/{rest}"))).collect()))
+}
+
 /// The first of `base`, `base 2`, `base 3`… that `taken` doesn't hold (egui `unique`).
 fn unique_name(base: &str, taken: impl Fn(&str) -> bool) -> String {
     (1..10_000).map(|k| if k == 1 { base.to_string() } else { format!("{base} {k}") }).find(|n| !taken(n)).unwrap_or_else(|| base.to_string())
@@ -986,27 +1009,26 @@ impl VariablesEditor {
             let q = st.clone();
             let c = cmds.clone();
             move |text: &str, _, _| {
-                let name = text.trim().replace('/', "-");
+                let name = text.trim().to_string();
                 let old = q.borrow_mut().rename_group.take();
                 if let Some(old) = old {
-                    if !name.is_empty() && name != old {
+                    let members = gm.borrow().clone();
+                    if let Some((renamed, moves)) = group_renames(&members, &old, &name) {
                         // 整组改名是**一个手势**：合成一步撤销（`command.batch`）。
-                        // `old` 是完整组路径（如 `Brand/Buttons`），编辑器里只有短名。
-                        // 改名的只是最后一段，父路径必须原样保留（否则 `Brand/Buttons`
-                        // 改成 `Controls` 会把成员移出 `Brand`，CodeRabbit PR#29 折叠项）。
-                        let parent = match old.rsplit_once('/') {
-                            Some((p, _)) => format!("{p}/"),
-                            None => String::new(),
-                        };
-                        let steps: Vec<Value> = gm
-                            .borrow()
-                            .iter()
-                            .map(|(id, rest)| {
-                                json!({ "command": "variable.update", "params": { "variable": id, "name": format!("{parent}{name}/{rest}") } })
-                            })
+                        // `old` 是完整组路径（如 `Brand/Buttons`），编辑器里只有短名；
+                        // `group_renames` 保留父路径，`/` 则把组嵌进新父组。
+                        let steps: Vec<Value> = moves
+                            .into_iter()
+                            .map(|(id, name)| json!({ "command": "variable.update", "params": { "variable": id, "name": name } }))
                             .collect();
                         if !steps.is_empty() {
                             c.push(Cmd { id: "command.batch", params: Some(json!({ "label": tr("Rename group"), "commands": steps })) });
+                            let mut s = q.borrow_mut();
+                            if let Some(sel) = s.group.clone() {
+                                if sel == old || sel.starts_with(&format!("{old}/")) {
+                                    s.group = Some(format!("{renamed}{}", &sel[old.len()..]));
+                                }
+                            }
                         }
                     }
                 }
@@ -4154,6 +4176,34 @@ mod tests {
         assert!(toggle_scope(VarKind::Color, Some(&last), "FRAME_FILL", false).is_empty());
         // Booleans have no scopes at all (egui `booleans_share_no_scope`).
         assert!(figcraft_doc::styles::scopes_for(figcraft_doc::VariableType::Boolean).is_empty());
+    }
+
+    #[test]
+    fn bulk_menu_lists_every_group_so_the_popup_can_scroll() {
+        let groups: Vec<String> = (0..40).map(|i| format!("Group {i}")).collect();
+        let rows = vec![("1".to_string(), "Brand/Primary".to_string(), VarKind::Color)];
+        let items = bulk_menu_items(&rows, &groups);
+        assert_eq!(items.iter().filter(|i| i.label.starts_with("Move to group ")).count(), 40);
+    }
+
+    #[test]
+    fn group_rename_keeps_the_parent_and_nests_on_a_slash() {
+        let members = vec![("1".to_string(), "Primary".to_string()), ("2".to_string(), "Disabled".to_string())];
+        let (renamed, moves) = group_renames(&members, "Brand/Buttons", "Controls").expect("a rename");
+        assert_eq!(renamed, "Brand/Controls");
+        assert!(moves.iter().any(|(_, n)| n == "Brand/Controls/Primary"));
+        assert!(moves.iter().any(|(_, n)| n == "Brand/Controls/Disabled"));
+
+        let (renamed, moves) = group_renames(&members, "Brand/Buttons", "Palette/Orange").expect("a nested rename");
+        assert_eq!(renamed, "Brand/Palette/Orange");
+        assert!(moves.iter().any(|(_, n)| n == "Brand/Palette/Orange/Primary"));
+    }
+
+    #[test]
+    fn group_rename_does_nothing_when_the_path_is_unchanged() {
+        let members = vec![("1".to_string(), "Primary".to_string())];
+        assert!(group_renames(&members, "Brand", "Brand").is_none());
+        assert!(group_renames(&members, "Brand", " / ").is_none());
     }
 
     fn var_row(id: &str, full_name: &str, inherited: bool) -> VarRow {
