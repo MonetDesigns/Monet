@@ -8,7 +8,7 @@
 //! | page/frame/group/section/component/instance containers and their fills | icons and slices |
 //! | rectangles (four corner radii, smoothing), full ellipses, arcs and rings, polygons, stars | gradient or image paint on a path/stroke |
 //! | vector networks, booleans, lines — filled and stroked through the CPU's own outlines | images, patterns |
-//! | strokes: weight, align, joins, caps, dashes, per-side weights (via `figcraft-pathops`) | group opacity with more than one child, other blend modes, masks |
+//! | strokes: weight, align, joins, caps, dashes, per-side weights (via `figcraft-pathops`) | group opacity that is not one painted leaf, other blend modes, masks |
 //! | solid, linear/radial/angular/diamond gradients (≤ [`MAX_STOPS`] stops) on SDF shapes | round or noisy effects this build cannot draw |
 //! | drop shadows from an opaque SDF box: offset, blur (box-approximated exactly as the CPU), tint | drop shadows that spread, blend differently, or cast from groups, text or translucent/outlined layers |
 //! | inner shadows from an SDF box: offset, blur, tint, masked to the box | inner shadows that spread or blend differently, and group inner shadows |
@@ -17,7 +17,7 @@
 //! | text: glyph and decoration outlines from `figcraft_text`, solid fills and strokes per run | colour glyphs (emoji, COLR) |
 //! | mono/duo/multi grains over one SDF box fill, hashed exactly as the CPU | grains over children, strokes, clips, groups or other effects |
 //! | texture over one SDF box fill: whole-pixel scatter hashed exactly as the CPU | textures combined with children, strokes, clips, or other effects |
-//! | node opacity, single-leaf group opacity, visibility, ancestor clipping rectangles | rounded or rotated clips, variable-bound fills |
+//! | node opacity, single-leaf group opacity (including single-child chains), visibility, ancestor clipping rectangles | rounded or rotated clips, variable-bound fills |
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -87,7 +87,12 @@ fn can_group_opacity(doc: &Document, n: &Node) -> bool {
     let Some(child) = doc.node(*child_id) else {
         return false;
     };
-    if is_container(&child.kind) || !child.children.is_empty() || child.has_visible_stroke() || child.clip || child.is_mask {
+    if is_container(&child.kind) {
+        // A chain of plain groups still ends in one painted leaf; every alpha in the chain
+        // multiplies onto that same paint.
+        return can_group_opacity(doc, child);
+    }
+    if !child.children.is_empty() || child.has_visible_stroke() || child.clip || child.is_mask {
         return false;
     }
     if child.effects.iter().any(|e| e.visible) || !matches!(child.blend, BlendMode::Normal | BlendMode::PassThrough) {
@@ -99,6 +104,13 @@ fn can_group_opacity(doc: &Document, n: &Node) -> bool {
         return false;
     }
     true
+}
+
+/// A leaf whose own alpha can be multiplied straight into its paint: one visible fill, no visible
+/// stroke and no effect. Anything else is a layer on the CPU, and folding its alpha into each paint
+/// would double-composite where paints overlap.
+fn can_leaf_opacity(n: &Node) -> bool {
+    n.fills.iter().filter(|f| f.visible).count() == 1 && !n.has_visible_stroke() && !n.effects.iter().any(|e| e.visible)
 }
 
 /// Whether a node kind only carries children (and possibly its own box fill).
@@ -167,6 +179,12 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, opa
     }
     if container && n.opacity < 0.999 && !can_group_opacity(doc, n) {
         scene.unsupported("group-opacity", format!("`{}` is a group at {} opacity that cannot be flattened onto one leaf", n.name, n.opacity));
+        return;
+    }
+    // A layer blur already folds the node alpha into its tint (the CPU blurs the one-fill layer,
+    // then composites it), so it does not need the plain-leaf rule.
+    if !container && n.opacity < 0.999 && layer_blurs.is_empty() && !can_leaf_opacity(n) {
+        scene.unsupported("node-opacity", format!("`{}` is at {} opacity with more than one paint", n.name, n.opacity));
         return;
     }
     let node_opacity = (opacity * n.opacity.clamp(0.0, 1.0)).clamp(0.0, 1.0);
@@ -1186,6 +1204,44 @@ mod tests {
         let scene = build(&doc, page, &view());
         assert!(!scene.is_supported(), "stacked fills accumulate inside the group before its alpha applies");
         assert!(scene.unsupported_features().iter().any(|u| u.feature == "group-opacity"));
+    }
+
+    #[test]
+    fn a_nested_group_opacity_chain_multiplies_into_the_leaf() {
+        let mut doc = Document::default();
+        let page = doc.pages[0];
+        let outer = doc.create(page, NodeKind::Group, "Outer", 40.0, 40.0, 60.0, 40.0).expect("outer");
+        let inner = doc.create(outer, NodeKind::Group, "Inner", 0.0, 0.0, 60.0, 40.0).expect("inner");
+        let leaf = doc.create(inner, NodeKind::Rectangle, "Card", 0.0, 0.0, 60.0, 40.0).expect("leaf");
+        if let Ok(n) = doc.get_mut(leaf) {
+            n.fills = vec![DocPaint::solid(Color::new(0.2, 0.5, 0.8, 1.0))];
+        }
+        if let Ok(n) = doc.get_mut(outer) {
+            n.opacity = 0.5;
+        }
+        if let Ok(n) = doc.get_mut(inner) {
+            n.opacity = 0.8;
+        }
+        let scene = build(&doc, page, &view());
+        assert!(scene.is_supported(), "{:?}", scene.unsupported_features());
+        let shape = scene.shapes().next().expect("the leaf shape");
+        assert!((shape.opacity - 0.4).abs() < 1e-4, "the chain multiplies: {}", shape.opacity);
+    }
+
+    #[test]
+    fn a_translucent_leaf_with_a_stroke_falls_back() {
+        let mut doc = Document::default();
+        let page = doc.pages[0];
+        let rect = doc.create(page, NodeKind::Rectangle, "Card", 20.0, 20.0, 60.0, 40.0).expect("rect");
+        if let Ok(n) = doc.get_mut(rect) {
+            n.fills = vec![DocPaint::solid(Color::new(0.2, 0.5, 0.8, 1.0))];
+            n.strokes = vec![DocPaint::solid(Color::new(0.9, 0.9, 0.9, 1.0))];
+            n.stroke.weight = 8.0;
+            n.opacity = 0.5;
+        }
+        let scene = build(&doc, page, &view());
+        assert!(!scene.is_supported(), "the stroke over the fill would composite twice");
+        assert!(scene.unsupported_features().iter().any(|u| u.feature == "node-opacity"));
     }
 
     #[test]

@@ -252,9 +252,11 @@ match figcraft_gpu::render::Renderer::global().render(&scene) { Ok(rgba) => …,
 ### M5 组合
 
 - **已落地（过渡子集）**：单叶组透明度。组自身无可见填充/描边/裁剪/蒙版/效果、`Normal` 或
-  `PassThrough`，且恰好一个可见子节点；子节点为叶子、无自己的裁剪/蒙版/效果、`Normal` 或
-  `PassThrough` 时，把组的 `opacity` 乘进子叶的填充、路径填充、描边与文字，不建离屏层。
-  其余任何组透明度整帧回退。子节点须恰好一个可见填充，避免层内多次绘制先叠加 alpha。
+  `PassThrough`，且恰好一个可见子节点；子节点可以是同样的纯组链，最终落到一个叶子。叶子须
+  **恰好一个可见填充**、无可见描边/效果、`Normal` 或 `PassThrough`。满足时把整条链的
+  `opacity` 乘进子叶的填充、路径填充或文字，不建离屏层。其余任何组透明度整帧回退。
+- 同一判据也用于节点自身的 `opacity`：单填充、无描边/效果时直接折进漆面；填充+描边、多填充
+  等会重叠的漆面登记 `node-opacity` 整帧回退，避免逐漆面乘 alpha 而 CPU 是整层乘一次。
 - 完整组透明度 / 非 Normal 混合模式 / 蒙版：**离屏层**。组内容画进 `Rgba8UnormSrgb` 层纹理，再以
   `opacity` + `blend` 合成；蒙版用 stencil（Metal 的 `depthStencil` 等价）或 `mask_type` 对应的
   alpha/outline/luminance 采样。
