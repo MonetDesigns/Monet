@@ -193,6 +193,13 @@ pub fn scale_for(doc: &Document, node: NodeId, size: figcraft_doc::ExportSize) -
     }
 }
 
+/// Map a user-facing 1–100 quality value to H.264 CRF (lower is better).
+/// 100 → 18, 85 (the default) → 23, 1 → 51.
+fn mp4_crf(quality: u8) -> f32 {
+    let q = quality.clamp(1, 100) as f32;
+    51.0 - (q - 1.0) * (33.0 / 99.0)
+}
+
 /// Encode one Motion export from a plain document. This is the single encoder used by
 /// `motion.export` and by a normal Export row whose format is GIF / WebM / PNG frames / MP4.
 pub fn encode_animation(
@@ -235,7 +242,7 @@ pub fn encode_animation(
                 let pm = anim.render(*t).ok_or_else(|| bad(cmd, "a frame failed to render"))?;
                 rendered.push(figcraft_motion_codec::FrameRgba::new(pm.width(), pm.height(), figcraft_render::to_rgba8(&pm)).map_err(|e| bad(cmd, e))?);
             }
-            let o = figcraft_motion_codec::Mp4Options { fps, crf: (100.0 - quality as f64 / 4.0) as f32 };
+            let o = figcraft_motion_codec::Mp4Options { fps, crf: mp4_crf(quality) };
             let bytes = figcraft_motion_codec::encode_mp4(&rendered, &o, [255, 255, 255]).map_err(|e| bad(cmd, e))?;
             (bytes, "mp4")
         }

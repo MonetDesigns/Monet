@@ -1754,12 +1754,14 @@ mod tests {
         let at_seg = hit_at(&hits, pos2(mid_x, g.key_y)).map(|h| h.kind);
         assert!(matches!(at_seg, Some(HitKind::Segment(id, AnimProperty::Position, 0)) if id == g.id), "两帧之间的线必须可选，实得 {at_seg:?}");
 
-        // 空白轨道区仍然是「清空选中」，不是选轨道。
+        // 空白轨道区按下时先开始框选，不立即清空；没有拖动，松开才恢复空选择。
         let q = Queue::new(Rc::new(|| {}));
         let empty = pos2(g.x0 + 600.0, g.key_y);
         let hit = hit_at(&hits, empty);
         begin_drag(&q, hit, empty, g.scale, false, 0.0, &g.doc, g.settings.duration_ms, false, false);
-        assert!(q.drain().iter().any(|a| matches!(a, Act::ClearSelection)), "点空白轨道应清空选中");
+        assert!(q.drain().is_empty(), "按下空白轨道只应开始框选，不应立刻清空选中");
+        end_drag(&q);
+        assert!(q.drain().iter().any(|a| matches!(a, Act::SetSelection(v) if v.is_empty())), "空白轨道点击在松开时应清空选中");
     }
 
     /// 回归：拖关键帧要能**连续**跟手。以前第一次 MoveKey 之后 `GRABBED` 还指着旧时间，
