@@ -506,6 +506,62 @@ fn mono_noise_matches_the_cpu() {
 }
 
 #[test]
+fn a_rough_texture_matches_the_cpu() {
+    let mut doc = Document::default();
+    let page = doc.pages[0];
+    transparent_page(&mut doc, page);
+    let clipped = rect(&mut doc, page, "Clipped texture", 20.0, 20.0, 60.0, 50.0, 6.0, Paint::solid(Color::new(0.85, 0.35, 0.15, 0.7)));
+    if let Ok(n) = doc.get_mut(clipped) {
+        n.effects = vec![figcraft_doc::Effect {
+            kind: figcraft_doc::EffectKind::Texture(figcraft_doc::Texture { size: 1.0, radius: 5.0, clip_to_shape: true, ..Default::default() }),
+            visible: true,
+        }];
+    }
+    let spilling = rect(&mut doc, page, "Free texture", 110.0, 100.0, 60.0, 50.0, 6.0, Paint::solid(Color::new(0.2, 0.45, 0.8, 1.0)));
+    if let Ok(n) = doc.get_mut(spilling) {
+        n.effects = vec![figcraft_doc::Effect {
+            kind: figcraft_doc::EffectKind::Texture(figcraft_doc::Texture { size: 1.0, radius: 6.0, clip_to_shape: false, ..Default::default() }),
+            visible: true,
+        }];
+    }
+
+    let scene = doc_scene::build(&doc, page, &viewport());
+    assert!(scene.is_supported(), "texture must stay on the GPU path: {:?}", scene.unsupported_features());
+    assert_eq!(scene.texture_count(), 2);
+    assert_eq!(scene.shapes().count(), 0, "the texture replaces each node's fill");
+
+    let cpu = cpu_pixels(&doc, page);
+    let Some(gpu) = gpu_pixels(&doc, page) else {
+        eprintln!("SKIP: no adapter");
+        return;
+    };
+    let tol = Tolerance { per_channel: 24, max_bad_ratio: 0.03 };
+    let report = compare(&cpu, &gpu, tol).expect("comparable");
+    assert!(report.passes(tol), "{}", report.summary());
+
+    // `clip_to_shape` keeps the first card inside its own pixels; without it the second card spills
+    // above its top edge. Check both sides agree.
+    let outside_clipped = (pixel(&cpu, SIZE as usize, 50, 16).expect("in bounds"), pixel(&gpu, SIZE as usize, 50, 16).expect("in bounds"));
+    assert_eq!(outside_clipped.0[3], 0, "the CPU clipped card 1");
+    assert_eq!(outside_clipped.1[3], 0, "the GPU clipped card 1");
+    // Without `clip_to_shape` the second card spills above its top edge; count those pixels rather
+    // than guessing a coordinate a grain may not reach.
+    let spill = |bytes: &[u8]| {
+        let mut count = 0usize;
+        for y in 86..100 {
+            for x in 110..170 {
+                if pixel(bytes, SIZE as usize, x, y).is_some_and(|p| p[3] > 0) {
+                    count += 1;
+                }
+            }
+        }
+        count
+    };
+    assert!(spill(&cpu) > 0, "the CPU did not spill card 2");
+    assert!(spill(&gpu) > 0, "the GPU did not spill card 2");
+}
+
+#[test]
 fn text_glyphs_match_the_cpu() {
     let mut doc = Document::default();
     let page = doc.pages[0];

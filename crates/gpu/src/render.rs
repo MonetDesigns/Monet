@@ -135,6 +135,8 @@ enum Cmd {
     Backdrop { first: u32, sigma: f32 },
     /// Mono grain over instance `n` of the frame's noise plans.
     Noise(usize),
+    /// Rough-edge texture over instance `n` of the frame's texture plans.
+    Texture(usize),
 }
 
 /// One shadow to draw: its silhouette (one instance), the blur radius in device pixels, the tint and
@@ -208,6 +210,30 @@ struct NoiseParams {
     color: [f32; 4],
 }
 
+/// One rough-edge texture layer: the instance that masks it, the CPU's cell hash seed, the scatter
+/// radius in device pixels, the shape clip flag, and the fill whose pixels are scattered.
+struct TexturePlan {
+    first: u32,
+    seed: u32,
+    radius: f32,
+    clip_to_shape: bool,
+    cell: [f32; 2],
+    fill: Rgba,
+}
+
+/// Uniforms for [`TexturePlan`]; same 48-byte layout as [`NoiseParams`].
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+struct TextureParams {
+    seed: u32,
+    radius: f32,
+    clip_to_shape: u32,
+    _pad0: u32,
+    cell: [f32; 2],
+    _pad1: [f32; 2],
+    color: [f32; 4],
+}
+
 /// A background blur's chain: the resolved frame (in place of the shadow's silhouette), two ping-pong
 /// textures, six box passes, and the quad that shows the last pass through the box.
 struct BackdropResources {
@@ -273,6 +299,7 @@ pub struct Renderer {
     inner_pipeline: wgpu::RenderPipeline,
     backdrop_pipeline: wgpu::RenderPipeline,
     noise_pipeline: wgpu::RenderPipeline,
+    texture_pipeline: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
     globals: wgpu::Buffer,
     bind_globals: wgpu::BindGroup,
@@ -282,6 +309,7 @@ pub struct Renderer {
     inner_layout: wgpu::BindGroupLayout,
     backdrop_layout: wgpu::BindGroupLayout,
     noise_layout: wgpu::BindGroupLayout,
+    texture_layout: wgpu::BindGroupLayout,
     instances: Option<(wgpu::Buffer, wgpu::BindGroup, u64)>,
     mesh_verts: Option<(wgpu::Buffer, u64)>,
     mesh_indices: Option<(wgpu::Buffer, u64)>,
@@ -359,6 +387,10 @@ impl Renderer {
         let noise_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("figcraft-gpu-noise"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/noise.wgsl").into()),
+        });
+        let texture_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("figcraft-gpu-texture"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/texture.wgsl").into()),
         });
 
         let globals_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -490,6 +522,15 @@ impl Renderer {
                 count: None,
             }],
         });
+        let texture_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("texture"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+                count: None,
+            }],
+        });
         let shape_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("shape"),
             bind_group_layouts: &[Some(&globals_layout), Some(&instances_layout)],
@@ -578,6 +619,11 @@ impl Renderer {
         let noise_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("noise"),
             bind_group_layouts: &[Some(&noise_layout), Some(&instances_layout)],
+            immediate_size: 0,
+        });
+        let texture_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("texture"),
+            bind_group_layouts: &[Some(&texture_layout), Some(&instances_layout)],
             immediate_size: 0,
         });
         let single_state = |b: Option<wgpu::BlendState>| wgpu::ColorTargetState {
@@ -692,6 +738,27 @@ impl Renderer {
             multiview_mask: None,
             cache: None,
         });
+        let texture_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("texture"),
+            layout: Some(&texture_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &texture_shader,
+                entry_point: Some("vs"),
+                buffers: &[],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &texture_shader,
+                entry_point: Some("fs"),
+                targets: &[Some(single_state(blend()))],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState { count: SAMPLES, mask: !0, alpha_to_coverage_enabled: false },
+            multiview_mask: None,
+            cache: None,
+        });
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("shadow"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -725,6 +792,7 @@ impl Renderer {
             inner_pipeline,
             backdrop_pipeline,
             noise_pipeline,
+            texture_pipeline,
             sampler,
             globals,
             bind_globals,
@@ -734,6 +802,7 @@ impl Renderer {
             inner_layout,
             backdrop_layout,
             noise_layout,
+            texture_layout,
             instances: None,
             mesh_verts: None,
             mesh_indices: None,
@@ -889,6 +958,32 @@ impl Renderer {
         (buffer, bind)
     }
 
+    /// One texture layer's uniforms. Nothing offscreen: the shader reads the fill at the moved pixel.
+    fn texture_resources(&self, plan: &TexturePlan) -> (wgpu::Buffer, wgpu::BindGroup) {
+        let params = TextureParams {
+            seed: plan.seed,
+            radius: plan.radius,
+            clip_to_shape: u32::from(plan.clip_to_shape),
+            _pad0: 0,
+            cell: plan.cell,
+            _pad1: [0.0; 2],
+            color: [plan.fill.r, plan.fill.g, plan.fill.b, plan.fill.a],
+        };
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("texture params"),
+            size: std::mem::size_of::<TextureParams>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&buffer, 0, bytemuck::bytes_of(&params));
+        let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("texture"),
+            layout: &self.texture_layout,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() }],
+        });
+        (buffer, bind)
+    }
+
     /// The blur chain for one background blur: the resolved frame as the source, then six box passes.
     fn backdrop_resources(&self, width: u32, height: u32, sigma: f32, source: &wgpu::TextureView) -> Option<BackdropResources> {
         use wgpu::TextureUsages as U;
@@ -967,6 +1062,7 @@ impl Renderer {
         let mut cover_instances: Vec<GpuInstance> = Vec::new();
         let mut shadow_plans: Vec<ShadowPlan> = Vec::new();
         let mut noise_plans: Vec<NoisePlan> = Vec::new();
+        let mut texture_plans: Vec<TexturePlan> = Vec::new();
         let mut verts: Vec<GpuMeshVertex> = Vec::new();
         let mut indices: Vec<u32> = Vec::new();
         let mut cmds: Vec<Cmd> = Vec::new();
@@ -1102,6 +1198,31 @@ impl Renderer {
                         color: noise.color,
                     });
                 }
+                Item::Texture(texture) => {
+                    if instances.len() > batch {
+                        cmds.push(Cmd::Shapes { first: batch as u32, count: (instances.len() - batch) as u32 });
+                    }
+                    let caster = ShapeNode {
+                        mat: texture.mat,
+                        size: texture.size,
+                        shape: texture.shape,
+                        paint: Paint::Solid(Rgba::new(1.0, 1.0, 1.0, 1.0)),
+                        clip: texture.clip,
+                        opacity: 1.0,
+                    };
+                    let first = instances.len() as u32;
+                    instances.push(GpuInstance::of(&caster));
+                    batch = instances.len();
+                    cmds.push(Cmd::Texture(texture_plans.len()));
+                    texture_plans.push(TexturePlan {
+                        first,
+                        seed: texture.seed,
+                        radius: texture.radius,
+                        clip_to_shape: texture.clip_to_shape,
+                        cell: texture.cell,
+                        fill: texture.fill,
+                    });
+                }
             }
         }
         if instances.len() > batch {
@@ -1178,6 +1299,7 @@ impl Renderer {
             .collect::<Option<Vec<_>>>()
             .ok_or_else(|| RenderError::Device("the shadow targets were not created".into()))?;
         let noise_binds: Vec<(wgpu::Buffer, wgpu::BindGroup)> = noise_plans.iter().map(|plan| self.noise_resources(plan)).collect();
+        let texture_binds: Vec<(wgpu::Buffer, wgpu::BindGroup)> = texture_plans.iter().map(|plan| self.texture_resources(plan)).collect();
 
         // Mesh buffers: one vertex buffer and one index buffer for the whole frame.
         if !verts.is_empty() {
@@ -1462,6 +1584,20 @@ impl Renderer {
                         };
                         pass.set_pipeline(&self.noise_pipeline);
                         pass.set_bind_group(0, noise_bind, &[]);
+                        pass.set_bind_group(1, bind, &[]);
+                        pass.draw(0..3, plan.first..plan.first + 1);
+                        bound_shapes = false;
+                        bound_mesh = false;
+                    }
+                    Cmd::Texture(index) => {
+                        let Some((_, texture_bind)) = texture_binds.get(index) else {
+                            continue;
+                        };
+                        let Some(plan) = texture_plans.get(index) else {
+                            continue;
+                        };
+                        pass.set_pipeline(&self.texture_pipeline);
+                        pass.set_bind_group(0, texture_bind, &[]);
                         pass.set_bind_group(1, bind, &[]);
                         pass.draw(0..3, plan.first..plan.first + 1);
                         bound_shapes = false;

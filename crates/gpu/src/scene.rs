@@ -246,8 +246,28 @@ pub struct NoiseNode {
     pub fill_alpha: f32,
 }
 
+/// A texture layer: each destination pixel is replaced by the pixel of the node's own fill at a
+/// hashed whole-pixel offset (the CPU's `grain::texture`), so edges turn rough and grainy.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextureNode {
+    pub mat: [f32; 6],
+    pub size: [f32; 2],
+    pub shape: ShapeKind,
+    pub clip: Clip,
+    /// The node id the CPU hashes cells with (XOR 0x7E57).
+    pub seed: u32,
+    /// Scatter distance in device pixels (the CPU's `radius * scale`, clamped to 2048).
+    pub radius: f32,
+    /// The CPU's `clip_to_shape`: multiply the result by the layer alpha at the destination.
+    pub clip_to_shape: bool,
+    /// Cell size in document units (twice the texture size).
+    pub cell: [f32; 2],
+    /// The fill colour, straight sRGB; the shader premultiplies it by its own alpha and coverage.
+    pub fill: Rgba,
+}
+
 /// One thing to draw, in painter's order: an SDF shape, a tessellated path, a shadow, a layer blur,
-/// a background blur or a mono grain layer.
+/// a background blur, a mono grain layer or a texture layer.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Item {
     Shape(ShapeNode),
@@ -256,6 +276,7 @@ pub enum Item {
     Blur(LayerBlurNode),
     Backdrop(BackdropNode),
     Noise(NoiseNode),
+    Texture(TextureNode),
 }
 
 /// A feature this milestone cannot draw. Its presence sends the **whole frame** to the CPU.
@@ -314,11 +335,16 @@ impl Scene {
         self.items.push(Item::Noise(noise));
     }
 
+    /// A rough-edge texture over the node's fill.
+    pub fn push_texture(&mut self, texture: TextureNode) {
+        self.items.push(Item::Texture(texture));
+    }
+
     /// The SDF shapes, in draw order (tests and the log use this; the renderer walks `items`).
     pub fn shapes(&self) -> impl Iterator<Item = &ShapeNode> {
         self.items.iter().filter_map(|item| match item {
             Item::Shape(shape) => Some(shape),
-            Item::Mesh(_) | Item::Shadow(_) | Item::Blur(_) | Item::Backdrop(_) | Item::Noise(_) => None,
+            Item::Mesh(_) | Item::Shadow(_) | Item::Blur(_) | Item::Backdrop(_) | Item::Noise(_) | Item::Texture(_) => None,
         })
     }
 
@@ -343,6 +369,10 @@ impl Scene {
 
     pub fn noise_count(&self) -> usize {
         self.items.iter().filter(|item| matches!(item, Item::Noise(_))).count()
+    }
+
+    pub fn texture_count(&self) -> usize {
+        self.items.iter().filter(|item| matches!(item, Item::Texture(_))).count()
     }
 
     /// Record a feature this frame uses that this milestone cannot draw.

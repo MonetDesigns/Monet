@@ -16,6 +16,7 @@
 //! | uniform background blur over one SDF box with one fill (the frame is resolved and blurred in place) | background blur over children, strokes, clips, group opacity, and glass |
 //! | text: glyph and decoration outlines from `figcraft_text`, solid fills and strokes per run | colour glyphs (emoji, COLR) |
 //! | mono noise over one SDF box fill, hashed exactly as the CPU | duo/multi noise, and noise over children, strokes, clips, groups or other effects |
+//! | texture over one SDF box fill: whole-pixel scatter hashed exactly as the CPU | textures combined with children, strokes, clips, or other effects |
 //! | node opacity, visibility, ancestor clipping rectangles | rounded or rotated clips, variable-bound fills |
 
 use std::collections::BTreeMap;
@@ -28,7 +29,7 @@ use figcraft_geom::{Affine, BezPath, Point};
 use crate::geometry;
 use crate::scene::{
     BackdropNode, Clip, GradientKind, LayerBlurNode, MAX_STOPS, MeshNode, NoiseNode, Paint, Rgba, Scene, ShadowNode, ShapeKind, ShapeNode, Stop,
-    Viewport, is_similarity,
+    TextureNode, Viewport, is_similarity,
 };
 
 /// The deepest subtree walked; a document that nests deeper is a broken file and a fallback.
@@ -109,6 +110,8 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, sce
         .collect();
     let noises: Vec<&figcraft_doc::Noise> =
         n.effects.iter().filter(|e| e.visible).filter_map(|e| if let EffectKind::Noise(nz) = &e.kind { Some(nz) } else { None }).collect();
+    let textures: Vec<&figcraft_doc::Texture> =
+        n.effects.iter().filter(|e| e.visible).filter_map(|e| if let EffectKind::Texture(t) = &e.kind { Some(t) } else { None }).collect();
     if n.effects.iter().any(|e| {
         e.visible
             && !matches!(
@@ -118,6 +121,7 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, sce
                     | EffectKind::LayerBlur(_)
                     | EffectKind::BackgroundBlur(_)
                     | EffectKind::Noise(_)
+                    | EffectKind::Texture(_)
             )
     }) {
         scene.unsupported("effect", format!("`{}` has a visible effect this build cannot draw", n.name));
@@ -175,10 +179,20 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, sce
         }
     }
 
+    // A texture replaces the layer's pixels with whole-pixel-scattered copies of the fill. Only a
+    // one-fill SDF box is accepted, so its layer content is exactly that fill; the normal fill is
+    // skipped when the texture is active, exactly like a blurred layer.
+    let texture_ok = !textures.is_empty() && shape.is_some() && can_texture(n, &textures, clip);
+    let texture_node = match (texture_ok, shape) {
+        (true, Some(shape)) => make_texture(id, n, &textures[0], shape, m, w, h, clip, scale),
+        _ => None,
+    };
+    let textured = texture_node.is_some();
+
     // Fills: the SDF when the box is one of its primitives, the CPU's own outline tessellated
     // otherwise (vectors, booleans, lines, and boxes the SDF cannot express exactly). Text paints
     // glyph outlines instead of its box. A blurred layer already paints the fill, so it replaces it.
-    if sized && !blurred {
+    if sized && !blurred && !textured {
         if let NodeKind::Text(_) = n.kind {
             emit_text(n, m, clip, scene);
         } else if let Some(shape) = shape {
@@ -197,6 +211,12 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, sce
             }
             _ => scene.unsupported("effect", format!("`{}` carries a noise effect this build cannot draw", n.name)),
         }
+    }
+
+    if let Some(node) = texture_node {
+        scene.push_texture(node);
+    } else if !textures.is_empty() && !texture_ok {
+        scene.unsupported("effect", format!("`{}` carries a texture effect this build cannot draw", n.name));
     }
 
     // Inner shadows paint over the fills, under the children and the stroke, like the CPU.
@@ -531,6 +551,72 @@ fn emit_noise(id: NodeId, n: &Node, noise: &figcraft_doc::Noise, shape: ShapeKin
     });
 }
 
+/// Whether this node's texture is the CPU's scatter over exactly its own SDF box fill: one texture,
+/// no children, no stroke, no clip, full node opacity, one plain solid fill, and no other effect
+/// (the layer being scattered is just that fill).
+fn can_texture(n: &Node, textures: &[&figcraft_doc::Texture], clip: Clip) -> bool {
+    let [texture] = textures else {
+        return false;
+    };
+    if !texture.radius.is_finite() {
+        return false;
+    }
+    if !n.children.is_empty() || n.clip || !clip.is_none() || n.has_visible_stroke() || n.opacity < 0.999 {
+        return false;
+    }
+    if !matches!(n.blend, BlendMode::Normal) {
+        return false;
+    }
+    if n.effects.iter().filter(|e| e.visible).count() != 1 {
+        return false;
+    }
+    let mut fills = n.fills.iter().filter(|f| f.visible);
+    let Some(fill) = fills.next() else {
+        return false;
+    };
+    if fills.next().is_some() || !matches!(fill.blend, BlendMode::Normal) {
+        return false;
+    }
+    fill.solid_color().is_some_and(|c| c.a.is_finite())
+}
+
+/// The CPU's whole-pixel scatter as a scene node: one full-screen quad whose destination pixels
+/// hash to a cell, then read the fill at a source pixel offset by up to `radius` device pixels.
+/// `clip_to_shape` multiplies the result by the fill's alpha at the destination, exactly like the
+/// CPU's `keep`. `None` when the radius is too small to move anything (the CPU leaves the layer
+/// untouched).
+fn make_texture(
+    id: NodeId,
+    n: &Node,
+    texture: &figcraft_doc::Texture,
+    shape: ShapeKind,
+    m: Affine,
+    w: f64,
+    h: f64,
+    clip: Clip,
+    scale: f64,
+) -> Option<TextureNode> {
+    let radius = texture.radius * scale;
+    if !(radius.is_finite() && radius >= 0.5) {
+        return None;
+    }
+    let (gx, gy) = texture.grain();
+    let Some(fill) = n.fills.iter().find(|f| f.visible).and_then(|f| f.solid_color()) else {
+        return None;
+    };
+    Some(TextureNode {
+        mat: crate::scene::matrix(m),
+        size: [w as f32, h as f32],
+        shape,
+        clip,
+        seed: id.0 as u32,
+        radius: (radius.min(2048.0)) as f32,
+        clip_to_shape: texture.clip_to_shape,
+        cell: [(gx * 2.0) as f32, (gy * 2.0) as f32],
+        fill: Rgba::from_color(fill),
+    })
+}
+
 /// Whether this node's backdrop effect is one uniform blur over an SDF box whose layer is just its
 /// own fill (no children, no layer blur on top, no clip, no group opacity). The CPU paints the
 /// blurred backdrop into the layer first, so the node's fills, shadows and strokes go over it.
@@ -773,7 +859,8 @@ fn meshes(scene: &Scene) -> impl Iterator<Item = &MeshNode> {
         | crate::scene::Item::Shadow(_)
         | crate::scene::Item::Blur(_)
         | crate::scene::Item::Backdrop(_)
-        | crate::scene::Item::Noise(_) => None,
+        | crate::scene::Item::Noise(_)
+        | crate::scene::Item::Texture(_) => None,
     })
 }
 
@@ -1064,6 +1151,37 @@ mod tests {
         }
         let scene = build(&doc, page, &view());
         assert!(!scene.is_supported(), "two-colour grains are not this shader's input");
+        assert!(scene.unsupported_features().iter().any(|u| u.feature == "effect"));
+    }
+
+    #[test]
+    fn a_texture_replaces_one_fill() {
+        let mut doc = Document::default();
+        let page = doc.pages[0];
+        let rect = doc.create(page, NodeKind::Rectangle, "Rough", 10.0, 10.0, 60.0, 40.0).expect("rect");
+        if let Ok(n) = doc.get_mut(rect) {
+            n.fills = vec![DocPaint::solid(Color::new(0.2, 0.6, 0.3, 0.7))];
+            n.effects = vec![figcraft_doc::Effect { kind: EffectKind::Texture(figcraft_doc::Texture::default()), visible: true }];
+        }
+        let scene = build(&doc, page, &view());
+        assert!(scene.is_supported(), "{:?}", scene.unsupported_features());
+        assert_eq!(scene.texture_count(), 1);
+        assert_eq!(scene.shapes().count(), 0, "the texture replaces the fill, so no plain fill is drawn");
+        assert!(matches!(scene.items.first(), Some(crate::scene::Item::Texture(_))), "the texture is the only painter");
+    }
+
+    #[test]
+    fn a_texture_over_children_falls_back() {
+        let mut doc = Document::default();
+        let page = doc.pages[0];
+        let frame = doc.create(page, NodeKind::Frame, "Rough", 10.0, 10.0, 60.0, 40.0).expect("frame");
+        let _child = doc.create(frame, NodeKind::Rectangle, "Child", 5.0, 5.0, 20.0, 20.0).expect("child");
+        if let Ok(n) = doc.get_mut(frame) {
+            n.fills = vec![DocPaint::solid(Color::new(0.2, 0.6, 0.3, 1.0))];
+            n.effects = vec![figcraft_doc::Effect { kind: EffectKind::Texture(figcraft_doc::Texture::default()), visible: true }];
+        }
+        let scene = build(&doc, page, &view());
+        assert!(!scene.is_supported(), "the layer's children would be part of what the CPU scatters");
         assert!(scene.unsupported_features().iter().any(|u| u.feature == "effect"));
     }
 }
