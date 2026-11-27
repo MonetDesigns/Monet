@@ -28,8 +28,8 @@ use figcraft_geom::{Affine, BezPath, Point};
 
 use crate::geometry;
 use crate::scene::{
-    BackdropNode, Clip, GradientKind, GrainMode, LayerBlurNode, MAX_STOPS, MeshNode, NoiseNode, Paint, ProgressiveBlurNode, Rgba, Scene, ShadowNode,
-    ShapeKind, ShapeNode, Stop, TextureNode, Viewport, is_similarity,
+    BackdropNode, Clip, GradientKind, GrainMode, GroupNode, LayerBlurNode, MAX_STOPS, MeshNode, NoiseNode, Paint, ProgressiveBlurNode, Rgba, Scene,
+    ShadowNode, ShapeKind, ShapeNode, Stop, TextureNode, Viewport, is_similarity,
 };
 
 /// The deepest subtree walked; a document that nests deeper is a broken file and a fallback.
@@ -118,6 +118,26 @@ fn subtree_has_visible_effects(doc: &Document, id: NodeId) -> bool {
     doc.subtree(id).into_iter().any(|id| doc.node(id).is_some_and(|n| n.effects.iter().any(|e| e.visible)))
 }
 
+/// Whether this subtree carries a background blur. A group layer has no document behind it, so a
+/// backdrop effect inside one would read the layer's own transparent pixels instead of the page.
+fn subtree_has_backdrop(doc: &Document, id: NodeId) -> bool {
+    doc.subtree(id)
+        .into_iter()
+        .any(|id| doc.node(id).is_some_and(|n| n.effects.iter().any(|e| e.visible && matches!(e.kind, figcraft_doc::EffectKind::BackgroundBlur(_)))))
+}
+
+/// Whether a group can be drawn as one isolated layer: it has no own paint, stroke, clip, mask or
+/// effect, a normal blend, and no background blur anywhere below it.
+fn can_layer_group(doc: &Document, n: &Node) -> bool {
+    if n.fills.iter().any(|f| f.visible) || n.has_visible_stroke() || n.clip || n.is_mask {
+        return false;
+    }
+    if n.effects.iter().any(|e| e.visible) || !matches!(n.blend, BlendMode::Normal | BlendMode::PassThrough) {
+        return false;
+    }
+    !subtree_has_backdrop(doc, n.id)
+}
+
 /// Whether a node kind only carries children (and possibly its own box fill).
 fn is_container(kind: &NodeKind) -> bool {
     matches!(
@@ -182,10 +202,6 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, opa
     if n.is_mask {
         scene.unsupported("mask", format!("`{}` is a mask", n.name));
     }
-    if container && n.opacity < 0.999 && !can_group_opacity(doc, n) {
-        scene.unsupported("group-opacity", format!("`{}` is a group at {} opacity that cannot be flattened onto one leaf", n.name, n.opacity));
-        return;
-    }
     // A layer blur already folds the node alpha into its tint (the CPU blurs the one-fill layer,
     // then composites it), so it does not need the plain-leaf rule.
     if !container && n.opacity < 0.999 && layer_blurs.is_empty() && !can_leaf_opacity(n) {
@@ -240,6 +256,26 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, opa
                 inner = inner.intersect(rect);
             }
         }
+    }
+
+    // Group opacity that cannot be flattened onto one leaf becomes an isolated layer. Children
+    // draw transparent, then one composite applies the group alpha exactly once.
+    if container && n.opacity < 0.999 && !can_group_opacity(doc, n) {
+        if can_layer_group(doc, n) {
+            let mut group = Scene::new(scene.width, scene.height);
+            for &child in &n.children {
+                walk(doc, child, view_xf, scale, inner, 1.0, &mut group, depth + 1);
+            }
+            if group.is_supported() {
+                scene.push_group(GroupNode { items: group.items, opacity: n.opacity.clamp(0.0, 1.0) as f32 });
+                return;
+            }
+            scene.absorb_unsupported(group.unsupported_features());
+            scene.unsupported("group-opacity", format!("`{}` contains content the GPU cannot draw in a group layer", n.name));
+            return;
+        }
+        scene.unsupported("group-opacity", format!("`{}` is a group at {} opacity that cannot be flattened onto one leaf", n.name, n.opacity));
+        return;
     }
 
     // Drop shadows sit under the node's own content, so they are emitted before its fills and
@@ -967,16 +1003,18 @@ fn map_point(m: Affine, x: f64, y: f64) -> (f64, f64) {
 /// The mesh items of a scene, for tests that do not run a GPU.
 #[cfg(test)]
 fn meshes(scene: &Scene) -> impl Iterator<Item = &MeshNode> {
-    scene.items.iter().filter_map(|item| match item {
-        crate::scene::Item::Mesh(mesh) => Some(mesh),
-        crate::scene::Item::Shape(_)
-        | crate::scene::Item::Shadow(_)
-        | crate::scene::Item::Blur(_)
-        | crate::scene::Item::ProgressiveBlur(_)
-        | crate::scene::Item::Backdrop(_)
-        | crate::scene::Item::Noise(_)
-        | crate::scene::Item::Texture(_) => None,
-    })
+    fn collect<'a>(items: &'a [crate::scene::Item], out: &mut Vec<&'a MeshNode>) {
+        for item in items {
+            match item {
+                crate::scene::Item::Mesh(mesh) => out.push(mesh),
+                crate::scene::Item::Group(group) => collect(&group.items, out),
+                _ => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    collect(&scene.items, &mut out);
+    out.into_iter()
 }
 
 #[cfg(test)]
@@ -1196,7 +1234,7 @@ mod tests {
     }
 
     #[test]
-    fn a_multi_child_group_opacity_falls_back() {
+    fn a_multi_child_group_opacity_becomes_a_layer() {
         let mut doc = Document::default();
         let page = doc.pages[0];
         let group = doc.create(page, NodeKind::Group, "Stack", 40.0, 40.0, 60.0, 40.0).expect("group");
@@ -1211,12 +1249,19 @@ mod tests {
             n.opacity = 0.6;
         }
         let scene = build(&doc, page, &view());
-        assert!(!scene.is_supported(), "two leaves can overlap, so a single pass cannot compose the group first");
-        assert!(scene.unsupported_features().iter().any(|u| u.feature == "group-opacity"));
+        assert!(scene.is_supported(), "{:?}", scene.unsupported_features());
+        // Two leaves that can overlap need the isolated layer: their overlap is composed
+        // before the group alpha applies, exactly as the CPU does.
+        assert_eq!(scene.group_count(), 1);
+        assert_eq!(scene.shapes().count(), 2);
+        let [crate::scene::Item::Group(group)] = &scene.items[..] else {
+            panic!("the whole group should be one isolated item");
+        };
+        assert_eq!(group.opacity, 0.6_f32);
     }
 
     #[test]
-    fn a_stacked_fill_child_group_opacity_falls_back() {
+    fn a_stacked_fill_child_group_opacity_becomes_a_layer() {
         let mut doc = Document::default();
         let page = doc.pages[0];
         let group = doc.create(page, NodeKind::Group, "Faded", 40.0, 40.0, 60.0, 40.0).expect("group");
@@ -1228,8 +1273,12 @@ mod tests {
             n.opacity = 0.6;
         }
         let scene = build(&doc, page, &view());
-        assert!(!scene.is_supported(), "stacked fills accumulate inside the group before its alpha applies");
-        assert!(scene.unsupported_features().iter().any(|u| u.feature == "group-opacity"));
+        assert!(scene.is_supported(), "{:?}", scene.unsupported_features());
+        // Stacked fills accumulate inside the isolated layer first; only the finished layer
+        // is multiplied by the group alpha.
+        assert_eq!(scene.group_count(), 1);
+        assert_eq!(scene.shapes().count(), 2);
+        assert!(scene.shapes().all(|s| (s.opacity - 1.0).abs() < 1e-4));
     }
 
     #[test]

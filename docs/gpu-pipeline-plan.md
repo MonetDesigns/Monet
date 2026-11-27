@@ -7,7 +7,7 @@
 > SDF 图元（圆角矩形/椭圆/多边形/星形）、四类渐变、裁剪、路径填充与描边网格（4× MSAA）、文字字形
 > 网格、离屏剪影 + 六 pass 盒模糊的投影/内阴影/图层模糊、八级加权混合的分级模糊、按段 resolve 的背景
 > 模糊回读、逐 cell 64 位哈希的 Mono/Duo/Multi 颗粒、整像素散射的纹理粗糙边、单叶组透明度、动画导出
-> 切到 `figcraft-gpu`、圆角裁剪、CPU↔GPU 像素 diff（20 项对照测试），UI 画布已接线并整帧回退。**所有内置效果按产品计划弃用，后续效果转到外置 WGSL，
+> 切到 `figcraft-gpu`、圆角裁剪、离屏组层透明度、CPU↔GPU 像素 diff（22 项对照测试），UI 画布已接线并整帧回退。**所有内置效果按产品计划弃用，后续效果转到外置 WGSL，
 > 本分支不再新增或扩展内置效果**；M5–M7 的非效果核心为设计与接口。
 > 日期：2026-11-27
 
@@ -114,7 +114,7 @@ match figcraft_gpu::render::Renderer::global().render(&scene) { Ok(rgba) => …,
 - 抗锯齿：局部空间 SDF + `fwidth` 屏幕空间覆盖，1px 边缘，任意缩放下线宽恒定。
 - **验收**：矩形/椭圆/多边形/星形 × 纯色/四种渐变 × 旋转 × 裁剪，CPU↔GPU 像素 diff 达标（第 6 节）。
 - 未做（登记为 Unsupported，走 CPU）：图片填充、图案填充、圆角 smoothing、弧形/环形椭圆、
-  文字、效果、非 Normal 混合、组透明度、蒙版；圆角裁剪只支持单层、无效果、均匀缩放的
+  文字、效果、非 Normal 混合、组透明度（仅单叶与无裁剪/无效果组的离屏层子集）、蒙版；圆角裁剪只支持单层、无效果、均匀缩放的
   SDF/网格子树。
 
 ### M2 路径与描边（本分支已落地）
@@ -264,11 +264,19 @@ match figcraft_gpu::render::Renderer::global().render(&scene) { Ok(rgba) => …,
 - 同一判据也用于节点自身的 `opacity`：恰好一个可见漆面（单个填充或单条描边）、无效果时直接
   折进漆面；填充+描边、多填充等会重叠的漆面登记 `node-opacity` 整帧回退，避免逐漆面乘 alpha
   而 CPU 是整层乘一次。
-- 完整组透明度 / 非 Normal 混合模式 / 蒙版：**离屏层**。组内容画进 `Rgba8UnormSrgb` 层纹理，再以
-  `opacity` + `blend` 合成；蒙版用 stencil（Metal 的 `depthStencil` 等价）或 `mask_type` 对应的
+- **已落地（过渡子集）**：离屏组层透明度。当组自身无可见填充/描边/裁剪/蒙版/效果、`Normal` 或
+  `PassThrough`、子树内没有 `BackgroundBlur`（层内读不到文档背景）时，子节点先画进一张全帧透明
+  `Rgba8Unorm` 4× MSAA 层，resolve 后由 `shaders/composite.wgsl` 把四个预乘通道一起乘组
+  `opacity`，再按画家顺序合成一次。嵌套组按「父组先登记、子组后登记」的逆序准备各自的层，父层
+  合成时子层已 resolve；重叠的多子节点因此先完成组内合成，再乘一次 alpha，与 CPU 的
+  `save_layer` 语义一致。组内投影/内阴影/模糊/颗粒/纹理仍走既有 pass；组内 `BackgroundBlur`
+  与组自身的裁剪/效果登记 `group-opacity` 整帧回退。
+- 非 Normal 混合模式 / 蒙版：**离屏层扩展**。组内容画进层纹理，再以 `opacity` + `blend` 合成；
+  蒙版用 stencil（Metal 的 `depthStencil` 等价）或 `mask_type` 对应的
   alpha/outline/luminance 采样。
 - **验收**：`blend` 16 种模式逐项 diff；组透明度与 CPU 的「先合成再乘 alpha」一致；蒙版边缘与
-  CPU `mask_bounds_tests` 一致；圆角裁剪的角部与 CPU 裁剪路径一致（已完成 SDF/网格两项对照）。
+  CPU `mask_bounds_tests` 一致；圆角裁剪的角部与 CPU 裁剪路径一致（已完成 SDF/网格两项对照）；
+  离屏组层已完成重叠双叶与嵌套双组两项对照。
 
 ### M6 导出链路
 

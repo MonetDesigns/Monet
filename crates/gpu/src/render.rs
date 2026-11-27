@@ -142,6 +142,8 @@ enum Cmd {
     Texture(usize),
     /// Progressive layer blur `n` (index into the frame's progressive plans).
     Progressive(usize),
+    /// Group `n` (index into the frame's group plans), composited from its resolved layer.
+    Group(usize),
 }
 
 /// One shadow to draw: its silhouette (one instance), the blur radius in device pixels, the tint and
@@ -288,6 +290,237 @@ struct TextureParams {
     color: [f32; 4],
 }
 
+/// One offscreen group: its own draw list (which may contain nested groups, already prepared) and
+/// the alpha applied when its resolved layer is composited into the parent.
+struct GroupPlan {
+    cmds: Vec<Cmd>,
+    opacity: f32,
+}
+
+/// Everything the frame needs while walking the item tree: GPU instances, mesh geometry, effect
+/// plans and the command streams for the frame and each nested group.
+#[derive(Default)]
+struct CommandList {
+    instances: Vec<GpuInstance>,
+    shadow_instances: Vec<GpuInstance>,
+    cover_instances: Vec<GpuInstance>,
+    shadow_plans: Vec<ShadowPlan>,
+    noise_plans: Vec<NoisePlan>,
+    texture_plans: Vec<TexturePlan>,
+    progressive_plans: Vec<ProgressivePlan>,
+    verts: Vec<GpuMeshVertex>,
+    indices: Vec<u32>,
+    groups: Vec<GroupPlan>,
+}
+
+impl CommandList {
+    fn build(&mut self, items: &[Item]) -> Vec<Cmd> {
+        let mut cmds: Vec<Cmd> = Vec::new();
+        let mut batch = 0usize;
+        for item in items {
+            match item {
+                Item::Shape(shape) => self.instances.push(GpuInstance::of(shape)),
+                Item::Mesh(mesh) => {
+                    if self.instances.len() > batch {
+                        cmds.push(Cmd::Shapes { first: batch as u32, count: (self.instances.len() - batch) as u32 });
+                        batch = self.instances.len();
+                    }
+                    let opacity = mesh.opacity.clamp(0.0, 1.0);
+                    let premul = mesh.color.premultiplied();
+                    let color = [premul[0] * opacity, premul[1] * opacity, premul[2] * opacity, premul[3] * opacity];
+                    let base = self.verts.len() as u32;
+                    self.verts.extend(mesh.verts.iter().map(|p| GpuMeshVertex { pos: *p, color, clip: mesh.clip.0, clip_radii: mesh.clip.1 }));
+                    let first = self.indices.len() as u32;
+                    self.indices.extend(mesh.indices.iter().map(|i| i + base));
+                    cmds.push(Cmd::Mesh { first, count: mesh.indices.len() as u32 });
+                }
+                Item::Shadow(shadow) => {
+                    if self.instances.len() > batch {
+                        cmds.push(Cmd::Shapes { first: batch as u32, count: (self.instances.len() - batch) as u32 });
+                        batch = self.instances.len();
+                    }
+                    let caster = ShapeNode {
+                        mat: shadow.mat,
+                        size: shadow.size,
+                        shape: shadow.shape,
+                        paint: Paint::Solid(Rgba::new(1.0, 1.0, 1.0, 1.0)),
+                        clip: shadow.clip,
+                        opacity: 1.0,
+                    };
+                    let mut offset_caster = caster.clone();
+                    offset_caster.mat[4] += shadow.offset[0];
+                    offset_caster.mat[5] += shadow.offset[1];
+                    let first = self.shadow_instances.len() as u32;
+                    self.shadow_instances.push(GpuInstance::of(&offset_caster));
+                    let (cover_first, cover_count) = if shadow.inner {
+                        let first = self.cover_instances.len() as u32;
+                        self.cover_instances.push(GpuInstance::of(&caster));
+                        (first, 1)
+                    } else {
+                        (0, 0)
+                    };
+                    cmds.push(Cmd::Shadow(self.shadow_plans.len()));
+                    self.shadow_plans.push(ShadowPlan {
+                        first,
+                        count: 1,
+                        cover_first,
+                        cover_count,
+                        sigma: shadow.sigma,
+                        color: shadow.color,
+                        clip: shadow.clip,
+                        inner: shadow.inner,
+                    });
+                }
+                Item::Blur(blur) => {
+                    if self.instances.len() > batch {
+                        cmds.push(Cmd::Shapes { first: batch as u32, count: (self.instances.len() - batch) as u32 });
+                        batch = self.instances.len();
+                    }
+                    let caster = ShapeNode {
+                        mat: blur.mat,
+                        size: blur.size,
+                        shape: blur.shape,
+                        paint: Paint::Solid(Rgba::new(1.0, 1.0, 1.0, 1.0)),
+                        clip: blur.clip,
+                        opacity: 1.0,
+                    };
+                    let first = self.shadow_instances.len() as u32;
+                    self.shadow_instances.push(GpuInstance::of(&caster));
+                    cmds.push(Cmd::Shadow(self.shadow_plans.len()));
+                    self.shadow_plans.push(ShadowPlan {
+                        first,
+                        count: 1,
+                        cover_first: 0,
+                        cover_count: 0,
+                        sigma: blur.sigma,
+                        color: blur.color,
+                        clip: blur.clip,
+                        inner: false,
+                    });
+                }
+                Item::ProgressiveBlur(blur) => {
+                    if self.instances.len() > batch {
+                        cmds.push(Cmd::Shapes { first: batch as u32, count: (self.instances.len() - batch) as u32 });
+                        batch = self.instances.len();
+                    }
+                    let caster = ShapeNode {
+                        mat: blur.mat,
+                        size: blur.size,
+                        shape: blur.shape,
+                        paint: Paint::Solid(Rgba::new(1.0, 1.0, 1.0, 1.0)),
+                        clip: blur.clip,
+                        opacity: 1.0,
+                    };
+                    let first = self.shadow_instances.len() as u32;
+                    self.shadow_instances.push(GpuInstance::of(&caster));
+                    cmds.push(Cmd::Progressive(self.progressive_plans.len()));
+                    self.progressive_plans.push(ProgressivePlan {
+                        first,
+                        levels: blur.levels.clone(),
+                        s0: blur.s0,
+                        s1: blur.s1,
+                        start: blur.start,
+                        end: blur.end,
+                        color: blur.color,
+                    });
+                }
+                Item::Backdrop(backdrop) => {
+                    if self.instances.len() > batch {
+                        cmds.push(Cmd::Shapes { first: batch as u32, count: (self.instances.len() - batch) as u32 });
+                    }
+                    let caster = ShapeNode {
+                        mat: backdrop.mat,
+                        size: backdrop.size,
+                        shape: backdrop.shape,
+                        paint: Paint::Solid(Rgba::new(1.0, 1.0, 1.0, 1.0)),
+                        clip: backdrop.clip,
+                        opacity: 1.0,
+                    };
+                    let first = self.instances.len() as u32;
+                    self.instances.push(GpuInstance::of(&caster));
+                    batch = self.instances.len();
+                    cmds.push(Cmd::Backdrop { first, sigma: backdrop.sigma });
+                }
+                Item::Noise(noise) => {
+                    if self.instances.len() > batch {
+                        cmds.push(Cmd::Shapes { first: batch as u32, count: (self.instances.len() - batch) as u32 });
+                    }
+                    let caster = ShapeNode {
+                        mat: noise.mat,
+                        size: noise.size,
+                        shape: noise.shape,
+                        paint: Paint::Solid(Rgba::new(1.0, 1.0, 1.0, 1.0)),
+                        clip: noise.clip,
+                        opacity: 1.0,
+                    };
+                    let first = self.instances.len() as u32;
+                    self.instances.push(GpuInstance::of(&caster));
+                    batch = self.instances.len();
+                    cmds.push(Cmd::Noise(self.noise_plans.len()));
+                    self.noise_plans.push(NoisePlan {
+                        first,
+                        seed: noise.seed,
+                        density: noise.density,
+                        fill_alpha: noise.fill_alpha,
+                        mode: match noise.mode {
+                            crate::scene::GrainMode::Mono => 0,
+                            crate::scene::GrainMode::Duo => 1,
+                            crate::scene::GrainMode::Multi => 2,
+                        },
+                        opacity: noise.opacity,
+                        cell: noise.cell,
+                        color: noise.color,
+                        secondary: noise.secondary,
+                    });
+                }
+                Item::Texture(texture) => {
+                    if self.instances.len() > batch {
+                        cmds.push(Cmd::Shapes { first: batch as u32, count: (self.instances.len() - batch) as u32 });
+                    }
+                    let caster = ShapeNode {
+                        mat: texture.mat,
+                        size: texture.size,
+                        shape: texture.shape,
+                        paint: Paint::Solid(Rgba::new(1.0, 1.0, 1.0, 1.0)),
+                        clip: texture.clip,
+                        opacity: 1.0,
+                    };
+                    let first = self.instances.len() as u32;
+                    self.instances.push(GpuInstance::of(&caster));
+                    batch = self.instances.len();
+                    cmds.push(Cmd::Texture(self.texture_plans.len()));
+                    self.texture_plans.push(TexturePlan {
+                        first,
+                        seed: texture.seed,
+                        radius: texture.radius,
+                        clip_to_shape: texture.clip_to_shape,
+                        cell: texture.cell,
+                        fill: texture.fill,
+                    });
+                }
+                Item::Group(group) => {
+                    if self.instances.len() > batch {
+                        cmds.push(Cmd::Shapes { first: batch as u32, count: (self.instances.len() - batch) as u32 });
+                    }
+                    let index = self.groups.len();
+                    let opacity = group.opacity.clamp(0.0, 1.0);
+                    self.groups.push(GroupPlan { cmds: Vec::new(), opacity });
+                    let inner = self.build(&group.items);
+                    self.groups[index].cmds = inner;
+                    // The children's instances belong to the group layer only; the parent must not
+                    // batch them again into its own shape run.
+                    batch = self.instances.len();
+                    cmds.push(Cmd::Group(index));
+                }
+            }
+        }
+        if self.instances.len() > batch {
+            cmds.push(Cmd::Shapes { first: batch as u32, count: (self.instances.len() - batch) as u32 });
+        }
+        cmds
+    }
+}
+
 /// A background blur's chain: the resolved frame (in place of the shadow's silhouette), two ping-pong
 /// textures, six box passes, and the quad that shows the last pass through the box.
 struct BackdropResources {
@@ -341,6 +574,25 @@ struct Target {
     readback: wgpu::Buffer,
 }
 
+/// An offscreen 4× MSAA layer for a group: the pass draws into `msaa_view`, resolves into
+/// `view`, and the composite samples `view`.
+struct GroupTarget {
+    #[allow(dead_code)]
+    msaa: wgpu::Texture,
+    msaa_view: wgpu::TextureView,
+    #[allow(dead_code)]
+    resolve: wgpu::Texture,
+    view: wgpu::TextureView,
+}
+
+/// A prepared group layer: its texture, the composite bind group and the opacity uniform.
+struct GroupResources {
+    _target: GroupTarget,
+    bind: wgpu::BindGroup,
+    #[allow(dead_code)]
+    opacity: wgpu::Buffer,
+}
+
 /// Offscreen GPU renderer. One per process (the canvas and the exporter share it through
 /// [`global`]), reused across frames.
 pub struct Renderer {
@@ -355,6 +607,7 @@ pub struct Renderer {
     noise_pipeline: wgpu::RenderPipeline,
     texture_pipeline: wgpu::RenderPipeline,
     progressive_pipeline: wgpu::RenderPipeline,
+    composite_pipeline: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
     globals: wgpu::Buffer,
     bind_globals: wgpu::BindGroup,
@@ -366,6 +619,7 @@ pub struct Renderer {
     noise_layout: wgpu::BindGroupLayout,
     texture_layout: wgpu::BindGroupLayout,
     progressive_layout: wgpu::BindGroupLayout,
+    composite_layout: wgpu::BindGroupLayout,
     instances: Option<(wgpu::Buffer, wgpu::BindGroup, u64)>,
     mesh_verts: Option<(wgpu::Buffer, u64)>,
     mesh_indices: Option<(wgpu::Buffer, u64)>,
@@ -451,6 +705,10 @@ impl Renderer {
         let progressive_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("figcraft-gpu-progressive"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/progressive.wgsl").into()),
+        });
+        let composite_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("figcraft-gpu-composite"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/composite.wgsl").into()),
         });
 
         let globals_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -712,6 +970,38 @@ impl Renderer {
             bind_group_layouts: &[Some(&progressive_layout), Some(&instances_layout)],
             immediate_size: 0,
         });
+        let composite_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("composite"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+                    count: None,
+                },
+            ],
+        });
+        let composite_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("composite"),
+            bind_group_layouts: &[Some(&globals_layout), Some(&composite_layout)],
+            immediate_size: 0,
+        });
         let single_state = |b: Option<wgpu::BlendState>| wgpu::ColorTargetState {
             format: wgpu::TextureFormat::Rgba8Unorm,
             blend: b,
@@ -866,6 +1156,27 @@ impl Renderer {
             multiview_mask: None,
             cache: None,
         });
+        let composite_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("composite"),
+            layout: Some(&composite_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &composite_shader,
+                entry_point: Some("vs"),
+                buffers: &[],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &composite_shader,
+                entry_point: Some("fs"),
+                targets: &[Some(single_state(blend()))],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState { count: SAMPLES, mask: !0, alpha_to_coverage_enabled: false },
+            multiview_mask: None,
+            cache: None,
+        });
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("shadow"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -901,6 +1212,7 @@ impl Renderer {
             noise_pipeline,
             texture_pipeline,
             progressive_pipeline,
+            composite_pipeline,
             sampler,
             globals,
             bind_globals,
@@ -912,6 +1224,7 @@ impl Renderer {
             noise_layout,
             texture_layout,
             progressive_layout,
+            composite_layout,
             instances: None,
             mesh_verts: None,
             mesh_indices: None,
@@ -1276,6 +1589,202 @@ impl Renderer {
         Some(BackdropResources { _ping: ping, ping_view, _pong: pong, pong_view, blur_binds, _blur_params: blur_params, draw_bind })
     }
 
+    /// A full-frame 4× MSAA layer for a group. Resolve is sampleable by the composite pass.
+    fn group_target(&self, width: u32, height: u32) -> Option<GroupTarget> {
+        use wgpu::TextureUsages as U;
+        let size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
+        let msaa = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("group-msaa"),
+            size,
+            mip_level_count: 1,
+            sample_count: SAMPLES,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: U::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let msaa_view = msaa.create_view(&wgpu::TextureViewDescriptor::default());
+        let resolve = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("group-resolve"),
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: U::RENDER_ATTACHMENT | U::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = resolve.create_view(&wgpu::TextureViewDescriptor::default());
+        Some(GroupTarget { msaa, msaa_view, resolve, view })
+    }
+
+    /// The composite bind group for one resolved layer.
+    fn group_bind(&self, view: &wgpu::TextureView, opacity: f32) -> Option<(wgpu::Buffer, wgpu::BindGroup)> {
+        let opacity = opacity.clamp(0.0, 1.0);
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("group-opacity"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&buffer, 0, bytemuck::cast_slice(&[opacity, 0.0, 0.0, 0.0]));
+        let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("group-composite"),
+            layout: &self.composite_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry { binding: 2, resource: buffer.as_entire_binding() },
+            ],
+        });
+        Some((buffer, bind))
+    }
+
+    /// Draw one group's commands into its offscreen layer. Backdrops never appear here (the scene
+    /// builder rejects them inside a layer), so this is a straightforward painter's-order pass.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_group(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &GroupTarget,
+        cmds: &[Cmd],
+        shadow_plans: &[ShadowPlan],
+        shadow_resources: &[ShadowResources],
+        noise_plans: &[NoisePlan],
+        progressive_plans: &[ProgressivePlan],
+        progressive_resources: &[ProgressiveResources],
+        texture_plans: &[TexturePlan],
+        noise_binds: &[(wgpu::Buffer, wgpu::BindGroup)],
+        texture_binds: &[(wgpu::Buffer, wgpu::BindGroup)],
+        groups: &[Option<GroupResources>],
+        bind: &wgpu::BindGroup,
+        shadow_bind: Option<&wgpu::BindGroup>,
+    ) {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("group layer"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &target.msaa_view,
+                depth_slice: None,
+                resolve_target: Some(&target.view),
+                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        let mut bound_shapes = false;
+        let mut bound_mesh = false;
+        for cmd in cmds {
+            match *cmd {
+                Cmd::Shapes { first, count } => {
+                    if !bound_shapes {
+                        pass.set_pipeline(&self.pipeline);
+                        pass.set_bind_group(0, &self.bind_globals, &[]);
+                        pass.set_bind_group(1, bind, &[]);
+                        bound_shapes = true;
+                        bound_mesh = false;
+                    }
+                    pass.draw(0..6, first..first + count);
+                }
+                Cmd::Mesh { first, count } => {
+                    let (Some((vb, _)), Some((ib, _))) = (self.mesh_verts.as_ref(), self.mesh_indices.as_ref()) else {
+                        continue;
+                    };
+                    if !bound_mesh {
+                        pass.set_pipeline(&self.mesh_pipeline);
+                        pass.set_bind_group(0, &self.bind_globals, &[]);
+                        pass.set_vertex_buffer(0, vb.slice(..));
+                        pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+                        bound_mesh = true;
+                        bound_shapes = false;
+                    }
+                    pass.draw_indexed(first..first + count, 0, 0..1);
+                }
+                Cmd::Shadow(index) => {
+                    let Some(res) = shadow_resources.get(index) else {
+                        continue;
+                    };
+                    let Some(plan) = shadow_plans.get(index) else {
+                        continue;
+                    };
+                    if plan.inner {
+                        let Some(inner_bind) = res.inner_bind.as_ref() else {
+                            continue;
+                        };
+                        pass.set_pipeline(&self.inner_pipeline);
+                        pass.set_bind_group(0, &self.bind_globals, &[]);
+                        pass.set_bind_group(1, inner_bind, &[]);
+                    } else {
+                        pass.set_pipeline(&self.shadow_pipeline);
+                        pass.set_bind_group(0, &self.bind_globals, &[]);
+                        pass.set_bind_group(1, &res.draw_bind, &[]);
+                    }
+                    pass.draw(0..3, 0..1);
+                    bound_shapes = false;
+                    bound_mesh = false;
+                }
+                Cmd::Backdrop { .. } => {}
+                Cmd::Noise(index) => {
+                    let Some((_, bind_group)) = noise_binds.get(index) else {
+                        continue;
+                    };
+                    let Some(plan) = noise_plans.get(index) else {
+                        continue;
+                    };
+                    pass.set_pipeline(&self.noise_pipeline);
+                    pass.set_bind_group(0, bind_group, &[]);
+                    pass.set_bind_group(1, bind, &[]);
+                    pass.draw(0..3, plan.first..plan.first + 1);
+                    bound_shapes = false;
+                    bound_mesh = false;
+                }
+                Cmd::Texture(index) => {
+                    let Some((_, bind_group)) = texture_binds.get(index) else {
+                        continue;
+                    };
+                    let Some(plan) = texture_plans.get(index) else {
+                        continue;
+                    };
+                    pass.set_pipeline(&self.texture_pipeline);
+                    pass.set_bind_group(0, bind_group, &[]);
+                    pass.set_bind_group(1, bind, &[]);
+                    pass.draw(0..3, plan.first..plan.first + 1);
+                    bound_shapes = false;
+                    bound_mesh = false;
+                }
+                Cmd::Progressive(index) => {
+                    let Some(res) = progressive_resources.get(index) else {
+                        continue;
+                    };
+                    let Some(plan) = progressive_plans.get(index) else {
+                        continue;
+                    };
+                    let Some(shadow_bind) = shadow_bind else {
+                        continue;
+                    };
+                    pass.set_pipeline(&self.progressive_pipeline);
+                    pass.set_bind_group(0, &res.bind, &[]);
+                    pass.set_bind_group(1, shadow_bind, &[]);
+                    pass.draw(0..3, plan.first..plan.first + 1);
+                    bound_shapes = false;
+                    bound_mesh = false;
+                }
+                Cmd::Group(index) => {
+                    let Some(res) = groups.get(index).and_then(Option::as_ref) else {
+                        continue;
+                    };
+                    pass.set_pipeline(&self.composite_pipeline);
+                    pass.set_bind_group(0, &self.bind_globals, &[]);
+                    pass.set_bind_group(1, &res.bind, &[]);
+                    pass.draw(0..3, 0..1);
+                    bound_shapes = false;
+                    bound_mesh = false;
+                }
+            }
+        }
+    }
+
     /// Draw `scene` and read it back as premultiplied RGBA8, `width * height * 4` bytes.
     pub fn render(&mut self, scene: &Scene) -> Result<Vec<u8>, RenderError> {
         if !scene.is_supported() {
@@ -1294,212 +1803,20 @@ impl Renderer {
         let globals = [w as f32, h as f32, 0.0, 0.0];
         self.queue.write_buffer(&self.globals, 0, bytemuck::cast_slice(&globals));
 
-        // Walk the items once: instances, mesh vertices/indices and the draw list.
-        let mut instances: Vec<GpuInstance> = Vec::new();
-        let mut shadow_instances: Vec<GpuInstance> = Vec::new();
-        let mut cover_instances: Vec<GpuInstance> = Vec::new();
-        let mut shadow_plans: Vec<ShadowPlan> = Vec::new();
-        let mut noise_plans: Vec<NoisePlan> = Vec::new();
-        let mut texture_plans: Vec<TexturePlan> = Vec::new();
-        let mut progressive_plans: Vec<ProgressivePlan> = Vec::new();
-        let mut verts: Vec<GpuMeshVertex> = Vec::new();
-        let mut indices: Vec<u32> = Vec::new();
-        let mut cmds: Vec<Cmd> = Vec::new();
-        let mut batch = 0usize;
-        for item in &scene.items {
-            match item {
-                Item::Shape(shape) => instances.push(GpuInstance::of(shape)),
-                Item::Mesh(mesh) => {
-                    if instances.len() > batch {
-                        cmds.push(Cmd::Shapes { first: batch as u32, count: (instances.len() - batch) as u32 });
-                        batch = instances.len();
-                    }
-                    let opacity = mesh.opacity.clamp(0.0, 1.0);
-                    let premul = mesh.color.premultiplied();
-                    let color = [premul[0] * opacity, premul[1] * opacity, premul[2] * opacity, premul[3] * opacity];
-                    let base = verts.len() as u32;
-                    verts.extend(mesh.verts.iter().map(|p| GpuMeshVertex { pos: *p, color, clip: mesh.clip.0, clip_radii: mesh.clip.1 }));
-                    let first = indices.len() as u32;
-                    indices.extend(mesh.indices.iter().map(|i| i + base));
-                    cmds.push(Cmd::Mesh { first, count: mesh.indices.len() as u32 });
-                }
-                Item::Shadow(shadow) => {
-                    if instances.len() > batch {
-                        cmds.push(Cmd::Shapes { first: batch as u32, count: (instances.len() - batch) as u32 });
-                        batch = instances.len();
-                    }
-                    // The silhouette is the shape itself in white: the same SDF coverage the fill has,
-                    // shifted by the shadow's offset (already in device pixels).
-                    let caster = ShapeNode {
-                        mat: shadow.mat,
-                        size: shadow.size,
-                        shape: shadow.shape,
-                        paint: Paint::Solid(Rgba::new(1.0, 1.0, 1.0, 1.0)),
-                        clip: shadow.clip,
-                        opacity: 1.0,
-                    };
-                    let mut offset_caster = caster.clone();
-                    offset_caster.mat[4] += shadow.offset[0];
-                    offset_caster.mat[5] += shadow.offset[1];
-                    let first = shadow_instances.len() as u32;
-                    shadow_instances.push(GpuInstance::of(&offset_caster));
-                    let (cover_first, cover_count) = if shadow.inner {
-                        let first = cover_instances.len() as u32;
-                        cover_instances.push(GpuInstance::of(&caster));
-                        (first, 1)
-                    } else {
-                        (0, 0)
-                    };
-                    cmds.push(Cmd::Shadow(shadow_plans.len()));
-                    shadow_plans.push(ShadowPlan {
-                        first,
-                        count: 1,
-                        cover_first,
-                        cover_count,
-                        sigma: shadow.sigma,
-                        color: shadow.color,
-                        clip: shadow.clip,
-                        inner: shadow.inner,
-                    });
-                }
-                Item::Blur(blur) => {
-                    if instances.len() > batch {
-                        cmds.push(Cmd::Shapes { first: batch as u32, count: (instances.len() - batch) as u32 });
-                        batch = instances.len();
-                    }
-                    // The blurred layer is the same white silhouette the shadow chain renders; the
-                    // fill's colour comes back as the tint.
-                    let caster = ShapeNode {
-                        mat: blur.mat,
-                        size: blur.size,
-                        shape: blur.shape,
-                        paint: Paint::Solid(Rgba::new(1.0, 1.0, 1.0, 1.0)),
-                        clip: blur.clip,
-                        opacity: 1.0,
-                    };
-                    let first = shadow_instances.len() as u32;
-                    shadow_instances.push(GpuInstance::of(&caster));
-                    cmds.push(Cmd::Shadow(shadow_plans.len()));
-                    shadow_plans.push(ShadowPlan {
-                        first,
-                        count: 1,
-                        cover_first: 0,
-                        cover_count: 0,
-                        sigma: blur.sigma,
-                        color: blur.color,
-                        clip: blur.clip,
-                        inner: false,
-                    });
-                }
-                Item::ProgressiveBlur(blur) => {
-                    if instances.len() > batch {
-                        cmds.push(Cmd::Shapes { first: batch as u32, count: (instances.len() - batch) as u32 });
-                        batch = instances.len();
-                    }
-                    let caster = ShapeNode {
-                        mat: blur.mat,
-                        size: blur.size,
-                        shape: blur.shape,
-                        paint: Paint::Solid(Rgba::new(1.0, 1.0, 1.0, 1.0)),
-                        clip: blur.clip,
-                        opacity: 1.0,
-                    };
-                    let first = shadow_instances.len() as u32;
-                    shadow_instances.push(GpuInstance::of(&caster));
-                    cmds.push(Cmd::Progressive(progressive_plans.len()));
-                    progressive_plans.push(ProgressivePlan {
-                        first,
-                        levels: blur.levels.clone(),
-                        s0: blur.s0,
-                        s1: blur.s1,
-                        start: blur.start,
-                        end: blur.end,
-                        color: blur.color,
-                    });
-                }
-                Item::Backdrop(backdrop) => {
-                    if instances.len() > batch {
-                        cmds.push(Cmd::Shapes { first: batch as u32, count: (instances.len() - batch) as u32 });
-                    }
-                    // The backdrop quad reads the node's box from the instance buffer: one white
-                    // instance, never drawn by the shape pipeline.
-                    let caster = ShapeNode {
-                        mat: backdrop.mat,
-                        size: backdrop.size,
-                        shape: backdrop.shape,
-                        paint: Paint::Solid(Rgba::new(1.0, 1.0, 1.0, 1.0)),
-                        clip: backdrop.clip,
-                        opacity: 1.0,
-                    };
-                    let first = instances.len() as u32;
-                    instances.push(GpuInstance::of(&caster));
-                    batch = instances.len();
-                    cmds.push(Cmd::Backdrop { first, sigma: backdrop.sigma });
-                }
-                Item::Noise(noise) => {
-                    if instances.len() > batch {
-                        cmds.push(Cmd::Shapes { first: batch as u32, count: (instances.len() - batch) as u32 });
-                    }
-                    // The noise quad reads the node's box and clip from the instance buffer: one white
-                    // instance, never drawn by the shape pipeline.
-                    let caster = ShapeNode {
-                        mat: noise.mat,
-                        size: noise.size,
-                        shape: noise.shape,
-                        paint: Paint::Solid(Rgba::new(1.0, 1.0, 1.0, 1.0)),
-                        clip: noise.clip,
-                        opacity: 1.0,
-                    };
-                    let first = instances.len() as u32;
-                    instances.push(GpuInstance::of(&caster));
-                    batch = instances.len();
-                    cmds.push(Cmd::Noise(noise_plans.len()));
-                    noise_plans.push(NoisePlan {
-                        first,
-                        seed: noise.seed,
-                        density: noise.density,
-                        fill_alpha: noise.fill_alpha,
-                        mode: match noise.mode {
-                            crate::scene::GrainMode::Mono => 0,
-                            crate::scene::GrainMode::Duo => 1,
-                            crate::scene::GrainMode::Multi => 2,
-                        },
-                        opacity: noise.opacity,
-                        cell: noise.cell,
-                        color: noise.color,
-                        secondary: noise.secondary,
-                    });
-                }
-                Item::Texture(texture) => {
-                    if instances.len() > batch {
-                        cmds.push(Cmd::Shapes { first: batch as u32, count: (instances.len() - batch) as u32 });
-                    }
-                    let caster = ShapeNode {
-                        mat: texture.mat,
-                        size: texture.size,
-                        shape: texture.shape,
-                        paint: Paint::Solid(Rgba::new(1.0, 1.0, 1.0, 1.0)),
-                        clip: texture.clip,
-                        opacity: 1.0,
-                    };
-                    let first = instances.len() as u32;
-                    instances.push(GpuInstance::of(&caster));
-                    batch = instances.len();
-                    cmds.push(Cmd::Texture(texture_plans.len()));
-                    texture_plans.push(TexturePlan {
-                        first,
-                        seed: texture.seed,
-                        radius: texture.radius,
-                        clip_to_shape: texture.clip_to_shape,
-                        cell: texture.cell,
-                        fill: texture.fill,
-                    });
-                }
-            }
-        }
-        if instances.len() > batch {
-            cmds.push(Cmd::Shapes { first: batch as u32, count: (instances.len() - batch) as u32 });
-        }
+        let mut list = CommandList::default();
+        let cmds = list.build(&scene.items);
+        let CommandList {
+            instances,
+            shadow_instances,
+            cover_instances,
+            shadow_plans,
+            noise_plans,
+            texture_plans,
+            progressive_plans,
+            verts,
+            indices,
+            groups,
+        } = list;
 
         // The instance buffer (at least one record: an empty storage binding is not allowed everywhere).
         let bytes: Vec<u8> =
@@ -1767,6 +2084,37 @@ impl Renderer {
             }
         }
 
+        // Group layers are self-contained (no backdrop), so they can all be drawn before the
+        // frame pass. Nested groups were appended after their parent, so reverse order prepares
+        // children first.
+        let mut group_resources: Vec<Option<GroupResources>> = (0..groups.len()).map(|_| None).collect();
+        for index in (0..groups.len()).rev() {
+            let plan = &groups[index];
+            let Some(target) = self.group_target(w, h) else {
+                return Err(RenderError::Device("the group layer could not be created".into()));
+            };
+            let Some((opacity, composite_bind)) = self.group_bind(&target.view, plan.opacity) else {
+                return Err(RenderError::Device("the group composite bind group could not be created".into()));
+            };
+            self.draw_group(
+                &mut encoder,
+                &target,
+                &plan.cmds,
+                &shadow_plans,
+                &shadow_resources,
+                &noise_plans,
+                &progressive_plans,
+                &progressive_resources,
+                &texture_plans,
+                &noise_binds,
+                &texture_binds,
+                &group_resources,
+                &bind,
+                shadow_bind.as_ref().map(|(_, bind)| bind),
+            );
+            group_resources[index] = Some(GroupResources { _target: target, bind: composite_bind, opacity });
+        }
+
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("frame"),
@@ -1937,6 +2285,17 @@ impl Renderer {
                         pass.set_bind_group(0, &res.bind, &[]);
                         pass.set_bind_group(1, shadow_bind, &[]);
                         pass.draw(0..3, plan.first..plan.first + 1);
+                        bound_shapes = false;
+                        bound_mesh = false;
+                    }
+                    Cmd::Group(index) => {
+                        let Some(res) = group_resources.get(index).and_then(Option::as_ref) else {
+                            continue;
+                        };
+                        pass.set_pipeline(&self.composite_pipeline);
+                        pass.set_bind_group(0, &self.bind_globals, &[]);
+                        pass.set_bind_group(1, &res.bind, &[]);
+                        pass.draw(0..3, 0..1);
                         bound_shapes = false;
                         bound_mesh = false;
                     }

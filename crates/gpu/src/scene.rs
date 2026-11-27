@@ -315,6 +315,19 @@ pub struct TextureNode {
     pub fill: Rgba,
 }
 
+/// A group whose children are composited into an offscreen layer and then painted at `opacity`.
+///
+/// This is the painter's-order escape hatch for a group that cannot be flattened onto one leaf:
+/// the children draw into a transparent full-frame layer, and one composite multiplies the layer
+/// alpha exactly once. The layer content must not read the backdrop (no background blur), because
+/// inside an isolated layer there is no document behind it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroupNode {
+    pub items: Vec<Item>,
+    /// The group's alpha, straight (not folded into the children).
+    pub opacity: f32,
+}
+
 /// One thing to draw, in painter's order: an SDF shape, a tessellated path, a shadow, a layer blur,
 /// a background blur, a mono grain layer or a texture layer.
 #[derive(Clone, Debug, PartialEq)]
@@ -327,6 +340,7 @@ pub enum Item {
     Backdrop(BackdropNode),
     Noise(NoiseNode),
     Texture(TextureNode),
+    Group(GroupNode),
 }
 
 /// A feature this milestone cannot draw. Its presence sends the **whole frame** to the CPU.
@@ -336,6 +350,19 @@ pub struct Unsupported {
     pub feature: &'static str,
     /// Where and why, for the log and the tests.
     pub detail: String,
+}
+
+fn count_items(items: &[Item], pred: &dyn Fn(&Item) -> bool) -> usize {
+    let mut count = 0;
+    for item in items {
+        if pred(item) {
+            count += 1;
+        }
+        if let Item::Group(group) = item {
+            count += count_items(&group.items, pred);
+        }
+    }
+    count
 }
 
 /// A frame to draw: size, background, draw items and the list of things it cannot draw.
@@ -395,45 +422,65 @@ impl Scene {
         self.items.push(Item::Texture(texture));
     }
 
+    /// A group's children, composited once at `opacity`.
+    pub fn push_group(&mut self, group: GroupNode) {
+        self.items.push(Item::Group(group));
+    }
+
+    /// Carry the reasons a nested group cannot draw into this frame's list.
+    pub fn absorb_unsupported(&mut self, other: &[Unsupported]) {
+        self.unsupported.extend_from_slice(other);
+    }
+
     /// The SDF shapes, in draw order (tests and the log use this; the renderer walks `items`).
     pub fn shapes(&self) -> impl Iterator<Item = &ShapeNode> {
-        self.items.iter().filter_map(|item| match item {
-            Item::Shape(shape) => Some(shape),
-            Item::Mesh(_) | Item::Shadow(_) | Item::Blur(_) | Item::ProgressiveBlur(_) | Item::Backdrop(_) | Item::Noise(_) | Item::Texture(_) => {
-                None
+        fn collect<'a>(items: &'a [Item], out: &mut Vec<&'a ShapeNode>) {
+            for item in items {
+                match item {
+                    Item::Shape(shape) => out.push(shape),
+                    Item::Group(group) => collect(&group.items, out),
+                    _ => {}
+                }
             }
-        })
+        }
+        let mut out = Vec::new();
+        collect(&self.items, &mut out);
+        out.into_iter()
     }
 
     /// How many tessellated paths the frame carries.
     pub fn mesh_count(&self) -> usize {
-        self.items.iter().filter(|item| matches!(item, Item::Mesh(_))).count()
+        count_items(&self.items, &|item| matches!(item, Item::Mesh(_)))
     }
 
     /// How many drop/inner shadows the frame carries.
     pub fn shadow_count(&self) -> usize {
-        self.items.iter().filter(|item| matches!(item, Item::Shadow(_))).count()
+        count_items(&self.items, &|item| matches!(item, Item::Shadow(_)))
     }
 
     /// How many layer blurs the frame carries.
     pub fn blur_count(&self) -> usize {
-        self.items.iter().filter(|item| matches!(item, Item::Blur(_) | Item::ProgressiveBlur(_))).count()
+        count_items(&self.items, &|item| matches!(item, Item::Blur(_) | Item::ProgressiveBlur(_)))
     }
 
     pub fn progressive_blur_count(&self) -> usize {
-        self.items.iter().filter(|item| matches!(item, Item::ProgressiveBlur(_))).count()
+        count_items(&self.items, &|item| matches!(item, Item::ProgressiveBlur(_)))
     }
 
     pub fn backdrop_count(&self) -> usize {
-        self.items.iter().filter(|item| matches!(item, Item::Backdrop(_))).count()
+        count_items(&self.items, &|item| matches!(item, Item::Backdrop(_)))
     }
 
     pub fn noise_count(&self) -> usize {
-        self.items.iter().filter(|item| matches!(item, Item::Noise(_))).count()
+        count_items(&self.items, &|item| matches!(item, Item::Noise(_)))
     }
 
     pub fn texture_count(&self) -> usize {
-        self.items.iter().filter(|item| matches!(item, Item::Texture(_))).count()
+        count_items(&self.items, &|item| matches!(item, Item::Texture(_)))
+    }
+
+    pub fn group_count(&self) -> usize {
+        count_items(&self.items, &|item| matches!(item, Item::Group(_)))
     }
 
     /// Record a feature this frame uses that this milestone cannot draw.

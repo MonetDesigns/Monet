@@ -507,6 +507,86 @@ fn a_single_child_group_opacity_matches_the_cpu() {
 }
 
 #[test]
+fn an_overlapping_multi_child_group_opacity_matches_the_cpu() {
+    let mut doc = Document::default();
+    let page = doc.pages[0];
+    transparent_page(&mut doc, page);
+    let group = doc.create(page, figcraft_doc::NodeKind::Group, "Stack", 50.0, 50.0, 120.0, 100.0).expect("group");
+    let back = doc.create(group, figcraft_doc::NodeKind::Rectangle, "Back", 0.0, 0.0, 80.0, 80.0).expect("back");
+    let front = doc.create(group, figcraft_doc::NodeKind::Rectangle, "Front", 40.0, 20.0, 80.0, 80.0).expect("front");
+    if let Ok(n) = doc.get_mut(back) {
+        n.corners.radii = [8.0; 4];
+        n.fills = vec![Paint::solid(Color::new(0.9, 0.35, 0.15, 1.0))];
+    }
+    if let Ok(n) = doc.get_mut(front) {
+        n.corners.radii = [8.0; 4];
+        n.fills = vec![Paint::solid(Color::new(0.1, 0.45, 0.85, 0.8))];
+    }
+    if let Ok(n) = doc.get_mut(group) {
+        n.opacity = 0.6;
+    }
+
+    let scene = doc_scene::build(&doc, page, &viewport());
+    assert!(scene.is_supported(), "the overlapping group must use the isolated layer: {:?}", scene.unsupported_features());
+    assert_eq!(scene.group_count(), 1);
+    assert_eq!(scene.shapes().count(), 2);
+    // The leaves keep their own alpha; only the finished layer is multiplied by the group's.
+    assert!(scene.shapes().all(|s| (s.opacity - 1.0).abs() < 1e-4));
+
+    let cpu = cpu_pixels(&doc, page);
+    let Some(gpu) = gpu_pixels(&doc, page) else {
+        eprintln!("SKIP: no adapter");
+        return;
+    };
+    let tol = Tolerance { per_channel: 2, max_bad_ratio: 0.02 };
+    let report = compare_interiors(&cpu, &gpu, SIZE as usize, SIZE as usize, tol).expect("comparable");
+    assert!(report.passes(tol), "{}", report.summary());
+}
+
+#[test]
+fn nested_group_opacity_layers_match_the_cpu() {
+    let mut doc = Document::default();
+    let page = doc.pages[0];
+    transparent_page(&mut doc, page);
+    let outer = doc.create(page, figcraft_doc::NodeKind::Group, "Outer", 40.0, 30.0, 120.0, 120.0).expect("outer");
+    let inner = doc.create(outer, figcraft_doc::NodeKind::Group, "Inner", 10.0, 20.0, 90.0, 70.0).expect("inner");
+    let back = doc.create(inner, figcraft_doc::NodeKind::Rectangle, "Back", 0.0, 0.0, 70.0, 70.0).expect("back");
+    let front = doc.create(inner, figcraft_doc::NodeKind::Rectangle, "Front", 30.0, 15.0, 60.0, 55.0).expect("front");
+    let loose = doc.create(outer, figcraft_doc::NodeKind::Rectangle, "Loose", 0.0, 90.0, 120.0, 30.0).expect("loose");
+    if let Ok(n) = doc.get_mut(back) {
+        n.corners.radii = [10.0; 4];
+        n.fills = vec![Paint::solid(Color::new(0.85, 0.4, 0.2, 1.0))];
+    }
+    if let Ok(n) = doc.get_mut(front) {
+        n.corners.radii = [10.0; 4];
+        n.fills = vec![Paint::solid(Color::new(0.15, 0.4, 0.8, 0.75))];
+    }
+    if let Ok(n) = doc.get_mut(loose) {
+        n.fills = vec![Paint::solid(Color::new(0.2, 0.7, 0.3, 0.9))];
+    }
+    if let Ok(n) = doc.get_mut(inner) {
+        n.opacity = 0.7;
+    }
+    if let Ok(n) = doc.get_mut(outer) {
+        n.opacity = 0.5;
+    }
+
+    let scene = doc_scene::build(&doc, page, &viewport());
+    assert!(scene.is_supported(), "{:?}", scene.unsupported_features());
+    assert_eq!(scene.group_count(), 2);
+    assert_eq!(scene.shapes().count(), 3);
+
+    let cpu = cpu_pixels(&doc, page);
+    let Some(gpu) = gpu_pixels(&doc, page) else {
+        eprintln!("SKIP: no adapter");
+        return;
+    };
+    let tol = Tolerance { per_channel: 2, max_bad_ratio: 0.02 };
+    let report = compare_interiors(&cpu, &gpu, SIZE as usize, SIZE as usize, tol).expect("comparable");
+    assert!(report.passes(tol), "{}", report.summary());
+}
+
+#[test]
 fn a_layer_blur_matches_the_cpu_blur() {
     let mut doc = Document::default();
     let page = doc.pages[0];
