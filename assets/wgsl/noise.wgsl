@@ -149,13 +149,15 @@ fn fbm(s : i32, q : vec2<f32>) -> f32 {
 
 /// Figma 的 `d()`：density 窗口。
 fn density_window(v : f32, density : f32, inverted : bool) -> f32 {
+    // `u.density` is the user-facing 0..100 percent; the window formulas below use 0..1.
+    let d = clamp(density, 0.0, 100.0) / 100.0;
     var lo : f32;
     if (inverted) {
-        lo = 10.0 * (0.75 - density / 4.0);
+        lo = 10.0 * (0.75 - d / 4.0);
     } else {
-        lo = 10.0 * (0.25 - density / 4.0);
+        lo = 10.0 * (0.25 - d / 4.0);
     }
-    let hi = lo + 10.0 * (density / 2.0);
+    let hi = lo + 10.0 * (d / 2.0);
     let b = v * 10.0;
     return step(lo, b) * (1.0 - step(hi, b));
 }

@@ -45,7 +45,10 @@ fn gpu_frame_supported(doc: &Document, ids: &[NodeId], view: &figcraft_render::V
 /// One animated-export frame on the GPU. `None` means "not expressible" or "no adapter", and the
 /// caller falls back to the CPU raster.
 fn render_frame_gpu(doc: &Document, ids: &[NodeId], view: &figcraft_render::View) -> Option<Pixmap> {
-    let scene = scene_of_node(doc, *ids.first()?, view)?;
+    // `render_frame_for_export` can call the hook directly; the support probe's `[id]` check must
+    // hold here too, or a multi-ID frame would render only the first layer and skip CPU fallback.
+    let [id] = ids else { return None };
+    let scene = scene_of_node(doc, *id, view)?;
     let mut guard = FRAME_GPU.lock().ok()?;
     if guard.is_none() {
         *guard = Gpu::new();
@@ -97,6 +100,16 @@ mod tests {
 
     /// The animated-export hook: a solid-shape frame is accepted and rendered through the GPU
     /// (premultiplied pixels wrapped as a `Pixmap`), with the CPU path staying the fallback.
+    #[test]
+    fn a_multi_layer_export_frame_declines_the_gpu_hook() {
+        let mut doc = Document::default();
+        let page = doc.pages[0];
+        let a = doc.create(page, figcraft_doc::NodeKind::Rectangle, "A", 0.0, 0.0, 10.0, 10.0).expect("a rectangle");
+        let b = doc.create(page, figcraft_doc::NodeKind::Rectangle, "B", 10.0, 0.0, 10.0, 10.0).expect("a rectangle");
+        let view = figcraft_render::View { origin: (0.0, 0.0), scale: 1.0, width: 20, height: 10 };
+        assert!(render_frame_gpu(&doc, &[a, b], &view).is_none(), "only one node is expressible; two must use the CPU");
+    }
+
     #[test]
     fn an_export_frame_goes_through_the_gpu_hook() {
         if WgslRunner::new().is_none() {

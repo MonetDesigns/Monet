@@ -140,7 +140,7 @@ pub struct WebmOptions {
     pub speed: u8,
     /// Colour transparent parts are flattened onto (AV1-in-WebM here has no alpha).
     pub background: [u8; 3],
-    /// Encoder threads (0 = one per core, at most 8).
+    /// Encoder threads (0 = one per core, capped at 32; an explicit count is used as-is).
     pub threads: usize,
     /// Tiles to split the picture into for parallel encoding (0 = auto).
     pub tiles: usize,
@@ -350,13 +350,13 @@ pub fn rgba_to_yuv420_into(rgba: &[u8], w: usize, h: usize, bg: [u8; 3], y: &mut
                     n += 1;
                 }
             }
-            // BT.709 U/V on the 2x2 average, using the standard 8-bit fixed-point coefficients
-            // (the `+128) >> 8` rounds; neutral grey lands exactly on 128.
+            // BT.709 U/V on the 2x2 average. Each triplet sums to zero, so neutral grey
+            // (including white) lands exactly on 128 rather than one code below it.
             let ar = (sr + n / 2) / n;
             let ag = (sg + n / 2) / n;
             let ab = (sb + n / 2) / n;
             let i = cy * cw + cx;
-            u[i] = (((-26 * ar as i32 - 87 * ag as i32 + 112 * ab as i32 + 128) >> 8) + 128).clamp(16, 240) as u8;
+            u[i] = (((-26 * ar as i32 - 87 * ag as i32 + 113 * ab as i32 + 128) >> 8) + 128).clamp(16, 240) as u8;
             v[i] = (((112 * ar as i32 - 102 * ag as i32 - 10 * ab as i32 + 128) >> 8) + 128).clamp(16, 240) as u8;
         }
     }
@@ -643,7 +643,8 @@ mod tests {
         let mut v = vec![0; 1];
         rgba_to_yuv420_into(&[0, 0, 0, 0].repeat(4), 2, 2, [255, 255, 255], &mut y, &mut u, &mut v);
         assert!(y.iter().all(|&c| c == 235), "transparent over white is white (luma 235): {y:?}");
-        assert!(u[0].abs_diff(128) <= 1 && v[0].abs_diff(128) <= 1, "white has neutral chroma: {} {}", u[0], v[0]);
+        assert_eq!(u[0], 128, "white has exactly neutral U");
+        assert_eq!(v[0], 128, "white has exactly neutral V");
     }
 
     #[test]

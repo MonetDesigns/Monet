@@ -41,6 +41,8 @@ struct Session {
     /// Property writes not yet flushed, per node: `node.x = 1; node.name = "a"` becomes one
     /// `node.set` when the callback ends or the script reads that node again.
     pending: BTreeMap<u64, Map<String, Value>>,
+    /// Approximate heap held by `pending`; the QuickJS memory cap only covers the JS heap.
+    pending_bytes: usize,
     output: Option<Value>,
 }
 
@@ -50,6 +52,7 @@ impl Session {
         self.logs.clear();
         self.log_bytes = 0;
         self.pending.clear();
+        self.pending_bytes = 0;
         self.output = None;
     }
 
@@ -66,10 +69,19 @@ impl Session {
         self.host.call(command, params)
     }
 
+    fn pending_len(&self) -> usize {
+        self.pending
+            .values()
+            .flat_map(|props| props.iter())
+            .map(|(key, value)| key.len() + value.to_string().len())
+            .sum()
+    }
+
     fn flush(&mut self, id: u64) -> Result<(), String> {
         let Some(props) = self.pending.remove(&id) else {
             return Ok(());
         };
+        self.pending_bytes = self.pending_len();
         if props.is_empty() {
             return Ok(());
         }
@@ -148,6 +160,7 @@ impl QuickJs {
             logs: Vec::new(),
             log_bytes: 0,
             pending: BTreeMap::new(),
+            pending_bytes: 0,
             output: None,
         }));
         context.with(|ctx| install(&ctx, &state, script.ui.as_deref()))?;
@@ -338,6 +351,12 @@ fn bridge_set(ctx: &Ctx<'_>, state: Shared, id_text: &str, prop: &str, json: &st
     check_size(ctx, &session.limits, json)?;
     session.tick().map_err(|error| throw(ctx, error))?;
     session.pending.entry(id).or_default().insert(key.to_string(), value);
+    session.pending_bytes = session.pending_len();
+    // `pending` values live on the Rust heap, outside `set_memory_limit`. Flush them into
+    // engine commands once their aggregate exceeds the per-message cap.
+    if session.pending_bytes > session.limits.max_message {
+        session.flush_all().map_err(|error| throw(ctx, error))?;
+    }
     Ok(())
 }
 
@@ -385,6 +404,7 @@ fn bridge_remove(ctx: &Ctx<'_>, state: Shared, id_text: &str) -> rquickjs::Resul
     let call = ops::remove(id).map_err(|error| throw(ctx, error.to_string()))?;
     let mut session = session(ctx, &state)?;
     session.pending.remove(&id);
+    session.pending_bytes = session.pending_len();
     session.call_host(call.command, &call.params).map(|_| ()).map_err(|error| throw(ctx, error))
 }
 

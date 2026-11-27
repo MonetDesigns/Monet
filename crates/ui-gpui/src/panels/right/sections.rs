@@ -6263,6 +6263,15 @@ mod view_menu_tests {
         assert_eq!(ls_create_params(&d, "grid", "")["value"], json!([]));
     }
 
+    #[test]
+    fn body_slots_stay_distinct_at_a_49_field_grid() {
+        let mut n = 0;
+        let slots: Vec<usize> = (0..49).map(|_| slot(&mut n)).collect();
+        let unique: BTreeSet<usize> = slots.iter().copied().collect();
+        assert_eq!(unique.len(), 49, "a 23x23 expanded grid claims 49 editors; each needs its own slot");
+        assert!(unique.iter().all(|s| *s < crate::panels::PROTO_EDITOR_SLOT));
+    }
+
     /// `menu_check` 给勾选行加 `✓ ` / 四个空格前缀，`menu_popup` 在 on_pick 时 trim 掉。
     /// 所以行 label 本身不能带前后空格、也不能重复，否则会选中错的那条命令。
     #[test]
