@@ -150,8 +150,9 @@ match figcraft_gpu::render::Renderer::global().render(&scene) { Ok(rgba) => …,
 - 已知差异：CPU 的 LOD `greeked`（低缩放下画灰条）GPU 未实现——GPU 始终画真实字形；只影响低缩放
   预览的观感，不影响 100% 导出。列入 M7 对齐项。
 - **验收**：单测 `text_glyphs_become_meshes`；对照测试 `text_glyphs_match_the_cpu`（覆盖率总量误差
-  < 3%、内区 `per_channel = 2`）。测试在找不到字体（Inter / Segoe UI / Arial）时跳过并打印 SKIP，
-  因为字体由 `craft-fonts` 提供，CI 可能没有。
+  < 3%、内区 `per_channel = 2`）。已用 `CRAFT_FONTS_DIR` 指向 Arial 的临时字体目录跑过一次真机对照
+  （不再 SKIP，字形轮廓、亚像素位置与装饰线均一致）；无字体环境仍打印 `SKIP`。`parity` 的 GPU 设备
+  创建/销毁用一把测试锁串行化：并行创建十几个 adapter/device 会卡驱动（安装真字体后暴露）。
 
 ### M4 效果（本分支已落地：drop shadow、inner shadow、uniform 图层模糊与背景模糊）
 

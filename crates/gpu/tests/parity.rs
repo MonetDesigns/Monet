@@ -34,7 +34,13 @@ fn cpu_pixels(doc: &Document, page: NodeId) -> Vec<u8> {
 }
 
 /// The GPU's pixels for `doc`, or `None` when this machine has no adapter.
+///
+/// Device creation and teardown is serialised: creating a dozen adapters and devices at once from
+/// parallel test threads can wedge a driver (seen with a real font installed, which stops the text
+/// test from skipping early). CPU rendering still runs in parallel.
 fn gpu_pixels(doc: &Document, page: NodeId) -> Option<Vec<u8>> {
+    static GPU: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = GPU.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let scene = doc_scene::build(doc, page, &viewport());
     assert!(scene.is_supported(), "the test scene must be expressible: {:?}", scene.unsupported_features());
     let mut renderer = figcraft_gpu::render::Renderer::new()?;
