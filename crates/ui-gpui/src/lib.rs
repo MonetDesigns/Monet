@@ -2318,9 +2318,15 @@ impl CanvasView {
                 }
 
                 // `comment.new`：Comment 工具在画布上点击后，用通用对话框输入正文；点的页坐标
-                // 留在按钮的固定参数里，提交时 `comment.add` 仍落在原位置。
+                // 留在按钮的固定参数里，提交时 `comment.add` 仍落在原位置。请求不带 page，
+                // 这里把**点击时**的当前页钉进按钮参数，避免对话框开着时切页、提交到别的页。
                 "comment.new" => {
-                    self.open_dialog(dialogs::Kind::Comment, &r.data, cx);
+                    let mut data = r.data.clone();
+                    data["anchor"] = serde_json::json!(true);
+                    if let Ok(page) = self.app.session.page() {
+                        data["page"] = serde_json::json!(page.0);
+                    }
+                    self.open_dialog(dialogs::Kind::Comment, &data, cx);
                     continue;
                 }
 
@@ -2835,8 +2841,8 @@ impl CanvasView {
         if let (Some(p), Some(d)) = (self.present.as_mut(), snapshot) {
             p.doc = Some(d);
         }
+        let options = self.present_view.clone();
         if let Some(p) = self.present.as_mut().filter(|p| !p.preview) {
-            let options = self.present_view.clone();
             options.apply_to(p);
         }
     }
@@ -3158,6 +3164,7 @@ impl CanvasView {
             }
         }
         if let Some(scale) = present::take_scale_choice() {
+            self.present_view.scale = scale;
             if let Some(st) = self.present.as_mut() {
                 st.scale = scale;
                 st.scale_open = false;
@@ -3199,8 +3206,14 @@ impl CanvasView {
                 2 => st.back(),
                 4 => st.restart(st.start, st.clock),
                 5 => st.comments = !st.comments,
-                6 => st.inspect = !st.inspect,
-                7 => st.hide_ui = !st.hide_ui,
+                6 => {
+                    st.inspect = !st.inspect;
+                    self.present_view.inspect = st.inspect;
+                }
+                7 => {
+                    st.hide_ui = !st.hide_ui;
+                    self.present_view.hide_ui = st.hide_ui;
+                }
                 20 => {
                     // 外链确认条：Open link（记住「不再提示」）。
                     if let Some(n) = st.link_notice.take() {
@@ -3249,6 +3262,13 @@ impl CanvasView {
             // P1–P5：指针 / 滚轮 / 键盘 + 惯性 / 定时器。
             let now = st.now();
             present::tick_input(&mut st, now);
+            // Keep `present_view` in step with the running player, like egui's chrome: a later
+            // partial `present.options` request must not restore a scale the user picked with Z.
+            self.present_view.scale = st.scale;
+            self.present_view.device_frame = st.device_frame;
+            self.present_view.hotspot_hints = st.hints;
+            self.present_view.inspect = st.inspect;
+            self.present_view.hide_ui = st.hide_ui;
             st.tick(now);
             // 本帧点到的 widget：插件回调在帧后跑（eGUI `click_widgets`）。
             if let Some(e) = st.click_widgets(&self.app.session) {

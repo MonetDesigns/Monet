@@ -809,10 +809,14 @@ pub(crate) fn spec(kind: Kind, data: &Value) -> Spec {
         Kind::Comment => {
             let x = data.get("x").and_then(Value::as_f64).unwrap_or(0.0);
             let y = data.get("y").and_then(Value::as_f64).unwrap_or(0.0);
+            let mut base = json!({ "x": x, "y": y, "anchor": true });
+            if let Some(page) = data.get("page") {
+                base["page"] = page.clone();
+            }
             Spec::new(tr("New comment"))
                 .width(360.0)
                 .field(Field::Text { key: "text", label: tr("Comment"), value: String::new() })
-                .button(Button::primary(tr("Post"), "comment.add", json!({ "x": x, "y": y })))
+                .button(Button::primary(tr("Post"), "comment.add", base))
                 .with_cancel()
         }
         // A17：1:1 照 `ui-egui/src/dialogs/menu_input.rs::MenuInput::Offset` —— 一个数字框，
@@ -1760,12 +1764,16 @@ mod tests {
 
     #[test]
     fn comment_dialog_posts_at_the_requested_page_point() {
-        let s = spec(Kind::Comment, &json!({"x": 12.5, "y": 22.0}));
+        let s = spec(Kind::Comment, &json!({"x": 12.5, "y": 22.0, "page": 7}));
         assert_eq!(s.title, figcraft_i18n::tr("New comment").to_string());
         assert!(s.fields.iter().any(|f| matches!(f, Field::Text { key: "text", .. })));
         assert!(s.buttons.iter().any(|b| matches!(
             &b.action,
-            Action::Submit { id: "comment.add", base } if base["x"].as_f64() == Some(12.5) && base["y"].as_f64() == Some(22.0)
+            Action::Submit { id: "comment.add", base }
+                if base["x"].as_f64() == Some(12.5)
+                    && base["y"].as_f64() == Some(22.0)
+                    && base["page"].as_u64() == Some(7)
+                    && base["anchor"].as_bool() == Some(true)
         )));
         assert!(s.buttons.iter().any(|b| b.action == Action::Close));
     }

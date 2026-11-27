@@ -705,7 +705,7 @@ pub(crate) struct RightFields {
     /// field for this frame.
     new_note_focus: std::rc::Rc<std::cell::RefCell<Option<figcraft_doc::NodeId>>>,
     /// The new-note field built for the current frame: `(node, field)`, used by `focus_new_note`.
-    new_note_field: std::rc::Rc<std::cell::RefCell<Option<(figcraft_doc::NodeId, Entity<TextField>)>>>,
+    new_note_field: std::rc::Rc<std::cell::RefCell<Option<(figcraft_doc::NodeId, Entity<TextEdit>)>>>,
     /// Inspect 标签的三个选择：代码语言下标、颜色格式下标、Web 语言是否用 rem。
     inspect_lang: std::rc::Rc<std::cell::RefCell<usize>>,
     inspect_fmt: std::rc::Rc<std::cell::RefCell<usize>>,
@@ -1593,7 +1593,7 @@ impl RightFields {
         *self.new_note_focus.borrow_mut() = None;
     }
 
-    pub(crate) fn set_new_note_field(&self, id: figcraft_doc::NodeId, field: Entity<TextField>) {
+    pub(crate) fn set_new_note_field(&self, id: figcraft_doc::NodeId, field: Entity<TextEdit>) {
         *self.new_note_field.borrow_mut() = Some((id, field));
     }
 
