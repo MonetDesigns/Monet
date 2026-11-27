@@ -12,6 +12,7 @@
 
 use figcraft_doc::{CodeLink, Document, NodeId, NodeKind};
 use serde_json::{Value, json};
+use std::collections::HashMap;
 
 use crate::cmd::CommandSpec;
 use crate::codegen::{CodeLang, Ctx};
@@ -672,6 +673,8 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
     let owners: Vec<(String, NodeId)> = doc.nodes().filter(|n| owner(doc, n.id) == Some(n.id)).map(|n| (n.name.clone(), n.id)).collect();
     let mut warnings: Vec<String> = Vec::new();
     let mut apply: Vec<(NodeId, CodeLink)> = Vec::new();
+    // 同一组件在多条 link 里只 describe 一次（P2-5：导入耗时随组件数增长，而非条目数）。
+    let mut described: HashMap<NodeId, Option<Component>> = HashMap::new();
     for (i, e) in entries.iter().enumerate() {
         let field = |k: &str| e.get(k).and_then(Value::as_str).map(str::trim);
         let (Some(component), Some(lang), Some(name), Some(template)) =
@@ -694,8 +697,9 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
             warnings.push(format!("link {}: no component named {component:?}", i + 1));
         }
         for id in matches {
-            let Some(c) = main_of(doc, id).and_then(|m| describe(doc, m)) else { continue };
-            match check(&c, &link, lang) {
+            let c = described.entry(id).or_insert_with(|| main_of(doc, id).and_then(|m| describe(doc, m)));
+            let Some(c) = c.as_ref() else { continue };
+            match check(c, &link, lang) {
                 Ok(_) => apply.push((id, link.clone())),
                 Err(err) => warnings.push(format!("link {} ({component}): {err}", i + 1)),
             }
