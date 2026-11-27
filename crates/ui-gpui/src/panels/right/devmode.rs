@@ -160,7 +160,7 @@ pub(crate) fn annotations(f: &RightFields, d: &PanelData, cx: &mut App, n: &mut 
     for a in &d.dev.annotations {
         sec = sec.child(field_row_full(annotation_head(f, a, node)));
         // 便签本体：egui 是 2 行 multiline，这里用 `TextEdit` 的 multiline 模式（2 行 × 24 pt）。
-        let edit = f.row_field(
+        let edit = f.row_field_multiline(
             cx,
             slot(n),
             &a.label,
@@ -176,11 +176,9 @@ pub(crate) fn annotations(f: &RightFields, d: &PanelData, cx: &mut App, n: &mut 
                 nest: None,
                 nest_key: None,
             },
+            2,
         );
-        edit.update(cx, |te, _| {
-            te.set_placeholder(tr("Add a note for developers"));
-            te.set_multiline(2);
-        });
+        edit.update(cx, |te, _| te.set_placeholder(tr("Add a note for developers")));
         sec = sec.child(block_row(div().w_full().h(pt(48.0)).pl(pt(16.0)).pr(pt(16.0)).child(edit)));
         // 钉住的属性（只读，值随图层变）。
         for p in &a.pins {
@@ -212,10 +210,7 @@ pub(crate) fn annotations(f: &RightFields, d: &PanelData, cx: &mut App, n: &mut 
             },
         );
         edit.update(cx, |te, _| te.set_placeholder(tr("Add an annotation for developers")));
-        // Two hand-offs exist across branches: main publishes the freshly built field for the
-        // one-frame `new_note_field` consumer; the sync branch keeps the older explicit focus
-        // request. Keep both so neither path loses its `annotation.new` behaviour after merging.
-        f.set_new_note_field(node, edit.clone());
+        // `annotation.new` (Shift+T / tool.annotation): focus the new note field once it's built.
         if f.take_note_focus_id(node) {
             f.set_note_focus_edit(edit.clone());
         }
