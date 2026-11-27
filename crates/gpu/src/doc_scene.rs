@@ -1,24 +1,27 @@
 //! `Document` → [`Scene`]: the only place document semantics are read.
 //!
-//! This milestone accepts a strict subset and **records** everything it cannot draw, so the caller can
+//! The front end accepts a strict subset and **records** everything it cannot draw, so the caller can
 //! send the whole frame to the CPU. Nothing is approximated silently:
 //!
 //! | accepted | recorded as unsupported |
 //! |---|---|
-//! | page/frame/group/section/component/instance containers and their fills | text, vectors, booleans, lines |
-//! | rectangles with four corner radii (no smoothing) | corner smoothing, arcs/rings on ellipses |
-//! | full ellipses, regular polygons and stars (3–32 points) | strokes |
-//! | solid, linear/radial/angular/diamond gradients (≤ [`MAX_STOPS`] stops) | images, patterns, gradient/pattern fills |
-//! | node opacity, visibility, ancestor clipping rectangles | group opacity, other blend modes, masks |
-//! | | visible effects (shadow, blur, glass, grain) |
-//! | | variable-bound fills (the value is not resolved here) |
+//! | page/frame/group/section/component/instance containers and their fills | text |
+//! | rectangles (four corner radii, smoothing), full ellipses, arcs and rings, polygons, stars | icons and slices |
+//! | vector networks, booleans, lines — filled and stroked through the CPU's own outlines | gradient or image paint on a path/stroke |
+//! | strokes: weight, align, joins, caps, dashes, per-side weights (via `figcraft-pathops`) | images, patterns |
+//! | solid, linear/radial/angular/diamond gradients (≤ [`MAX_STOPS`] stops) on SDF shapes | group opacity, other blend modes, masks |
+//! | node opacity, visibility, ancestor clipping rectangles | visible effects (shadow, blur, glass, grain) |
+//! | | rounded or rotated clips, variable-bound fills |
+
+use std::sync::Arc;
 
 use figcraft_color::{BlendMode, GradientKind as DocGradientKind, Paint as DocPaint, PaintKind};
-use figcraft_doc::{Document, NodeId, NodeKind};
+use figcraft_doc::{Document, Node, NodeId, NodeKind};
 use figcraft_geom::{Affine, Point};
 
+use crate::geometry;
 use crate::scene::{
-    is_similarity, Clip, GradientKind, Paint, Rgba, Scene, ShapeKind, ShapeNode, Stop, Viewport, MAX_STOPS,
+    is_similarity, Clip, GradientKind, MeshNode, Paint, Rgba, Scene, ShapeKind, ShapeNode, Stop, Viewport, MAX_STOPS,
 };
 
 /// The deepest subtree walked; a document that nests deeper is a broken file and a fallback.
@@ -88,11 +91,13 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, clip: Clip, scene: &mut Sce
     if container && n.opacity < 0.999 {
         scene.unsupported("group-opacity", format!("`{}` is a group at {} opacity", n.name, n.opacity));
     }
-    if n.strokes.iter().any(|s| s.visible) {
-        scene.unsupported("stroke", format!("`{}` has a visible stroke", n.name));
-    }
     if n.bound.keys().any(|k| k.starts_with("fills")) {
         scene.unsupported("variable-fill", format!("`{}` has a fill bound to a variable", n.name));
+    }
+    match &n.kind {
+        NodeKind::Text(_) => scene.unsupported("text", format!("`{}` is text", n.name)),
+        NodeKind::Icon { .. } | NodeKind::Slice => scene.unsupported("icon", format!("`{}` is an icon or slice", n.name)),
+        _ => {}
     }
 
     let (w, h) = (n.width, n.height);
@@ -120,92 +125,171 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, clip: Clip, scene: &mut Sce
         }
     }
 
+    // Fills: the SDF when the box is one of its primitives, the CPU's own outline tessellated
+    // otherwise (vectors, booleans, lines, and boxes the SDF cannot express exactly).
     if sized {
-        let shape = shape_of(n, m, w, h, scene);
-        if let Some(shape) = shape {
-            for (index, fill) in n.fills.iter().enumerate() {
-                if !fill.visible {
-                    continue;
-                }
-                if !matches!(fill.blend, BlendMode::Normal) {
-                    scene.unsupported("paint-blend", format!("`{}` fill {} blends with {:?}", n.name, index, fill.blend));
-                    continue;
-                }
-                let Some(paint) = paint_of(fill, scene, &n.name, index) else {
-                    continue;
-                };
-                if let Some(paint) = paint.normalised() {
-                    scene.push(ShapeNode {
-                        mat: crate::scene::matrix(m),
-                        size: [w as f32, h as f32],
-                        shape,
-                        paint,
-                        clip: inner,
-                        opacity: n.opacity.clamp(0.0, 1.0),
-                    });
-                }
-            }
+        if let Some(shape) = sdf_shape(n, &m, w, h) {
+            emit_sdf_fills(n, shape, m, w, h, clip, scene);
+        } else if n.fills.iter().any(|f| f.visible) {
+            emit_path_fills(doc, n, m, clip, scene);
         }
     }
 
-    for &child in &n.children {
-        walk(doc, child, view_xf, inner, scene, depth + 1);
+    // Boolean children are operands, not layers: the CPU draws the folded result and skips them.
+    if !matches!(n.kind, NodeKind::BooleanOp { .. }) {
+        for &child in &n.children {
+            walk(doc, child, view_xf, inner, scene, depth + 1);
+        }
+    }
+
+    // Strokes paint over the node's children, like the CPU.
+    if n.has_visible_stroke() {
+        emit_stroke(doc, n, m, clip, scene);
     }
 }
 
-/// The shape a node's box is filled as, or `None` (recorded) when this milestone cannot draw it.
-fn shape_of(n: &figcraft_doc::Node, m: Affine, w: f64, h: f64, scene: &mut Scene) -> Option<ShapeKind> {
-    if !n.fills.iter().any(|f| f.visible) {
+/// The SDF primitive for a node's box, or `None` when the box needs the tessellated path instead.
+///
+/// Purely a capability question: nothing is recorded here, so a box the SDF declines is simply
+/// drawn through the (exact) path fallback.
+fn sdf_shape(n: &Node, m: &Affine, w: f64, h: f64) -> Option<ShapeKind> {
+    if n.corners.smoothing > 0.01 {
         return None;
     }
-    let radii = corner_radii(n, m, w, h, scene)?;
+    if n.corners.radii.iter().any(|r| *r > 0.0) && !is_similarity(crate::scene::matrix(*m)) {
+        // A round corner under a non-uniform scale is an ellipse; the path fallback has the true
+        // outline, the SDF would draw a circle in local space.
+        return None;
+    }
     match &n.kind {
-        NodeKind::Rectangle | NodeKind::Frame | NodeKind::Group | NodeKind::Section { .. } | NodeKind::Component { .. } | NodeKind::ComponentSet { .. } | NodeKind::Instance { .. } | NodeKind::Page { .. } => {
+        NodeKind::Rectangle
+        | NodeKind::Frame
+        | NodeKind::Group
+        | NodeKind::Section { .. }
+        | NodeKind::Component { .. }
+        | NodeKind::ComponentSet { .. }
+        | NodeKind::Instance { .. }
+        | NodeKind::Page { .. } => {
+            let limit = (w.min(h) * 0.5) as f32;
+            let radii = n.corners.radii.map(|v| (v as f32).clamp(0.0, limit));
             Some(ShapeKind::RoundedRect { radii })
         }
         NodeKind::Ellipse { start, sweep, inner } => {
             let full = (*start).abs() < 1e-6 && (*sweep - std::f64::consts::TAU).abs() < 1e-6 && inner.abs() < 1e-6;
-            if !full {
-                scene.unsupported("ellipse-arc", format!("`{}` is an arc or a ring", n.name));
-                return None;
-            }
-            Some(ShapeKind::Ellipse)
+            full.then_some(ShapeKind::Ellipse)
         }
-        NodeKind::Polygon { count } => {
-            if !(3..=32).contains(count) {
-                scene.unsupported("polygon-count", format!("`{}` has {count} sides", n.name));
-                return None;
-            }
-            Some(ShapeKind::Polygon { count: *count })
+        NodeKind::Polygon { count } => (3..=32).contains(count).then_some(ShapeKind::Polygon { count: *count }),
+        NodeKind::Star { count, inner_ratio } => (3..=32).contains(count).then(|| ShapeKind::Star { count: *count, inner_ratio: *inner_ratio as f32 }),
+        NodeKind::Line | NodeKind::Vector { .. } | NodeKind::Text(_) | NodeKind::BooleanOp { .. } | NodeKind::Icon { .. } | NodeKind::Slice => None,
+    }
+}
+
+/// The SDF path: one instance per visible fill, gradients included.
+fn emit_sdf_fills(n: &Node, shape: ShapeKind, m: Affine, w: f64, h: f64, inner: Clip, scene: &mut Scene) {
+    for (index, fill) in n.fills.iter().enumerate() {
+        if !fill.visible {
+            continue;
         }
-        NodeKind::Star { count, inner_ratio } => {
-            if !(3..=32).contains(count) || !(0.0..1.0).contains(inner_ratio) {
-                scene.unsupported("star-count", format!("`{}` is not a drawable star", n.name));
-                return None;
-            }
-            Some(ShapeKind::Star { count: *count, inner_ratio: *inner_ratio as f32 })
+        if !matches!(fill.blend, BlendMode::Normal) {
+            scene.unsupported("paint-blend", format!("`{}` fill {} blends with {:?}", n.name, index, fill.blend));
+            continue;
         }
-        NodeKind::Line => {
-            scene.unsupported("line", format!("`{}` is a line", n.name));
-            None
-        }
-        NodeKind::Vector { .. } => {
-            scene.unsupported("vector", format!("`{}` is a vector path", n.name));
-            None
-        }
-        NodeKind::Text(_) => {
-            scene.unsupported("text", format!("`{}` is text", n.name));
-            None
-        }
-        NodeKind::BooleanOp { .. } => {
-            scene.unsupported("boolean", format!("`{}` is a boolean operation", n.name));
-            None
-        }
-        NodeKind::Icon { .. } | NodeKind::Slice => {
-            scene.unsupported("icon", format!("`{}` is an icon or slice", n.name));
-            None
+        let Some(paint) = paint_of(fill, scene, &n.name, index) else {
+            continue;
+        };
+        if let Some(paint) = paint.normalised() {
+            scene.push(ShapeNode {
+                mat: crate::scene::matrix(m),
+                size: [w as f32, h as f32],
+                shape,
+                paint,
+                clip: inner,
+                opacity: n.opacity.clamp(0.0, 1.0),
+            });
         }
     }
+}
+
+/// The path fallback: tessellate the CPU's own fill outline and paint each visible solid fill.
+fn emit_path_fills(doc: &Document, n: &Node, m: Affine, inner: Clip, scene: &mut Scene) {
+    // Text fills are glyph outlines: expensive to build and already recorded as unsupported.
+    if matches!(n.kind, NodeKind::Text(_) | NodeKind::Icon { .. } | NodeKind::Slice) {
+        return;
+    }
+    let Some((path, rule)) = geometry::fill_outline(doc, n) else {
+        // No fillable geometry (a line's box, say): the CPU paints nothing either.
+        return;
+    };
+    let tris = geometry::tessellate(&path, rule);
+    if tris.is_empty() {
+        return;
+    }
+    let (verts, indices) = device_geometry(&tris, m);
+    for (index, fill) in n.fills.iter().enumerate() {
+        if !fill.visible {
+            continue;
+        }
+        if !matches!(fill.blend, BlendMode::Normal) {
+            scene.unsupported("paint-blend", format!("`{}` fill {} blends with {:?}", n.name, index, fill.blend));
+            continue;
+        }
+        match fill.solid_color() {
+            Some(color) => scene.push_mesh(MeshNode {
+                verts: verts.clone(),
+                indices: indices.clone(),
+                color: Rgba::from_color(color),
+                opacity: n.opacity.clamp(0.0, 1.0),
+                clip: inner,
+            }),
+            None => scene.unsupported("gradient-on-path", format!("`{}` fill {index} is a gradient on a path", n.name)),
+        }
+    }
+}
+
+/// The stroke: the CPU's `stroke_fill` outline (align, joins, caps, dashes all baked in), painted
+/// with each visible solid stroke paint.
+fn emit_stroke(doc: &Document, n: &Node, m: Affine, inner: Clip, scene: &mut Scene) {
+    let Some((path, rule)) = geometry::stroke_outline(doc, n) else {
+        return;
+    };
+    let tris = geometry::tessellate(&path, rule);
+    if tris.is_empty() {
+        return;
+    }
+    let (verts, indices) = device_geometry(&tris, m);
+    for (index, paint) in n.strokes.iter().enumerate() {
+        if !paint.visible {
+            continue;
+        }
+        if !matches!(paint.blend, BlendMode::Normal) {
+            scene.unsupported("paint-blend", format!("`{}` stroke {} blends with {:?}", n.name, index, paint.blend));
+            continue;
+        }
+        match paint.solid_color() {
+            Some(color) => scene.push_mesh(MeshNode {
+                verts: verts.clone(),
+                indices: indices.clone(),
+                color: Rgba::from_color(color),
+                opacity: n.opacity.clamp(0.0, 1.0),
+                clip: inner,
+            }),
+            None => scene.unsupported("stroke-paint", format!("`{}` stroke {index} is a gradient or an image", n.name)),
+        }
+    }
+}
+
+/// The tessellation in device pixels: the same triangles, with the node transform baked into the
+/// vertices so the mesh shader needs no matrix.
+fn device_geometry(tris: &geometry::Triangles, m: Affine) -> (Arc<[[f32; 2]]>, Arc<[u32]>) {
+    let verts: Vec<[f32; 2]> = tris
+        .verts
+        .iter()
+        .map(|v| {
+            let p = m * Point::new(f64::from(v[0]), f64::from(v[1]));
+            [p.x as f32, p.y as f32]
+        })
+        .collect();
+    (Arc::from(verts), Arc::from(tris.tris.clone()))
 }
 
 /// One fill as a paintable fill. `None` means it was recorded as unsupported.
@@ -259,21 +343,13 @@ fn map_point(m: Affine, x: f64, y: f64) -> (f64, f64) {
     (p.x, p.y)
 }
 
-/// The four corner radii in document units, or `None` (recorded) when this milestone cannot draw them:
-/// corner smoothing, or a circular corner under a scale that is not a similarity.
-fn corner_radii(n: &figcraft_doc::Node, m: Affine, w: f64, h: f64, scene: &mut Scene) -> Option<[f32; 4]> {
-    if n.corners.smoothing > 0.01 {
-        scene.unsupported("corner-smoothing", format!("`{}` uses corner smoothing", n.name));
-        return None;
-    }
-    let limit = (w.min(h) * 0.5) as f32;
-    let radii = n.corners.radii.map(|v| (v as f32).clamp(0.0, limit));
-    if radii.iter().any(|v| *v > 0.0) && !is_similarity(crate::scene::matrix(m)) {
-        // A circle under a non-uniform scale is an ellipse; the SDF evaluates in local space.
-        scene.unsupported("elliptical-corner", format!("`{}` has round corners under a non-uniform scale", n.name));
-        return None;
-    }
-    Some(radii)
+/// The mesh items of a scene, for tests that do not run a GPU.
+#[cfg(test)]
+fn meshes(scene: &Scene) -> impl Iterator<Item = &MeshNode> {
+    scene.items.iter().filter_map(|item| match item {
+        crate::scene::Item::Mesh(mesh) => Some(mesh),
+        crate::scene::Item::Shape(_) => None,
+    })
 }
 
 #[cfg(test)]
@@ -303,13 +379,50 @@ mod tests {
         let (doc, page, _) = doc_with_rect();
         let scene = build(&doc, page, &view());
         assert!(scene.is_supported());
-        assert_eq!(scene.nodes.len(), 1, "one fill, one instance");
-        let n = &scene.nodes[0];
+        assert_eq!(scene.shapes().count(), 1, "one fill, one instance");
+        assert_eq!(scene.mesh_count(), 0, "a plain rectangle stays on the SDF");
+        let n = scene.shapes().next().expect("one shape");
         assert_eq!(n.size, [100.0, 50.0]);
         assert!(matches!(n.shape, ShapeKind::RoundedRect { .. }));
         assert!(matches!(n.paint, Paint::Solid(c) if c.a == 1.0));
         // Local (10, 20) lands on device pixel (10, 20).
         assert!((n.mat[4] - 10.0).abs() < 0.01 && (n.mat[5] - 20.0).abs() < 0.01, "{:?}", n.mat);
+    }
+
+    #[test]
+    fn a_stroke_becomes_a_tessellated_mesh_after_its_children() {
+        let (mut doc, page, rect) = doc_with_rect();
+        if let Ok(n) = doc.get_mut(rect) {
+            n.strokes = vec![DocPaint::solid(Color::new(1.0, 0.0, 0.0, 1.0))];
+            n.stroke.weight = 4.0;
+        }
+        let scene = build(&doc, page, &view());
+        assert!(scene.is_supported(), "{:?}", scene.unsupported_features());
+        assert_eq!(scene.shapes().count(), 1, "the fill is still an SDF shape");
+        assert_eq!(scene.mesh_count(), 1, "the stroke is a mesh");
+        let mesh = meshes(&scene).next().expect("a mesh");
+        assert!(!mesh.indices.is_empty());
+        // Four device pixels wide, drawn inside the 100×50 box at (10, 20) (the default alignment).
+        let xs: Vec<f32> = mesh.verts.iter().map(|v| v[0]).collect();
+        let min = xs.iter().copied().fold(f32::INFINITY, f32::min);
+        let max = xs.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        assert!((min - 10.0).abs() < 0.6, "stroke starts at x = 10, got {min}");
+        assert!((max - 110.0).abs() < 0.6, "stroke ends at x = 110, got {max}");
+    }
+
+    #[test]
+    fn a_line_is_drawn_by_its_stroke_mesh() {
+        let mut doc = Document::default();
+        let page = doc.pages[0];
+        let line = doc.create(page, NodeKind::Line, "Line", 10.0, 40.0, 100.0, 0.0).expect("line");
+        if let Ok(n) = doc.get_mut(line) {
+            n.strokes = vec![DocPaint::solid(Color::new(0.0, 0.0, 0.0, 1.0))];
+            n.stroke.weight = 6.0;
+        }
+        let scene = build(&doc, page, &view());
+        assert!(scene.is_supported(), "{:?}", scene.unsupported_features());
+        assert_eq!(scene.shapes().count(), 0);
+        assert_eq!(scene.mesh_count(), 1);
     }
 
     #[test]
@@ -335,7 +448,7 @@ mod tests {
             n.fills = vec![DocPaint::solid(Color::new(1.0, 0.0, 0.0, 1.0))];
         }
         let scene = build(&doc, page, &view());
-        let node = scene.nodes.iter().find(|n| n.size == [100.0, 10.0]).expect("the child's instance");
+        let node = scene.shapes().find(|n| n.size == [100.0, 10.0]).expect("the child's instance");
         assert_eq!(node.clip.0, [10.0, 10.0, 50.0, 50.0], "clipped to the frame's own box");
     }
 
@@ -367,5 +480,21 @@ mod tests {
         }
         let scene = build(&doc, page, &view());
         assert!(scene.unsupported_features().iter().any(|u| u.feature == "rotated-clip"));
+    }
+
+    #[test]
+    fn a_ring_ellipse_is_drawn_by_the_path_fallback() {
+        let mut doc = Document::default();
+        let page = doc.pages[0];
+        let ring = doc
+            .create(page, NodeKind::Ellipse { start: 0.0, sweep: std::f64::consts::TAU, inner: 0.6 }, "Ring", 0.0, 0.0, 80.0, 80.0)
+            .expect("ring");
+        if let Ok(n) = doc.get_mut(ring) {
+            n.fills = vec![DocPaint::solid(Color::new(0.2, 0.4, 0.8, 1.0))];
+        }
+        let scene = build(&doc, page, &view());
+        assert!(scene.is_supported(), "{:?}", scene.unsupported_features());
+        assert_eq!(scene.shapes().count(), 0, "the SDF cannot draw a ring");
+        assert_eq!(scene.mesh_count(), 1, "the path fallback can");
     }
 }

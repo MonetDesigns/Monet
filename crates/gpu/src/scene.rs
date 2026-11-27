@@ -156,6 +156,28 @@ pub struct ShapeNode {
     pub opacity: f32,
 }
 
+/// A tessellated path in **device pixels** (the document transform is applied when the scene is
+/// built, so the shader needs no matrix for these). Used for any fill or stroke the SDF shapes cannot
+/// cover: vector networks, booleans, lines, and every stroke.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MeshNode {
+    pub verts: std::sync::Arc<[[f32; 2]]>,
+    /// Triangles into `verts`; a non-empty list means at least one triangle.
+    pub indices: std::sync::Arc<[u32]>,
+    /// The paint, straight sRGB; the renderer premultiplies and folds `opacity` in.
+    pub color: Rgba,
+    /// The node's opacity, 0..=1.
+    pub opacity: f32,
+    pub clip: Clip,
+}
+
+/// One thing to draw, in painter's order: an SDF shape or a tessellated path.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Item {
+    Shape(ShapeNode),
+    Mesh(MeshNode),
+}
+
 /// A feature this milestone cannot draw. Its presence sends the **whole frame** to the CPU.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Unsupported {
@@ -165,28 +187,45 @@ pub struct Unsupported {
     pub detail: String,
 }
 
-/// A frame to draw: size, background, shapes and the list of things it cannot draw.
+/// A frame to draw: size, background, draw items and the list of things it cannot draw.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Scene {
     pub width: u32,
     pub height: u32,
     /// The background, straight (non-premultiplied) sRGB.
     pub clear: Rgba,
-    pub nodes: Vec<ShapeNode>,
+    pub items: Vec<Item>,
     unsupported: Vec<Unsupported>,
 }
 
 impl Scene {
     pub fn new(width: u32, height: u32) -> Self {
-        Self { width, height, clear: Rgba::TRANSPARENT, nodes: Vec::new(), unsupported: Vec::new() }
+        Self { width, height, clear: Rgba::TRANSPARENT, items: Vec::new(), unsupported: Vec::new() }
     }
 
     pub fn with_clear(width: u32, height: u32, clear: Rgba) -> Self {
-        Self { width, height, clear, nodes: Vec::new(), unsupported: Vec::new() }
+        Self { width, height, clear, items: Vec::new(), unsupported: Vec::new() }
     }
 
     pub fn push(&mut self, node: ShapeNode) {
-        self.nodes.push(node);
+        self.items.push(Item::Shape(node));
+    }
+
+    pub fn push_mesh(&mut self, mesh: MeshNode) {
+        self.items.push(Item::Mesh(mesh));
+    }
+
+    /// The SDF shapes, in draw order (tests and the log use this; the renderer walks `items`).
+    pub fn shapes(&self) -> impl Iterator<Item = &ShapeNode> {
+        self.items.iter().filter_map(|item| match item {
+            Item::Shape(shape) => Some(shape),
+            Item::Mesh(_) => None,
+        })
+    }
+
+    /// How many tessellated paths the frame carries.
+    pub fn mesh_count(&self) -> usize {
+        self.items.iter().filter(|item| matches!(item, Item::Mesh(_))).count()
     }
 
     /// Record a feature this frame uses that this milestone cannot draw.

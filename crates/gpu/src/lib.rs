@@ -19,6 +19,7 @@
 pub mod backend;
 pub mod diff;
 pub mod doc_scene;
+pub mod geometry;
 pub mod prefs;
 pub mod scene;
 
@@ -27,4 +28,4 @@ pub mod render;
 
 pub use backend::{Capability, DeviceClass};
 pub use prefs::{Effective, RenderBackend};
-pub use scene::{Paint, Scene, ShapeKind, ShapeNode, Viewport};
+pub use scene::{Item, MeshNode, Paint, Scene, ShapeKind, ShapeNode, Viewport};

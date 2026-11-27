@@ -2528,6 +2528,8 @@ dependencies = [
  "figcraft-geom",
  "figcraft-render",
  "log",
+ "lyon_path",
+ "lyon_tessellation",
  "pollster 0.4.0",
  "tiny-skia 0.12.0",
  "wgpu",

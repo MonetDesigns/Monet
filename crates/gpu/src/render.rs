@@ -1,8 +1,15 @@
-//! The wgpu side: adapter and device, one instanced pipeline, offscreen target, readback.
+//! The wgpu side: adapter and device, two pipelines (instanced SDF shapes, tessellated meshes),
+//! one multisampled offscreen target, readback.
 //!
-//! The renderer knows nothing about documents (see [`crate::scene`]); it draws a [`Scene`] into an
-//! `Rgba8Unorm` texture with **premultiplied** blending (`One` / `OneMinusSrcAlpha`), then reads the
-//! pixels back row by row (every row padded to wgpu's 256-byte copy alignment).
+//! The renderer knows nothing about documents (see [`crate::scene`]); it draws a [`Scene`] into a
+//! 4× multisampled `Rgba8Unorm` target, resolves it to a single-sample texture with **premultiplied**
+//! blending (`One` / `OneMinusSrcAlpha`), then reads the pixels back row by row (every row padded to
+//! wgpu's 256-byte copy alignment).
+//!
+//! Why multisampled: tessellated paths have no analytic coverage to compute in the shader, so the
+//! samples are the coverage. The SDF shapes keep their own `fwidth` coverage; their quads are drawn a
+//! few pixels larger than the shape so rasterization never clips the antialiased edge (otherwise a
+//! pixel at the box's border would get coverage × samples instead of coverage).
 //!
 //! A scene that lists an unsupported feature is refused here, not drawn "best effort": the caller
 //! (canvas or export) then renders the same frame with `figcraft-render` on the CPU.
@@ -12,7 +19,10 @@ use std::sync::{Mutex, OnceLock};
 use bytemuck::{Pod, Zeroable};
 use figcraft_geom::Affine;
 
-use crate::scene::{Paint, Scene, ShapeKind, ShapeNode, Unsupported};
+use crate::scene::{Item, Paint, Scene, ShapeKind, ShapeNode, Unsupported};
+
+/// Samples per pixel the target uses. Tessellated geometry gets its coverage from these.
+const SAMPLES: u32 = 4;
 
 /// Why a frame did not render on the GPU.
 #[derive(Clone, Debug, PartialEq)]
@@ -39,7 +49,7 @@ impl std::fmt::Display for RenderError {
 
 impl std::error::Error for RenderError {}
 
-/// The instance as the shader sees it. 256 bytes, every member 16-byte aligned, no padding.
+/// The SDF instance as the shader sees it. 256 bytes, every member 16-byte aligned, no padding.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 struct GpuInstance {
@@ -103,10 +113,34 @@ impl GpuInstance {
     }
 }
 
+/// A tessellated vertex: device pixels, premultiplied colour, device-pixel clip.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+struct GpuMeshVertex {
+    pos: [f32; 2],
+    color: [f32; 4],
+    clip: [f32; 4],
+}
+
+/// What one draw in the pass does, in painter's order.
+enum Cmd {
+    /// Instances `first .. first + count` of the instance buffer.
+    Shapes { first: u32, count: u32 },
+    /// Indices `first .. first + count` of the shared index buffer.
+    Mesh { first: u32, count: u32 },
+}
+
 struct Target {
     width: u32,
     height: u32,
-    texture: wgpu::Texture,
+    /// The 4× attachment the pass draws into.
+    /// Kept alive for the lifetime of `msaa_view` (a view keeps its texture alive, but holding both
+    /// makes the intent explicit).
+    #[allow(dead_code)]
+    msaa: wgpu::Texture,
+    msaa_view: wgpu::TextureView,
+    /// The resolved single-sample image, the copy source.
+    resolve: wgpu::Texture,
     view: wgpu::TextureView,
     readback: wgpu::Buffer,
 }
@@ -117,17 +151,35 @@ pub struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     pipeline: wgpu::RenderPipeline,
+    mesh_pipeline: wgpu::RenderPipeline,
     globals: wgpu::Buffer,
     bind_globals: wgpu::BindGroup,
     instances_layout: wgpu::BindGroupLayout,
     instances: Option<(wgpu::Buffer, wgpu::BindGroup, u64)>,
+    mesh_verts: Option<(wgpu::Buffer, u64)>,
+    mesh_indices: Option<(wgpu::Buffer, u64)>,
     target: Option<Target>,
     adapter: String,
     max_side: u32,
 }
 
+fn blend() -> Option<wgpu::BlendState> {
+    Some(wgpu::BlendState {
+        color: wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+            operation: wgpu::BlendOperation::Add,
+        },
+        alpha: wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+            operation: wgpu::BlendOperation::Add,
+        },
+    })
+}
+
 impl Renderer {
-    /// Build a device and the pipeline. `None` when the machine has no adapter that meets the limits
+    /// Build a device and the pipelines. `None` when the machine has no adapter that meets the limits
     /// (see [`crate::backend`]); the caller falls back to the CPU.
     pub fn new() -> Option<Self> {
         let instance = wgpu::Instance::default();
@@ -157,6 +209,10 @@ impl Renderer {
             label: Some("figcraft-gpu-shape"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/shape.wgsl").into()),
         });
+        let mesh_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("figcraft-gpu-mesh"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/mesh.wgsl").into()),
+        });
 
         let globals_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("globals"),
@@ -180,14 +236,24 @@ impl Renderer {
                 count: None,
             }],
         });
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        let shape_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("shape"),
             bind_group_layouts: &[Some(&globals_layout), Some(&instances_layout)],
             immediate_size: 0,
         });
+        let mesh_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("mesh"),
+            bind_group_layouts: &[Some(&globals_layout)],
+            immediate_size: 0,
+        });
+        let target_state = |_label: &str| wgpu::ColorTargetState {
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            blend: blend(),
+            write_mask: wgpu::ColorWrites::ALL,
+        };
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("shape"),
-            layout: Some(&layout),
+            layout: Some(&shape_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs"),
@@ -197,27 +263,43 @@ impl Renderer {
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: Some("fs"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba8Unorm,
-                    blend: Some(wgpu::BlendState {
-                        color: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::One,
-                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                        alpha: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::One,
-                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                    }),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
+                targets: &[Some(target_state("shape"))],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             }),
             primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() },
             depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
+            multisample: wgpu::MultisampleState { count: SAMPLES, mask: !0, alpha_to_coverage_enabled: false },
+            multiview_mask: None,
+            cache: None,
+        });
+
+        let vertex_layout = wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<GpuMeshVertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute { offset: 0, shader_location: 0, format: wgpu::VertexFormat::Float32x2 },
+                wgpu::VertexAttribute { offset: 8, shader_location: 1, format: wgpu::VertexFormat::Float32x4 },
+                wgpu::VertexAttribute { offset: 24, shader_location: 2, format: wgpu::VertexFormat::Float32x4 },
+            ],
+        };
+        let mesh_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("mesh"),
+            layout: Some(&mesh_layout),
+            vertex: wgpu::VertexState {
+                module: &mesh_shader,
+                entry_point: Some("vs"),
+                buffers: &[Some(vertex_layout)],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &mesh_shader,
+                entry_point: Some("fs"),
+                targets: &[Some(target_state("mesh"))],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState { count: SAMPLES, mask: !0, alpha_to_coverage_enabled: false },
             multiview_mask: None,
             cache: None,
         });
@@ -239,10 +321,13 @@ impl Renderer {
             device,
             queue,
             pipeline,
+            mesh_pipeline,
             globals,
             bind_globals,
             instances_layout,
             instances: None,
+            mesh_verts: None,
+            mesh_indices: None,
             target: None,
             adapter: format!("{} ({:?})", info.name, info.backend),
             max_side,
@@ -272,10 +357,37 @@ impl Renderer {
         let globals = [w as f32, h as f32, 0.0, 0.0];
         self.queue.write_buffer(&self.globals, 0, bytemuck::cast_slice(&globals));
 
-        let instances: Vec<GpuInstance> = scene.nodes.iter().map(GpuInstance::of).collect();
-        let count = instances.len().max(1) as u32;
+        // Walk the items once: instances, mesh vertices/indices and the draw list.
+        let mut instances: Vec<GpuInstance> = Vec::new();
+        let mut verts: Vec<GpuMeshVertex> = Vec::new();
+        let mut indices: Vec<u32> = Vec::new();
+        let mut cmds: Vec<Cmd> = Vec::new();
+        let mut batch = 0usize;
+        for item in &scene.items {
+            match item {
+                Item::Shape(shape) => instances.push(GpuInstance::of(shape)),
+                Item::Mesh(mesh) => {
+                    if instances.len() > batch {
+                        cmds.push(Cmd::Shapes { first: batch as u32, count: (instances.len() - batch) as u32 });
+                        batch = instances.len();
+                    }
+                    let opacity = mesh.opacity.clamp(0.0, 1.0);
+                    let premul = mesh.color.premultiplied();
+                    let color = [premul[0] * opacity, premul[1] * opacity, premul[2] * opacity, premul[3] * opacity];
+                    let base = verts.len() as u32;
+                    verts.extend(mesh.verts.iter().map(|p| GpuMeshVertex { pos: *p, color, clip: mesh.clip.0 }));
+                    let first = indices.len() as u32;
+                    indices.extend(mesh.indices.iter().map(|i| i + base));
+                    cmds.push(Cmd::Mesh { first, count: mesh.indices.len() as u32 });
+                }
+            }
+        }
+        if instances.len() > batch {
+            cmds.push(Cmd::Shapes { first: batch as u32, count: (instances.len() - batch) as u32 });
+        }
+
+        // The instance buffer (at least one record: an empty storage binding is not allowed everywhere).
         let bytes: Vec<u8> = if instances.is_empty() {
-            // An empty scene still needs a binding; one zero instance is never drawn.
             bytemuck::bytes_of(&GpuInstance::zeroed()).to_vec()
         } else {
             bytemuck::cast_slice(&instances).to_vec()
@@ -301,12 +413,60 @@ impl Renderer {
         };
         self.queue.write_buffer(buffer, 0, &bytes);
 
+        // Mesh buffers: one vertex buffer and one index buffer for the whole frame.
+        if !verts.is_empty() {
+            let bytes = bytemuck::cast_slice(&verts).to_vec();
+            let need = bytes.len() as u64;
+            if self.mesh_verts.as_ref().is_none_or(|(_, cap)| *cap < need) {
+                let size = need.next_power_of_two().max(256);
+                let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("mesh vertices"),
+                    size,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                self.mesh_verts = Some((buffer, size));
+            }
+            if let Some((buffer, _)) = self.mesh_verts.as_ref() {
+                self.queue.write_buffer(buffer, 0, &bytes);
+            }
+        }
+        if !indices.is_empty() {
+            let bytes = bytemuck::cast_slice(&indices).to_vec();
+            let need = bytes.len() as u64;
+            if self.mesh_indices.as_ref().is_none_or(|(_, cap)| *cap < need) {
+                let size = need.next_power_of_two().max(256);
+                let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("mesh indices"),
+                    size,
+                    usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                self.mesh_indices = Some((buffer, size));
+            }
+            if let Some((buffer, _)) = self.mesh_indices.as_ref() {
+                self.queue.write_buffer(buffer, 0, &bytes);
+            }
+        }
+
         let unpadded = w * 4;
         let padded = unpadded.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
         if self.target.as_ref().is_none_or(|t| t.width != w || t.height != h) {
-            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            let size = wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 };
+            let msaa = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("target-msaa"),
+                size,
+                mip_level_count: 1,
+                sample_count: SAMPLES,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+            let msaa_view = msaa.create_view(&wgpu::TextureViewDescriptor::default());
+            let resolve = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("target"),
-                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                size,
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
@@ -314,14 +474,14 @@ impl Renderer {
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             });
-            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let view = resolve.create_view(&wgpu::TextureViewDescriptor::default());
             let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("readback"),
                 size: u64::from(padded) * u64::from(h),
                 usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                 mapped_at_creation: false,
             });
-            self.target = Some(Target { width: w, height: h, texture, view, readback });
+            self.target = Some(Target { width: w, height: h, msaa, msaa_view, resolve, view, readback });
         }
         let Some(target) = self.target.as_ref() else {
             return Err(RenderError::Device("the render target was not created".into()));
@@ -331,11 +491,11 @@ impl Renderer {
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("shapes"),
+                label: Some("frame"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &target.view,
+                    view: &target.msaa_view,
                     depth_slice: None,
-                    resolve_target: None,
+                    resolve_target: Some(&target.view),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
                             r: f64::from(clear.r * clear.a),
@@ -351,16 +511,42 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            if !scene.nodes.is_empty() {
-                pass.set_pipeline(&self.pipeline);
-                pass.set_bind_group(0, &self.bind_globals, &[]);
-                pass.set_bind_group(1, bind, &[]);
-                pass.draw(0..6, 0..count);
+            let mut bound_shapes = false;
+            let mut bound_mesh = false;
+            for cmd in &cmds {
+                match *cmd {
+                    Cmd::Shapes { first, count } => {
+                        if !bound_shapes {
+                            pass.set_pipeline(&self.pipeline);
+                            pass.set_bind_group(0, &self.bind_globals, &[]);
+                            pass.set_bind_group(1, bind, &[]);
+                            bound_shapes = true;
+                            // A pipeline switch drops the other side's state: the next mesh draw
+                            // must bind its own pipeline and buffers again.
+                            bound_mesh = false;
+                        }
+                        pass.draw(0..6, first..first + count);
+                    }
+                    Cmd::Mesh { first, count } => {
+                        let (Some((vb, _)), Some((ib, _))) = (self.mesh_verts.as_ref(), self.mesh_indices.as_ref()) else {
+                            continue;
+                        };
+                        if !bound_mesh {
+                            pass.set_pipeline(&self.mesh_pipeline);
+                            pass.set_bind_group(0, &self.bind_globals, &[]);
+                            pass.set_vertex_buffer(0, vb.slice(..));
+                            pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+                            bound_mesh = true;
+                            bound_shapes = false;
+                        }
+                        pass.draw_indexed(first..first + count, 0, 0..1);
+                    }
+                }
             }
         }
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
-                texture: &target.texture,
+                texture: &target.resolve,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,

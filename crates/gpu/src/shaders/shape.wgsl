@@ -20,6 +20,10 @@ struct Globals {
 };
 @group(0) @binding(0) var<uniform> globals: Globals;
 
+// How far (device pixels) the quad is drawn beyond the shape's box, so multisample coverage never
+// cuts into the SDF's antialiased edge.
+const EXPAND_PX: f32 = 4.0;
+
 struct Inst {
   // Local → device: x' = m.x*x + m.z*y + off.x, y' = m.y*x + m.w*y + off.y
   m: vec4<f32>,
@@ -58,7 +62,15 @@ fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VsOut
   );
   let inst = insts[ii];
   let c = corners[vi];
-  let l = vec2<f32>(c.x * inst.size.x, c.y * inst.size.y);
+  // The quad is drawn a few device pixels larger than the shape on every side. The target is
+  // multisampled (for tessellated paths), and a quad exactly on the shape's border would give the
+  // border pixels partial sample coverage *and* the SDF's coverage — double antialiasing. With the
+  // margin every pixel within the SDF's edge band is fully covered by samples, so the shader's
+  // coverage is what the resolve averages.
+  let sx = max(length(inst.m.xy), 1e-6);
+  let sy = max(length(inst.m.zw), 1e-6);
+  let margin = vec2<f32>(EXPAND_PX / sx, EXPAND_PX / sy);
+  let l = vec2<f32>(c.x * (inst.size.x + 2.0 * margin.x) - margin.x, c.y * (inst.size.y + 2.0 * margin.y) - margin.y);
   let d = vec2<f32>(
     inst.m.x * l.x + inst.m.z * l.y + inst.off.x,
     inst.m.y * l.x + inst.m.w * l.y + inst.off.y,

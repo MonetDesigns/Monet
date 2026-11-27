@@ -1922,7 +1922,7 @@ fn run_gpu(job: &Job, view: &View) -> Option<Done> {
     let image = wrap_bgra(view.width, view.height, data);
     let ms = t0.elapsed().as_secs_f64() * 1000.0;
     if render_log() {
-        eprintln!("[render] {}x{} {ms:.1}ms gpu shapes={}", view.width, view.height, scene.nodes.len());
+        eprintln!("[render] {}x{} {ms:.1}ms gpu shapes={} meshes={}", view.width, view.height, scene.shapes().count(), scene.mesh_count());
     }
     Some(Done {
         doc: job.doc.clone(),

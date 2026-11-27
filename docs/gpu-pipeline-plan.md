@@ -1,9 +1,10 @@
 # 完整 GPU 管线立项（Monet / FigCraft）
 
 > 分支：`ai/gpu-pipeline`（worktree `D:\Projektdateien\GPUI\branches\gpu-pipeline`，从 `main` 拉出）
-> 状态：阶段 1（图元与填充）已落地——能力探测、`auto/gpu/cpu` 三档偏好（引擎命令 + Preferences ▸
-> Rendering）、场景 IR、实例化 SDF 图元（圆角矩形/椭圆/多边形/星形）、四类渐变、裁剪、
-> 回读与 CPU↔GPU 像素 diff（5 项对照测试），UI 画布已接线并整帧回退；M2–M7 为设计与接口
+> 状态：阶段 1（图元与填充）与阶段 2（路径与描边）已落地——能力探测、`auto/gpu/cpu` 三档偏好
+> （引擎命令 + Preferences ▸ Rendering）、场景 IR、实例化 SDF 图元（圆角矩形/椭圆/多边形/星形）、
+> 四类渐变、裁剪、路径填充与描边网格（4× MSAA）、回读与 CPU↔GPU 像素 diff（7 项对照测试），
+> UI 画布已接线并整帧回退；M3–M7 为设计与接口
 > 日期：2026-11-27
 
 ## 0. 一句话结论
@@ -26,7 +27,7 @@ diff 工具）、引擎与偏好面板的开关接线、CPU↔GPU 像素回归�
 | 外置 WGSL 材质跑 GPU | `ui-gpui/wgsl_runner.rs`、`shade_gpu.rs`、`render::wgsl_effect` | 效果阶段的着色器加载/绑定约定 |
 | 效果着色器数学 | `assets/wgsl/{shadow,layer_blur,background_blur,glass,noise}.wgsl` | M4 直接复用 |
 | 文字排版与字形轮廓 | `crates/text`（skrifa / harfrust，`TextLayout`、`Glyph`、glyph outlines） | M3 的字形图集来源 |
-| 路径代数 | `crates/pathops`、`figcraft_geom`（kurbo 形状构造） | M2 的三角化输入；`lyon` 尚未引入 |
+| 路径代数 | `crates/pathops`、`figcraft_geom`（kurbo 形状构造） | M2 的三角化输入；`lyon_tessellation` 只做填充三角化，描边语义仍来自 pathops |
 
 结论：M1 的「图元 + 填充」已有可复用的内核，缺的是**与 UI 解耦的公共 crate、完整的图元/填充
 表达、逐特性回退判定和回归口径**。
@@ -107,17 +108,27 @@ match figcraft_gpu::render::Renderer::global().render(&scene) { Ok(rgba) => …,
   多层填充按 Figma 顺序叠加；`paint.opacity`、节点 `opacity`、可见性、祖先裁剪矩形。
 - 抗锯齿：局部空间 SDF + `fwidth` 屏幕空间覆盖，1px 边缘，任意缩放下线宽恒定。
 - **验收**：矩形/椭圆/多边形/星形 × 纯色/四种渐变 × 旋转 × 裁剪，CPU↔GPU 像素 diff 达标（第 6 节）。
-- 未做（登记为 Unsupported，走 CPU）：图片填充、图案填充、描边、圆角 smoothing、弧形/环形椭圆、
-  文字、效果、非 Normal 混合、组透明度、蒙版。
+- 未做（登记为 Unsupported，走 CPU）：图片填充、图案填充、圆角 smoothing、弧形/环形椭圆、文字、
+  效果、非 Normal 混合、组透明度、蒙版。描边在 M2 起由网格通道承担。
 
-### M2 路径与描边
+### M2 路径与描边（本分支已落地）
 
-- 三角化：优先 `lyon`（`fill` + `stroke` 的 join/cap/dash 已成熟），失败再退回 compute 光栅；
-  输入是 `figcraft_geom::BezPath`，与 CPU 的 `pathops` 同源。
-- 描边：`StrokeProps` 的 weight/align（内/中/外）/join（miter/round/bevel）/cap/虚线；
-  外描边与内描边通过几何偏移（offset）实现，不用扩边技巧。
-- **验收**：与 CPU 的 `stroke_fill`、`dash` 结果 diff；尖角 miter limit 与 dash phase 逐项对齐。
-- 风险：lyon 的 miter 与 tiny-skia 的 miter 在极限角度下不同 → 用「描边覆盖率」容差而非逐像素等值。
+- 几何与 CPU **同源**：不引入 lyon 的描边器，直接取 `figcraft_render::node_outline`（填充轮廓）与
+  `figcraft_render::stroke_fill`（描边轮廓，`figcraft_pathops::stroke_outline_of` 已把 align、
+  join、cap、dash、per-side、arrowhead 全部烘进 `BezPath`）。GPU 只负责三角化——所以只有 AA 口径
+  的差别，没有第二套描边语义。
+- 三角化：`lyon_tessellation::FillTessellator`（tolerance 0.05），`tiny_skia::FillRule`
+  直接映射；顶点在**设备像素**里烘焙节点变换，网格着色器只需帧尺寸，无矩阵。
+- 覆盖形状：任意填充轮廓（矢量网络、布尔结果、线段、圆角 smoothing、弧形/环形椭圆）、任意描边
+  （内/中/外、miter/round/bevel、虚线、per-side）；布尔节点的子节点是操作数，不递归绘制。
+- 抗锯齿：整帧 **4× MSAA**（`Rgba8Unorm`，单采样 resolve 供回读），SDF 图元四边形按局部像素尺度
+  外扩 4px，避免「样本覆盖率 × SDF 覆盖率」双重抗锯齿。
+- 仍登记为 Unsupported：路径上的渐变填充 / 渐变描边、文字、图标、切片（走 CPU）。
+- **验收**：新增 2 项 CPU↔GPU 对照（描边圆角矩形 + 虚线描边；环形椭圆 + 星形描边），
+  内区 `per_channel = 2`、`bad_ratio = 0`（`diff::compare_interiors` 自动跳过两图任一颜色台阶
+  的 1–2px 边带）；另有 8 项场景单测 + 4 项三角化单测。
+- 风险：MSAA 的 4 档覆盖率与 tiny-skia 的解析覆盖率在边带上不可能逐级相等 → 边带跳过、内部严格；
+  `lyon` 与 tiny-skia 的 miter 极限角度差异被同一「跳过边带」口径吸收。
 
 ### M3 文字
 
@@ -189,6 +200,10 @@ match figcraft_gpu::render::Renderer::global().render(&scene) { Ok(rgba) => …,
 
 边缘带用「CPU 结果的 alpha 梯度」自动圈定，不手写坐标。金样存 `crates/gpu/tests/golden/`（PNG，
 仅存 CPU 基准，GPU 结果现算，避免二进制随平台漂移）。
+
+网格（路径/描边）另用 `diff::compare_interiors`：在**任一**图里相邻通道差 > 8 的像素两侧各扩 1px
+算边带并跳过，其余按 `per_channel = 2`、`bad_ratio = 0` 判——MSAA 4 档覆盖率与解析覆盖率的差别
+只允许存在于边带。
 
 ## 7. 导出
 

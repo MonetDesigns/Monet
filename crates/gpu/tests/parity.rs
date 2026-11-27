@@ -11,8 +11,8 @@
 #![cfg(feature = "wgpu")]
 
 use figcraft_color::{Color, Gradient, GradientKind, Paint};
-use figcraft_doc::{Document, NodeId, NodeKind};
-use figcraft_gpu::diff::{compare, pixel, Tolerance};
+use figcraft_doc::{Document, NodeId, NodeKind, StrokeJoin};
+use figcraft_gpu::diff::{compare, compare_interiors, pixel, Tolerance};
 use figcraft_gpu::doc_scene;
 use figcraft_gpu::Viewport;
 use figcraft_render::{Options, View};
@@ -182,6 +182,68 @@ fn a_clipping_frame_stops_its_child_on_both_sides() {
     // Inside (x = 40) both sides paint.
     assert!(pixel(&cpu, SIZE as usize, 40, 50).expect("in bounds")[3] > 0);
     assert!(pixel(&gpu, SIZE as usize, 40, 50).expect("in bounds")[3] > 0);
+}
+
+#[test]
+fn strokes_are_tessellated_from_the_cpu_outline_and_match_inside() {
+    let mut doc = Document::default();
+    let page = doc.pages[0];
+    transparent_page(&mut doc, page);
+    let stroked = rect(&mut doc, page, "Stroked", 30.0, 30.0, 110.0, 70.0, 14.0, Paint::solid(Color::new(0.95, 0.95, 0.95, 1.0)));
+    if let Ok(n) = doc.get_mut(stroked) {
+        n.strokes = vec![Paint::solid(Color::new(0.1, 0.3, 0.7, 1.0))];
+        n.stroke.weight = 6.0;
+        n.stroke.join = StrokeJoin::Round;
+    }
+    let dashed = rect(&mut doc, page, "Dashed", 30.0, 120.0, 140.0, 30.0, 6.0, Paint::solid(Color::new(0.98, 0.9, 0.4, 1.0)));
+    if let Ok(n) = doc.get_mut(dashed) {
+        n.strokes = vec![Paint::solid(Color::new(0.15, 0.15, 0.15, 1.0))];
+        n.stroke.weight = 10.0;
+        n.stroke.dashes = vec![16.0, 10.0];
+    }
+
+    // Both frames must stay on the GPU path: a stroke is a tessellated mesh, not a fallback.
+    let scene = doc_scene::build(&doc, page, &viewport());
+    assert!(scene.is_supported(), "{:?}", scene.unsupported_features());
+    assert!(scene.mesh_count() >= 2, "each stroke is a mesh");
+
+    let cpu = cpu_pixels(&doc, page);
+    let Some(gpu) = gpu_pixels(&doc, page) else {
+        eprintln!("SKIP: no adapter");
+        return;
+    };
+    // Four multisamples versus tiny-skia's analytic coverage: the one-pixel edge band is skipped,
+    // the rest of the stroke band and its interior must agree exactly.
+    let report = compare_interiors(&cpu, &gpu, SIZE as usize, SIZE as usize, Tolerance::SOLID).expect("comparable");
+    assert!(report.passes(Tolerance::SOLID), "{}", report.summary());
+}
+
+#[test]
+fn a_dialogue_free_ring_and_a_star_stroke_stay_gpu_drawable() {
+    let mut doc = Document::default();
+    let page = doc.pages[0];
+    transparent_page(&mut doc, page);
+    let ring = doc
+        .create(page, NodeKind::Ellipse { start: 0.0, sweep: std::f64::consts::TAU, inner: 0.45 }, "Ring", 20.0, 20.0, 90.0, 90.0)
+        .expect("ring");
+    if let Ok(n) = doc.get_mut(ring) {
+        n.fills = vec![Paint::solid(Color::new(0.2, 0.5, 0.3, 1.0))];
+    }
+    let star = doc.create(page, NodeKind::Star { count: 5, inner_ratio: 0.5 }, "Star", 120.0, 20.0, 90.0, 90.0).expect("star");
+    if let Ok(n) = doc.get_mut(star) {
+        n.strokes = vec![Paint::solid(Color::new(0.8, 0.2, 0.2, 1.0))];
+        n.stroke.weight = 5.0;
+    }
+    let scene = doc_scene::build(&doc, page, &viewport());
+    assert!(scene.is_supported(), "{:?}", scene.unsupported_features());
+
+    let cpu = cpu_pixels(&doc, page);
+    let Some(gpu) = gpu_pixels(&doc, page) else {
+        eprintln!("SKIP: no adapter");
+        return;
+    };
+    let report = compare_interiors(&cpu, &gpu, SIZE as usize, SIZE as usize, Tolerance::SOLID).expect("comparable");
+    assert!(report.passes(Tolerance::SOLID), "{}", report.summary());
 }
 
 #[test]

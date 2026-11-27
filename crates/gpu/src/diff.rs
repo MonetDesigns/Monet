@@ -97,6 +97,87 @@ pub fn pixel(data: &[u8], width: usize, x: usize, y: usize) -> Option<[u8; 4]> {
     Some([slice[0], slice[1], slice[2], slice[3]])
 }
 
+/// A channel step this large between neighbours makes a pixel part of an edge (a solid fill's
+/// interior never steps that fast).
+const EDGE_STEP: u8 = 8;
+
+/// Compare **interiors** only: pixels on or next to a colour edge in either image are skipped, and
+/// everything else is graded with `tolerance` (whose `max_bad_ratio` should then be 0).
+///
+/// Tessellated paths get their antialiasing from four multisamples, while `tiny-skia` resolves the
+/// edge analytically; the two cannot agree level by level on the one-pixel band, but they must agree
+/// everywhere the shape is solid or fully empty. This is the plan's "coverage, not per-pixel equality"
+/// rule for strokes and paths.
+pub fn compare_interiors(cpu: &[u8], gpu: &[u8], width: usize, height: usize, tolerance: Tolerance) -> Option<Report> {
+    if width == 0 || height == 0 || cpu.len() != gpu.len() || cpu.len() != width * height * 4 {
+        return None;
+    }
+    // 1. Pixels that sit on a colour step, in either image.
+    let mut edge = vec![false; width * height];
+    for y in 0..height {
+        for x in 0..width {
+            let i = y * width + x;
+            let p = [pixel(cpu, width, x, y)?, pixel(gpu, width, x, y)?];
+            let mut stepped = false;
+            for neighbour in [(x + 1, y), (x, y + 1)] {
+                let (nx, ny) = neighbour;
+                if nx >= width || ny >= height {
+                    continue;
+                }
+                let n = [pixel(cpu, width, nx, ny)?, pixel(gpu, width, nx, ny)?];
+                for (a, b) in p.iter().zip(n.iter()) {
+                    if a.iter().zip(b.iter()).any(|(va, vb)| va.abs_diff(*vb) > EDGE_STEP) {
+                        stepped = true;
+                    }
+                }
+            }
+            if stepped {
+                edge[i] = true;
+                // The step belongs to both pixels, and one more ring covers the antialiased fringe.
+                for (dx, dy) in [(-1i64, 0i64), (1, 0), (0, -1), (0, 1)] {
+                    let (ex, ey) = (x as i64 + dx, y as i64 + dy);
+                    if ex >= 0 && ey >= 0 && (ex as usize) < width && (ey as usize) < height {
+                        edge[ey as usize * width + ex as usize] = true;
+                    }
+                }
+            }
+        }
+    }
+    // 2. Grade the rest.
+    let mut max_delta = 0u8;
+    let mut sum = 0u64;
+    let mut bad = 0usize;
+    let mut compared = 0usize;
+    for i in 0..width * height {
+        if edge[i] {
+            continue;
+        }
+        let a = &cpu[i * 4..i * 4 + 4];
+        let b = &gpu[i * 4..i * 4 + 4];
+        compared += 1;
+        let mut pixel_bad = false;
+        for k in 0..4 {
+            let d = a[k].abs_diff(b[k]);
+            sum += u64::from(d);
+            max_delta = max_delta.max(d);
+            if d > tolerance.per_channel {
+                pixel_bad = true;
+            }
+        }
+        if pixel_bad {
+            bad += 1;
+        }
+    }
+    let channels = (compared * 4) as u64;
+    Some(Report {
+        pixels: compared,
+        max_delta,
+        mean_delta: if channels == 0 { 0.0 } else { sum as f64 / channels as f64 },
+        bad,
+        bad_ratio: if compared == 0 { 0.0 } else { bad as f64 / compared as f64 },
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
