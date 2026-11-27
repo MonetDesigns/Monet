@@ -8886,6 +8886,10 @@ impl Render for CanvasView {
                         return;
                     }
                     if run_binding(&mut this.app, id) {
+                        // Keyboard-issued UI requests must belong to the window that handled
+                        // the key; otherwise F11 in window B can toggle window A if A renders
+                        // first (CodeRabbit PR#40).
+                        this.stamp_ui_requests();
                         cx.notify();
                         // CodeRabbit PR#20/#22/#23: the root handler has the same keymap fallback;
                         // without stopping propagation a handled canvas shortcut (undo/redo, delete…)
