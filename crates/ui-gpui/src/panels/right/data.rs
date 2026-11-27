@@ -78,6 +78,12 @@ pub struct GridRow {
     pub visible: bool,
     /// 整个 grids 数组的 JSON（改类型 / 颜色时替换其中一项，推 `node.set {"grids": …}`）。
     pub grids: serde_json::Value,
+    /// 这一条网格的原始快照：展开设置时按字段改写后重新序列化。
+    pub layout: figcraft_doc::LayoutGrid,
+    pub kind: figcraft_doc::GridKind,
+    /// `None` = Auto（fixed 列的 count 为 0）；Stretch 至少 1。
+    pub count: Option<u32>,
+    pub align: figcraft_doc::GridAlign,
 }
 
 /// 一个 export setting 行（egui `export_panel.rs::setting_row`）。
@@ -213,6 +219,14 @@ pub struct TextData {
     pub features_supported: std::collections::BTreeSet<String>,
     /// 可变字体的轴（只有单一字体族的可变字面才有）：驱动 Type settings 的 Variable 页。
     pub axes: Vec<AxisRow>,
+    /// 文本是否全部在路径上（egui `typography.rs::path_row`）。
+    pub has_path: bool,
+    /// 路径起点（0..1）；多选不一致时 `None`。
+    pub path_start: Option<f64>,
+    /// 文本是否翻到路径另一侧（全选一致）。
+    pub path_flip: bool,
+    /// 文本 + 一个矢量路径双选：可以 “Put text on path”。
+    pub can_put_on_path: bool,
 }
 
 /// 可变字体的一条轴（`figcraft_text::Axis` + 当前值），供 Type settings 的 Variable 页使用。
@@ -249,6 +263,8 @@ pub struct VectorData {
     pub join: Option<Option<figcraft_doc::StrokeJoin>>,
     /// Variable width 工具选中的宽度点（`ve.tool == Width` 时右栏只画 Width point 节）。
     pub width_point: Option<WidthPointData>,
+    /// 当前是否处于 Variable width 工具（即使还没点出宽度点，也要画 Width point 标题与提示）。
+    pub width_tool: bool,
 }
 
 /// Variable width 的宽度点（egui `vector_panel.rs::width_point`）。
@@ -534,6 +550,8 @@ pub struct InspectData {
     pub sections: Vec<InspectSection>,
     /// 生成的代码（按当前语言）。
     pub code: String,
+    /// Motion 动画代码（`inspect.motionCode` 的纯入口）；无动画时为空，不画动画块。
+    pub motion_code: String,
     /// 语言 display 名。
     pub lang_label: &'static str,
     /// 当前语言 id（下拉选中用）。
@@ -652,9 +670,16 @@ pub fn read_inspect(
         .collect();
     let raw = figcraft_engine::codegen::code_for(doc, first, lang);
     let code = if rem && lang.is_web() { figcraft_engine::codegen::px_to_rem(&raw, 16.0) } else { raw };
+    let motion_lang = match lang {
+        CodeLang::SwiftUi => "swiftui",
+        CodeLang::Compose => "compose",
+        _ => "css",
+    };
+    let motion_code = figcraft_engine::codegen::motion_code_for(doc, first, motion_lang).unwrap_or_default();
     InspectData {
         sections,
         code,
+        motion_code,
         lang_label: lang.label(),
         lang: lang.id(),
         langs: CodeLang::ALL.iter().map(|l| (l.label(), l.id())).collect(),
@@ -1474,7 +1499,38 @@ pub fn read_vector(doc: &Document, ve: &figcraft_engine::vectoredit::VectorEdit)
         cap: same(pts.iter().map(|v| vertex(v).map(|x| x.cap))).flatten(),
         join: same(pts.iter().map(|v| vertex(v).map(|x| x.join))).flatten(),
         width_point,
+        width_tool: ve.tool == vectoredit::VTool::Width,
     }
+}
+
+/// 选中文本范围的共享填充（egui `paints.rs::range_fill`）。
+///
+/// 只在正在编辑的文本节点属于当前选区、且 range 非空时返回；范围内字符填充不一致时
+/// `paint` 为 `None`（Mixed），仍返回一行让用户改写或清掉范围覆盖。
+pub fn read_range_fill(
+    doc: &Document,
+    ids: &[NodeId],
+    range: Option<(NodeId, usize, usize)>,
+) -> Option<RangeFillData> {
+    let (id, start, end) = range?;
+    if start >= end || !ids.contains(&id) {
+        return None;
+    }
+    let n = doc.node(id)?;
+    let tx = n.kind.text()?;
+    let mut shared: Option<Vec<figcraft_color::Paint>> = None;
+    for (s, e, st) in tx.spans() {
+        if s < end && e > start {
+            let fills = st.fills.clone().unwrap_or_else(|| n.fills.clone());
+            match &shared {
+                Some(prev) if prev != &fills => return Some(RangeFillData { id, start, end, paint: None }),
+                Some(_) => {}
+                None => shared = Some(fills),
+            }
+        }
+    }
+    let paint = shared.as_ref().and_then(|f| f.first().cloned());
+    Some(RangeFillData { id, start, end, paint })
 }
 
 /// Scale 工具（K）的面板快照（egui `scale_panel.rs`）。
@@ -1509,6 +1565,34 @@ pub struct GridTracksData {
     pub rows: Vec<TrackRow>,
 }
 
+/// 网格父级里的一个子层：它的单元格（1-based，Auto 时为算出来的位置）与跨格 / 对齐
+/// （egui `layout_panel.rs::grid_cell`）。
+#[derive(Clone, Debug, PartialEq)]
+pub struct GridCellData {
+    pub column: u32,
+    pub row: u32,
+    /// 只有单选时 Column/Row 才有确定值；多选时上游不画这一行。
+    pub single: bool,
+    /// 有显式 `gridColumn` / `gridRow`（显示 Reset 按钮）；Auto 放置时为 `false`。
+    pub anchored: bool,
+    /// 多选时 `None` = 各子层 span 不一致（上游 `common` 后显示 Mixed）。
+    pub column_span: Option<u32>,
+    pub row_span: Option<u32>,
+    pub align_h: Option<&'static str>,
+    pub align_v: Option<&'static str>,
+    /// H / V 对齐多选不一致。
+    pub align_h_mixed: bool,
+    pub align_v_mixed: bool,
+}
+
+/// 智能选区间距（egui `canvas::selection_spacing::panel`）：外层 `Some` = 该轴存在，
+/// 内层 `None` = 间距不一致（Mixed，留空）。
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SelectionSpacingData {
+    pub horizontal: Option<Option<f64>>,
+    pub vertical: Option<Option<f64>>,
+}
+
 /// 变量模式的一行（egui `paints.rs::variable_modes`）。
 #[derive(Clone, Debug, PartialEq)]
 pub struct ModeRow {
@@ -1527,8 +1611,15 @@ pub struct SectionData {
     pub is_section: bool,
     pub status: String,
     pub changed: bool,
+    /// The single selected layer is the one `dev.focus` is showing.
+    pub focused: bool,
+    /// The newest saved version, when the selection hasn't changed since it was marked: EGUI
+    /// compares against that version instead of "when marked ready".
+    pub newest_version: Option<String>,
     pub hide_contents: bool,
     pub color_hex: Option<String>,
+    /// `dev_note`：上次改动说明（非空时显示 “Last change: …”）。
+    pub last_note: String,
 }
 
 /// 取色器 AA 对比度的选区上下文（selection → picker）。右栏拿不到 doc，所以和别的节一样
@@ -1614,12 +1705,28 @@ fn read_contrast_context(doc: &Document, ids: &[NodeId], page: Option<NodeId>) -
     ContrastContext { bg, is_text, runs, auto_category }
 }
 
+/// 选中文本范围内共享的填充（egui `paints.rs::range_fill`）。
+///
+/// `paint` 为 `None` = 范围内字符的填充不一致（Mixed）；仍画一行，并允许“Use the layer's fill”
+/// 清掉范围覆盖。`id/start/end` 是 `text.style` 的目标，`start/end` 是字符下标。
+#[derive(Clone, Debug, PartialEq)]
+pub struct RangeFillData {
+    pub id: NodeId,
+    pub start: usize,
+    pub end: usize,
+    pub paint: Option<figcraft_color::Paint>,
+}
+
 /// 空选区时的 Page 节（egui `right.rs::page_section`）。
 #[derive(Clone, Debug, PartialEq)]
 pub struct PageData {
     pub background: String,
+    /// 背景颜色的不透明度（0..100，参考实现 `paint_field` 的 alpha 输入）。
+    pub background_opacity: f64,
     pub profile: String,
     pub profiles: Vec<String>,
+    /// 页面级 Variable modes（`page_variable_modes`：Auto = 集合默认模式）。
+    pub variable_modes: Vec<ModeRow>,
     pub local_variables: usize,
     pub local_styles: usize,
     /// 页面子层（egui `page_section`：`doc.node(page).children`），整页导出的 `ids`。
@@ -1646,12 +1753,17 @@ pub struct HeaderData {
     pub is_text: bool,
     /// 单选 Component / ComponentSet（参考实现 `header` 开头的组件专属分支）。
     pub is_component: bool,
+    /// 单选组件是 ComponentSet（决定标题图标；否则用 Component 图标）。
+    pub is_component_set: bool,
     /// 单选形状（参考实现 `edit_id` → `vector.edit.begin`）。
     pub is_shape: bool,
     /// 布尔组当前运算（参考实现 `booleans::shown_op`）：决定布尔按钮图标与菜单勾选项。
     pub bool_op: Option<figcraft_doc::BoolOp>,
     /// 选区数量（参考实现：Union 按钮只有 `sel.len() >= 2` 才执行）。
     pub count: usize,
+    /// 「Create component set」是否可用（引擎 `cmd::component::can_create_set`）：
+    /// 多选时菜单只有允许才列出第三项，而不是画出来再报错。
+    pub can_create_set: bool,
     /// 「More actions」菜单行：`(显示名, 命令 id, 上方要分隔线)`。
     /// 取自画布右键菜单的顶层可运行命令（参考实现 `text.more` 打开的就是它）。
     pub more_actions: Vec<(String, &'static str, bool)>,
@@ -1725,10 +1837,79 @@ pub struct LocalStyleRow {
     /// 文本样式的完整 `TextStyle` JSON（camelCase，引擎 `text_style_json` 也认 snake_case）；
     /// 编辑时整体写回 `style.update {value: …}`，缺字段会被引擎按默认重置，所以必须整段保留。
     pub text: Option<serde_json::Value>,
+    /// 样式的字段绑定：`字段 -> 变量名`（`Style::bound` 的显示快照；样式编辑器据此画 chip）。
+    pub bound: Vec<(String, String)>,
+    /// 样式编辑器可绑定的数字 / 字符串变量名（按类型过滤后的快照）。
+    pub number_variables: Vec<String>,
+    pub string_variables: Vec<String>,
+    pub color_variables: Vec<String>,
     /// 效果样式的完整 effects 数组（每个含原始 JSON，供写回 `style.update {value: …}`）。
     pub effects: Option<Vec<EffectRow>>,
     /// 网格样式的完整 grids 数组（每个含原始 JSON，供写回 `style.update {value: …}`）。
     pub grids: Option<Vec<GridRow>>,
+}
+
+/// One component-playground result: a copy of the document with the values applied, never the doc.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlaygroundData {
+    pub target: NodeId,
+    /// `component.properties` rows (`name`, `type`, `options?`, `value`, `preferred?`).
+    pub properties: Vec<Value>,
+    pub code: String,
+    /// `(width, height, BGRA)` rendered from the copy; `None` when the layer has no pixels.
+    pub preview: Option<(u32, u32, Vec<u8>)>,
+    /// Whether the user changed at least one value (the Code section should show `code`).
+    pub tried: bool,
+    /// Components an `instanceSwap` property may point at (name + main id), from the copy.
+    pub swapped: Vec<(String, NodeId)>,
+}
+
+impl PlaygroundData {
+    /// egui hides the Playground section for a component with no properties: there is nothing to
+    /// try, so a preview/code block alone would look like a broken Inspect section.
+    pub fn has_controls(&self) -> bool {
+        !self.properties.is_empty()
+    }
+}
+
+/// Build the playground copy and read its properties, code and preview.
+/// `revision` + `values` form the thumbnail cache key, so changed values re-render without touching
+/// the document's own revision.
+pub fn read_playground(
+    doc: &Document,
+    target: NodeId,
+    values: &serde_json::Map<String, Value>,
+    lang: figcraft_engine::codegen::CodeLang,
+    revision: u64,
+) -> Option<PlaygroundData> {
+    use figcraft_engine::playground;
+    let (copy, inst) = playground::build(doc, target, values).ok()?;
+    let properties = playground::properties(&copy, inst)["properties"].as_array().cloned().unwrap_or_default();
+    let code = figcraft_engine::codegen::code_for(&copy, inst, lang);
+    let hash = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        serde_json::to_string(values).unwrap_or_default().hash(&mut h);
+        h.finish()
+    };
+    let preview = export_preview(&copy, inst, 416.0, revision ^ hash);
+    let swapped = copy
+        .nodes()
+        .filter_map(|n| match n.kind {
+            NodeKind::Component { .. } | NodeKind::ComponentSet { .. } => Some((n.name.clone(), n.id)),
+            _ => None,
+        })
+        .collect();
+    Some(PlaygroundData { target, properties, code, preview, tried: !values.is_empty(), swapped })
+}
+
+/// One read-only plugin command offered in Inspect.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PluginRunRow {
+    pub plugin: String,
+    pub plugin_name: String,
+    pub command: String,
+    pub label: String,
 }
 
 /// 右栏所有列表的一次快照。`None` 的 Vec 表示「多选且值不一致」（egui 显示 Mixed / 提示点 + 替换）。
@@ -1793,12 +1974,32 @@ pub struct PanelData {
     pub page_node: Option<NodeId>,
     /// Auto layout 的 W/H + sizing + 约束比例 + min/max。
     pub dimensions: Option<DimensionsData>,
-    /// 排版快照（仅全部选中都是文本节点时 `Some`）；驱动 Typography 节。
+    /// 排版快照（选区里只要有文本节点就 `Some`）；驱动 Typography 节。
     pub text: Option<TextData>,
+    /// 选区内所有文本节点的 id：Typography 的命令明确打到这些节点，而不是整个选区
+    /// （“文本 + 矩形”混选时不能把字体/字号写给矩形）。
+    pub text_ids: Vec<NodeId>,
+    /// 选中的文本链接的共享文本样式名；`Some` 时字体行让位给样式 chip（egui `typography.rs`）。
+    pub text_style: Option<String>,
+    /// 文本样式链接是否不一致（有的字符链接样式、有的没有，或链接到不同样式）。
+    /// `text_style` 为 `None` 时，这个布尔区分“完全没有样式”和“Mixed”。
+    pub text_style_mixed: bool,
+    /// 正在编辑的文本选区（`textedit::selected_range`）；`Some` 时 Fill 节改画范围填充单行。
+    pub selected_text_range: Option<(NodeId, usize, usize)>,
+    /// 文本范围填充的单行快照（由 `selected_text_range` 与文档内容算出）。
+    pub range_fill: Option<RangeFillData>,
+    /// 外观的混合模式快照；`None` = 多选不一致。
+    pub blend: Option<figcraft_color::BlendMode>,
     /// 取色器 AA 对比度的选区上下文（背景色 + 文字分段 + auto 类别判定）。
     pub contrast: ContrastContext,
     /// 网格 auto layout 的轨道快照（仅单选一个 grid frame 时 `Some`）。
     pub grid_tracks: Option<GridTracksData>,
+    /// 网格父级里的子层单元格快照（父级是 grid 且 `absolute == false` 时 `Some`）。
+    pub grid_cell: Option<GridCellData>,
+    /// 多选时的智能间距（`Some` 且任一轴有值时才画 Spacing 行）。
+    pub selection_spacing: Option<SelectionSpacingData>,
+    /// 矢量编辑中选中 region 时它自己的 fills（`Some` = region 模式，`None` 内层 = mixed）。
+    pub region_fills: Option<Option<Vec<Paint>>>,
     /// Scale 工具激活时的快照；`Some` 时右栏用 Scale 节**替换** Position 节。
     pub scale: Option<ScaleData>,
     /// Frame 工具（F）激活时，Design 标签整页换成 Frame 预设（egui `right.rs` 的
@@ -1808,6 +2009,9 @@ pub struct PanelData {
     pub vector: Option<VectorData>,
     /// 选中节点是否都是「无自动布局（或自身 absolute）的 frame 子层」——只有这种才显示 Constraints 子节。
     pub in_frame: bool,
+    /// 选区里有节点位于实例内部：位置由主组件决定，X/Y/W/H/Rotation/约束等位置控件只读
+    /// （参考实现 `right.rs::position_fields`：`inside_instance(doc, *i)` 任意命中即禁用整块）。
+    pub position_readonly: bool,
     /// 参考实现 `engine::cmd::arrange::can_align`：对齐是否有目标。空选区 / 页面上的孤层都
     /// 无可对齐目标，此时 Alignment 行整行隐藏（连 caption 一起），不是画出来再禁用。
     pub can_align: bool,
@@ -1838,6 +2042,10 @@ pub struct PanelData {
     pub variables: crate::panels::right::variables::VariablesData,
     /// Appearance 的可见性（`object.toggleVisible`）。
     pub visible: Option<bool>,
+    /// 选中的都是蒙版图层（egui `paints.rs`：`every(doc, sel, |n| n.is_mask)`）。
+    pub all_mask: bool,
+    /// 蒙版的遮罩类型；`None` = 多选不一致。
+    pub mask_type: Option<figcraft_doc::MaskType>,
     /// Frame-like 的「Clip content」勾选（参考编辑器 的 Frame 设置区）；`None` = 多选不一致。
     pub clip: Option<bool>,
     /// Appearance 圆角行旁「Corner smoothing」小窗的值（0..1）；`None` = 多选不一致。
@@ -1860,6 +2068,11 @@ pub struct PanelData {
     pub proto: ProtoData,
     /// Inspect 标签（Dev Mode）的属性与代码；`None` = 无选中。
     pub inspect: Option<InspectData>,
+    /// Component Playground：选中的实例/组件试值后的预览、属性与代码；`None` = 不是组件。
+    pub playground: Option<PlaygroundData>,
+    /// Read-only plugin commands listed in Inspect (Developer Mode). Plugins with write access
+    /// are deliberately absent: Developer Mode must not let one edit the document.
+    pub plugins: Vec<PluginRunRow>,
     /// Inspect 标签里 Dev Mode 的其余节：注释 / 开发资源 / 测量 / 就绪列表 / 分类。
     pub dev: DevModeData,
     /// Component / Instance 面板；`None` = 选中的不是组件相关节点。
@@ -1883,6 +2096,29 @@ fn common<T: PartialEq + Clone>(doc: &Document, ids: &[NodeId], f: impl Fn(&figc
     let mut it = ids.iter().filter_map(|i| doc.node(*i));
     let first = f(it.next()?);
     if it.all(|n| f(n) == first) { Some(first) } else { None }
+}
+
+/// Page 级 Variable modes（egui `page_variable_modes`）：自己的 `var_modes`，Auto 退回集合默认模式。
+fn page_mode_rows(doc: &Document, page: Option<NodeId>) -> Vec<ModeRow> {
+    let own_node = page.and_then(|p| doc.node(p));
+    doc.variables
+        .collections
+        .iter()
+        .filter(|c| !c.modes.is_empty())
+        .map(|c| {
+            let own = own_node.and_then(|n| n.var_modes.get(&c.id)).cloned();
+            let inherited = c.modes.first().map(|m| m.name.clone()).unwrap_or_default();
+            let current = own
+                .as_ref()
+                .and_then(|m| c.modes.iter().find(|x| x.id == *m).map(|x| x.name.clone()))
+                .unwrap_or_else(|| format!("Auto ({inherited})"));
+            let mut options = vec![format!("Auto ({inherited})")];
+            options.extend(c.modes.iter().map(|m| m.name.clone()));
+            let mut option_ids = vec![serde_json::Value::Null];
+            option_ids.extend(c.modes.iter().map(|m| serde_json::json!(m.id)));
+            ModeRow { collection: c.name.clone(), collection_id: c.id.clone(), current, options, option_ids }
+        })
+        .collect()
 }
 
 /// 文本节点的 `TextData`；非文本返回 `None`（Type settings 的若干属性都只对文本有意义）。
@@ -1989,7 +2225,16 @@ fn paint_pattern_sources(doc: &Document, ids: &[NodeId], page: Option<NodeId>) -
 }
 
 fn paint_rows(doc: &Document, ids: &[NodeId], page: Option<NodeId>, fills: bool) -> Option<Vec<PaintRow>> {
-    let list = common(doc, ids, |n| if fills { n.fills.clone() } else { n.strokes.clone() })?;
+    // 文本的 Fill 是“字符实际显示的 fills”：各 span 共享一份时取那一份，不共享就是 Mixed。
+    // 非文本节点 `character_fills` 直接返回图层 fills，所以这里可以统一走它。
+    let list = common(doc, ids, |n| {
+        if fills {
+            figcraft_engine::cmd::lists::character_fills(n)
+        } else {
+            Some(n.strokes.clone())
+        }
+    })
+    .flatten()?;
     let color_vars: Vec<String> =
         doc.variables.variables.iter().filter(|v| v.kind == figcraft_doc::VariableType::Color).map(|v| v.name.clone()).collect();
     let pattern_sources = paint_pattern_sources(doc, ids, page);
@@ -2064,6 +2309,18 @@ fn export_rows(list: &[figcraft_doc::ExportSetting]) -> Vec<ExportRow> {
 
 /// 读取当前选区的完整快照。
 pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: usize) -> PanelData {
+    read_with_dev(doc, ids, page, ready_filter, None)
+}
+
+/// [`read`] with an already computed Dev section. `CanvasView` caches `read_dev` by document revision;
+/// the rest of the panel is cheap enough to rebuild, but `dev_items`/measurements are not.
+pub fn read_with_dev(
+    doc: &Document,
+    ids: &[NodeId],
+    page: Option<NodeId>,
+    ready_filter: usize,
+    dev: Option<DevModeData>,
+) -> PanelData {
     let mut d = PanelData::default();
     // 导出节与页面导出按钮都要用：选区、文档色彩配置在 `ids.is_empty()` 提前 return 之前填。
     d.ids = ids.to_vec();
@@ -2075,7 +2332,7 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
     // Prototype 标签的数据跟选区无关地先算好：`ids.is_empty()` 会提前 return。
     d.proto = read_proto(doc, ids, page);
     // Inspect 标签的 Dev Mode 各节：`ready` / `categories` 也与选区无关。
-    d.dev = read_dev(doc, ids, page, ready_filter);
+    d.dev = dev.unwrap_or_else(|| read_dev(doc, ids, page, ready_filter));
     // 本地样式清单同样与选区无关：空选区时 Page 节的「Local styles」要逐条列出来
     // （egui `page_section` → `style_picker::local_styles`），所以必须在提前 return 之前填。
     d.styles = doc
@@ -2144,6 +2401,10 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
                                 color: g.color.to_hex(),
                                 visible: g.visible,
                                 grids: grids_json.clone(),
+                                layout: g.clone(),
+                                kind: g.kind,
+                                count: grid_count_cell(g),
+                                align: g.align,
                             })
                             .collect(),
                     )
@@ -2160,11 +2421,17 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
                 properties,
                 paints,
                 text,
+                bound: s.bound.iter().filter_map(|(k, v)| doc.variables.get(v).map(|x| (k.clone(), x.name.clone()))).collect(),
+                number_variables: doc.variables.variables.iter().filter(|v| v.kind == figcraft_doc::VariableType::Number).map(|v| v.name.clone()).collect(),
+                string_variables: doc.variables.variables.iter().filter(|v| v.kind == figcraft_doc::VariableType::String).map(|v| v.name.clone()).collect(),
+                color_variables: doc.variables.variables.iter().filter(|v| v.kind == figcraft_doc::VariableType::Color).map(|v| v.name.clone()).collect(),
                 effects,
                 grids,
             }
         })
         .collect();
+    // 实例内部的位置由主组件决定：任一命中即整块 Position 只读（参考实现 `nested`）。
+    d.position_readonly = ids.iter().any(|id| figcraft_engine::components::inside_instance(doc, *id));
     if ids.is_empty() {
         // ── Page（`page_section`）：背景色 / 色彩配置 / 本地变量与样式数量 ──
         let page_node = page.and_then(|p| doc.node(p));
@@ -2176,9 +2443,16 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
             .unwrap_or(figcraft_color::Color::DEFAULT_PAGE);
         d.page = Some(PageData {
             background: bg.to_hex(),
+            background_opacity: f64::from(bg.a) * 100.0,
             profile: doc.color_profile.label().to_string(),
             profiles: figcraft_color::ColorProfile::ALL.iter().map(|p| p.label().to_string()).collect(),
-            local_variables: doc.variables.variables.len(),
+            variable_modes: page_mode_rows(doc, page),
+            local_variables: doc
+                .variables
+                .variables
+                .iter()
+                .filter(|v| !figcraft_engine::library::is_remote_variable(doc, &v.id))
+                .count(),
             local_styles: doc.styles.len(),
             export_ids: page_node.map(|n| n.children.clone()).unwrap_or_default(),
         });
@@ -2221,9 +2495,11 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
         is_group: ids.iter().all(|i| doc.node(*i).is_some_and(|n| matches!(n.kind, figcraft_doc::NodeKind::Group))),
         is_text,
         is_component,
+        is_component_set: ids.len() == 1 && first.is_some_and(|n| matches!(n.kind, NodeKind::ComponentSet { .. })),
         is_shape,
         bool_op: figcraft_engine::booleans::shown_op(doc, ids),
         count: ids.len(),
+        can_create_set: figcraft_engine::cmd::component::can_create_set(doc, ids),
         more_actions,
     });
 
@@ -2296,7 +2572,7 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
         let grids_json = serde_json::to_value(&list).unwrap_or(serde_json::Value::Array(vec![]));
         list.iter()
             .enumerate()
-            .map(|(index, g)| GridRow { index, label: grid_label(g), color: g.color.to_hex(), visible: g.visible, grids: grids_json.clone() })
+            .map(|(index, g)| GridRow { index, label: grid_label(g), color: g.color.to_hex(), visible: g.visible, grids: grids_json.clone(), layout: g.clone(), kind: g.kind, count: grid_count_cell(g), align: g.align })
             .collect()
     });
 
@@ -2342,8 +2618,11 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
             is_section,
             status,
             changed: ids.iter().any(|i| doc.node(*i).is_some_and(|n| n.dev_status == figcraft_doc::DevStatus::ReadyForDev && n.dev_changed)),
+            focused: false,
+            newest_version: None,
             hide_contents: ids.iter().all(|i| doc.node(*i).is_some_and(|n| n.hides_contents())),
             color_hex: common(doc, ids, |n| n.fills.first().and_then(|p| p.solid_color()).map(|c| c.to_hex())).flatten(),
+            last_note: common(doc, ids, |n| n.dev_note.clone()).unwrap_or_default(),
         });
     }
 
@@ -2358,6 +2637,11 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
     d.bool_variables = doc.variables.variables.iter().filter(|v| v.kind == figcraft_doc::VariableType::Boolean).map(|v| v.name.clone()).collect();
     d.text_variables = doc.variables.variables.iter().filter(|v| v.kind == figcraft_doc::VariableType::String).map(|v| v.name.clone()).collect();
     d.visible = common(doc, ids, |n| n.visible);
+    // ── Appearance 的混合模式与蒙版（egui `paints.rs::appearance`）──
+    // blend 每帧从选区算；Normal / PassThrough 不画 blend 行，只有非默认值才出现。
+    d.blend = common(doc, ids, |n| n.blend);
+    d.all_mask = ids.iter().all(|i| doc.node(*i).is_some_and(|n| n.is_mask));
+    d.mask_type = common(doc, ids, |n| n.mask_type);
     // ── Frame 设置：裁剪内容 + Appearance 的平滑圆角（`node.set` 的两条属性）──
     d.clip = common(doc, ids, |n| n.clip);
     d.corner_smoothing = common(doc, ids, |n| n.corners.smoothing);
@@ -2464,14 +2748,30 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
     d.constraints_h = constraints_h;
     d.constraints_v = constraints_v;
 
-    // ── Typography（`typography/fields.rs`）：全部选中都是文本节点才画这一节 ──
-    let text = if ids.iter().all(|i| doc.node(*i).is_some_and(|n| matches!(n.kind, NodeKind::Text(_)))) {
+    // ── Typography（`typography/fields.rs`）：选区里只要有文本节点就画这一节 ──
+    // 值只从文本节点统计；“文本 + 矩形”混选时矩形不参与字体字段，命令也只打文本 id。
+    let text_ids: Vec<NodeId> = ids
+        .iter()
+        .copied()
+        .filter(|i| doc.node(*i).is_some_and(|n| matches!(n.kind, NodeKind::Text(_))))
+        .collect();
+    d.text_ids = text_ids.clone();
+    // Eligibility uses the **full** selection: one text plus one path. It must be computed
+    // before `ids` is narrowed to text targets for the typography values.
+    let can_put_on_path = text_ids.len() == 1
+        && ids.len() == 2
+        && ids.iter().find(|i| !text_ids.contains(*i)).and_then(|i| doc.node(*i)).is_some_and(|n| figcraft_doc::geometry::stroke_geometry(n).is_some());
+    let text = if !text_ids.is_empty() {
+        let ids = text_ids.as_slice();
         fn text_of(n: &figcraft_doc::Node) -> Option<&figcraft_doc::TextData> {
             match &n.kind {
                 NodeKind::Text(t) => Some(t),
                 _ => None,
             }
         }
+        let has_path = ids.iter().all(|i| doc.node(*i).and_then(|n| text_of(n)).and_then(|t| t.path.as_ref()).is_some());
+        let path_start = common(doc, ids, |n| text_of(n).and_then(|t| t.path.as_ref()).map(|p| p.start())).flatten();
+        let path_flip = ids.iter().all(|i| doc.node(*i).and_then(|n| text_of(n)).and_then(|t| t.path.as_ref()).is_some_and(|p| p.flip));
         Some(TextData {
             font_family: common(doc, ids, |n| text_of(n).map(|t| t.style.font_family.clone())).flatten(),
             font_style: common(doc, ids, |n| text_of(n).map(|t| t.style.font_style.clone())).flatten(),
@@ -2591,11 +2891,46 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
             // 可变字体的轴：只有**单一**字体族 + 单一字面才谈得上「这个字体的轴」（egui
             // `variable_face`）；值取该字面的 `axis_values`，缺省退回轴的默认值。
             axes: variable_axes(doc, ids),
+            has_path,
+            path_start,
+            path_flip,
+            can_put_on_path,
         })
     } else {
         None
     };
     d.text = text;
+    // ── 文本样式链接（egui `style_picker::text_link`）：有链接时 Typography 只留样式 chip，
+    // 字体族 / 字重 / 字号行隐藏（字符样式不一致的文本仍显示字体行）。──
+    let style_links: Vec<Option<String>> = text_ids
+        .iter()
+        .map(|id| doc.node(*id).and_then(|n| n.styles.text.clone()))
+        .collect();
+    let style_first = style_links.first().cloned().flatten();
+    d.text_style_mixed = style_links
+        .first()
+        .is_some_and(|first| style_links.iter().any(|link| link != first));
+    d.text_style = if d.text_style_mixed {
+        None
+    } else {
+        style_first.and_then(|id| doc.style(&id)).map(|s| s.name.clone())
+    };
+    // `characters` 的绑定行只看文本节点；整选区里混进矩形时不能拿矩形的空绑定把行吞掉。
+    d.bound.remove("characters");
+    let char_bindings: Vec<Option<String>> = text_ids
+        .iter()
+        .map(|id| {
+            doc.node(*id)
+                .and_then(|n| n.bound.get("characters"))
+                .and_then(|v| doc.variables.get(v))
+                .map(|v| v.name.clone())
+        })
+        .collect();
+    if let Some(first) = char_bindings.first().cloned().flatten() {
+        if char_bindings.iter().all(|b| b.as_deref() == Some(first.as_str())) {
+            d.bound.insert("characters".into(), first);
+        }
+    }
 
     // ── 网格轨道（egui `layout_panel.rs::tracks`）：只在单选一个 grid frame 时出现 ──
     d.grid_tracks = ids.first().and_then(|id| {
@@ -2623,6 +2958,75 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
         Some(GridTracksData { columns: track_rows(&layout.column_tracks, &g.columns), rows: track_rows(&layout.row_tracks, &g.rows) })
     });
 
+    // ── 网格单元格（egui `layout_panel.rs::grid_cell`）：父级是 grid、子层不 absolute ──
+    let grid_parent = !ids.is_empty()
+        && ids.iter().all(|i| {
+            doc.node(*i)
+                .and_then(|n| n.parent)
+                .and_then(|p| doc.node(p))
+                .and_then(|p| p.layout.as_ref())
+                .is_some_and(|l| l.mode == figcraft_doc::LayoutMode::Grid)
+        });
+    let all_relative = common(doc, ids, |n| n.child_layout.absolute) == Some(false);
+    d.grid_cell = if grid_parent && all_relative {
+        ids.first().and_then(|id| {
+            let parent = doc.node(*id)?.parent.and_then(|p| doc.node(p))?;
+            let g = figcraft_layout::grid_geometry(doc, parent.id)?;
+            let cell = g.cells.into_iter().find(|c| c.id == *id)?;
+            let n = doc.node(*id)?;
+            let align_name = |a: figcraft_doc::CellAlign| match a {
+                figcraft_doc::CellAlign::Min => "min",
+                figcraft_doc::CellAlign::Center => "center",
+                figcraft_doc::CellAlign::Max => "max",
+            };
+            let aligns: Vec<Option<&'static str>> =
+                ids.iter().filter_map(|i| doc.node(*i)).map(|n| n.child_layout.grid_align_h.map(align_name)).collect();
+            let vs: Vec<Option<&'static str>> =
+                ids.iter().filter_map(|i| doc.node(*i)).map(|n| n.child_layout.grid_align_v.map(align_name)).collect();
+            let pick = |list: &[Option<&'static str>]| {
+                let first = list.first().copied().flatten();
+                let mixed = list.iter().any(|x| *x != list[0]);
+                (first, mixed)
+            };
+            let (align_h, align_h_mixed) = pick(&aligns);
+            let (align_v, align_v_mixed) = pick(&vs);
+            let column_spans: Vec<u32> =
+                ids.iter().filter_map(|i| doc.node(*i)).map(|n| n.child_layout.column_span()).collect();
+            let row_spans: Vec<u32> =
+                ids.iter().filter_map(|i| doc.node(*i)).map(|n| n.child_layout.row_span()).collect();
+            let pick_span = |values: Vec<u32>| {
+                let first = *values.first()?;
+                values.iter().all(|v| *v == first).then_some(first)
+            };
+            let single = ids.len() == 1;
+            Some(GridCellData {
+                column: cell.column as u32 + 1,
+                row: cell.row as u32 + 1,
+                single,
+                anchored: n.child_layout.grid_column.is_some() || n.child_layout.grid_row.is_some(),
+                column_span: pick_span(column_spans),
+                row_span: pick_span(row_spans),
+                align_h,
+                align_v,
+                align_h_mixed,
+                align_v_mixed,
+            })
+        })
+    } else {
+        None
+    };
+
+    // ── 智能选区间距（egui `canvas::selection_spacing::panel`）──
+    let sp = figcraft_engine::selection_spacing::selection_spacing(doc, ids);
+    d.selection_spacing = if sp.horizontal.is_some() || sp.vertical.is_some() {
+        Some(SelectionSpacingData {
+            horizontal: sp.horizontal.as_ref().map(|a| a.value),
+            vertical: sp.vertical.as_ref().map(|a| a.value),
+        })
+    } else {
+        None
+    };
+
     d
 }
 
@@ -2631,8 +3035,8 @@ pub(crate) fn grid_label(g: &figcraft_doc::LayoutGrid) -> String {
     let trim = |v: f64| format!("{v}");
     match g.kind {
         GridKind::Grid => format!("Grid ({})", trim(g.size)),
-        GridKind::Columns if g.count == 0 => tr("Auto columns").into(),
-        GridKind::Rows if g.count == 0 => tr("Auto rows").into(),
+        GridKind::Columns if grid_auto(g) => tr("Auto columns").into(),
+        GridKind::Rows if grid_auto(g) => tr("Auto rows").into(),
         GridKind::Diagonal if g.count == 0 => "Auto 45° lines".into(),
         GridKind::Rings if g.count == 0 => "Auto rings".into(),
         GridKind::Columns => format!("{} columns", g.count.max(1)),
@@ -2640,6 +3044,16 @@ pub(crate) fn grid_label(g: &figcraft_doc::LayoutGrid) -> String {
         GridKind::Diagonal => format!("{} lines at 45°", g.count.max(1)),
         GridKind::Rings => format!("{} rings", g.count.max(1)),
     }
+}
+
+/// Fixed-size columns/rows counted Auto：`count == 0` 且不是 Stretch（上游 `auto_count`）。
+pub(crate) fn grid_auto(g: &figcraft_doc::LayoutGrid) -> bool {
+    g.count == 0 && g.align != figcraft_doc::GridAlign::Stretch
+}
+
+/// 设置面板里 Count 的显示值：Auto 时留空。
+pub(crate) fn grid_count_cell(g: &figcraft_doc::LayoutGrid) -> Option<u32> {
+    (!grid_auto(g)).then(|| g.count.max(1))
 }
 
 /// 选区颜色分组。**直接用引擎的 `collect`**，与 egui `selection_colors::colors` 是同一份数据。
@@ -2863,6 +3277,20 @@ mod tests {
         let page = doc.pages.first().copied();
         let ctx = read_contrast_context(doc, &[front], page);
         assert_eq!(ctx.bg.to_hex(), "FF0000", "the red sibling under the blue selection is the contrast background");
+    }
+
+    /// D09：文本 + 矩形混选时 Typography 仍出现，但值/命令目标只取文本节点。
+    #[test]
+    fn mixed_text_and_rectangle_keeps_typography_for_text_only() {
+        let mut s = Session::with_document(Document::new("mixed-text"));
+        let t = s.execute("text.create", &json!({ "text": "Hello", "x": 0.0, "y": 0.0 })).expect("text");
+        let text: NodeId = serde_json::from_value(t["id"].clone()).expect("text id");
+        let r = s.execute("shape.rectangle", &json!({ "x": 80.0, "y": 0.0, "width": 40.0, "height": 40.0 })).expect("rect");
+        let rect: NodeId = serde_json::from_value(r["id"].clone()).expect("rect id");
+        let d = read(s.doc().expect("doc"), &[text, rect], None, 0);
+        assert!(d.text.is_some(), "the text half still drives Typography");
+        assert_eq!(d.text_ids, vec![text], "only text ids are typography targets");
+        assert!(d.text.as_ref().and_then(|x| x.font_family.as_ref()).is_some(), "font values are read from the text, not the rectangle");
     }
 }
 

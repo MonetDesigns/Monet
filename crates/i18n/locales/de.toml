@@ -2037,7 +2037,7 @@ status = "draft — needs native review"
 "Anyone on your network with this code can look at the file, not change it, while this app stays open." = "Alle in deinem Netzwerk mit diesem Code können die Datei ansehen, aber nicht ändern, solange diese App geöffnet ist."
 "Auto: by the first letter with a direction" = "Automatisch: nach dem ersten Buchstaben mit Richtung"
 "Ctrl+click a padding field" = "Strg+Klick auf ein Innenabstands-Feld"
-"Delete {n} variables" = "{n} Variablen löschen"
+"Delete {n} variables" = { other = "{n} Variablen löschen" }
 "Disconnected. Reconnecting…" = "Getrennt. Verbinde neu…"
 "Disconnected. Your edits stay here and sync when the connection returns. Reconnecting…" = "Getrennt. Deine Änderungen bleiben hier und werden synchronisiert, sobald die Verbindung zurück ist. Verbinde neu…"
 "Dismiss" = "Ausblenden"

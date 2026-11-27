@@ -10,7 +10,7 @@
 //! 全部走冻结通用控件与列表行编辑器池，没有新建控件。
 
 use super::data::{BindingData, ComponentData, ComponentDef, ComponentProp, PanelData};
-use super::sections::{icon_cmd, icon_row, open_detached_with, pick_dropdown, slot, window_open_button};
+use super::sections::{bindable, icon_cmd, icon_row, open_detached_with, pick_dropdown, slot, window_open_button};
 use crate::panels::{RightFields, RowEditCtx};
 use crate::widgets::{Icon, IconButton, PanelSection, field_row, field_row_full, field_row_full_trailing, pt, rgba, sublabel_row, tokens};
 use figcraft_doc::NodeId;
@@ -37,7 +37,7 @@ pub(crate) fn section(f: &RightFields, d: &PanelData, cx: &mut App, n: &mut usiz
         // 嵌在主组件里的实例：实例属性之外，还要能把它「显示哪个组件」绑到 instanceSwap 属性上
         // （lizard `scoped_property_row(mainComponent)`）。这一行只存在于 `binding_section`，
         // 而走到这里时 `d.component` 一定是 Some，之前就整行丢了。
-        return Some(instance_section(f, c, d.binding.as_ref(), cx, n));
+        return Some(instance_section(f, d, c, d.binding.as_ref(), cx, n));
     }
     if !c.editable_description {
         return None;
@@ -90,6 +90,7 @@ fn variant_section(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut usi
                 paint: None,
                 nest: None,
                 nest_key: None,
+                map: None,
                 paint_color: None,
             },
         );
@@ -115,6 +116,7 @@ fn variant_section(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut usi
                 paint: None,
                 nest: None,
                 nest_key: None,
+                map: None,
                 paint_color: None,
             },
         );
@@ -135,6 +137,34 @@ fn properties_section(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut 
     // header 画，这里**没有** description 输入框（之前我塞了一个在 Properties 上面，是错的）。
     let t = tokens();
     let sec = PanelSection::new(c.title);
+    // egui `component_panel.rs::description_ui`：组件 / 组件集自己的描述可编辑，提交
+    // `node.set {description}`。现在是 3 行多行输入（按失焦 / Enter 提交），并限制 10000 字符。
+    let owner = c.main_id.unwrap_or(NodeId(0));
+    let desc = f.row_field_multiline(
+        cx,
+        slot(n),
+        &c.description,
+        RowEditCtx {
+            cmd: "node.set",
+            params: json!({}),
+            key: "description",
+            scale: 1.0,
+            string_value: true,
+            paint: None,
+            nest: None,
+            nest_key: None,
+            map: Some(std::rc::Rc::new(move |text: &str| {
+                let value: String = text.chars().take(10_000).collect();
+                Some(json!({ "id": owner.0, "props": { "description": value } }))
+            })),
+            paint_color: None,
+        },
+        3,
+    );
+    desc.update(cx, |te, _| {
+        te.set_placeholder(tr("Describe how and when to use this component"));
+    });
+    let sec = sec.child(sublabel_row(tr("Description"))).child(crate::widgets::block_row(div().w_full().h(px(72.0)).child(desc)));
     let sec = property_rows(f, c, cx, n).into_iter().fold(sec, |s, row| s.child(row));
     // 变体值冲突警告（lizard `variant_conflicts`：同一组合出现多个变体时给黄条）。
     let sec = if c.variant_conflicts.is_empty() {
@@ -186,6 +216,7 @@ fn property_rows(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut usize
                 paint: None,
                 nest: None,
                 nest_key: None,
+                map: None,
                 paint_color: None,
             },
         );
@@ -245,6 +276,7 @@ fn property_rows(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut usize
                         paint: None,
                         nest: None,
                         nest_key: None,
+                        map: None,
                         paint_color: None,
                     },
                 );
@@ -291,6 +323,7 @@ fn property_rows(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut usize
                 paint: None,
                 nest: None,
                 nest_key: None,
+                map: None,
                 paint_color: None,
             },
         );
@@ -321,6 +354,7 @@ fn property_rows(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut usize
                         paint: None,
                         nest: None,
                         nest_key: None,
+                        map: None,
                         paint_color: None,
                     },
                 )
@@ -569,6 +603,7 @@ fn current_variant_rows(f: &RightFields, c: &ComponentData) -> Vec<crate::widget
 
 fn instance_section(
     f: &RightFields,
+    d: &PanelData,
     c: &ComponentData,
     binding: Option<&BindingData>,
     cx: &mut App,
@@ -615,7 +650,7 @@ fn instance_section(
         sec = sec.child(sublabel_row(tr("Properties")));
     }
     for p in &c.props {
-        sec = sec.child(instance_prop_row(f, c, None, cx, n, p));
+        sec = sec.child(instance_prop_row(f, d, c, None, cx, n, p));
     }
     // 暴露属性的嵌套实例（lizard `exposed_copies`）：名字小标题 + 它们各自的属性行。
     // 之前这块完全没接，实例里暴露的嵌套实例属性在右栏看不到。
@@ -625,7 +660,7 @@ fn instance_section(
         ));
         for p in props {
             // 打在这个嵌套副本上，不是外层选中的实例：属性名可能只有它才有。
-            sec = sec.child(instance_prop_row(f, c, Some(*copy), cx, n, p));
+            sec = sec.child(instance_prop_row(f, d, c, Some(*copy), cx, n, p));
         }
     }
     // 嵌在主组件里的实例：主组件绑定行（lizard `scoped_property_row(mainComponent)`）。
@@ -638,6 +673,7 @@ fn instance_section(
 /// 实例属性的一行（lizard `instance_props` 的 row）：类型图标 + 属性名 + 值控件。
 fn instance_prop_row(
     f: &RightFields,
+    d: &PanelData,
     c: &ComponentData,
     // 属性写在哪个实例上：外层选中的实例为 None（引擎按选中项走）；暴露属性的嵌套副本传它自己的 id，
     // 否则引擎会在外层实例的主组件里找同名属性（找不到就报 unknown property）。
@@ -687,6 +723,7 @@ fn instance_prop_row(
                     paint: None,
                     nest: Some("properties"),
                     nest_key: Some(p.name.clone()),
+                    map: None,
                     paint_color: None,
                 },
             )
@@ -737,6 +774,16 @@ fn instance_prop_row(
         }
         "slot" => slot_fill_control(f, c, p),
         _ => div().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(p.value.clone())).into_any_element(),
+    };
+    // Instance properties are variable-backed in lizard: boolean → Boolean variables, text /
+    // variant → String variables. The engine key is `componentProperties/<name>`.
+    let bind_key = format!("componentProperties/{}", p.name);
+    let control = match p.kind {
+        "boolean" => bindable(f, bind_key.clone(), d.bound.get(&bind_key).map(String::as_str), &d.bool_variables, control),
+        "text" | "variant" => {
+            bindable(f, bind_key.clone(), d.bound.get(&bind_key).map(String::as_str), &d.text_variables, control)
+        }
+        _ => control,
     };
     let line = div().flex().flex_row().items_center().gap(pt(8.0)).w_full().child(label).child(div().flex_1().min_w(px(0.0)).child(control));
     field_row_full(line)

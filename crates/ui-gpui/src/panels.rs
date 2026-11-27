@@ -10,14 +10,14 @@ use crate::canvas::geom::Color32;
 use crate::inline_input::InlineInput;
 use crate::widgets::menu::MenuRow;
 use crate::widgets::{
-    Icon, IconButton, PanelSection, SectionHeader, SectionHeaderVariant, Segmented, Slot, TextEdit, TextField, field_row, field_row_full,
+    Icon, IconButton, PanelSection, SectionHeader, SectionHeaderVariant, Segmented, Slot, TextEdit, TextField, Dropdown, field_row, field_row_full,
     field_row_h, pt, rgba, sublabel_row, sublabel_row2, tokens,
 };
 use figcraft_color::BlendMode;
 use figcraft_i18n::tr;
 use figcraft_i18n::tr_noop;
 use gpui::{App, Div, Entity, Hsla, SharedString, Stateful, Window, div, prelude::*, px, svg};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::rc::Rc;
 
 /// 四块整面板（Shortcuts / Versions / Dev compare / Assets），由引擎 `ui_requests` 打开的浮层。
@@ -468,7 +468,7 @@ pub(crate) struct LayoutVals {
 /// egui 每帧用 `Id::unique((row, i))` 重建临时输入框；GPUI 是 retained tree，输入框必须
 /// 缓存，因此用一个**固定大小的编辑器池** + 每帧刷新的上下文表：第 `n` 个编辑器提交时
 /// 读 `ctx[n]` 决定写到哪个命令/哪一行。`right_panel` 每帧按顺序认领槽位。
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) struct RowEditCtx {
     pub cmd: &'static str,
     /// 提交时合并进 params 的固定部分（如 `{"index": 0}`）。
@@ -492,6 +492,10 @@ pub(crate) struct RowEditCtx {
     pub nest: Option<&'static str>,
     /// `nest` 的键名需要是运行时字符串时用它（组件属性名是 `String`，不能 `&'static str`）。
     pub nest_key: Option<String>,
+    /// 自定义提交：拿到用户输入的**原始文本**，返回一条完整命令参数；`None` = 不提交。
+    /// 用于必须整体替换一个数组/对象的字段（layout grid 的 `props.grids`、selection spacing 的
+    /// `{horizontal|vertical}` 等），它们无法用 `key` + 标量值表达。
+    pub map: Option<std::rc::Rc<dyn Fn(&str) -> Option<Value>>>,
 }
 
 /// 一个 WGSL 参数输入框提交时所需的全部上下文。持有当前绑定快照，提交时只改这一个参数、
@@ -525,6 +529,11 @@ pub(crate) struct PanelSel {
     pub all_points: bool,
     pub has_text: bool,
     pub all_frame: bool,
+    /// 所有选中都是可容纳 auto layout 的容器：frame-like 或 Group（egui
+    /// `layout_panel.rs::layout_containers`）。`layout.add` 的 `+` 只看这个，不看 `all_frame`。
+    pub all_layout_container: bool,
+    /// 所有选中都是 Star（决定 Star 节标题与 Ratio 字段；纯 Polygon 时标题为 Polygon）。
+    pub all_stars: bool,
     /// Whether every selected node has auto layout (mirrors egui `has_al`).
     pub has_al: bool,
     /// The common layout direction (`None` when not all in auto layout, or values differ → "Mixed").
@@ -596,13 +605,13 @@ pub(crate) mod visibility {
     }
 
     /// egui `layout_panel.rs::layout_section` 的 `btns`：
-    /// `in_instance` → 空；`frames && !has_al` → `+`；`has_al` → `−`；其余 → 空。
+    /// `in_instance` → 空；`layout_containers && !has_al` → `+`；`has_al` → `−`；其余 → 空。
     /// 返回该显示的命令 id（`None` = 这个按钮根本不该出现）。
     pub fn layout_header(sel: &PanelSel) -> Option<&'static str> {
         if sel.in_instance {
             return None;
         }
-        if sel.all_frame && !sel.has_al {
+        if sel.all_layout_container && !sel.has_al {
             return Some("layout.add");
         }
         if sel.has_al {
@@ -710,9 +719,23 @@ pub(crate) struct RightFields {
     inspect_lang: std::rc::Rc<std::cell::RefCell<usize>>,
     inspect_fmt: std::rc::Rc<std::cell::RefCell<usize>>,
     inspect_rem: std::rc::Rc<std::cell::RefCell<bool>>,
+    /// `annotation.new` request: focus the "new annotation" field of this layer once it is built.
+    note_focus_id: std::rc::Rc<std::cell::RefCell<Option<figcraft_doc::NodeId>>>,
+    /// The field entity `annotations` handed over for that focus request (taken by `right_panel`).
+    note_focus_edit: std::rc::Rc<std::cell::RefCell<Option<Entity<TextEdit>>>>,
+    /// Component Playground: the target the values belong to (reset when the selection changes),
+    /// the values the user is trying, the last built result and its cache key, and one text field
+    /// per text property (kept across frames so typing/caret survive).
+    playground_target: std::rc::Rc<std::cell::RefCell<Option<figcraft_doc::NodeId>>>,
+    playground_values: std::rc::Rc<std::cell::RefCell<serde_json::Map<String, Value>>>,
+    playground_cache: std::rc::Rc<std::cell::RefCell<Option<(String, right::data::PlaygroundData)>>>,
+    playground_edits: std::rc::Rc<std::cell::RefCell<std::collections::HashMap<String, Entity<TextEdit>>>>,
     /// Prototype 面板里展开编辑的那条交互：`(节点, 行下标)`；`None` = 都没展开。
     /// 带节点是因为画布上的原型连线/手柄也能打开编辑器，切选后同一下标不该串行。
     proto_open: std::rc::Rc<std::cell::RefCell<Option<(figcraft_doc::NodeId, usize)>>>,
+    /// 展开了设置的 layout grid 行下标（egui `grid_open` 临时状态）。一次只展开一条，
+    /// 设置里的输入框池按「当前展开那一行」认领。
+    grid_open: std::rc::Rc<std::cell::RefCell<Option<usize>>>,
     /// WGSL 参数输入框池：retained tree 不能每帧新建，预建固定个数，按当前 shader 的参数数认领。
     wgsl_param_fields: Vec<Entity<TextField>>,
     /// 每个参数字段提交时的运行时上下文（当前绑定快照 + uniform 路径 + 控件范围）。
@@ -774,8 +797,6 @@ pub(crate) struct RightFields {
     corner_br: Entity<TextField>,
     /// 「独立圆角」展开开关（egui `right.rs` 的 `Id::new("indep_corners")` 临时标记）。
     corners_individual: std::rc::Rc<std::cell::RefCell<bool>>,
-    /// Whether the constraints row under X/Y is revealed.
-    constraints_open: std::rc::Rc<std::cell::RefCell<bool>>,
     /// 描边逐边权重 T/R/B/L（`strokeTopWeight` … `strokeLeftWeight`）。选「Custom」后展开，
     /// 对应 egui `paints.rs::stroke` 的 `common(doc, sel, |n| n.stroke.sides)` 那两行输入框。
     stroke_side_t: Entity<TextField>,
@@ -796,7 +817,7 @@ pub(crate) struct RightFields {
     limit_open: std::rc::Rc<std::cell::RefCell<[bool; 4]>>,
     /// 可绑定变量的数值字段里，指针**现在停在哪一个**（`variable.bind` 的 field key）。
     /// 原版「应用变量」按钮只在 `rect_contains_pointer` 时才画，这里用一份共享的悬停态实现。
-    bind_hover: std::rc::Rc<std::cell::RefCell<Option<&'static str>>>,
+    bind_hover: std::rc::Rc<std::cell::RefCell<Option<SharedString>>>,
     /// The blend-mode dropdown's current label (egui's `dropdown` row). Clicking opens the menu.
     blend_label: std::cell::RefCell<SharedString>,
     /// Blend-mode row reveal (egui `paints.rs::appearance`'s `blend_open` local flag): the
@@ -1175,6 +1196,10 @@ impl RightFields {
                     r.properties,
                     r.paints,
                     r.text.clone(),
+                    r.bound.clone(),
+                    r.number_variables.clone(),
+                    r.string_variables.clone(),
+                    r.color_variables.clone(),
                     r.effects.clone(),
                     r.grids.clone(),
                     self.popups(),
@@ -1239,6 +1264,13 @@ impl RightFields {
                 te.set_right_pad(8.0);
                 te.set_on_commit(move |text, _window, _cx| {
                     let Some(c) = ctx.borrow().get(slot).cloned().flatten() else { return };
+                    // 需要整体替换 JSON（grids / spacing）：闭包自己构造完整 params，绕过 key/scale。
+                    if let Some(map) = &c.map {
+                        if let Some(params) = map(text.trim()) {
+                            cmds.push(Cmd { id: c.cmd, params: Some(params) });
+                        }
+                        return;
+                    }
                     let mut params = c.params.clone();
                     // `nest` = 写进子对象（`instance.setProperties` 的 `properties`）。
                     let put = |params: &mut Value, key: &str, v: Value| match c.nest {
@@ -1252,14 +1284,38 @@ impl RightFields {
                         None => params[key] = v,
                     };
                     if c.string_value {
-                        if let Some(mut paint) = c.paint_color.clone() {
+                        if c.cmd == "page.setBackground" && c.key == "color" {
+                            // 改页面底色时不要顺手把不透明度重置成 100：6 位 hex 输入沿用
+                            // 旧 alpha，8 位 hex 输入则以输入里的 alpha 为准。
+                            let base = params
+                                .get("color")
+                                .and_then(Value::as_str)
+                                .and_then(figcraft_color::Color::from_hex)
+                                .unwrap_or(figcraft_color::Color::WHITE);
+                            let input = text.trim();
+                            if let Some(color) = figcraft_color::Color::from_hex(input) {
+                                let digits = input.trim_start_matches('#').chars().filter(|c| c.is_ascii_hexdigit()).count();
+                                let alpha = if digits == 6 { base.a } else { color.a };
+                                params["color"] = Value::String(color.with_alpha(alpha).to_css_hex());
+                            }
+                        } else if let Some(mut paint) = c.paint_color.clone() {
                             paint["color"] = Value::String(text.trim().to_string());
                             params["paint"] = paint;
                         } else {
                             put(&mut params, c.key, Value::String(text.trim().to_string()));
                         }
                     } else if let Ok(v) = text.trim().trim_end_matches('%').trim().parse::<f64>() {
-                        if let Some(mut paint) = c.paint.clone() {
+                        if c.cmd == "page.setBackground" && c.key == "opacity" {
+                            // 页面背景的不透明度是颜色的一部分：引擎 `page.setBackground`
+                            // 只读 `color`（`crates/engine/src/cmd/page.rs`），所以把固定
+                            // 底色参数的 alpha 换掉后提交 8 位 hex（`#RRGGBBAA`）。
+                            let base = params
+                                .get("color")
+                                .and_then(Value::as_str)
+                                .and_then(figcraft_color::Color::from_hex)
+                                .unwrap_or(figcraft_color::Color::WHITE);
+                            params["color"] = Value::String(base.with_alpha((v / c.scale) as f32).to_css_hex());
+                        } else if let Some(mut paint) = c.paint.clone() {
                             // egui `selection_colors.rs`: clone the group's paint, change its
                             // opacity, and send the whole object as `paint`.
                             paint["opacity"] = serde_json::json!(v / c.scale);
@@ -1345,7 +1401,14 @@ impl RightFields {
             inspect_lang: std::rc::Rc::new(std::cell::RefCell::new(0usize)),
             inspect_fmt: std::rc::Rc::new(std::cell::RefCell::new(0usize)),
             inspect_rem: std::rc::Rc::new(std::cell::RefCell::new(false)),
+            note_focus_id: std::rc::Rc::new(std::cell::RefCell::new(None)),
+            note_focus_edit: std::rc::Rc::new(std::cell::RefCell::new(None)),
+            playground_target: std::rc::Rc::new(std::cell::RefCell::new(None)),
+            playground_values: std::rc::Rc::new(std::cell::RefCell::new(serde_json::Map::new())),
+            playground_cache: std::rc::Rc::new(std::cell::RefCell::new(None)),
+            playground_edits: std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new())),
             proto_open: std::rc::Rc::new(std::cell::RefCell::new(None)),
+            grid_open: std::rc::Rc::new(std::cell::RefCell::new(None)),
             // WGSL 材质（另一条并行开发线新增的字段）：这里先给可编译的默认值，
             // 参数输入框池由该功能自己按需预建。
             wgsl_param_fields,
@@ -1417,7 +1480,6 @@ impl RightFields {
             corner_bl: nf_corner(cx, "BL", "bottomLeftRadius", &cmds),
             corner_br: nf_corner(cx, "BR", "bottomRightRadius", &cmds),
             corners_individual: std::rc::Rc::new(std::cell::RefCell::new(false)),
-            constraints_open: std::rc::Rc::new(std::cell::RefCell::new(false)),
             // 描边逐边权重：与菜单里 T/R/B/L 四项、展开后 lead 同一族图标。
             stroke_side_t: nf_stroke_side(cx, Icon::PaddingTop, "strokeTopWeight", &cmds, wake),
             stroke_side_r: nf_stroke_side(cx, Icon::PaddingRight, "strokeRightWeight", &cmds, wake),
@@ -1535,6 +1597,7 @@ impl RightFields {
         f.inspect_fmt = Default::default();
         f.inspect_rem = Default::default();
         f.proto_open = Default::default();
+        f.grid_open = Default::default();
         // ⛔ 不要把 row_ctx / wgsl_param_ctx / scale_ctx / pad 换成新的空 Rc：
         // 这些 editor 实体是 clone 的（共享），回调在 new 时捕获的是**原** context Rc。
         // 一旦换成空 Rc，新窗口的行编辑提交时 get_mut(slot) 读不到、直接 return —— 编辑
@@ -1549,7 +1612,6 @@ impl RightFields {
         // scale_ctx / pad 同理保留共享（见上方注释），不重置。
         f.pad_individual = Default::default();
         f.corners_individual = Default::default();
-        f.constraints_open = Default::default();
         f.limit_open = Default::default();
         f.bind_hover = Default::default();
         f.blend_open = Default::default();
@@ -1569,6 +1631,96 @@ impl RightFields {
     /// The canvas view, for opening a menu from a panel control (the comments filter).
     pub(crate) fn root(&self) -> Option<Entity<CanvasView>> {
         self.root.clone()
+    }
+
+    /// `annotation.new`: remember which layer's new-note field should take focus.
+    pub(crate) fn request_note_focus(&self, id: figcraft_doc::NodeId) {
+        *self.note_focus_id.borrow_mut() = Some(id);
+    }
+
+    /// Whether this layer is the pending focus target; consumes the request (once).
+    pub(crate) fn take_note_focus_id(&self, id: figcraft_doc::NodeId) -> bool {
+        let mut slot = self.note_focus_id.borrow_mut();
+        if *slot == Some(id) {
+            *slot = None;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// The field built for that request; `right_panel` focuses it with the real `Window`.
+    pub(crate) fn set_note_focus_edit(&self, edit: Entity<TextEdit>) {
+        *self.note_focus_edit.borrow_mut() = Some(edit);
+    }
+
+    pub(crate) fn take_note_focus_edit(&self) -> Option<Entity<TextEdit>> {
+        self.note_focus_edit.borrow_mut().take()
+    }
+
+    /// Drop a pending `annotation.new` when its target layer no longer exists.
+    pub(crate) fn clear_note_focus(&self) {
+        *self.note_focus_id.borrow_mut() = None;
+        *self.note_focus_edit.borrow_mut() = None;
+    }
+
+    /// The playground values for `target`; a different target clears the tried values (EGUI resets
+    /// its `Playground` when the selection moves to another component).
+    pub(crate) fn playground_values(&self, target: figcraft_doc::NodeId) -> serde_json::Map<String, Value> {
+        let mut owner = self.playground_target.borrow_mut();
+        if *owner != Some(target) {
+            *owner = Some(target);
+            self.playground_values.borrow_mut().clear();
+            *self.playground_cache.borrow_mut() = None;
+        }
+        self.playground_values.borrow().clone()
+    }
+
+    pub(crate) fn set_playground_value(&self, name: String, value: Value) {
+        self.playground_values.borrow_mut().insert(name, value);
+        *self.playground_cache.borrow_mut() = None;
+    }
+
+    pub(crate) fn clear_playground_values(&self) {
+        self.playground_values.borrow_mut().clear();
+        *self.playground_cache.borrow_mut() = None;
+    }
+
+    pub(crate) fn playground_cache(&self, key: &str) -> Option<right::data::PlaygroundData> {
+        self.playground_cache.borrow().as_ref().filter(|(k, _)| k == key).map(|(_, v)| v.clone())
+    }
+
+    pub(crate) fn set_playground_cache(&self, key: String, data: right::data::PlaygroundData) {
+        *self.playground_cache.borrow_mut() = Some((key, data));
+    }
+
+    /// A text property's editor, kept across frames (the playground section is rebuilt each frame).
+    pub(crate) fn playground_edit(&self, cx: &mut App, name: &str, value: &str) -> Entity<TextEdit> {
+        let edit = self
+            .playground_edits
+            .borrow_mut()
+            .entry(name.to_string())
+            .or_insert_with(|| cx.new(|cx| TextEdit::new(cx)))
+            .clone();
+        let values = self.playground_values.clone();
+        let wake = self.cmds.clone();
+        let key = name.to_string();
+        edit.update(cx, |te, _| {
+            if te.value() != value {
+                te.set_value(value);
+            }
+            te.set_on_change(move |text, _w, cx| {
+                values.borrow_mut().insert(key.clone(), Value::String(text.to_string()));
+                // 300 ms 防抖：逐字输入不逐帧 `build + export_preview`，停顿后再刷新预览与代码。
+                let wake = wake.clone();
+                cx.spawn(async move |_| {
+                    smol::Timer::after(std::time::Duration::from_millis(300)).await;
+                    wake.wake();
+                })
+                .detach();
+            });
+        });
+        edit
     }
 
     /// A3: the Comments panel's local state.
@@ -1709,6 +1861,16 @@ impl RightFields {
     /// 认领一个列表行编辑器：绑定本帧的提交目标，且只在显示值变化时写入。
     /// 返回可用于 `ColorField` 等组件的 `TextEdit` 实体。
     pub(crate) fn row_field(&self, cx: &mut App, slot: usize, value: &str, ctx: RowEditCtx) -> Entity<TextEdit> {
+        self.row_field_with_rows(cx, slot, value, ctx, 0)
+    }
+
+    /// 同 [`RightFields::row_field`]，但本行是多行编辑器。池里的编辑器会在普通行与多行行之间
+    /// 复用；每次认领时直接设置目标行数，避免先 reset 成 0 再把多行值冲成单行。
+    pub(crate) fn row_field_multiline(&self, cx: &mut App, slot: usize, value: &str, ctx: RowEditCtx, rows: usize) -> Entity<TextEdit> {
+        self.row_field_with_rows(cx, slot, value, ctx, rows)
+    }
+
+    fn row_field_with_rows(&self, cx: &mut App, slot: usize, value: &str, ctx: RowEditCtx, rows: usize) -> Entity<TextEdit> {
         // 只有「透明度」这一行是 0..100 的百分比、且尾部带可拖的「%」；其余数值行（时长、
         // 宽高、内边距…）范围各异，绝不能套 0..100，保持原来的纯文本提交即可。
         let opacity = !ctx.string_value && ctx.key == "opacity" && (ctx.scale - 100.0).abs() < f64::EPSILON;
@@ -1721,6 +1883,7 @@ impl RightFields {
         if let Some(e) = self.row_editors.get(slot) {
             e.update(cx, |te, _| {
                 te.set_readonly(false);
+                te.set_multiline(rows > 1);
                 if opacity {
                     // 与样式编辑器共用同一套透明度配置（拖动「%」、0..100 夹紧、可编辑）。
                     crate::widgets::ColorField::configure_opacity_editor(te, value);
@@ -1745,6 +1908,15 @@ impl RightFields {
             last[slot] = Some(value.to_string());
         }
         self.row_editors[slot].clone()
+    }
+
+    /// 实例内部的层不能改位置：X/Y/W/H/Rotation 的文本字段逐帧切只读。
+    /// 分段按钮 / 图标按钮没有 disabled API，由调用点去掉回调并降透明度。
+    pub(crate) fn set_position_readonly(&self, cx: &mut App, readonly: bool) {
+        let fields = [&self.x, &self.y, &self.w, &self.h, &self.rotation];
+        for e in fields {
+            e.update(cx, |tf, _| tf.set_readonly(readonly));
+        }
     }
 
     /// Push the selected nodes' common values into the cached fields (selection → panel).
@@ -2467,7 +2639,12 @@ pub(crate) fn right_panel(
     let header_sec = right::sections::header(f, data, col);
     // Component / Instance（egui `header` 末尾的 `component_panel::instance_section`）。
     let component_sec = right::component::section(f, data, cx, &mut n);
-    let section_sec = right::sections::section(f, data, row_w);
+    // 上游只在非矢量编辑时画 Section（`vector_edit == None`）；这里同步门控。
+    let section_sec = if data.vector.is_none() {
+        right::sections::section(f, data, row_w, cx, &mut n)
+    } else {
+        None
+    };
     let modes_sec = right::sections::variable_modes(f, data, row_w);
     // Design panel: not in Motion mode, so paint rows carry no keyframe diamond. The motion queue
     // is a placeholder (never used — `keyframe_layer` is `None`), keeping the shared `paints` call
@@ -2477,7 +2654,7 @@ pub(crate) fn right_panel(
     let strokes_sec = right::sections::paints(f, data, false, sel.has_vector, row_w, col, &mut n, window, cx, None, false, 0, &motion_q);
     let effects_sec = right::sections::effects(f, data, col, cx, None);
     let sel_colors_sec = right::sections::selection_colors(f, data, row_w, col, &mut n, window, cx);
-    let grids_sec = right::sections::grids(f, data, col);
+    let grids_sec = right::sections::grids(f, data, col, &mut n, cx);
     let export_sec = right::sections::export(f, data, col, &mut n, cx, motion);
 
     // ⛔ 分隔线的规则：**一条线属于「它上面那一节」的结尾**，且只有那一节真的存在时才加。
@@ -2494,11 +2671,15 @@ pub(crate) fn right_panel(
         body = body.child(s).child(sep());
     }
     // ── Position / Scale / Points ───────────────────────────────────────────────
-    // 矢量编辑选了顶点或线段时，点面板**替换** Position（egui `design`：`match vector_edit
+    // 矢量编辑激活时，点面板**替换** Position（egui `design`：`match vector_edit
     // { Some(ve) => vector_panel::points(...), None => { … position … } }`）。
+    // 注意门槛是「正在编辑矢量」而不是「已选中点」：刚进入矢量编辑、还没点任何点时，
+    // 参考实现照样画 Points 面板（`Point` + `Select points…`），Position 整块让位。
+    // `points_selected` 仍单独用来抑制 Arc / Star 与 Auto layout（无点时 layout 照常显示）。
+    let vector_active = data.vector.is_some();
     let points_selected = data.vector.as_ref().is_some_and(|v| v.has_selection);
     body = body
-        .child(if points_selected {
+        .child(if vector_active {
             right::sections::vector_points(f, data, cx, &mut n)
         } else if data.scale.is_some() {
             right::sections::scale(f, data, cx)
@@ -2506,12 +2687,21 @@ pub(crate) fn right_panel(
             // `position_fields`: Alignment captions sit above the 32 pt field track; the six icons are
             // two three-cell segments; each fills one field column of the unified grid (no fixed
             // width — they flow with the columns, so they stay aligned with the X/Y rows below).
+            // 实例内部的层拿不到自己的位置：X/Y/W/H/Rotation/约束整块只读（参考实现用
+            // `add_enabled_ui(!nested)` 包住 `position_fields`）。这里逐帧把字段设成只读，
+            // 并把没有 disabled API 的分段按钮换成「无回调 + 降透明度」。
+            f.set_position_readonly(cx, data.position_readonly);
             let bar = |items: &[(Icon, &'static str)], base: usize| {
                 let cmds = f.cmds.clone();
-                Segmented::icons(items).on_pick(move |i: usize, _w: &mut Window, _cx: &mut App| {
-                    const NAMES: [&str; 6] = ["align.left", "align.hcenter", "align.right", "align.top", "align.vcenter", "align.bottom"];
-                    cmds.push(Cmd { id: NAMES[(base + i).min(5)], params: None });
-                })
+                let seg = Segmented::icons(items);
+                if data.position_readonly {
+                    seg
+                } else {
+                    seg.on_pick(move |i: usize, _w: &mut Window, _cx: &mut App| {
+                        const NAMES: [&str; 6] = ["align.left", "align.hcenter", "align.right", "align.top", "align.vcenter", "align.bottom"];
+                        cmds.push(Cmd { id: NAMES[(base + i).min(5)], params: None });
+                    })
+                }
             };
             let h = bar(
                 &[(Icon::AlignLeft, tr("Align left")), (Icon::AlignHCenter, tr("Align horizontal centers")), (Icon::AlignRight, tr("Align right"))],
@@ -2525,6 +2715,9 @@ pub(crate) fn right_panel(
             // 少于 3 个图层时这个按钮**根本不画**，不是画出来再禁用。此前这里无条件显示，
             // 是「按钮什么时候显示 / 什么时候隐藏没接好」最直白的一处。
             let distribute_btn = visibility::distribute(&sel).then(|| {
+                if data.position_readonly {
+                    return div().opacity(0.45).child(IconButton::new(Icon::DistributeH).size(24.0)).into_any_element();
+                }
                 let dist_cmds = f.cmds.clone();
                 let dist_root = f.root.clone();
                 // 照抄 `Dropdown`：.menu(key) + on_click_at 收按钮真实矩形。
@@ -2550,21 +2743,32 @@ pub(crate) fn right_panel(
             // `rotate_row`: the three 24 pt cells under "Rotation" (`position_fields`'s
             // `widgets::segmented`): Rotate 90° / Flip H / Flip V — each a `object.*` command.
             let rot_cmds = f.cmds.clone();
-            let rotate =
-                Segmented::icons(&[(Icon::Rotate, tr("Rotate 90° right")), (Icon::FlipH, tr("Flip horizontal")), (Icon::FlipV, tr("Flip vertical"))])
-                    .on_pick(move |i: usize, _w: &mut Window, _cx: &mut App| {
+            let rotate = {
+                let seg = Segmented::icons(&[(Icon::Rotate, tr("Rotate 90° right")), (Icon::FlipH, tr("Flip horizontal")), (Icon::FlipV, tr("Flip vertical"))]);
+                if data.position_readonly {
+                    seg
+                } else {
+                    seg.on_pick(move |i: usize, _w: &mut Window, _cx: &mut App| {
                         const C: [&str; 3] = ["object.rotateRight", "object.flipH", "object.flipV"];
                         rot_cmds.push(Cmd { id: C[i.min(2)], params: None });
-                    });
+                    })
+                }
+            };
             // egui `right.rs::position_row`: children of an auto layout frame can ignore the
             // layout (absolute position). The command / active state are the same, but the
             // button lives in the Position section's header slot, not in the X/Y field row.
             let absolute_btn = data.parent_al.then(|| {
                 let abs_cmds = f.cmds.clone();
                 let on = data.absolute.unwrap_or(false);
-                IconButton::new(Icon::AbsolutePosition).size(24.0).active(on).on_click(move |_e, _w, _cx| {
-                    abs_cmds.push(Cmd { id: "node.set", params: Some(serde_json::json!({ "props": { "absolute": !on } })) });
-                })
+                let btn = IconButton::new(Icon::AbsolutePosition).size(24.0).active(on);
+                if data.position_readonly {
+                    div().opacity(0.45).child(btn).into_any_element()
+                } else {
+                    btn.on_click(move |_e, _w, _cx| {
+                        abs_cmds.push(Cmd { id: "node.set", params: Some(serde_json::json!({ "props": { "absolute": !on } })) });
+                    })
+                    .into_any_element()
+                }
             });
             // One trailing slot, so both optional header buttons share it.
             let has_pos_trail = distribute_btn.is_some() || absolute_btn.is_some();
@@ -2575,16 +2779,6 @@ pub(crate) fn right_panel(
             if let Some(b) = absolute_btn {
                 pos_trail = pos_trail.child(b);
             }
-            let constraints_open = *f.constraints_open.borrow();
-            let constraints_toggle = {
-                let flag = f.constraints_open.clone();
-                let wake = f.cmds.clone();
-                IconButton::new(Icon::LayoutGrid).size(24.0).active(constraints_open).on_click(move |_e, _w, _cx| {
-                    let next = !*flag.borrow();
-                    *flag.borrow_mut() = next;
-                    wake.wake();
-                })
-            };
             let mut pos_sec = PanelSection::new(tr("Position"));
             if has_pos_trail {
                 pos_sec = pos_sec.header_trail(pos_trail);
@@ -2593,17 +2787,29 @@ pub(crate) fn right_panel(
             // 它只在 can_align 时出现：空选区或页面上的孤层没有对齐目标，两组图标与 caption
             // 整行都不画。`data.can_align` 由引擎同名函数算出。
             if data.can_align {
-                pos_sec = pos_sec
-                    .child(sublabel_row(tr("Alignment")))
-                    .child(field_row(vec![h.into_any_element(), v.into_any_element()], Vec::<IconButton>::new()));
+                let h_el = if data.position_readonly { h.build().opacity(0.45).into_any_element() } else { h.into_any_element() };
+                let v_el = if data.position_readonly { v.build().opacity(0.45).into_any_element() } else { v.into_any_element() };
+                let mut align_row = field_row(vec![h_el, v_el], Vec::<IconButton>::new());
+                if data.position_readonly {
+                    align_row = align_row.tip(tr("Layers in an instance take their position from the main component"));
+                }
+                pos_sec = pos_sec.child(sublabel_row(tr("Alignment"))).child(align_row);
             }
-            pos_sec = pos_sec.child(sublabel_row(tr("Position"))).child(field_row(
-                vec![f.x.clone().into_any_element(), f.y.clone().into_any_element()],
-                // 约束只在 frame 子层（父级无 auto layout 或自身 absolute）时出现：
-                // 展开按钮与下面的约束节共用同一个 in_frame 门槛（参考实现
-                // `right.rs::position_fields` 的 `if in_frame { … }`），两者不能分家。
-                if data.in_frame { vec![constraints_toggle] } else { Vec::<IconButton>::new() },
-            ));
+            // 参考实现把 Constraints 挂在 Rotation 之后，**没有展开按钮**：只要 `in_frame`
+            // （frame 子层、父级无 auto layout 或自身 absolute）就画出来。旧实现用一颗
+            // `LayoutGrid` 切换按钮先折叠，等于默认把约束藏起来，与本轮对齐目标相反。
+            let mut xy_row = field_row(vec![f.x.clone().into_any_element(), f.y.clone().into_any_element()], Vec::<IconButton>::new());
+            if data.position_readonly {
+                xy_row = xy_row.tip(tr("Layers in an instance take their position from the main component"));
+            }
+            pos_sec = pos_sec.child(sublabel_row(tr("Position"))).child(xy_row);
+            // 顺序照参考实现 `position_fields`：align → X/Y → rotation → constraints。
+            let rot_el = if data.position_readonly { rotate.build().opacity(0.45).into_any_element() } else { rotate.into_any_element() };
+            let mut rot_row = field_row(vec![f.rotation.clone().into_any_element(), rot_el], Vec::<IconButton>::new());
+            if data.position_readonly {
+                rot_row = rot_row.tip(tr("Layers in an instance take their position from the main component"));
+            }
+            let pos_sec = pos_sec.child(sublabel_row(tr("Rotation"))).child(rot_row);
 
             // ── Constraints（egui `right.rs::position_fields`：仅 frame 子层、自身无自动布局或为
             // absolute 时才显示；`in_frame` 的逻辑与 egui `common` 后的 `all(...)` 完全一致）。──
@@ -2611,7 +2817,7 @@ pub(crate) fn right_panel(
             // 选中即 `node.set {"props":{"constraints":{"horizontal"/"vertical":v}}}`（等价于 egui 的
             // `app.set_props(&ids, json!({"constraints":{"horizontal": v}}))`，`node.set` 由 Cmd 通道附带
             // 选区 ids 执行）。`None` = Mixed，下拉显示 "Mixed"。
-            let pos_sec = if constraints_open && data.in_frame {
+            let pos_sec = if data.in_frame {
                 let pretty_h = |v: Option<&'static str>| -> &'static str {
                     match v {
                         Some("leftRight") => tr("Left & right"),
@@ -2640,7 +2846,18 @@ pub(crate) fn right_panel(
                     (tr("Center").into(), "node.set", serde_json::json!({ "props": { "constraints": { "vertical": "center" } } })),
                     (tr("Scale").into(), "node.set", serde_json::json!({ "props": { "constraints": { "vertical": "scale" } } })),
                 ];
-                pos_sec.child(sublabel_row(tr("Constraints"))).child(crate::widgets::field_row_h(
+                // 只读时换成没有菜单的 Dropdown（`add_enabled_ui` 的等价：控件还在，点了没反应）。
+                let h_dd = if data.position_readonly {
+                    Dropdown::new(pretty_h(data.constraints_h), col, Some(crate::widgets::dropdown::DropLead::Icon(Icon::DistributeH))).fill()
+                } else {
+                    right::sections::pick_dropdown_lead(f, pretty_h(data.constraints_h), col, h_opts, Some(Icon::DistributeH))
+                };
+                let v_dd = if data.position_readonly {
+                    Dropdown::new(pretty_v(data.constraints_v), col, Some(crate::widgets::dropdown::DropLead::Icon(Icon::AlignTop))).fill()
+                } else {
+                    right::sections::pick_dropdown_lead(f, pretty_v(data.constraints_v), col, v_opts, Some(Icon::AlignTop))
+                };
+                let mut constraints_row = crate::widgets::field_row_h(
                     vec![
                         div()
                             .w_full()
@@ -2648,20 +2865,23 @@ pub(crate) fn right_panel(
                             .flex_col()
                             .h_full()
                             .gap(pt(8.0))
-                            .child(right::sections::pick_dropdown_lead(f, pretty_h(data.constraints_h), col, h_opts, Some(Icon::DistributeH)))
-                            .child(right::sections::pick_dropdown_lead(f, pretty_v(data.constraints_v), col, v_opts, Some(Icon::AlignTop)))
+                            .child(h_dd)
+                            .child(v_dd)
                             .into_any_element(),
                         right::sections::constraint_graphic(f, data),
                     ],
                     Vec::<IconButton>::new(),
                     56.0,
-                ))
+                );
+                if data.position_readonly {
+                    constraints_row = constraints_row.tip(tr("Layers in an instance take their position from the main component"));
+                }
+                let body = pos_sec.child(sublabel_row(tr("Constraints"))).child(constraints_row);
+                body
             } else {
                 pos_sec
             };
             pos_sec
-                .child(sublabel_row(tr("Rotation")))
-                .child(field_row(vec![f.rotation.clone().into_any_element(), rotate.into_any_element()], Vec::<IconButton>::new()))
         })
         .child(sep())
         // ── Auto layout（egui `layout_panel.rs::layout_section` / `direction` / `spacing` / `alignment`）──
@@ -2670,17 +2890,17 @@ pub(crate) fn right_panel(
         // 的 trail 菜单（Fixed/Hug/Fill + min/max），min/max 用 `any_min/any_max` 行，3×3 对齐
         // picker 由 `right::picker::alignment_picker` 自绘。grid tracks 见 `grid_track_rows`。
         // 矢量点被选中时整节让位给点面板（egui `if !points_selected { layout_section(…) }`）。
-        .child(auto_layout_section(f, sel, data, cx, &mut n, points_selected, true))
+        .child(auto_layout_section(f, sel, data, cx, &mut n, points_selected, true, col))
         .child(sep());
 
     // ── Arc：仅当全部选中都是 Ellipse（原版 `arc_section` 返回 false 就不画） ──────
-    if sel.all_ellipse && !points_selected {
+    if sel.all_ellipse && !vector_active {
         body = body.child(arc_section(f)).child(sep());
     }
 
     // ── Star：仅当全部选中都是 Polygon/Star（原版 `points_section`） ──────────────
-    if sel.all_points && !points_selected {
-        body = body.child(star_section(f)).child(sep());
+    if sel.all_points && !vector_active {
+        body = body.child(star_section(f, sel.all_stars)).child(sep());
     }
 
     body = body
@@ -2694,7 +2914,7 @@ pub(crate) fn right_panel(
 
     // ── Typography：仅当选中含 Text（原版 `sel.iter().any(Text)`） ────────────────
     if sel.has_text {
-        body = body.child(right::sections::typography(f, data)).child(sep());
+        body = body.child(right::sections::typography(f, data, cx, &mut n)).child(sep());
     }
 
     body = body
@@ -2719,19 +2939,37 @@ pub(crate) fn right_panel(
     }
 
     // ── Export（egui `export_panel.rs::setting_row`）──────────────────────────────
+    // `annotation.new`: the field was built this frame; focusing needs the real window.
+    if let Some(edit) = f.take_note_focus_edit() {
+        edit.update(cx, |te, _| te.focus_editor(window));
+    }
     wrap(body.child(export_sec))
 }
 
 /// Arc 段（仅椭圆）：起始角 / 扫过角 / 内径比例。设计面板与 Motion 右栏共用。
 pub(crate) fn arc_section(f: &RightFields) -> PanelSection {
     PanelSection::new(tr("Arc"))
+        .child(sublabel_row2(tr("Start"), tr("Sweep")))
         .child(field_row(vec![f.arc_start.clone(), f.arc_sweep.clone()], Vec::<IconButton>::new()))
+        .child(sublabel_row(tr("Ratio")))
         .child(field_row(vec![f.arc_ratio.clone()], Vec::<IconButton>::new()))
 }
 
-/// Star 段（仅多边形 / 星形）：角数 / 内径比例。设计面板与 Motion 右栏共用。
-pub(crate) fn star_section(f: &RightFields) -> PanelSection {
-    PanelSection::new(tr("Star")).child(field_row(vec![f.star_points.clone(), f.star_ratio.clone()], Vec::<IconButton>::new()))
+/// Star / Polygon 段：角数；星形另有内径比例。上游 `points_section` 在纯 Polygon 时
+/// 标题写 Polygon、且不画 Ratio。
+pub(crate) fn star_section(f: &RightFields, all_stars: bool) -> PanelSection {
+    let title = if all_stars { tr("Star") } else { tr("Polygon") };
+    let mut sec = PanelSection::new(title);
+    if all_stars {
+        sec = sec
+            .child(sublabel_row2(tr("Count"), tr("Ratio")))
+            .child(field_row(vec![f.star_points.clone(), f.star_ratio.clone()], Vec::<IconButton>::new()));
+    } else {
+        sec = sec
+            .child(sublabel_row(tr("Count")))
+            .child(field_row(vec![f.star_points.clone()], Vec::<IconButton>::new()));
+    }
+    sec
 }
 
 /// Auto layout 段（egui `layout_panel.rs`）：方向 / 尺寸 / 对齐+间距 / 内边距 / 网格轨道。
@@ -2746,6 +2984,7 @@ pub(crate) fn auto_layout_section(
     n: &mut usize,
     points_selected: bool,
     with_dimensions: bool,
+    col: f32,
 ) -> gpui::AnyElement {
     if points_selected {
         return div().into_any_element();
@@ -2777,9 +3016,14 @@ pub(crate) fn auto_layout_section(
             LayoutDir::None => None,
         };
         let dir_cmds = f.cmds.clone();
+        // 参考实现 `layout_panel.rs::direction`：`if let Some(Some(l)) = &al { ui.add_enabled_ui(!in_instance, direction) }`
+        // ——实例内部的层不能改主组件的排版方向，按钮仍在，但点了没反应（无 disabled API → 去回调 + 降透明度）。
         let dir = Segmented::icons(&[(Icon::LayoutV, tr("Vertical")), (Icon::LayoutH, tr("Horizontal")), (Icon::LayoutGrid, tr("Grid"))])
-            .active(active)
-            .on_pick(move |i: usize, _w: &mut Window, _cx: &mut App| {
+            .active(active);
+        let dir = if sel.in_instance {
+            dir
+        } else {
+            dir.on_pick(move |i: usize, _w: &mut Window, _cx: &mut App| {
                 let m = match i {
                     0 => "vertical",
                     1 => "horizontal",
@@ -2787,8 +3031,14 @@ pub(crate) fn auto_layout_section(
                     _ => return,
                 };
                 dir_cmds.push(Cmd { id: "node.set", params: Some(serde_json::json!({ "props": { "layout": m } })) });
-            });
-        sec = sec.child(sublabel_row(tr("Layout"))).child(field_row_full(dir));
+            })
+        };
+        let dir_el = if sel.in_instance { dir.build().opacity(0.45).into_any_element() } else { dir.into_any_element() };
+        let mut dir_row = field_row_full(dir_el);
+        if sel.in_instance {
+            dir_row = dir_row.tip(tr("In an instance, this comes from the main component"));
+        }
+        sec = sec.child(sublabel_row(tr("Layout"))).child(dir_row);
     }
 
     if with_dimensions {
@@ -2836,6 +3086,7 @@ pub(crate) fn auto_layout_section(
                 Some("widthAndHeight") => Some(0usize),
                 Some("height") => Some(1),
                 Some("none") => Some(2),
+                Some("truncate") => Some(3),
                 _ => None,
             };
             let cmds = f.cmds.clone();
@@ -2843,6 +3094,7 @@ pub(crate) fn auto_layout_section(
                 crate::widgets::segmented::SegItem::text(tr("Auto width")),
                 crate::widgets::segmented::SegItem::text(tr("Auto height")),
                 crate::widgets::segmented::SegItem::text(tr("Fixed")),
+                crate::widgets::segmented::SegItem::text(tr("Truncate")),
             ])
             .active(active)
             .on_pick(move |i: usize, _w: &mut Window, _cx: &mut App| {
@@ -2850,6 +3102,7 @@ pub(crate) fn auto_layout_section(
                     0 => "widthAndHeight",
                     1 => "height",
                     2 => "none",
+                    3 => "truncate",
                     _ => return,
                 };
                 cmds.push(Cmd { id: "node.set", params: Some(serde_json::json!({ "props": { "textAutoResize": v } })) });
@@ -2861,13 +3114,53 @@ pub(crate) fn auto_layout_section(
         let any_min = dims.min_w.is_some() || dims.min_h.is_some() || lo[0] || lo[2];
         let any_max = dims.max_w.is_some() || dims.max_h.is_some() || lo[1] || lo[3];
         if any_max {
-            let left = if dims.max_w.is_some() || lo[1] { f.dim_max_w.clone().into_any_element() } else { div().into_any_element() };
-            let right = if dims.max_h.is_some() || lo[3] { f.dim_max_h.clone().into_any_element() } else { div().into_any_element() };
+            let left = if dims.max_w.is_some() || lo[1] {
+                right::sections::bindable(
+                    f,
+                    "maxWidth",
+                    data.bound.get("maxWidth").map(String::as_str),
+                    &data.number_variables,
+                    f.dim_max_w.clone().into_any_element(),
+                )
+            } else {
+                div().into_any_element()
+            };
+            let right = if dims.max_h.is_some() || lo[3] {
+                right::sections::bindable(
+                    f,
+                    "maxHeight",
+                    data.bound.get("maxHeight").map(String::as_str),
+                    &data.number_variables,
+                    f.dim_max_h.clone().into_any_element(),
+                )
+            } else {
+                div().into_any_element()
+            };
             sec = sec.child(sublabel_row2(tr("Max W"), tr("Max H"))).child(field_row(vec![left, right], Vec::<IconButton>::new()));
         }
         if any_min {
-            let left = if dims.min_w.is_some() || lo[0] { f.dim_min_w.clone().into_any_element() } else { div().into_any_element() };
-            let right = if dims.min_h.is_some() || lo[2] { f.dim_min_h.clone().into_any_element() } else { div().into_any_element() };
+            let left = if dims.min_w.is_some() || lo[0] {
+                right::sections::bindable(
+                    f,
+                    "minWidth",
+                    data.bound.get("minWidth").map(String::as_str),
+                    &data.number_variables,
+                    f.dim_min_w.clone().into_any_element(),
+                )
+            } else {
+                div().into_any_element()
+            };
+            let right = if dims.min_h.is_some() || lo[2] {
+                right::sections::bindable(
+                    f,
+                    "minHeight",
+                    data.bound.get("minHeight").map(String::as_str),
+                    &data.number_variables,
+                    f.dim_min_h.clone().into_any_element(),
+                )
+            } else {
+                div().into_any_element()
+            };
             sec = sec.child(sublabel_row2(tr("Min W"), tr("Min H"))).child(field_row(vec![left, right], Vec::<IconButton>::new()));
         }
     }
@@ -2964,12 +3257,41 @@ pub(crate) fn auto_layout_section(
         if individual {
             // egui `layout_panel.rs::spacing`：开关 `layout_button_at(padding_row, 0)` 贴在
             // **第一行**的右侧 action 槽；展开后的第二行（R/B）没有开关。开关不能跟着行走。
+            let l = right::sections::bindable(
+                f,
+                "paddingLeft",
+                data.bound.get("paddingLeft").map(String::as_str),
+                &data.number_variables,
+                f.pad_l.clone().into_any_element(),
+            );
+            let t = right::sections::bindable(
+                f,
+                "paddingTop",
+                data.bound.get("paddingTop").map(String::as_str),
+                &data.number_variables,
+                f.pad_t.clone().into_any_element(),
+            );
+            let r = right::sections::bindable(
+                f,
+                "paddingRight",
+                data.bound.get("paddingRight").map(String::as_str),
+                &data.number_variables,
+                f.pad_r.clone().into_any_element(),
+            );
+            let b = right::sections::bindable(
+                f,
+                "paddingBottom",
+                data.bound.get("paddingBottom").map(String::as_str),
+                &data.number_variables,
+                f.pad_b.clone().into_any_element(),
+            );
             sec = sec
-                .child(field_row(vec![f.pad_l.clone(), f.pad_t.clone()], vec![toggle]))
-                .child(field_row(vec![f.pad_r.clone(), f.pad_b.clone()], Vec::<IconButton>::new()));
+                .child(field_row(vec![l, t], vec![toggle]))
+                .child(field_row(vec![r, b], Vec::<IconButton>::new()));
         } else {
             // 水平 / 垂直内边距同样可绑变量（`paddingHorizontal` / `paddingVertical`）。
-            // 独立四边是「一个数组一起提交」，原版也没有逐边绑定，这里保持纯数值。
+            // 独立四边在上游 `layout_panel.rs::spacing` 里也是每个边各走 `variable_ui::number_field`；
+            // 这里按 `paddingLeft/Top/Right/Bottom` 同步接上。
             let pad_h_el = right::sections::bindable(
                 f,
                 "paddingHorizontal",
@@ -2990,6 +3312,159 @@ pub(crate) fn auto_layout_section(
     // ④ 网格轨道（egui `layout_panel.rs::tracks`，只在 grid frame 上出现）：
     // 每轴一组「Column sizes / Row sizes」+ 每条轨道一行（序号 / 尺寸 / sizing 下拉）。
     sec = right::sections::grid_track_rows(f, data, cx, n, sec);
+    // ⑤ 智能选区间距（egui `canvas::selection_spacing::panel`，在 auto layout 之后）。
+    if let Some(sp) = data.selection_spacing.as_ref() {
+        let mut spacing_field = |axis: &'static str, value: Option<f64>| -> gpui::AnyElement {
+            if value.is_none() && !matches!(axis, "horizontal" if sp.horizontal.is_some()) && !matches!(axis, "vertical" if sp.vertical.is_some()) {
+                return div().into_any_element();
+            }
+            let ids = data.ids.clone();
+            let map = Rc::new(move |s: &str| {
+                let v = s.parse::<f64>().ok()?;
+                Some(json!({ "ids": ids, axis: v.clamp(-1e6, 1e6), "fromGesture": true }))
+            });
+            let shown = value.map(|v| format!("{v}")).unwrap_or_default();
+            let edit = f.row_field(
+                cx,
+                right::sections::slot(n),
+                &shown,
+                RowEditCtx {
+                    cmd: "arrange.spacing",
+                    params: json!({}),
+                    key: axis,
+                    scale: 1.0,
+                    string_value: false,
+                    paint: None,
+                    nest: None,
+                    nest_key: None,
+                    map: Some(map),
+                    paint_color: None,
+                },
+            );
+            if value.is_none() {
+                edit.update(cx, |te, _| te.set_placeholder(tr("Mixed")));
+            }
+            edit.into_any_element()
+        };
+        sec = sec.child(sublabel_row(tr("Spacing"))).child(field_row(
+            vec![spacing_field("horizontal", sp.horizontal.flatten()), spacing_field("vertical", sp.vertical.flatten())],
+            Vec::<IconButton>::new(),
+        ));
+    }
+    // ⑤ 网格单元格（egui `layout_panel.rs::grid_cell`）：父级是 grid、子层不 absolute 时出现。
+    if let Some(cell) = data.grid_cell.as_ref() {
+        let id = data.ids[0];
+        let ids = data.ids.clone();
+        let set = |props: Value| json!({ "ids": ids, "props": props });
+        let col_map = {
+            let ids = data.ids.clone();
+            let row = cell.row.saturating_sub(1);
+            Rc::new(move |s: &str| {
+                let c = s.parse::<f64>().ok()?;
+                Some(json!({ "ids": ids, "props": { "gridColumn": (c - 1.0).max(0.0), "gridRow": row } }))
+            })
+        };
+        let row_map = {
+            let ids = data.ids.clone();
+            let column = cell.column.saturating_sub(1);
+            Rc::new(move |s: &str| {
+                let r = s.parse::<f64>().ok()?;
+                Some(json!({ "ids": ids, "props": { "gridColumn": column, "gridRow": (r - 1.0).max(0.0) } }))
+            })
+        };
+        let cspan_map = {
+            let ids = data.ids.clone();
+            Rc::new(move |s: &str| Some(json!({ "ids": ids, "props": { "gridColumnSpan": s.parse::<f64>().ok()?.max(1.0) } })))
+        };
+        let rspan_map = {
+            let ids = data.ids.clone();
+            Rc::new(move |s: &str| Some(json!({ "ids": ids, "props": { "gridRowSpan": s.parse::<f64>().ok()?.max(1.0) } })))
+        };
+        let mut cell_field = |slot: usize, value: String, string_value: bool, map: std::rc::Rc<dyn Fn(&str) -> Option<serde_json::Value>>| {
+            f.row_field(
+                cx,
+                slot,
+                &value,
+                RowEditCtx {
+                    cmd: "node.set",
+                    params: serde_json::json!({}),
+                    key: "gridCell",
+                    scale: 1.0,
+                    string_value,
+                    paint: None,
+                    nest: None,
+                    nest_key: None,
+                    map: Some(map),
+                    paint_color: None,
+                },
+            )
+        };
+        if cell.single {
+            let col_el = cell_field(right::sections::slot(n), cell.column.to_string(), false, col_map);
+            let row_el = cell_field(right::sections::slot(n), cell.row.to_string(), false, row_map);
+            let reset = if cell.anchored {
+                Some(right::sections::icon_cmd(
+                    Icon::Rotate,
+                    "node.set",
+                    json!({ "ids": &ids, "props": { "gridColumn": null, "gridRow": null } }),
+                    f,
+                    false,
+                ))
+            } else {
+                None
+            };
+            let first = field_row(vec![col_el.into_any_element(), row_el.into_any_element()], reset.into_iter().collect::<Vec<_>>());
+            sec = sec.child(sublabel_row2(tr("Column"), tr("Row"))).child(first);
+        }
+        let cspan = cell.column_span.map(|v| v.to_string()).unwrap_or_else(|| tr("Mixed").to_string());
+        let rspan = cell.row_span.map(|v| v.to_string()).unwrap_or_else(|| tr("Mixed").to_string());
+        let cs = cell_field(right::sections::slot(n), cspan, false, cspan_map);
+        let rs = cell_field(right::sections::slot(n), rspan, false, rspan_map);
+        sec = sec
+            .child(sublabel_row2(tr("Column span"), tr("Row span")))
+            .child(field_row(vec![cs.into_any_element(), rs.into_any_element()], Vec::<IconButton>::new()));
+        let h_cur = if cell.align_h_mixed {
+            tr("Mixed").to_string()
+        } else {
+            match cell.align_h {
+                None => tr("Auto").to_string(),
+                Some("min") => tr("Left").to_string(),
+                Some("center") => tr("Center").to_string(),
+                _ => tr("Right").to_string(),
+            }
+        };
+        let h_choices = vec![
+            (tr("Auto").to_string(), "node.set", set(json!({ "gridAlignH": null }))),
+            (tr("Left").to_string(), "node.set", set(json!({ "gridAlignH": "min" }))),
+            (tr("Center").to_string(), "node.set", set(json!({ "gridAlignH": "center" }))),
+            (tr("Right").to_string(), "node.set", set(json!({ "gridAlignH": "max" }))),
+        ];
+        let v_cur = if cell.align_v_mixed {
+            tr("Mixed").to_string()
+        } else {
+            match cell.align_v {
+                None => tr("Auto").to_string(),
+                Some("min") => tr("Top").to_string(),
+                Some("center") => tr("Center").to_string(),
+                _ => tr("Bottom").to_string(),
+            }
+        };
+        let v_choices = vec![
+            (tr("Auto").to_string(), "node.set", set(json!({ "gridAlignV": null }))),
+            (tr("Top").to_string(), "node.set", set(json!({ "gridAlignV": "min" }))),
+            (tr("Center").to_string(), "node.set", set(json!({ "gridAlignV": "center" }))),
+            (tr("Bottom").to_string(), "node.set", set(json!({ "gridAlignV": "max" }))),
+        ];
+        sec = sec
+            .child(sublabel_row2(tr("Horizontal align"), tr("Vertical align")))
+            .child(field_row(
+                vec![
+                    right::sections::pick_dropdown(f, h_cur, col, h_choices).into_any_element(),
+                    right::sections::pick_dropdown(f, v_cur, col, v_choices).into_any_element(),
+                ],
+                Vec::<IconButton>::new(),
+            ));
+    }
     // ⑤ Clip content：egui `layout_section` 末尾 `if frames { row(24, checkbox) }` —— 它属于
     // **Layout 节**，不是 Appearance，也不是独立 "Frame" 节。
     if sel.all_frame {
@@ -3278,16 +3753,21 @@ mod visibility_tests {
     #[test]
     fn layout_header_button_follows_egui_visibility() {
         // egui `layout_panel.rs::layout_section` 的 `btns` 规则（严格对齐源码）：
-        // `in_instance` → 无按钮；`frames && !has_al` → `+`；`has_al` → `−`；
-        // 其余（含普通非 frame 图层）→ 无按钮。
+        // `in_instance` → 无按钮；`layout_containers && !has_al` → `+`；`has_al` → `−`；
+        // 其余（含普通非容器图层）→ 无按钮。
         let mut s = PanelSel::default();
-        assert_eq!(visibility::layout_header(&s), None, "a non-frame without auto layout shows no button (matches egui)");
+        assert_eq!(visibility::layout_header(&s), None, "a non-container without auto layout shows no button (matches egui)");
         s.all_frame = true;
-        assert_eq!(visibility::layout_header(&s), Some("layout.add"), "frames without auto layout show +");
+        assert_eq!(visibility::layout_header(&s), None, "all_frame alone no longer gates the +; the container flag does");
+        s.all_layout_container = true;
+        assert_eq!(visibility::layout_header(&s), Some("layout.add"), "frames and groups without auto layout show +");
         s.has_al = true;
         assert_eq!(visibility::layout_header(&s), Some("layout.remove"), "auto layout shows -");
         s.in_instance = true;
         assert_eq!(visibility::layout_header(&s), None, "an instance takes its layout from the main: no button");
+        let mut g = PanelSel { all_layout_container: true, ..PanelSel::default() };
+        g.all_frame = false;
+        assert_eq!(visibility::layout_header(&g), Some("layout.add"), "a Group is a layout container too");
     }
 
     /// 端到端：验证引擎 `layout.add` / `layout.remove` 在真实选区上确实加上 / 去掉自动布局。

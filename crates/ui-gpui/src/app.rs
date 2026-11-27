@@ -70,6 +70,9 @@ pub struct CanvasApp {
     pub(crate) connect: crate::canvas::board_connect::State,
     /// 图片裁剪模式的目标层与 fill 序号；`image.crop` UI 请求写入，画布叠加层据此画裁剪标记。
     pub crop: Option<(figcraft_doc::NodeId, usize)>,
+    /// 数字键设置不透明度时的第一个数字与时间戳（`OPACITY_CHAIN_SECS` 内按第二键凑两位）。
+    /// 上游 `FigApp::ui.opacity_digit`。
+    pub opacity_digit: Option<(u32, f64)>,
     /// 键盘框选的页面矩形 `[x0, y0, x1, y1]`（对应 egui `FigApp::ui.key_box`）。
     /// `select.area` / `selectArea` 建立，方向键移动、Shift/Cmd 改大小、Enter 选中、Escape 取消。
     pub key_box: Option<[f64; 4]>,
@@ -113,6 +116,7 @@ impl CanvasApp {
             proto: crate::canvas::proto_canvas::State::default(),
             connect: crate::canvas::board_connect::State::default(),
             crop: None,
+            opacity_digit: None,
             key_box: None,
             key_box_doc: None,
             pick: None,

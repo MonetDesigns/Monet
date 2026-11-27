@@ -54,7 +54,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "style.bind",
             "Bind variable in style",
-            "{style, field, variable? (id or name; none: unbind)}  bind a variable to a field of the style's value: a paint style's `fills/<i>/color` (or `fill`: its first paint) and `fills/<i>/stops/<j>/color`, an effect style's `effects/<i>/<color|radius|spread|offsetX|offsetY|startRadius>` (glass: `lightAngle|lightIntensity|refraction|depth|dispersion|radius|splay`), a grid style's `layoutGrids/<i>/<size|count|gutter|offset>`, a text style's `fontSize|lineHeight|letterSpacing` (numbers, px) and `fontFamily|fontStyle` (strings). Every layer using the style shows the field resolved in its own modes; the style keeps it resolved in the default modes",
+            "{style, field, variable? (id or name; none: unbind)}  bind a variable to a field of the style's value: a paint style's `fills/<i>/color` (or `fill`: its first paint) and `fills/<i>/stops/<j>/color`, an effect style's `effects/<i>/<color|radius|spread|offsetX|offsetY|startRadius>` (glass: `lightAngle|lightIntensity|refraction|depth|dispersion|radius|splay`), a grid style's `layoutGrids/<i>/<size|count|gutter|offset>`, a text style's `fontSize|lineHeight|letterSpacing|fontWeight` (numbers; line height and letter spacing in px, as the reference tool applies them; a weight picks the family's face nearest it and the `wght` axis of a variable font) and `fontFamily|fontStyle` (strings; a weight bound as a number replaces a bound style name and the reverse). Every layer using the style shows the field resolved in its own modes; the style keeps it resolved in the default modes",
             true,
             bind_style
         ),
@@ -520,6 +520,11 @@ fn bind_style(s: &mut Session, p: &Value) -> Result<Value> {
             {
                 rebind_paint_alpha(paints, &mut [], &key, true);
             }
+            match key.as_str() {
+                "fontWeight" => style.bound.remove("fontStyle"),
+                "fontStyle" => style.bound.remove("fontWeight"),
+                _ => None,
+            };
             style.bound.insert(key, id);
         }
         None => {
@@ -1114,6 +1119,10 @@ pub(crate) fn bound_before(doc: &Document, ids: &[NodeId]) -> Vec<std::sync::Arc
 pub(crate) fn detach_edited(doc: &mut Document, before: &[std::sync::Arc<Node>]) {
     for old in before {
         let Some(n) = doc.node(old.id) else { continue };
+        // An instance the Scale tool scaled keeps its bindings: they draw at its new scale (#2090).
+        if n.scale_factor != old.scale_factor {
+            continue;
+        }
         let edited: Vec<String> = n
             .bound
             .keys()
@@ -1257,6 +1266,88 @@ pub(crate) fn apply_paint_bindings_on_load(doc: &mut Document) {
     doc.mark_dirty(pending);
 }
 
+/// The bound fields holding a length: what the Scale tool scales, so what an instance's scale
+/// factor multiplies a number variable by (#2090).
+pub(crate) const LENGTH_FIELDS: &[&str] = &[
+    "width",
+    "height",
+    "w",
+    "h",
+    "gap",
+    "itemSpacing",
+    "columnGap",
+    "crossGap",
+    "counterAxisSpacing",
+    "rowGap",
+    "padding",
+    "paddingTop",
+    "paddingRight",
+    "paddingBottom",
+    "paddingLeft",
+    "paddingHorizontal",
+    "paddingVertical",
+    "cornerRadius",
+    "topLeftRadius",
+    "topRightRadius",
+    "bottomRightRadius",
+    "bottomLeftRadius",
+    "strokeWeight",
+    "strokeTopWeight",
+    "strokeRightWeight",
+    "strokeBottomWeight",
+    "strokeLeftWeight",
+    "minWidth",
+    "maxWidth",
+    "minHeight",
+    "maxHeight",
+    "fontSize",
+    "lineHeight",
+    "letterSpacing",
+    "paragraphSpacing",
+    "paragraphIndent",
+];
+
+/// The scale a layer's lengths are drawn at: the product of the scale factors of the instances it
+/// is or sits in.
+fn scale_of(doc: &Document, id: NodeId) -> f64 {
+    let factor = |i: NodeId| doc.node(i).filter(|n| matches!(n.kind, NodeKind::Instance { .. })).map_or(1.0, |n| n.scale_factor);
+    let k = std::iter::once(id).chain(doc.ancestors(id)).map(factor).product::<f64>();
+    if k.is_finite() && k > 0.0 { k } else { 1.0 }
+}
+
+/// A layer that stops being an instance keeps its lengths as drawn (#2090, measured for Detach):
+/// its own layers drop their length variables and the instances in it take its scale on. The
+/// layer must no longer be an instance.
+pub(crate) fn bake_scale(doc: &mut Document, id: NodeId) {
+    let Some(n) = doc.node_mut(id) else { return };
+    let k = std::mem::replace(&mut n.scale_factor, 1.0);
+    if k == 1.0 {
+        return;
+    }
+    for d in doc.subtree(id) {
+        let own = !crate::components::inside_instance(doc, d);
+        let Some(n) = doc.node_mut(d) else { continue };
+        if !own {
+            continue;
+        }
+        if matches!(n.kind, NodeKind::Instance { .. }) {
+            n.scale_factor = (n.scale_factor * k).clamp(super::arrange::MIN_SCALE_FACTOR, super::arrange::MAX_SCALE_FACTOR);
+        } else {
+            n.bound.retain(|f, _| !LENGTH_FIELDS.contains(&f.as_str()));
+        }
+    }
+}
+
+/// [`bake_scale`] for every layer under `root` that is no longer an instance but still has a
+/// scale factor (a conversion left it behind).
+pub(crate) fn bake_stale_scales(doc: &mut Document, root: NodeId) {
+    for d in doc.subtree(root) {
+        if doc.node(d).is_some_and(|n| !matches!(n.kind, NodeKind::Instance { .. }) && n.scale_factor != 1.0) {
+            bake_scale(doc, d);
+        }
+    }
+}
+
 /// Re-apply the variable bindings whose field passes `include`, on the `only` nodes (every bound
 /// node when `None`). Auto layout fields wait while their node has no auto layout.
 fn apply_bindings_matching(doc: &mut Document, only: Option<&std::collections::BTreeSet<NodeId>>, include: impl Fn(&str) -> bool) {
@@ -1271,6 +1362,7 @@ fn apply_bindings_matching(doc: &mut Document, only: Option<&std::collections::B
     };
     for id in bound {
         let modes = doc.modes_for(id);
+        let scale = scale_of(doc, id);
         let Some(n) = doc.node(id) else { continue };
         let binds = n.bound.clone();
         let has_layout = n.layout.is_some();
@@ -1318,6 +1410,8 @@ fn apply_bindings_matching(doc: &mut Document, only: Option<&std::collections::B
                 VariableValue::Number(x) if field == "arcSweep" => json!(x * 3.6),
                 VariableValue::Number(x) if field == "arcInner" => json!(x / 100.0),
                 VariableValue::Number(x) if field == "characters" => json!(trim_num(*x)),
+                // An instance's scale factor scales the lengths its variables give.
+                VariableValue::Number(x) if scale != 1.0 && LENGTH_FIELDS.contains(&field.as_str()) => json!(x * scale),
                 VariableValue::Number(x) => json!(x),
                 VariableValue::String(x) => json!(x),
                 VariableValue::Boolean(b) => json!(b),

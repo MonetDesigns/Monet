@@ -1308,11 +1308,17 @@ impl CanvasView {
     }
 
     fn layer_toggle_visible(&mut self, id: NodeId, cx: &mut Context<Self>) {
+        if self.dev_refuses("object.toggleVisible", cx) {
+            return;
+        }
         let _ = self.app.session.execute("object.toggleVisible", &json!({ "ids": [id] }));
         cx.notify();
     }
 
     fn layer_toggle_lock(&mut self, id: NodeId, cx: &mut Context<Self>) {
+        if self.dev_refuses("object.toggleLock", cx) {
+            return;
+        }
         let _ = self.app.session.execute("object.toggleLock", &json!({ "ids": [id] }));
         cx.notify();
     }
@@ -1433,6 +1439,9 @@ impl CanvasView {
     ///   (This is the placement fix that stopped nodes landing at the wrong end of the list.)
     ///
     fn layer_commit_drop(&mut self, d: &drag::Drag, target: &drag::Target, cx: &mut Context<Self>) {
+        if self.dev_refuses("node.reparent", cx) {
+            return;
+        }
         let dragging = NodeId(d.from_id);
         let Ok(ds) = self.app.session.ds() else { return };
         let doc = &ds.doc;

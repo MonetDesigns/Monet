@@ -1,0 +1,20 @@
+[package]
+name = "figcraft-plugin-figma"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Figma plugin compatibility: manifest.json, node ids, the property table and the calls a Figma API write turns into. No engine, no JavaScript engine."
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+url = "2"
+
+[dev-dependencies]
+serde_json = { workspace = true }

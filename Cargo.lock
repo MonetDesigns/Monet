@@ -2468,6 +2468,7 @@ dependencies = [
  "figcraft-i18n",
  "figcraft-layout",
  "figcraft-motion-codec",
+ "figcraft-motion-mediafoundation",
  "figcraft-pathops",
  "figcraft-pdf",
  "figcraft-plugin",
@@ -2565,6 +2566,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "figcraft-motion-mediafoundation"
+version = "2648.15.0"
+dependencies = [
+ "figcraft-motion-codec",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "figcraft-pathops"
 version = "2648.15.0"
 dependencies = [
@@ -2602,6 +2611,25 @@ dependencies = [
  "thiserror 2.0.21",
  "wasmi",
  "wat",
+]
+
+[[package]]
+name = "figcraft-plugin-figma"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "url",
+]
+
+[[package]]
+name = "figcraft-plugin-figma-quickjs"
+version = "0.1.0"
+dependencies = [
+ "figcraft-plugin-figma",
+ "rquickjs",
+ "serde_json",
 ]
 
 [[package]]
@@ -2697,6 +2725,7 @@ dependencies = [
  "accesskit_windows",
  "base64 0.22.1",
  "bytemuck",
+ "chrono",
  "figcraft-abr",
  "figcraft-collab-net",
  "figcraft-color",
@@ -3665,6 +3694,8 @@ version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 dependencies = [
+ "allocator-api2",
+ "equivalent",
  "foldhash 0.2.0",
 ]
 
@@ -6176,6 +6207,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
+name = "relative-path"
+version = "2.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "38540a682c6e9bca04a8bca9e5ec5a6ba168dfbb04c9998fe517a9befb92eb68"
+dependencies = [
+ "serde_core",
+]
+
+[[package]]
 name = "renderdoc-sys"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6264,6 +6304,35 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9da7f59328b09405b181fee1018925fad50f157afb43c0c0f5c522c256dd5907"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "rquickjs"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a0a22bf72f515cc4189dd7c63d016f6de92a11eee98ddf7dd64794198f6eb34e"
+dependencies = [
+ "rquickjs-core",
+]
+
+[[package]]
+name = "rquickjs-core"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6657979a24d543e5fc66f32cef2f47ca82ce8eb55cec5f7d59a12b7b570bbf24"
+dependencies = [
+ "hashbrown 0.17.1",
+ "relative-path",
+ "rquickjs-sys",
+]
+
+[[package]]
+name = "rquickjs-sys"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cee271d0eeba64f0915b846cb7ae02e16faf3dfdffdca91731101d9d30fe3423"
+dependencies = [
+ "cc",
 ]
 
 [[package]]
@@ -8631,7 +8700,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

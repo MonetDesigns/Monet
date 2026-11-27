@@ -281,6 +281,10 @@ pub(crate) fn pink_label(painter: &mut Painter, label: String, center: Pos2) {
 /// 子层在贴图里的抗锯齿边缘已经把画框底色混进边界那一列，带子只盖到一半 —— 看着一条白细线。
 /// 铺在子层之前，那一列只有一次合成（见 `crates/render/src/band.rs`）。
 pub fn bands_for_render(app: &CanvasApp) -> Vec<figcraft_render::Band> {
+    // Dev Mode never shows the editable padding / gap hatch (EGUI's `handles::draw` is gated too).
+    if app.session.tool.dev_mode {
+        return Vec::new();
+    }
     let Some(z) = al_zones(app) else { return Vec::new() };
     let Ok(ds) = app.session.ds() else { return Vec::new() };
     let zoom = ds.view.zoom.max(1e-6);
@@ -377,6 +381,11 @@ pub fn draw(app: &CanvasApp, painter: &mut Painter, _pointer: Option<Pos2>) {
 /// `pressed` 是「这一事件按下了左键」，`released` 是「这一事件松开了左键」，
 /// `down` 是「左键当前按着」——由 GPUI 的三个回调分别传进来（egui 那边是同一个 `input()`）。
 pub fn input(app: &mut CanvasApp, pos: Pos2, pressed: bool, down: bool, released: bool, shift: bool) -> bool {
+    // Developer Mode inspects: padding / gap bands must not edit the frame (EGUI hides them).
+    if app.session.tool.dev_mode {
+        app.handles.drag = None;
+        return false;
+    }
     if let Some(drag) = app.handles.drag.clone() {
         if down {
             apply(app, &drag, pos, shift);
