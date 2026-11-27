@@ -809,7 +809,7 @@ pub struct PaneState {
     last_panel: Option<panels::right::data::PanelData>,
 
     /// Dev 节按 `(uid, revision, page, selection, ready_filter)` 缓存；其余节仍每帧重读。
-    dev_cache: Option<(DevCacheKey, panels::right::data::DevModeData)>,
+    dev_cache: std::cell::RefCell<Option<(DevCacheKey, panels::right::data::DevModeData)>>,
 
     /// 工具栏里打开着的飞出菜单（组的 key）；`None` 表示没开。
     tool_flyout: Option<&'static str>,
@@ -1511,7 +1511,7 @@ impl CanvasView {
 
             last_panel: None,
 
-            dev_cache: None,
+            dev_cache: std::cell::RefCell::new(None),
 
             tool_flyout: None,
 
@@ -1942,18 +1942,18 @@ impl CanvasView {
 
     /// 右栏列表数据的快照（照 egui 面板每帧读 `Document` 的同构做法）。
 
-    fn panel_data(&mut self) -> panels::right::data::PanelData {
+    fn panel_data(&self) -> panels::right::data::PanelData {
         let Ok(ds) = self.app.session.ds() else { return Default::default() };
 
         let page = self.app.session.page().ok();
 
         let ready = self.fields.dev_ready_filter();
         let key = (ds.uid, ds.revision, page, ds.selection.clone(), ready);
-        let dev = match &self.dev_cache {
-            Some((k, d)) if k == &key => d.clone(),
-            _ => {
+        let dev = match self.dev_cache.borrow().as_ref().filter(|(k, _)| k == &key).map(|(_, d)| d.clone()) {
+            Some(d) => d,
+            None => {
                 let d = panels::right::data::read_dev(&ds.doc, &ds.selection, page, ready);
-                self.dev_cache = Some((key, d.clone()));
+                *self.dev_cache.borrow_mut() = Some((key, d.clone()));
                 d
             }
         };

@@ -550,7 +550,7 @@ fn versions_body(
                                 .text_size(pt(11.0))
                                 .font_weight(crate::panels::UI_FONT_REGULAR)
                                 .text_color(rgba(t.text))
-                                .child(SharedString::from(figcraft_i18n::trf("Viewing “{name}”", &[("name", &nm)])),
+                                .child(SharedString::from(figcraft_i18n::trf("Viewing “{name}”", &[("name", &nm)]))),
                         )
                         .child(div().text_size(pt(10.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(time_ago(p.time)))),
                 )
@@ -639,7 +639,7 @@ fn versions_body(
                             .min_w(px(0.0))
                             .text_size(pt(11.0))
                             .text_color(rgba(t.text))
-                            .child(SharedString::from(figcraft_i18n::trf("Delete “{name}”? This can't be undone.", &[("name", &v.name)])),
+                            .child(SharedString::from(figcraft_i18n::trf("Delete “{name}”? This can't be undone.", &[("name", &v.name)]))),
                     )
                     .child(yes)
                     .child(no),
