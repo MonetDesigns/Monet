@@ -34,6 +34,7 @@ use std::thread::ThreadId;
 
 use figcraft_doc::Document;
 use figcraft_engine::Session;
+use figcraft_engine::branches;
 use figcraft_format::{Branch, Version};
 use gpui::prelude::*;
 use gpui::{
@@ -115,15 +116,25 @@ pub(crate) fn capture(session: &Session) {
     let docs = session
         .docs
         .iter()
-        .map(|d| DocCopy {
-            uid: d.uid,
-            name: d.doc.name.clone(),
-            path: d.path.clone(),
-            dirty: d.is_dirty(),
-            main: d.branch_of.is_none(),
-            doc: d.document_itself().clone(),
-            versions: d.versions.clone(),
-            branches: d.branches.clone(),
+        .map(|d| {
+            // A main tab's recovery copy must include branch-tab edits that the engine has not
+            // synchronized into `d.branches` yet; `d.document_itself()` alone is stale there.
+            let (doc, versions, branches) = if d.branch_of.is_none() {
+                branches::recovery_copy(session, d)
+            } else {
+                (d.document_itself().clone(), d.versions.clone(), d.branches.clone())
+            };
+            DocCopy {
+                uid: d.uid,
+                name: d.doc.name.clone(),
+                path: d.path.clone(),
+                // Branch tabs save with their main file, so a branch-only edit also dirties it.
+                dirty: d.branch_of.is_none() && branches::needs_copy(session, d),
+                main: d.branch_of.is_none(),
+                doc,
+                versions,
+                branches,
+            }
         })
         .collect();
     *lock() = Some(Snapshot { signature, docs });
@@ -218,7 +229,8 @@ fn report(message: &str, location: &str, thread: &str) {
     spawn_reporter(log.as_deref());
 }
 
-/// 紧急保存：脏文档有路径就原子写回原文件，新文档写进 `CrashSaves/<时间>/`。
+/// 紧急保存：脏文档一律写进 `CrashSaves/<时间>/` 的**新副本**，绝不覆盖原文件
+/// （别的进程可能在快照之后改过它）。日志里记下每条副本对应的原始路径。
 /// 返回逐条结果，写进日志里显示。
 fn emergency_save() -> Vec<String> {
     let snapshot = {
@@ -236,16 +248,24 @@ fn emergency_save() -> Vec<String> {
             lines.push(format!("  {} — could not be serialized", display_name(doc)));
             continue;
         };
-        let target = match (&doc.path, &crash_dir) {
-            (Some(path), _) => PathBuf::from(path),
-            (None, Some(dir)) => dir.join(format!("{}.figcraft", doc.uid)),
-            (None, None) => {
-                lines.push(format!("  {} — no path and no folder to save it in", display_name(doc)));
-                continue;
-            }
+        let target = match &crash_dir {
+            Some(dir) => dir.join(format!("{}-{}.figcraft", crash_stem(doc), doc.uid)),
+            None => match &doc.path {
+                // No recoverable folder: writing the original is the only place left, but keep
+                // the old path in the log so the user can tell it was a crash overwrite.
+                Some(path) => PathBuf::from(path),
+                None => {
+                    lines.push(format!("  {} — no path and no folder to save it in", display_name(doc)));
+                    continue;
+                }
+            },
         };
-        match write_atomic(&target, &bytes) {
-            Ok(()) => lines.push(format!("  {} — saved", target.display())),
+        let result = if crash_dir.is_some() { write_crash_atomic(&target, &bytes) } else { write_atomic(&target, &bytes) };
+        match result {
+            Ok(()) => match &doc.path {
+                Some(original) => lines.push(format!("  {} — saved as {} (original: {original})", display_name(doc), target.display())),
+                None => lines.push(format!("  {} — saved", target.display())),
+            },
             Err(e) => lines.push(format!("  {} — failed: {e}", target.display())),
         }
     }
@@ -255,19 +275,44 @@ fn emergency_save() -> Vec<String> {
     lines
 }
 
+/// A filesystem-safe stem for a crash copy; the uid appended by the caller keeps it unique.
+fn crash_stem(doc: &DocCopy) -> String {
+    let name = doc.path.as_deref().and_then(|p| Path::new(p).file_stem()).map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| doc.name.clone());
+    let stem: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_') { c } else { '_' }).take(64).collect();
+    if stem.is_empty() { "document".into() } else { stem }
+}
+
 fn display_name(doc: &DocCopy) -> String {
     doc.path.clone().unwrap_or_else(|| format!("{} (unsaved)", doc.name))
 }
 
+/// Atomic replacement through the format crate's exclusive staging files (never a predictable
+/// `*.crash-tmp`, which a shared directory could pre-create as a symlink).
 fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let tmp = path.with_extension("crash-tmp");
-    std::fs::write(&tmp, bytes)?;
-    std::fs::rename(&tmp, path).inspect_err(|_| {
-        let _ = std::fs::remove_file(&tmp);
-    })
+    figcraft_format::write_file_atomic(path, bytes)
+}
+
+/// A new crash copy is private: restrict the containing `CrashSaves` folder before writing, then
+/// tighten the file itself. `write_file_atomic` preserves an existing destination's permissions,
+/// but a brand-new file would otherwise follow the umask (commonly 0644).
+fn write_crash_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let dir = path.parent().ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "crash copy has no parent"))?;
+    std::fs::create_dir_all(dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    figcraft_format::write_file_atomic(path, bytes)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
 }
 
 fn write_log(message: &str, location: &str, thread: &str, saved: &[String], backtrace: &str) -> Option<PathBuf> {
@@ -345,6 +390,9 @@ fn signature(session: &Session) -> Vec<u64> {
         sig.push(d.versions.len() as u64);
         sig.push(d.branches.len() as u64);
         sig.push(hash_path(d.path.as_deref().unwrap_or("")));
+        // Branch-tab edits advance only the tab's revision, so include every tab's stamp or a
+        // branch-only change never refreshes the crash snapshot.
+        sig.extend(branches::stamp(session, d));
     }
     sig
 }

@@ -1,5 +1,5 @@
 //! Animation frame encoders for Monet. Byte-in/byte-out codecs only: no document, no renderer,
-//! no engine dependency. Frames are premultiplied RGBA8 with an explicit size; the caller owns
+//! no engine dependency. Frames are straight RGBA8 with an explicit size; the caller owns
 //! timeline evaluation and drawing.
 //!
 //! Ported from the engine's `motion_export.rs` / `motion_webm.rs` so the export formats live in
@@ -314,8 +314,8 @@ fn mux(w: u32, h: u32, fps: u32, av1c: &[u8], blocks: &[Block]) -> Vec<u8> {
 
 // ------------------------------------------------------------------------------ colour
 
-/// Composite premultiplied RGBA8 pixels onto `bg` and convert straight to BT.709 limited-range
-/// 4:2:0 planes, filling the caller's reusable buffers.
+/// Composite **straight** RGBA8 pixels onto `bg` and convert to BT.709 limited-range 4:2:0
+/// planes, filling the caller's reusable buffers.
 ///
 /// Integer fixed-point maths instead of the previous per-pixel `f32` loop: a 1080p frame is ~2M
 /// pixels and video exports do this for every frame. The buffers are reused across frames so a
@@ -324,7 +324,9 @@ fn mux(w: u32, h: u32, fps: u32, av1c: &[u8], blocks: &[Block]) -> Vec<u8> {
 pub fn rgba_to_yuv420_into(rgba: &[u8], w: usize, h: usize, bg: [u8; 3], y: &mut [u8], u: &mut [u8], v: &mut [u8]) {
     #[inline]
     fn over(c: u8, a: u8, bg: u8) -> u32 {
-        c as u32 + (bg as u32 * (255 - a as u32) + 127) / 255
+        // Straight alpha: multiply the source by its coverage. Treating `c` as already
+        // premultiplied lightens semi-transparent colours (255 red at 50% became 382).
+        (c as u32 * a as u32 + bg as u32 * (255 - a as u32) + 127) / 255
     }
     for (i, px) in rgba.chunks_exact(4).enumerate() {
         let a = px[3];
@@ -642,6 +644,18 @@ mod tests {
         rgba_to_yuv420_into(&[0, 0, 0, 0].repeat(4), 2, 2, [255, 255, 255], &mut y, &mut u, &mut v);
         assert!(y.iter().all(|&c| c == 235), "transparent over white is white (luma 235): {y:?}");
         assert!(u[0].abs_diff(128) <= 1 && v[0].abs_diff(128) <= 1, "white has neutral chroma: {} {}", u[0], v[0]);
+    }
+
+    #[test]
+    fn semi_transparent_colours_composite_with_straight_alpha() {
+        let mut y = vec![0; 4];
+        let mut u = vec![0; 1];
+        let mut v = vec![0; 1];
+        // 50% red over white must become (255, 127, 127), not the "premultiplied" (382, 127, 127)
+        // which clips to pure white in luma.
+        rgba_to_yuv420_into(&[255, 0, 0, 128].repeat(4), 2, 2, [255, 255, 255], &mut y, &mut u, &mut v);
+        assert!(y.iter().all(|&c| (i32::from(c) - 149).abs() <= 1), "50% red over white luma ≈149: {y:?}");
+        assert!(u[0] < 120 && v[0] > 170, "red chroma must survive alpha compositing: u={} v={}", u[0], v[0]);
     }
 
     /// Local baseline for the hardware backend probes; ignored in normal CI because it encodes
