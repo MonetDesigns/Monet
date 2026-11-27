@@ -1129,18 +1129,18 @@ pub(crate) fn assets_body(
     } else {
         assets_styles(doc, cmds, &q)
     };
-    let updates = pending_library_updates(app, doc);
+    let updates = pending_library_updates(&app.session, doc);
     let banner = (updates > 0).then(|| updates_banner(cmds));
     wrap_header(body, header, banner)
 }
 
 /// Enabled libraries whose cached copy is newer than the document's copies (egui
 /// `build_listing` -> `updates`). Unread libraries simply contribute nothing until loaded.
-fn pending_library_updates(app: &CanvasApp, doc: &figcraft_doc::Document) -> usize {
+fn pending_library_updates(session: &figcraft_engine::Session, doc: &figcraft_doc::Document) -> usize {
     doc.libraries
         .enabled
         .iter()
-        .filter_map(|l| app.session.libraries.cached(&l.path))
+        .filter_map(|l| session.libraries.cached(&l.path))
         .filter_map(std::result::Result::ok)
         .map(|lib| figcraft_engine::library::pending(doc, lib).count())
         .sum()
@@ -1517,7 +1517,33 @@ mod tests {
         assert_eq!(ui_action("preview.close", &empty, 0), Some(UiAction::PreviewClose));
     }
 
-    /// 四块面板的标题 / 变体都能构造（防止 ui_requests 分派时漏分支）。
+    /// The Assets banner counts cached libraries, not the document's stale copies.
+    #[test]
+    fn pending_library_updates_counts_a_republished_component() {
+        let dir = std::env::temp_dir().join(format!("figcraft-asset-updates-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ui.figcraft").to_string_lossy().into_owned();
+        let id = |v: Value| figcraft_engine::params::id_of(&v["id"]).unwrap();
+
+        let mut lib = figcraft_engine::Session::new();
+        let frame = id(lib.execute("frame.create", &json!({"x": 0, "y": 0, "width": 100, "height": 40})).unwrap());
+        let comp = id(lib.execute("component.create", &json!({"ids": [frame]})).unwrap());
+        lib.execute("library.publish", &json!({"include": [comp]})).unwrap();
+        lib.execute("file.saveAs", &json!({"path": path})).unwrap();
+
+        let mut host = figcraft_engine::Session::new();
+        host.execute("library.add", &json!({"path": path})).unwrap();
+        host.execute("library.import", &json!({"library": path, "component": comp})).unwrap();
+        assert_eq!(pending_library_updates(&host, host.doc().unwrap()), 0, "the imported copy is current");
+
+        lib.execute("node.set", &json!({"id": frame, "props": {"width": 140}})).unwrap();
+        lib.execute("library.publish", &json!({"include": [comp]})).unwrap();
+        lib.execute("file.save", &json!({})).unwrap();
+        host.execute("library.updates", &json!({})).unwrap();
+        assert_eq!(pending_library_updates(&host, host.doc().unwrap()), 1, "one component has a newer version");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
     #[test]
     fn every_extra_kind_has_a_title() {
         for k in [ExtraKind::Shortcuts, ExtraKind::Versions, ExtraKind::DevCompare { id: None, version: Some("v1".into()) }, ExtraKind::Home] {
