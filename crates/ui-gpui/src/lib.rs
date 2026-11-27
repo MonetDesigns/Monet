@@ -2225,7 +2225,7 @@ impl CanvasView {
                     if self.present_view.update(&r.data) {
                         let options = self.present_view.clone();
                         if let Some(p) = self.present.as_mut().filter(|p| !p.preview) {
-                            options.apply_to(p);
+                            options.apply_request(&r.data, p);
                         }
                         cx.notify();
                     }

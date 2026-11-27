@@ -146,6 +146,26 @@ impl PresentOptions {
         changed
     }
 
+    /// Copy only the keys present in a `present.options` payload into a running presentation.
+    /// A partial request must not overwrite settings the user changed in the player (Z / menu).
+    pub fn apply_request(&self, data: &Value, state: &mut PresentState) {
+        if data.get("scale").and_then(Value::as_str).and_then(ScaleMode::parse).is_some() {
+            state.scale = self.scale;
+        }
+        if data.get("deviceFrame").and_then(Value::as_bool).is_some() {
+            state.device_frame = self.device_frame;
+        }
+        if data.get("hotspotHints").and_then(Value::as_bool).is_some() {
+            state.hints = self.hotspot_hints;
+        }
+        if data.get("inspect").and_then(Value::as_bool).is_some() {
+            state.inspect = self.inspect;
+        }
+        if data.get("hideUi").and_then(Value::as_bool).is_some() {
+            state.hide_ui = self.hide_ui;
+        }
+    }
+
     /// Copy the stored options into a running presentation.
     pub fn apply_to(&self, state: &mut PresentState) {
         state.scale = self.scale;
@@ -2395,6 +2415,21 @@ mod tests {
         assert_eq!(state.scale, ScaleMode::Fill);
         assert!(state.hide_ui && state.inspect);
         assert!(state.hints, "hotspot hints were not changed");
+    }
+
+    #[test]
+    fn present_options_partial_request_keeps_the_player_scale() {
+        let mut options = PresentOptions::default();
+        assert!(options.update(&serde_json::json!({"inspect": true})));
+        let mut state = PresentState::new(figcraft_doc::NodeId(1), false);
+        state.scale = ScaleMode::Fill;
+        options.apply_request(&serde_json::json!({"inspect": true}), &mut state);
+        assert!(state.inspect, "the requested key is applied");
+        assert_eq!(state.scale, ScaleMode::Fill, "an absent key does not reset the player");
+
+        assert!(options.update(&serde_json::json!({"scale": "actual"})));
+        options.apply_request(&serde_json::json!({"scale": "actual"}), &mut state);
+        assert_eq!(state.scale, ScaleMode::Actual);
     }
 
     #[test]
