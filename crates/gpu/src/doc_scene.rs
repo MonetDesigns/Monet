@@ -12,6 +12,8 @@
 //! | solid, linear/radial/angular/diamond gradients (≤ [`MAX_STOPS`] stops) on SDF shapes | round or noisy effects this build cannot draw |
 //! | drop shadows from an opaque SDF box: offset, blur (box-approximated exactly as the CPU), tint | drop shadows that spread, blend differently, or cast from groups, text or translucent/outlined layers |
 //! | inner shadows from an SDF box: offset, blur, tint, masked to the box | inner shadows that spread or blend differently, and group inner shadows |
+//! | uniform layer blur over one opaque SDF box fill | progressive blurs, and layers with children, strokes or clips |
+//! | uniform background blur over one SDF box with one fill (the frame is resolved and blurred in place) | background blur over children, strokes, clips, group opacity, and glass |
 //! | text: glyph and decoration outlines from `figcraft_text`, solid fills and strokes per run | colour glyphs (emoji, COLR) |
 //! | node opacity, visibility, ancestor clipping rectangles | rounded or rotated clips, variable-bound fills |
 
@@ -24,7 +26,8 @@ use figcraft_geom::{Affine, BezPath, Point};
 
 use crate::geometry;
 use crate::scene::{
-    Clip, GradientKind, LayerBlurNode, MAX_STOPS, MeshNode, Paint, Rgba, Scene, ShadowNode, ShapeKind, ShapeNode, Stop, Viewport, is_similarity,
+    BackdropNode, Clip, GradientKind, LayerBlurNode, MAX_STOPS, MeshNode, Paint, Rgba, Scene, ShadowNode, ShapeKind, ShapeNode, Stop, Viewport,
+    is_similarity,
 };
 
 /// The deepest subtree walked; a document that nests deeper is a broken file and a fallback.
@@ -96,7 +99,17 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, sce
         n.effects.iter().filter(|e| e.visible).filter_map(|e| if let EffectKind::InnerShadow(s) = &e.kind { Some(s) } else { None }).collect();
     let layer_blurs: Vec<&figcraft_doc::Blur> =
         n.effects.iter().filter(|e| e.visible).filter_map(|e| if let EffectKind::LayerBlur(b) = &e.kind { Some(b) } else { None }).collect();
-    if n.effects.iter().any(|e| e.visible && !matches!(e.kind, EffectKind::DropShadow(_) | EffectKind::InnerShadow(_) | EffectKind::LayerBlur(_))) {
+    let backdrops: Vec<&figcraft_doc::Blur> = n
+        .effects
+        .iter()
+        .filter(|e| e.visible)
+        .filter_map(|e| if let EffectKind::BackgroundBlur(b) = &e.kind { Some(b) } else { None })
+        .filter(|b| b.max_radius() > 0.0)
+        .collect();
+    if n.effects.iter().any(|e| {
+        e.visible
+            && !matches!(e.kind, EffectKind::DropShadow(_) | EffectKind::InnerShadow(_) | EffectKind::LayerBlur(_) | EffectKind::BackgroundBlur(_))
+    }) {
         scene.unsupported("effect", format!("`{}` has a visible effect this build cannot draw", n.name));
     }
     if !matches!(n.blend, BlendMode::Normal | BlendMode::PassThrough) {
@@ -139,6 +152,7 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, sce
     // Drop shadows sit under the node's own content, so they are emitted before its fills and
     // children. Only a node whose silhouette is exactly its SDF box can cast one in GPU.
     let shape = if sized { sdf_shape(n, &m, w, h) } else { None };
+    backdrop(n, &backdrops, &layer_blurs, shape, clip, m, w, h, scale, scene);
     let blurred = layer_blur(n, &layer_blurs, shape, clip, m, w, h, scale, scene.width, scene.height, scene);
     if !drop_shadows.is_empty() {
         match shape {
@@ -400,6 +414,63 @@ fn emit_layer_blur(shape: ShapeKind, m: Affine, w: f64, h: f64, scale: f64, blur
     });
 }
 
+/// Emits this node's background blur when it is one this build can draw; it paints before the node's
+/// own fills and children. Records `effect` for everything else.
+#[allow(clippy::too_many_arguments)]
+fn backdrop(
+    n: &Node,
+    backdrops: &[&figcraft_doc::Blur],
+    layer_blurs: &[&figcraft_doc::Blur],
+    shape: Option<ShapeKind>,
+    clip: Clip,
+    m: Affine,
+    w: f64,
+    h: f64,
+    scale: f64,
+    scene: &mut Scene,
+) {
+    if backdrops.is_empty() {
+        return;
+    }
+    let Some(shape) = shape.filter(|_| can_backdrop(n, backdrops, layer_blurs, clip)) else {
+        scene.unsupported("effect", format!("`{}` carries a background blur this build cannot draw", n.name));
+        return;
+    };
+    let blur = backdrops[0];
+    scene.push_backdrop(BackdropNode {
+        mat: crate::scene::matrix(m),
+        size: [w as f32, h as f32],
+        shape,
+        sigma: (blur.max_radius() / 2.0 * scale) as f32,
+        clip,
+    });
+}
+
+/// Whether this node's backdrop effect is one uniform blur over an SDF box whose layer is just its
+/// own fill (no children, no layer blur on top, no clip, no group opacity). The CPU paints the
+/// blurred backdrop into the layer first, so the node's fills, shadows and strokes go over it.
+fn can_backdrop(n: &Node, backdrops: &[&figcraft_doc::Blur], layer_blurs: &[&figcraft_doc::Blur], clip: Clip) -> bool {
+    let [blur] = backdrops else {
+        return false;
+    };
+    if blur.is_progressive() || !blur.max_radius().is_finite() {
+        return false;
+    }
+    if !n.children.is_empty() || n.clip || !clip.is_none() || !layer_blurs.is_empty() {
+        return false;
+    }
+    if n.has_visible_stroke() {
+        // The CPU masks the backdrop by the node's fill outline; a stroke widens what it covers.
+        return false;
+    }
+    if n.opacity < 0.999 || !matches!(n.blend, BlendMode::Normal) {
+        return false;
+    }
+    // The blurred backdrop is one layer image: several visible fills would each be painted over it,
+    // which is still what the CPU does, but this build takes the simple backdrop card (one fill).
+    n.fills.iter().filter(|f| f.visible).count() == 1
+}
+
 /// The path fallback: tessellate the CPU's own fill outline and paint each visible solid fill.
 fn emit_path_fills(doc: &Document, n: &Node, m: Affine, inner: Clip, scene: &mut Scene) {
     // Text fills are glyph outlines: expensive to build and already recorded as unsupported.
@@ -613,7 +684,7 @@ fn map_point(m: Affine, x: f64, y: f64) -> (f64, f64) {
 fn meshes(scene: &Scene) -> impl Iterator<Item = &MeshNode> {
     scene.items.iter().filter_map(|item| match item {
         crate::scene::Item::Mesh(mesh) => Some(mesh),
-        crate::scene::Item::Shape(_) | crate::scene::Item::Shadow(_) | crate::scene::Item::Blur(_) => None,
+        crate::scene::Item::Shape(_) | crate::scene::Item::Shadow(_) | crate::scene::Item::Blur(_) | crate::scene::Item::Backdrop(_) => None,
     })
 }
 
@@ -841,6 +912,37 @@ mod tests {
         }
         let scene = build(&doc, page, &view());
         assert!(!scene.is_supported(), "the layer's children are part of what the CPU blurs");
+        assert!(scene.unsupported_features().iter().any(|u| u.feature == "effect"));
+    }
+
+    #[test]
+    fn a_background_blur_paints_before_the_fill() {
+        let mut doc = Document::default();
+        let page = doc.pages[0];
+        let rect = doc.create(page, NodeKind::Rectangle, "Frosted", 10.0, 10.0, 60.0, 40.0).expect("rect");
+        if let Ok(n) = doc.get_mut(rect) {
+            n.fills = vec![DocPaint::solid(Color::new(1.0, 1.0, 1.0, 0.4))];
+            n.effects = vec![figcraft_doc::Effect { kind: EffectKind::BackgroundBlur(figcraft_doc::Blur::uniform(8.0)), visible: true }];
+        }
+        let scene = build(&doc, page, &view());
+        assert!(scene.is_supported(), "{:?}", scene.unsupported_features());
+        assert_eq!(scene.backdrop_count(), 1);
+        assert!(matches!(scene.items.first(), Some(crate::scene::Item::Backdrop(_))), "the backdrop paints first");
+        assert!(matches!(scene.items.get(1), Some(crate::scene::Item::Shape(_))), "the fill paints over it");
+    }
+
+    #[test]
+    fn a_background_blur_over_children_falls_back() {
+        let mut doc = Document::default();
+        let page = doc.pages[0];
+        let frame = doc.create(page, NodeKind::Frame, "Frosted", 10.0, 10.0, 60.0, 40.0).expect("frame");
+        let _child = doc.create(frame, NodeKind::Rectangle, "Child", 5.0, 5.0, 20.0, 20.0).expect("child");
+        if let Ok(n) = doc.get_mut(frame) {
+            n.fills = vec![DocPaint::solid(Color::new(1.0, 1.0, 1.0, 0.4))];
+            n.effects = vec![figcraft_doc::Effect { kind: EffectKind::BackgroundBlur(figcraft_doc::Blur::uniform(8.0)), visible: true }];
+        }
+        let scene = build(&doc, page, &view());
+        assert!(!scene.is_supported(), "the layer's children are part of what the CPU shows over the backdrop");
         assert!(scene.unsupported_features().iter().any(|u| u.feature == "effect"));
     }
 }

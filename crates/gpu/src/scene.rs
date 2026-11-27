@@ -214,13 +214,28 @@ pub struct LayerBlurNode {
     pub clip: Clip,
 }
 
-/// One thing to draw, in painter's order: an SDF shape, a tessellated path, a shadow or a layer blur.
+/// A background blur: the backdrop under the box, blurred and shown through the box before the
+/// node's own fills and children paint over it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BackdropNode {
+    /// The box in document units and local → device matrix, like [`ShapeNode`].
+    pub mat: [f32; 6],
+    pub size: [f32; 2],
+    pub shape: ShapeKind,
+    /// Gaussian-equivalent blur radius in device pixels (the CPU's `radius / 2 * scale`).
+    pub sigma: f32,
+    pub clip: Clip,
+}
+
+/// One thing to draw, in painter's order: an SDF shape, a tessellated path, a shadow, a layer blur or
+/// a background blur.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Item {
     Shape(ShapeNode),
     Mesh(MeshNode),
     Shadow(ShadowNode),
     Blur(LayerBlurNode),
+    Backdrop(BackdropNode),
 }
 
 /// A feature this milestone cannot draw. Its presence sends the **whole frame** to the CPU.
@@ -269,11 +284,16 @@ impl Scene {
         self.items.push(Item::Blur(blur));
     }
 
+    /// A blurred backdrop under the box, painted before the node's own content.
+    pub fn push_backdrop(&mut self, backdrop: BackdropNode) {
+        self.items.push(Item::Backdrop(backdrop));
+    }
+
     /// The SDF shapes, in draw order (tests and the log use this; the renderer walks `items`).
     pub fn shapes(&self) -> impl Iterator<Item = &ShapeNode> {
         self.items.iter().filter_map(|item| match item {
             Item::Shape(shape) => Some(shape),
-            Item::Mesh(_) | Item::Shadow(_) | Item::Blur(_) => None,
+            Item::Mesh(_) | Item::Shadow(_) | Item::Blur(_) | Item::Backdrop(_) => None,
         })
     }
 
@@ -290,6 +310,10 @@ impl Scene {
     /// How many layer blurs the frame carries.
     pub fn blur_count(&self) -> usize {
         self.items.iter().filter(|item| matches!(item, Item::Blur(_))).count()
+    }
+
+    pub fn backdrop_count(&self) -> usize {
+        self.items.iter().filter(|item| matches!(item, Item::Backdrop(_))).count()
     }
 
     /// Record a feature this frame uses that this milestone cannot draw.

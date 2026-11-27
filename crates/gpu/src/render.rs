@@ -130,6 +130,9 @@ enum Cmd {
     Mesh { first: u32, count: u32 },
     /// Blurred drop shadow `n` (index into the frame's shadow plans).
     Shadow(usize),
+    /// A blurred backdrop: instance `first` of the instance buffer, blurred with `sigma` device pixels,
+    /// drawn in the box's place before the node's own content.
+    Backdrop { first: u32, sigma: f32 },
 }
 
 /// One shadow to draw: its silhouette (one instance), the blur radius in device pixels, the tint and
@@ -177,6 +180,21 @@ struct ShadowResources {
     /// The blurred texture + shape mask + tint + clip (inner shadow).
     inner_bind: Option<wgpu::BindGroup>,
     tint: wgpu::Buffer,
+}
+
+/// A background blur's chain: the resolved frame (in place of the shadow's silhouette), two ping-pong
+/// textures, six box passes, and the quad that shows the last pass through the box.
+struct BackdropResources {
+    _ping: wgpu::Texture,
+    ping_view: wgpu::TextureView,
+    _pong: wgpu::Texture,
+    pong_view: wgpu::TextureView,
+    /// Six passes: inputs are frame → ping → pong → ping → pong → ping.
+    blur_binds: Vec<wgpu::BindGroup>,
+    /// Kept alive for the bind groups' uniform buffers.
+    _blur_params: Vec<wgpu::Buffer>,
+    /// The final blurred texture, sampled at the node's box.
+    draw_bind: wgpu::BindGroup,
 }
 
 /// Box radii for three passes approximating a Gaussian of `sigma` — the CPU's `fx::box_sizes`,
@@ -227,6 +245,7 @@ pub struct Renderer {
     blur_pipeline: wgpu::RenderPipeline,
     shadow_pipeline: wgpu::RenderPipeline,
     inner_pipeline: wgpu::RenderPipeline,
+    backdrop_pipeline: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
     globals: wgpu::Buffer,
     bind_globals: wgpu::BindGroup,
@@ -234,6 +253,7 @@ pub struct Renderer {
     blur_layout: wgpu::BindGroupLayout,
     shadow_layout: wgpu::BindGroupLayout,
     inner_layout: wgpu::BindGroupLayout,
+    backdrop_layout: wgpu::BindGroupLayout,
     instances: Option<(wgpu::Buffer, wgpu::BindGroup, u64)>,
     mesh_verts: Option<(wgpu::Buffer, u64)>,
     mesh_indices: Option<(wgpu::Buffer, u64)>,
@@ -303,6 +323,10 @@ impl Renderer {
         let inner_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("figcraft-gpu-inner-shadow"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/inner.wgsl").into()),
+        });
+        let backdrop_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("figcraft-gpu-backdrop"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/backdrop.wgsl").into()),
         });
 
         let globals_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -412,6 +436,19 @@ impl Renderer {
                 },
             ],
         });
+        let backdrop_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("backdrop"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            }],
+        });
         let shape_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("shape"),
             bind_group_layouts: &[Some(&globals_layout), Some(&instances_layout)],
@@ -492,6 +529,11 @@ impl Renderer {
             bind_group_layouts: &[Some(&globals_layout), Some(&inner_layout)],
             immediate_size: 0,
         });
+        let backdrop_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("backdrop"),
+            bind_group_layouts: &[Some(&backdrop_layout), Some(&instances_layout)],
+            immediate_size: 0,
+        });
         let single_state = |b: Option<wgpu::BlendState>| wgpu::ColorTargetState {
             format: wgpu::TextureFormat::Rgba8Unorm,
             blend: b,
@@ -562,6 +604,27 @@ impl Renderer {
             multiview_mask: None,
             cache: None,
         });
+        let backdrop_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("backdrop"),
+            layout: Some(&backdrop_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &backdrop_shader,
+                entry_point: Some("vs"),
+                buffers: &[],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &backdrop_shader,
+                entry_point: Some("fs"),
+                targets: &[Some(single_state(blend()))],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState { count: SAMPLES, mask: !0, alpha_to_coverage_enabled: false },
+            multiview_mask: None,
+            cache: None,
+        });
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("shadow"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -593,6 +656,7 @@ impl Renderer {
             blur_pipeline,
             shadow_pipeline,
             inner_pipeline,
+            backdrop_pipeline,
             sampler,
             globals,
             bind_globals,
@@ -600,6 +664,7 @@ impl Renderer {
             blur_layout,
             shadow_layout,
             inner_layout,
+            backdrop_layout,
             instances: None,
             mesh_verts: None,
             mesh_indices: None,
@@ -729,6 +794,60 @@ impl Renderer {
         })
     }
 
+    /// The blur chain for one background blur: the resolved frame as the source, then six box passes.
+    fn backdrop_resources(&self, width: u32, height: u32, sigma: f32, source: &wgpu::TextureView) -> Option<BackdropResources> {
+        use wgpu::TextureUsages as U;
+        let size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
+        let texture = |label: &str| {
+            self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: U::RENDER_ATTACHMENT | U::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+        };
+        let ping = texture("backdrop-ping");
+        let ping_view = ping.create_view(&wgpu::TextureViewDescriptor::default());
+        let pong = texture("backdrop-pong");
+        let pong_view = pong.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let radii = box_radii(sigma);
+        let mut blur_binds = Vec::with_capacity(6);
+        let mut blur_params = Vec::with_capacity(6);
+        let inputs: [&wgpu::TextureView; 6] = [source, &ping_view, &pong_view, &ping_view, &pong_view, &ping_view];
+        for (i, input) in inputs.iter().enumerate() {
+            let params = [radii[i % 3] as i32, i32::from(i < 3), 0, 0];
+            let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("backdrop blur params"),
+                size: 16,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.queue.write_buffer(&buffer, 0, bytemuck::cast_slice(&params));
+            let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("backdrop blur"),
+                layout: &self.blur_layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(input) },
+                    wgpu::BindGroupEntry { binding: 1, resource: buffer.as_entire_binding() },
+                ],
+            });
+            blur_binds.push(bind);
+            blur_params.push(buffer);
+        }
+
+        let draw_bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("backdrop draw"),
+            layout: &self.backdrop_layout,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&pong_view) }],
+        });
+        Some(BackdropResources { _ping: ping, ping_view, _pong: pong, pong_view, blur_binds, _blur_params: blur_params, draw_bind })
+    }
+
     /// Draw `scene` and read it back as premultiplied RGBA8, `width * height * 4` bytes.
     pub fn render(&mut self, scene: &Scene) -> Result<Vec<u8>, RenderError> {
         if !scene.is_supported() {
@@ -840,6 +959,25 @@ impl Renderer {
                         clip: blur.clip,
                         inner: false,
                     });
+                }
+                Item::Backdrop(backdrop) => {
+                    if instances.len() > batch {
+                        cmds.push(Cmd::Shapes { first: batch as u32, count: (instances.len() - batch) as u32 });
+                    }
+                    // The backdrop quad reads the node's box from the instance buffer: one white
+                    // instance, never drawn by the shape pipeline.
+                    let caster = ShapeNode {
+                        mat: backdrop.mat,
+                        size: backdrop.size,
+                        shape: backdrop.shape,
+                        paint: Paint::Solid(Rgba::new(1.0, 1.0, 1.0, 1.0)),
+                        clip: backdrop.clip,
+                        opacity: 1.0,
+                    };
+                    let first = instances.len() as u32;
+                    instances.push(GpuInstance::of(&caster));
+                    batch = instances.len();
+                    cmds.push(Cmd::Backdrop { first, sigma: backdrop.sigma });
                 }
             }
         }
@@ -975,7 +1113,7 @@ impl Renderer {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             });
             let view = resolve.create_view(&wgpu::TextureViewDescriptor::default());
@@ -1087,7 +1225,58 @@ impl Renderer {
             });
             let mut bound_shapes = false;
             let mut bound_mesh = false;
+            let mut backdrops: Vec<BackdropResources> = Vec::new();
             for cmd in &cmds {
+                if let Cmd::Backdrop { first, sigma } = *cmd {
+                    // The blur reads what has been drawn so far: close this segment (which resolves
+                    // the MSAA target), blur the resolve into a backdrop chain, then resume the pass
+                    // over the same samples and show it through the box.
+                    drop(pass);
+                    if let Some(res) = self.backdrop_resources(w, h, sigma, &target.view) {
+                        for (k, blur_bind) in res.blur_binds.iter().enumerate() {
+                            let view = if k % 2 == 0 { &res.ping_view } else { &res.pong_view };
+                            let mut blur_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: Some("backdrop blur"),
+                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                    view,
+                                    depth_slice: None,
+                                    resolve_target: None,
+                                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                                })],
+                                depth_stencil_attachment: None,
+                                timestamp_writes: None,
+                                occlusion_query_set: None,
+                                multiview_mask: None,
+                            });
+                            blur_pass.set_pipeline(&self.blur_pipeline);
+                            blur_pass.set_bind_group(0, blur_bind, &[]);
+                            blur_pass.draw(0..3, 0..1);
+                        }
+                        backdrops.push(res);
+                    }
+                    pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("frame (resumed)"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &target.msaa_view,
+                            depth_slice: None,
+                            resolve_target: Some(&target.view),
+                            ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                    if let Some(res) = backdrops.last() {
+                        pass.set_pipeline(&self.backdrop_pipeline);
+                        pass.set_bind_group(0, &res.draw_bind, &[]);
+                        pass.set_bind_group(1, bind, &[]);
+                        pass.draw(0..3, first..first + 1);
+                    }
+                    bound_shapes = false;
+                    bound_mesh = false;
+                    continue;
+                }
                 match *cmd {
                     Cmd::Shapes { first, count } => {
                         if !bound_shapes {
@@ -1138,6 +1327,8 @@ impl Renderer {
                         bound_shapes = false;
                         bound_mesh = false;
                     }
+                    // Handled above, because it splits the pass.
+                    Cmd::Backdrop { .. } => {}
                 }
             }
         }

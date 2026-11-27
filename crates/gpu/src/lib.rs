@@ -30,4 +30,4 @@ pub mod render;
 
 pub use backend::{Capability, DeviceClass};
 pub use prefs::{Effective, RenderBackend};
-pub use scene::{Item, LayerBlurNode, MeshNode, Paint, Scene, ShadowNode, ShapeKind, ShapeNode, Viewport};
+pub use scene::{BackdropNode, Item, LayerBlurNode, MeshNode, Paint, Scene, ShadowNode, ShapeKind, ShapeNode, Viewport};

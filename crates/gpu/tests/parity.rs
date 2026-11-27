@@ -410,6 +410,42 @@ fn a_layer_blur_matches_the_cpu_blur() {
 }
 
 #[test]
+fn a_background_blur_matches_the_cpu_blur() {
+    let mut doc = Document::default();
+    let page = doc.pages[0];
+    transparent_page(&mut doc, page);
+    // Two hard colour fields under the card: the blur should melt their seam.
+    let _red = rect(&mut doc, page, "Red", 0.0, 0.0, 100.0, 200.0, 0.0, Paint::solid(Color::new(0.9, 0.2, 0.15, 1.0)));
+    let _blue = rect(&mut doc, page, "Blue", 100.0, 0.0, 100.0, 200.0, 0.0, Paint::solid(Color::new(0.15, 0.3, 0.9, 1.0)));
+    let card = rect(&mut doc, page, "Frosted", 50.0, 50.0, 110.0, 100.0, 16.0, Paint::solid(Color::new(1.0, 1.0, 1.0, 0.35)));
+    if let Ok(n) = doc.get_mut(card) {
+        n.effects = vec![figcraft_doc::Effect { kind: figcraft_doc::EffectKind::BackgroundBlur(figcraft_doc::Blur::uniform(10.0)), visible: true }];
+    }
+    // A second blurred layer lower down: the frame is resolved, blurred and resumed twice.
+    let lower = rect(&mut doc, page, "Lower", 30.0, 150.0, 60.0, 40.0, 8.0, Paint::solid(Color::new(1.0, 1.0, 1.0, 0.3)));
+    if let Ok(n) = doc.get_mut(lower) {
+        n.effects = vec![figcraft_doc::Effect { kind: figcraft_doc::EffectKind::BackgroundBlur(figcraft_doc::Blur::uniform(6.0)), visible: true }];
+    }
+
+    let scene = doc_scene::build(&doc, page, &viewport());
+    assert!(scene.is_supported(), "the background blur must stay on the GPU path: {:?}", scene.unsupported_features());
+    assert_eq!(scene.backdrop_count(), 2);
+
+    let cpu = cpu_pixels(&doc, page);
+    let Some(gpu) = gpu_pixels(&doc, page) else {
+        eprintln!("SKIP: no adapter");
+        return;
+    };
+    let tol = Tolerance { per_channel: 3, max_bad_ratio: 0.03 };
+    let report = compare_interiors(&cpu, &gpu, SIZE as usize, SIZE as usize, tol).expect("comparable");
+    assert!(report.passes(tol), "{}", report.summary());
+    // The seam is gone under the card, on both sides.
+    let (cpu_seam, gpu_seam) = (pixel(&cpu, SIZE as usize, 105, 100).expect("in bounds"), pixel(&gpu, SIZE as usize, 105, 100).expect("in bounds"));
+    assert!(cpu_seam[0] < 250 && cpu_seam[2] > 20, "the CPU kept the seam sharp: {cpu_seam:?}");
+    assert!(gpu_seam[0] < 250 && gpu_seam[2] > 20, "the GPU kept the seam sharp: {gpu_seam:?}");
+}
+
+#[test]
 fn text_glyphs_match_the_cpu() {
     let mut doc = Document::default();
     let page = doc.pages[0];
