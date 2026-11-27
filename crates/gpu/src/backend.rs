@@ -38,13 +38,7 @@ pub struct Capability {
 impl Capability {
     /// No adapter (or one that cannot run this pipeline), with the reason kept for the UI.
     pub fn unavailable(reason: impl Into<String>) -> Self {
-        Self {
-            available: false,
-            class: DeviceClass::Unknown,
-            name: String::new(),
-            backend: String::new(),
-            reason: Some(reason.into()),
-        }
+        Self { available: false, class: DeviceClass::Unknown, name: String::new(), backend: String::new(), reason: Some(reason.into()) }
     }
 
     /// The one-line state the preferences row shows under the choice.
@@ -98,23 +92,14 @@ fn probe() -> Capability {
         ));
     }
     if limits.max_storage_buffer_binding_size < REQUIRED_STORAGE_BINDING {
-        return Capability::unavailable(format!(
-            "{} limits storage bindings to {} bytes",
-            info.name, limits.max_storage_buffer_binding_size
-        ));
+        return Capability::unavailable(format!("{} limits storage bindings to {} bytes", info.name, limits.max_storage_buffer_binding_size));
     }
     let class = match info.device_type {
         wgpu::DeviceType::Cpu => DeviceClass::Software,
         wgpu::DeviceType::Other => DeviceClass::Unknown,
         _ => DeviceClass::Hardware,
     };
-    Capability {
-        available: true,
-        class,
-        name: info.name.clone(),
-        backend: format!("{:?}", info.backend),
-        reason: None,
-    }
+    Capability { available: true, class, name: info.name.clone(), backend: format!("{:?}", info.backend), reason: None }
 }
 
 #[cfg(not(feature = "wgpu"))]

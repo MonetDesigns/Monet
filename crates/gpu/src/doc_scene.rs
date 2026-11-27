@@ -24,7 +24,7 @@ use figcraft_geom::{Affine, BezPath, Point};
 
 use crate::geometry;
 use crate::scene::{
-    is_similarity, Clip, GradientKind, MeshNode, Paint, Rgba, Scene, ShapeKind, ShapeNode, ShadowNode, Stop, Viewport, MAX_STOPS,
+    Clip, GradientKind, LayerBlurNode, MAX_STOPS, MeshNode, Paint, Rgba, Scene, ShadowNode, ShapeKind, ShapeNode, Stop, Viewport, is_similarity,
 };
 
 /// The deepest subtree walked; a document that nests deeper is a broken file and a fallback.
@@ -90,19 +90,13 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, sce
         return;
     }
     let container = is_container(&n.kind);
-    let drop_shadows: Vec<&figcraft_doc::Shadow> = n
-        .effects
-        .iter()
-        .filter(|e| e.visible)
-        .filter_map(|e| if let EffectKind::DropShadow(s) = &e.kind { Some(s) } else { None })
-        .collect();
-    let inner_shadows: Vec<&figcraft_doc::Shadow> = n
-        .effects
-        .iter()
-        .filter(|e| e.visible)
-        .filter_map(|e| if let EffectKind::InnerShadow(s) = &e.kind { Some(s) } else { None })
-        .collect();
-    if n.effects.iter().any(|e| e.visible && !matches!(e.kind, EffectKind::DropShadow(_) | EffectKind::InnerShadow(_))) {
+    let drop_shadows: Vec<&figcraft_doc::Shadow> =
+        n.effects.iter().filter(|e| e.visible).filter_map(|e| if let EffectKind::DropShadow(s) = &e.kind { Some(s) } else { None }).collect();
+    let inner_shadows: Vec<&figcraft_doc::Shadow> =
+        n.effects.iter().filter(|e| e.visible).filter_map(|e| if let EffectKind::InnerShadow(s) = &e.kind { Some(s) } else { None }).collect();
+    let layer_blurs: Vec<&figcraft_doc::Blur> =
+        n.effects.iter().filter(|e| e.visible).filter_map(|e| if let EffectKind::LayerBlur(b) = &e.kind { Some(b) } else { None }).collect();
+    if n.effects.iter().any(|e| e.visible && !matches!(e.kind, EffectKind::DropShadow(_) | EffectKind::InnerShadow(_) | EffectKind::LayerBlur(_))) {
         scene.unsupported("effect", format!("`{}` has a visible effect this build cannot draw", n.name));
     }
     if !matches!(n.blend, BlendMode::Normal | BlendMode::PassThrough) {
@@ -138,23 +132,20 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, sce
             }
             let (x0, y0) = map_point(m, 0.0, 0.0);
             let (x1, y1) = map_point(m, w, h);
-            inner = inner.intersect([
-                x0.min(x1) as f32,
-                y0.min(y1) as f32,
-                (x1 - x0).abs() as f32,
-                (y1 - y0).abs() as f32,
-            ]);
+            inner = inner.intersect([x0.min(x1) as f32, y0.min(y1) as f32, (x1 - x0).abs() as f32, (y1 - y0).abs() as f32]);
         }
     }
 
     // Drop shadows sit under the node's own content, so they are emitted before its fills and
     // children. Only a node whose silhouette is exactly its SDF box can cast one in GPU.
     let shape = if sized { sdf_shape(n, &m, w, h) } else { None };
+    let blurred = layer_blur(n, &layer_blurs, shape, clip, m, w, h, scale, scene.width, scene.height, scene);
     if !drop_shadows.is_empty() {
         match shape {
             Some(shape) if can_cast_shadow(n, &drop_shadows) => {
                 for shadow in &drop_shadows {
-                    emit_shadow(shape, m, w, h, scale, clip, shadow, false, scene);                }
+                    emit_shadow(shape, m, w, h, scale, clip, shadow, false, scene);
+                }
             }
             _ => scene.unsupported("effect", format!("`{}` casts a drop shadow this build cannot draw", n.name)),
         }
@@ -162,8 +153,8 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, sce
 
     // Fills: the SDF when the box is one of its primitives, the CPU's own outline tessellated
     // otherwise (vectors, booleans, lines, and boxes the SDF cannot express exactly). Text paints
-    // glyph outlines instead of its box.
-    if sized {
+    // glyph outlines instead of its box. A blurred layer already paints the fill, so it replaces it.
+    if sized && !blurred {
         if let NodeKind::Text(_) = n.kind {
             emit_text(n, m, clip, scene);
         } else if let Some(shape) = shape {
@@ -230,7 +221,9 @@ fn sdf_shape(n: &Node, m: &Affine, w: f64, h: f64) -> Option<ShapeKind> {
             full.then_some(ShapeKind::Ellipse)
         }
         NodeKind::Polygon { count } => (3..=32).contains(count).then_some(ShapeKind::Polygon { count: *count }),
-        NodeKind::Star { count, inner_ratio } => (3..=32).contains(count).then(|| ShapeKind::Star { count: *count, inner_ratio: *inner_ratio as f32 }),
+        NodeKind::Star { count, inner_ratio } => {
+            (3..=32).contains(count).then(|| ShapeKind::Star { count: *count, inner_ratio: *inner_ratio as f32 })
+        }
         NodeKind::Line | NodeKind::Vector { .. } | NodeKind::Text(_) | NodeKind::BooleanOp { .. } | NodeKind::Icon { .. } | NodeKind::Slice => None,
     }
 }
@@ -264,12 +257,7 @@ fn emit_sdf_fills(n: &Node, shape: ShapeKind, m: Affine, w: f64, h: f64, inner: 
 /// The shadow properties both kinds can express here: normal blend, no spread, finite radius and
 /// offset.
 fn shadow_is_plain(s: &figcraft_doc::Shadow) -> bool {
-    s.blend == BlendMode::Normal
-        && s.spread == 0.0
-        && s.radius.is_finite()
-        && s.radius >= 0.0
-        && s.offset.0.is_finite()
-        && s.offset.1.is_finite()
+    s.blend == BlendMode::Normal && s.spread == 0.0 && s.radius.is_finite() && s.radius >= 0.0 && s.offset.0.is_finite() && s.offset.1.is_finite()
 }
 
 /// Whether this node casts its drop shadows from exactly its SDF box: an opaque solid fill or fills,
@@ -302,17 +290,7 @@ fn can_cast_inner_shadow(n: &Node, shadows: &[&figcraft_doc::Shadow]) -> bool {
 /// One shadow: the node's box offset by the shadow's device-pixel offset, a sigma the CPU's blur
 /// uses (`radius / 2 * scale`) and the tint. An inner shadow is masked to the box's own coverage.
 #[allow(clippy::too_many_arguments)]
-fn emit_shadow(
-    shape: ShapeKind,
-    m: Affine,
-    w: f64,
-    h: f64,
-    scale: f64,
-    clip: Clip,
-    shadow: &figcraft_doc::Shadow,
-    inner: bool,
-    scene: &mut Scene,
-) {
+fn emit_shadow(shape: ShapeKind, m: Affine, w: f64, h: f64, scale: f64, clip: Clip, shadow: &figcraft_doc::Shadow, inner: bool, scene: &mut Scene) {
     let offset = [(shadow.offset.0 * scale).round() as f32, (shadow.offset.1 * scale).round() as f32];
     scene.push_shadow(ShadowNode {
         mat: crate::scene::matrix(m),
@@ -323,6 +301,102 @@ fn emit_shadow(
         color: Rgba::from_color(shadow.color),
         clip,
         inner,
+    });
+}
+
+/// Emits this node's layer blur when it is one this build can draw; returns whether the node's fill
+/// has been replaced by the blurred layer. Records `effect` for everything else.
+#[allow(clippy::too_many_arguments)]
+fn layer_blur(
+    n: &Node,
+    blurs: &[&figcraft_doc::Blur],
+    shape: Option<ShapeKind>,
+    clip: Clip,
+    m: Affine,
+    w: f64,
+    h: f64,
+    scale: f64,
+    frame_width: u32,
+    frame_height: u32,
+    scene: &mut Scene,
+) -> bool {
+    if blurs.is_empty() {
+        return false;
+    }
+    let Some(shape) = shape.filter(|_| can_blur_layer(n, blurs, clip, m, w, h, scale, frame_width, frame_height)) else {
+        scene.unsupported("effect", format!("`{}` carries a layer blur this build cannot draw", n.name));
+        return false;
+    };
+    emit_layer_blur(shape, m, w, h, scale, blurs[0], n, clip, scene);
+    true
+}
+
+/// Whether this node's layer is exactly one opaque SDF box fill, so blurring the box's coverage and
+/// repainting it is what the CPU's layer blur does. Children, strokes, its own or an ancestor's clip,
+/// other effects, progressive blurs and boxes close enough to the frame edge that the blur would read
+/// past it are all declined (the CPU's layer can carry content outside the frame; this build cannot).
+#[allow(clippy::too_many_arguments)]
+fn can_blur_layer(
+    n: &Node,
+    blurs: &[&figcraft_doc::Blur],
+    clip: Clip,
+    m: Affine,
+    w: f64,
+    h: f64,
+    scale: f64,
+    frame_width: u32,
+    frame_height: u32,
+) -> bool {
+    let [blur] = blurs else {
+        return false;
+    };
+    if blur.is_progressive() || !(blur.radius.is_finite() && blur.radius >= 0.0) {
+        return false;
+    }
+    if !n.children.is_empty() || n.has_visible_stroke() || n.clip || !clip.is_none() {
+        return false;
+    }
+    if n.effects.iter().any(|e| e.visible && matches!(e.kind, EffectKind::DropShadow(_) | EffectKind::InnerShadow(_))) {
+        return false;
+    }
+    let mut fills = 0;
+    for fill in n.fills.iter().filter(|f| f.visible) {
+        fills += 1;
+        if !matches!(fill.blend, BlendMode::Normal) || fill.solid_color().is_none() {
+            return false;
+        }
+    }
+    if fills != 1 {
+        return false;
+    }
+    // The CPU blurs a layer that may extend past the frame; this pipeline only has the frame, so a
+    // box whose blur reaches outside it would read different pixels at the border.
+    let reach = blur.max_radius() * 1.5 * scale;
+    if !reach.is_finite() {
+        return false;
+    }
+    let (x0, y0) = map_point(m, 0.0, 0.0);
+    let (x1, y1) = map_point(m, w, h);
+    let (min_x, max_x) = (x0.min(x1), x0.max(x1));
+    let (min_y, max_y) = (y0.min(y1), y0.max(y1));
+    min_x - reach >= 0.0 && min_y - reach >= 0.0 && max_x + reach <= f64::from(frame_width) && max_y + reach <= f64::from(frame_height)
+}
+
+/// A layer blur: the box's coverage blurred by the same chain and repainted with its single fill.
+#[allow(clippy::too_many_arguments)]
+fn emit_layer_blur(shape: ShapeKind, m: Affine, w: f64, h: f64, scale: f64, blur: &figcraft_doc::Blur, n: &Node, clip: Clip, scene: &mut Scene) {
+    let Some(fill) = n.fills.iter().filter(|f| f.visible).find_map(|f| f.solid_color()) else {
+        return;
+    };
+    let mut color = Rgba::from_color(fill);
+    color.a *= n.opacity.clamp(0.0, 1.0);
+    scene.push_blur(LayerBlurNode {
+        mat: crate::scene::matrix(m),
+        size: [w as f32, h as f32],
+        shape,
+        sigma: (blur.radius / 2.0 * scale) as f32,
+        color,
+        clip,
     });
 }
 
@@ -499,10 +573,7 @@ fn paint_of(fill: &DocPaint, scene: &mut Scene, name: &str, index: usize) -> Opt
             let mut stops: Vec<Stop> = g
                 .stops
                 .iter()
-                .map(|s| Stop {
-                    at: s.position.clamp(0.0, 1.0),
-                    color: Rgba::new(s.color.r, s.color.g, s.color.b, s.color.a * opacity),
-                })
+                .map(|s| Stop { at: s.position.clamp(0.0, 1.0), color: Rgba::new(s.color.r, s.color.g, s.color.b, s.color.a * opacity) })
                 .collect();
             // The CPU sorts its stops before sampling; the shader's piecewise lookup needs them in
             // order, and a file may hold them unsorted.
@@ -542,7 +613,7 @@ fn map_point(m: Affine, x: f64, y: f64) -> (f64, f64) {
 fn meshes(scene: &Scene) -> impl Iterator<Item = &MeshNode> {
     scene.items.iter().filter_map(|item| match item {
         crate::scene::Item::Mesh(mesh) => Some(mesh),
-        crate::scene::Item::Shape(_) | crate::scene::Item::Shadow(_) => None,
+        crate::scene::Item::Shape(_) | crate::scene::Item::Shadow(_) | crate::scene::Item::Blur(_) => None,
     })
 }
 
@@ -663,9 +734,7 @@ mod tests {
         let page = doc.pages[0];
         let rect = doc.create(page, NodeKind::Rectangle, "Rect", 0.0, 0.0, 10.0, 10.0).expect("rect");
         let mut g = figcraft_color::Gradient::default_for(figcraft_color::GradientKind::Linear, Color::new(0.0, 0.0, 0.0, 1.0));
-        g.stops = (0..8)
-            .map(|i| figcraft_color::ColorStop { position: i as f32 / 8.0, color: Color::new(1.0, 0.0, 0.0, 1.0) })
-            .collect();
+        g.stops = (0..8).map(|i| figcraft_color::ColorStop { position: i as f32 / 8.0, color: Color::new(1.0, 0.0, 0.0, 1.0) }).collect();
         if let Ok(n) = doc.get_mut(rect) {
             n.fills = vec![DocPaint::gradient(g)];
         }
@@ -691,9 +760,8 @@ mod tests {
     fn a_ring_ellipse_is_drawn_by_the_path_fallback() {
         let mut doc = Document::default();
         let page = doc.pages[0];
-        let ring = doc
-            .create(page, NodeKind::Ellipse { start: 0.0, sweep: std::f64::consts::TAU, inner: 0.6 }, "Ring", 0.0, 0.0, 80.0, 80.0)
-            .expect("ring");
+        let ring =
+            doc.create(page, NodeKind::Ellipse { start: 0.0, sweep: std::f64::consts::TAU, inner: 0.6 }, "Ring", 0.0, 0.0, 80.0, 80.0).expect("ring");
         if let Ok(n) = doc.get_mut(ring) {
             n.fills = vec![DocPaint::solid(Color::new(0.2, 0.4, 0.8, 1.0))];
         }
@@ -742,7 +810,37 @@ mod tests {
             }];
         }
         let scene = build(&doc, page, &view());
-        assert!(!scene.is_supported());
+        assert!(!scene.is_supported(), "the spread reaches outside the box");
+        assert!(scene.unsupported_features().iter().any(|u| u.feature == "effect"));
+    }
+
+    #[test]
+    fn a_layer_blur_replaces_the_fill() {
+        let mut doc = Document::default();
+        let page = doc.pages[0];
+        let rect = doc.create(page, NodeKind::Rectangle, "Blurred", 10.0, 10.0, 60.0, 40.0).expect("rect");
+        if let Ok(n) = doc.get_mut(rect) {
+            n.fills = vec![DocPaint::solid(Color::new(0.2, 0.5, 0.8, 1.0))];
+            n.effects = vec![figcraft_doc::Effect { kind: EffectKind::LayerBlur(figcraft_doc::Blur::uniform(6.0)), visible: true }];
+        }
+        let scene = build(&doc, page, &view());
+        assert!(scene.is_supported(), "{:?}", scene.unsupported_features());
+        assert_eq!(scene.blur_count(), 1);
+        assert_eq!(scene.shapes().count(), 0, "the blurred layer paints the fill, nothing sharp");
+        assert!(matches!(scene.items.first(), Some(crate::scene::Item::Blur(_))));
+    }
+
+    #[test]
+    fn a_layer_blur_over_children_falls_back() {
+        let mut doc = Document::default();
+        let page = doc.pages[0];
+        let frame = doc.create(page, NodeKind::Frame, "Blurred", 10.0, 10.0, 60.0, 40.0).expect("frame");
+        let _child = doc.create(frame, NodeKind::Rectangle, "Child", 5.0, 5.0, 20.0, 20.0).expect("child");
+        if let Ok(n) = doc.get_mut(frame) {
+            n.effects = vec![figcraft_doc::Effect { kind: EffectKind::LayerBlur(figcraft_doc::Blur::uniform(6.0)), visible: true }];
+        }
+        let scene = build(&doc, page, &view());
+        assert!(!scene.is_supported(), "the layer's children are part of what the CPU blurs");
         assert!(scene.unsupported_features().iter().any(|u| u.feature == "effect"));
     }
 }

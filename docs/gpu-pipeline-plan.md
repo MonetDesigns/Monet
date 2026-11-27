@@ -1,10 +1,10 @@
 # 完整 GPU 管线立项（Monet / FigCraft）
 
 > 分支：`ai/gpu-pipeline`（worktree `D:\Projektdateien\GPUI\branches\gpu-pipeline`，从 `main` 拉出）
-> 状态：阶段 1（图元与填充）、阶段 2（路径与描边）、阶段 3（文字）与阶段 4 的第一块（投影与内阴影）
+> 状态：阶段 1（图元与填充）、阶段 2（路径与描边）、阶段 3（文字）与阶段 4 的第一块（投影、内阴影与 uniform 图层模糊）
 > 已落地——能力探测、`auto/gpu/cpu` 三档偏好（引擎命令 + Preferences ▸ Rendering）、场景 IR、实例化
 > SDF 图元（圆角矩形/椭圆/多边形/星形）、四类渐变、裁剪、路径填充与描边网格（4× MSAA）、文字字形
-> 网格、离屏剪影 + 六 pass 盒模糊的投影与内阴影、回读与 CPU↔GPU 像素 diff（10 项对照测试），UI 画布
+> 网格、离屏剪影 + 六 pass 盒模糊的投影/内阴影/图层模糊、回读与 CPU↔GPU 像素 diff（11 项对照测试），UI 画布
 > 已接线并整帧回退；M4 其余、M5–M7 为设计与接口
 > 日期：2026-11-27
 
@@ -153,7 +153,7 @@ match figcraft_gpu::render::Renderer::global().render(&scene) { Ok(rgba) => …,
   < 3%、内区 `per_channel = 2`）。测试在找不到字体（Inter / Segoe UI / Arial）时跳过并打印 SKIP，
   因为字体由 `craft-fonts` 提供，CI 可能没有。
 
-### M4 效果（本分支已落地：drop shadow 与 inner shadow）
+### M4 效果（本分支已落地：drop shadow、inner shadow 与 uniform 图层模糊）
 
 - **剪影**：投影要求「轮廓 == 节点自身填充轮廓」——SDF 可表达的盒子、无可见描边、无子节点
   （或 `clip` 且自身有填充的 frame-like）、全部可见填充为不透明纯色、节点 `opacity = 1`。内阴影只
@@ -171,21 +171,30 @@ match figcraft_gpu::render::Renderer::global().render(&scene) { Ok(rgba) => …,
 - **内阴影合成**：额外把同一 SDF 盒子按零偏移画进一张 mask 目标（4× MSAA → resolve）；主 pass 在
   填充之后、子节点与描边之前，用 `shaders/inner.wgsl` 把「模糊后的反转剪影 alpha × mask alpha ×
   tint alpha」预乘输出。与 CPU 的 `inner_shadow`（反转 → 模糊 → 按覆盖裁剪 → tint）同一顺序。
-- **共享**：每个阴影用一条独立实例（内阴影另有零偏移实例），六组 blur bind group 与一组 draw/inner
+- **图层模糊（uniform）**：只接受「一个可见的 uniform `LayerBlur` + SDF 可表达的盒子 + 无子节点 + 无可见
+  描边 + 节点与祖先都无 `clip` + 恰好一个可见纯色填充 + 无投影/内阴影 + 模糊 reach 完全落在画布内」。
+  该节点的普通填充被跳过，改为把盒子按零偏移画成白色剪影，走同一套六 pass 盒模糊（`sigma` 同式），
+  再以「填充色 × 节点 `opacity`」为 tint 合成——CPU 的层内容就是这层填充，模糊后再按层 `op` 合成。
+  复用 `Cmd::Shadow` 与 `shaders/shadow.wgsl`，因此与投影共用同一条模糊链，不额外建管线。
+- **共享**：每个阴影/模糊用一条独立实例（内阴影另有零偏移实例），六组 blur bind group 与一组 draw/inner
   bind group 覆盖纹理、采样器与 tint/clip uniform；本帧现建，暂不做跨帧缓存池。
-- 仍登记为 Unsupported：图层模糊、背景模糊/玻璃、颗粒、纹理粗糙边（M4 其余）；spread ≠ 0、
-  非 Normal 混合、组/文字/半透明/带描边剪影的投影、组内阴影。
+- 仍登记为 Unsupported：分级图层模糊（`Blur::is_progressive()`）、带子节点/描边/`clip` 的图层模糊、
+  背景模糊/玻璃、颗粒、纹理粗糙边（M4 其余）；spread ≠ 0、非 Normal 混合、组/文字/半透明/带描边剪影
+  的投影、组内阴影。
 - **验收**：`box_radii` 单测对 CPU 近似公式的三组值；对照 `a_drop_shadow_matches_the_cpu_blur`（圆角
-  矩形 radius 12 / offset (6,10) / 55% 黑投影）与 `an_inner_shadow_matches_the_cpu_blur`（圆角矩形
-  radius 10 / offset (4,6) / 60% 黑内阴影，断言填充先于内阴影、边缘像素两侧相差 ≤ 3）。两项内区
-  均为 `per_channel = 2`、`bad_ratio = 2%`。
+  矩形 radius 12 / offset (6,10) / 55% 黑投影）、`an_inner_shadow_matches_the_cpu_blur`（圆角矩形
+  radius 10 / offset (4,6) / 60% 黑内阴影，断言填充先于内阴影）与 `a_layer_blur_matches_the_cpu_blur`
+  （radius 8 的实心卡片 + radius 6 的 80% 填充 × 0.65 层透明卡片，断言卡片上方有模糊外溢）。三项内区
+  均为 `per_channel = 2`、`bad_ratio = 2%`，图层模糊因两侧量化放宽到 `3 / 3%`。
 - 风险：剪影边缘是 4× MSAA 覆盖率、CPU 是解析覆盖率，1 级差会随模糊扩散几像素——对照口径因此
   放宽到 `per_channel = 2` 且允许 2% 像素；不透明度/描边/子节点等剪影不唯一的场景一律回退。
 
 ### M4 效果（设计，M4 其余）
 
-- 阴影：SDF 膨胀 + 两 pass 高斯（`assets/wgsl/shadow.wgsl`）；内阴影走 stencil/裁剪。
-- 图层模糊：可分离高斯，半径按设备像素，边缘 clamp 扩边（避免透明边收缩）。
+- 阴影/内阴影/uniform 图层模糊已在上一节落地；本节的「两 pass 高斯」是针对分级模糊的替代方案讨论，
+  当前仍以 CPU 精确复刻（三盒近似）为准。
+- 分级图层模糊（`start_radius/start/end` 的渐进过渡）：可分离高斯 + 按半径分带，半径按设备像素，
+  边缘 clamp 扩边（避免透明边收缩）；目前 `is_progressive()` 一律回退。
 - 背景模糊/玻璃：多 pass（降采样 → 模糊 → 折射/色散 → 合成），复用 `glass.wgsl` 的 uniform 约定；
   与 CPU `glass.rs` 的「玻璃切分」口径对齐。
 - 颗粒：`noise.wgsl`，按帧种子固定（导出可复现）。

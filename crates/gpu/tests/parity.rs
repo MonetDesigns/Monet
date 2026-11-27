@@ -12,9 +12,9 @@
 
 use figcraft_color::{Color, Gradient, GradientKind, Paint};
 use figcraft_doc::{Document, NodeId, NodeKind, StrokeJoin};
-use figcraft_gpu::diff::{compare, compare_interiors, pixel, Tolerance};
-use figcraft_gpu::doc_scene;
 use figcraft_gpu::Viewport;
+use figcraft_gpu::diff::{Tolerance, compare, compare_interiors, pixel};
+use figcraft_gpu::doc_scene;
 use figcraft_render::{Options, View};
 
 const SIZE: u32 = 200;
@@ -81,10 +81,7 @@ fn solid_shapes_round_corners_and_rotation_match_the_cpu() {
 
     // Interiors: the middle of the plain rectangle is the fill colour on both sides (within one
     // level: tiny-skia rounds its premultiplied bytes, the GPU's floats round at the end).
-    let (cpu_mid, gpu_mid) = (
-        pixel(&cpu, SIZE as usize, 40, 30).expect("in bounds"),
-        pixel(&gpu, SIZE as usize, 40, 30).expect("in bounds"),
-    );
+    let (cpu_mid, gpu_mid) = (pixel(&cpu, SIZE as usize, 40, 30).expect("in bounds"), pixel(&gpu, SIZE as usize, 40, 30).expect("in bounds"));
     for k in 0..4 {
         assert!(cpu_mid[k].abs_diff(gpu_mid[k]) <= 1, "solid interior differs by more than rounding: {cpu_mid:?} vs {gpu_mid:?}");
     }
@@ -135,7 +132,9 @@ fn ellipses_polygons_and_stars_match_the_cpu() {
     let mut doc = Document::default();
     let page = doc.pages[0];
     transparent_page(&mut doc, page);
-    let ellipse = doc.create(page, NodeKind::Ellipse { start: 0.0, sweep: std::f64::consts::TAU, inner: 0.0 }, "Ellipse", 10.0, 10.0, 80.0, 60.0).expect("ellipse");
+    let ellipse = doc
+        .create(page, NodeKind::Ellipse { start: 0.0, sweep: std::f64::consts::TAU, inner: 0.0 }, "Ellipse", 10.0, 10.0, 80.0, 60.0)
+        .expect("ellipse");
     if let Ok(n) = doc.get_mut(ellipse) {
         n.fills = vec![Paint::solid(Color::new(0.1, 0.6, 0.2, 1.0))];
     }
@@ -223,9 +222,8 @@ fn a_dialogue_free_ring_and_a_star_stroke_stay_gpu_drawable() {
     let mut doc = Document::default();
     let page = doc.pages[0];
     transparent_page(&mut doc, page);
-    let ring = doc
-        .create(page, NodeKind::Ellipse { start: 0.0, sweep: std::f64::consts::TAU, inner: 0.45 }, "Ring", 20.0, 20.0, 90.0, 90.0)
-        .expect("ring");
+    let ring =
+        doc.create(page, NodeKind::Ellipse { start: 0.0, sweep: std::f64::consts::TAU, inner: 0.45 }, "Ring", 20.0, 20.0, 90.0, 90.0).expect("ring");
     if let Ok(n) = doc.get_mut(ring) {
         n.fills = vec![Paint::solid(Color::new(0.2, 0.5, 0.3, 1.0))];
     }
@@ -277,14 +275,10 @@ fn a_drop_shadow_matches_the_cpu_blur() {
     };
     // The shadow is a blur, so a one-level difference at the caster's antialiased edge spreads a few
     // pixels; grade the interiors and allow that band to carry a couple of levels.
-    let report = compare_interiors(&cpu, &gpu, SIZE as usize, SIZE as usize, Tolerance { per_channel: 2, max_bad_ratio: 0.02 })
-        .expect("comparable");
+    let report = compare_interiors(&cpu, &gpu, SIZE as usize, SIZE as usize, Tolerance { per_channel: 2, max_bad_ratio: 0.02 }).expect("comparable");
     assert!(report.passes(Tolerance { per_channel: 2, max_bad_ratio: 0.02 }), "{}", report.summary());
     // Below the card's bottom edge (inside the offset, blurred shadow) both sides paint a shadow.
-    let (cpu_shadow, gpu_shadow) = (
-        pixel(&cpu, SIZE as usize, 90, 112).expect("in bounds"),
-        pixel(&gpu, SIZE as usize, 90, 112).expect("in bounds"),
-    );
+    let (cpu_shadow, gpu_shadow) = (pixel(&cpu, SIZE as usize, 90, 112).expect("in bounds"), pixel(&gpu, SIZE as usize, 90, 112).expect("in bounds"));
     assert!(cpu_shadow[3] > 0, "the CPU drew no shadow: {cpu_shadow:?}");
     assert!(gpu_shadow[3] > 0, "the GPU drew no shadow: {gpu_shadow:?}");
 }
@@ -378,6 +372,41 @@ fn two_drop_shadows_on_a_rotated_card_match_the_cpu() {
     let tol = Tolerance { per_channel: 2, max_bad_ratio: 0.02 };
     let report = compare_interiors(&cpu, &gpu, SIZE as usize, SIZE as usize, tol).expect("comparable");
     assert!(report.passes(tol), "{}", report.summary());
+}
+
+#[test]
+fn a_layer_blur_matches_the_cpu_blur() {
+    let mut doc = Document::default();
+    let page = doc.pages[0];
+    transparent_page(&mut doc, page);
+    let card = rect(&mut doc, page, "Blurred", 60.0, 60.0, 90.0, 60.0, 12.0, Paint::solid(Color::new(0.95, 0.5, 0.2, 1.0)));
+    if let Ok(n) = doc.get_mut(card) {
+        n.effects = vec![figcraft_doc::Effect { kind: figcraft_doc::EffectKind::LayerBlur(figcraft_doc::Blur::uniform(8.0)), visible: true }];
+    }
+    // A translucent fill under a partially transparent layer: the tint folds both alphas.
+    let faded = rect(&mut doc, page, "Faded", 20.0, 140.0, 70.0, 40.0, 8.0, Paint::solid(Color::new(0.2, 0.4, 0.8, 0.8)));
+    if let Ok(n) = doc.get_mut(faded) {
+        n.opacity = 0.65;
+        n.effects = vec![figcraft_doc::Effect { kind: figcraft_doc::EffectKind::LayerBlur(figcraft_doc::Blur::uniform(6.0)), visible: true }];
+    }
+
+    let scene = doc_scene::build(&doc, page, &viewport());
+    assert!(scene.is_supported(), "the layer blur must stay on the GPU path: {:?}", scene.unsupported_features());
+    assert_eq!(scene.blur_count(), 2);
+    assert_eq!(scene.shapes().count(), 0, "the fills are replaced by the blurred layers");
+
+    let cpu = cpu_pixels(&doc, page);
+    let Some(gpu) = gpu_pixels(&doc, page) else {
+        eprintln!("SKIP: no adapter");
+        return;
+    };
+    let tol = Tolerance { per_channel: 3, max_bad_ratio: 0.03 };
+    let report = compare_interiors(&cpu, &gpu, SIZE as usize, SIZE as usize, tol).expect("comparable");
+    assert!(report.passes(tol), "{}", report.summary());
+    // The blur spills above the card: both sides paint there.
+    let (cpu_edge, gpu_edge) = (pixel(&cpu, SIZE as usize, 105, 56).expect("in bounds"), pixel(&gpu, SIZE as usize, 105, 56).expect("in bounds"));
+    assert!(cpu_edge[3] > 0, "the CPU drew no blurred spill: {cpu_edge:?}");
+    assert!(gpu_edge[3] > 0, "the GPU drew no blurred spill: {gpu_edge:?}");
 }
 
 #[test]

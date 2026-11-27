@@ -64,11 +64,8 @@ pub fn tessellate(path: &BezPath, rule: FillRule) -> Triangles {
         FillRule::Winding => lyon_tessellation::FillRule::NonZero,
     });
     let lyon_path = to_lyon(path);
-    let built = tessellator.tessellate_path(
-        &lyon_path,
-        &options,
-        &mut BuffersBuilder::new(&mut buffers, |vertex: FillVertex| vertex.position().to_array()),
-    );
+    let built =
+        tessellator.tessellate_path(&lyon_path, &options, &mut BuffersBuilder::new(&mut buffers, |vertex: FillVertex| vertex.position().to_array()));
     if built.is_err() {
         return Triangles::default();
     }
@@ -87,10 +84,7 @@ fn to_lyon(path: &BezPath) -> LyonPath {
                 builder.line_to(lyon_path::math::point(p.x as f32, p.y as f32));
             }
             figcraft_geom::kurbo::PathEl::QuadTo(c, p) => {
-                builder.quadratic_bezier_to(
-                    lyon_path::math::point(c.x as f32, c.y as f32),
-                    lyon_path::math::point(p.x as f32, p.y as f32),
-                );
+                builder.quadratic_bezier_to(lyon_path::math::point(c.x as f32, c.y as f32), lyon_path::math::point(p.x as f32, p.y as f32));
             }
             figcraft_geom::kurbo::PathEl::CurveTo(c1, c2, p) => {
                 builder.cubic_bezier_to(

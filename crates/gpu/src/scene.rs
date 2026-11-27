@@ -69,7 +69,13 @@ pub enum Paint {
     /// The three Figma handles, in the shape's unit box (0..=1 on both axes): `from` is the start
     /// (the centre for radial/angular/diamond), `to` the end of the main axis, `width` the end of the
     /// secondary axis.
-    Gradient { kind: GradientKind, from: [f32; 2], to: [f32; 2], width: [f32; 2], stops: Vec<Stop> },
+    Gradient {
+        kind: GradientKind,
+        from: [f32; 2],
+        to: [f32; 2],
+        width: [f32; 2],
+        stops: Vec<Stop>,
+    },
 }
 
 impl Paint {
@@ -120,11 +126,7 @@ impl Clip {
         let y0 = self.0[1].max(rect[1]);
         let x1 = (self.0[0] + self.0[2]).min(rect[0] + rect[2]);
         let y1 = (self.0[1] + self.0[3]).min(rect[1] + rect[3]);
-        if x1 <= x0 || y1 <= y0 {
-            Self([x0, y0, 0.0, 0.0])
-        } else {
-            Self([x0, y0, x1 - x0, y1 - y0])
-        }
+        if x1 <= x0 || y1 <= y0 { Self([x0, y0, 0.0, 0.0]) } else { Self([x0, y0, x1 - x0, y1 - y0]) }
     }
 }
 
@@ -195,12 +197,30 @@ pub struct ShadowNode {
     pub inner: bool,
 }
 
-/// One thing to draw, in painter's order: an SDF shape, a tessellated path or a shadow.
+/// A layer blur of an SDF box: the box's coverage blurred by the CPU's box approximation and repainted
+/// with the box's own fill. Painted in the box's place (the fill is not drawn sharp), before the node's
+/// children and stroke, which a blurred layer would have included (this build only takes boxes whose
+/// fills are the whole layer).
+#[derive(Clone, Debug, PartialEq)]
+pub struct LayerBlurNode {
+    /// The box in document units and local → device matrix, like [`ShapeNode`].
+    pub mat: [f32; 6],
+    pub size: [f32; 2],
+    pub shape: ShapeKind,
+    /// Gaussian-equivalent blur radius in device pixels (the CPU's `radius / 2 * scale`).
+    pub sigma: f32,
+    /// The fill, straight sRGB, its alpha already folded with the node's opacity.
+    pub color: Rgba,
+    pub clip: Clip,
+}
+
+/// One thing to draw, in painter's order: an SDF shape, a tessellated path, a shadow or a layer blur.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Item {
     Shape(ShapeNode),
     Mesh(MeshNode),
     Shadow(ShadowNode),
+    Blur(LayerBlurNode),
 }
 
 /// A feature this milestone cannot draw. Its presence sends the **whole frame** to the CPU.
@@ -244,11 +264,16 @@ impl Scene {
         self.items.push(Item::Shadow(shadow));
     }
 
+    /// A blurred layer in the box's place.
+    pub fn push_blur(&mut self, blur: LayerBlurNode) {
+        self.items.push(Item::Blur(blur));
+    }
+
     /// The SDF shapes, in draw order (tests and the log use this; the renderer walks `items`).
     pub fn shapes(&self) -> impl Iterator<Item = &ShapeNode> {
         self.items.iter().filter_map(|item| match item {
             Item::Shape(shape) => Some(shape),
-            Item::Mesh(_) | Item::Shadow(_) => None,
+            Item::Mesh(_) | Item::Shadow(_) | Item::Blur(_) => None,
         })
     }
 
@@ -257,9 +282,14 @@ impl Scene {
         self.items.iter().filter(|item| matches!(item, Item::Mesh(_))).count()
     }
 
-    /// How many drop shadows the frame carries.
+    /// How many drop/inner shadows the frame carries.
     pub fn shadow_count(&self) -> usize {
         self.items.iter().filter(|item| matches!(item, Item::Shadow(_))).count()
+    }
+
+    /// How many layer blurs the frame carries.
+    pub fn blur_count(&self) -> usize {
+        self.items.iter().filter(|item| matches!(item, Item::Blur(_))).count()
     }
 
     /// Record a feature this frame uses that this milestone cannot draw.
@@ -306,12 +336,7 @@ impl Viewport {
     /// The area this viewport shows, in document units.
     pub fn page_rect(&self) -> figcraft_geom::Rect {
         let s = self.scale.max(1e-9);
-        figcraft_geom::Rect::new(
-            self.origin.0,
-            self.origin.1,
-            self.origin.0 + f64::from(self.width) / s,
-            self.origin.1 + f64::from(self.height) / s,
-        )
+        figcraft_geom::Rect::new(self.origin.0, self.origin.1, self.origin.0 + f64::from(self.width) / s, self.origin.1 + f64::from(self.height) / s)
     }
 }
 

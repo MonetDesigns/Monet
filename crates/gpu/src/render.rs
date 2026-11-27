@@ -422,11 +422,8 @@ impl Renderer {
             bind_group_layouts: &[Some(&globals_layout)],
             immediate_size: 0,
         });
-        let target_state = |_label: &str| wgpu::ColorTargetState {
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            blend: blend(),
-            write_mask: wgpu::ColorWrites::ALL,
-        };
+        let target_state =
+            |_label: &str| wgpu::ColorTargetState { format: wgpu::TextureFormat::Rgba8Unorm, blend: blend(), write_mask: wgpu::ColorWrites::ALL };
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("shape"),
             layout: Some(&shape_layout),
@@ -815,6 +812,35 @@ impl Renderer {
                         inner: shadow.inner,
                     });
                 }
+                Item::Blur(blur) => {
+                    if instances.len() > batch {
+                        cmds.push(Cmd::Shapes { first: batch as u32, count: (instances.len() - batch) as u32 });
+                        batch = instances.len();
+                    }
+                    // The blurred layer is the same white silhouette the shadow chain renders; the
+                    // fill's colour comes back as the tint.
+                    let caster = ShapeNode {
+                        mat: blur.mat,
+                        size: blur.size,
+                        shape: blur.shape,
+                        paint: Paint::Solid(Rgba::new(1.0, 1.0, 1.0, 1.0)),
+                        clip: blur.clip,
+                        opacity: 1.0,
+                    };
+                    let first = shadow_instances.len() as u32;
+                    shadow_instances.push(GpuInstance::of(&caster));
+                    cmds.push(Cmd::Shadow(shadow_plans.len()));
+                    shadow_plans.push(ShadowPlan {
+                        first,
+                        count: 1,
+                        cover_first: 0,
+                        cover_count: 0,
+                        sigma: blur.sigma,
+                        color: blur.color,
+                        clip: blur.clip,
+                        inner: false,
+                    });
+                }
             }
         }
         if instances.len() > batch {
@@ -822,11 +848,8 @@ impl Renderer {
         }
 
         // The instance buffer (at least one record: an empty storage binding is not allowed everywhere).
-        let bytes: Vec<u8> = if instances.is_empty() {
-            bytemuck::bytes_of(&GpuInstance::zeroed()).to_vec()
-        } else {
-            bytemuck::cast_slice(&instances).to_vec()
-        };
+        let bytes: Vec<u8> =
+            if instances.is_empty() { bytemuck::bytes_of(&GpuInstance::zeroed()).to_vec() } else { bytemuck::cast_slice(&instances).to_vec() };
         let need = bytes.len() as u64;
         if self.instances.as_ref().is_none_or(|(_, _, cap)| *cap < need) {
             let size = need.next_power_of_two().max(256);
@@ -888,8 +911,11 @@ impl Renderer {
             });
             Some((buffer, bind))
         };
-        let shadow_resources: Vec<ShadowResources> =
-            shadow_plans.iter().map(|plan| self.shadow_resources(w, h, plan)).collect::<Option<Vec<_>>>().ok_or_else(|| RenderError::Device("the shadow targets were not created".into()))?;
+        let shadow_resources: Vec<ShadowResources> = shadow_plans
+            .iter()
+            .map(|plan| self.shadow_resources(w, h, plan))
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| RenderError::Device("the shadow targets were not created".into()))?;
 
         // Mesh buffers: one vertex buffer and one index buffer for the whole frame.
         if !verts.is_empty() {
@@ -977,10 +1003,7 @@ impl Renderer {
                         view: &res.silhouette_msaa_view,
                         depth_slice: None,
                         resolve_target: Some(&res.silhouette_view),
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                            store: wgpu::StoreOp::Store,
-                        },
+                        ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
                     })],
                     depth_stencil_attachment: None,
                     timestamp_writes: None,
@@ -1003,10 +1026,7 @@ impl Renderer {
                             view: cover_msaa_view,
                             depth_slice: None,
                             resolve_target: Some(cover_view),
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                store: wgpu::StoreOp::Store,
-                            },
+                            ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
                         })],
                         depth_stencil_attachment: None,
                         timestamp_writes: None,
@@ -1122,12 +1142,7 @@ impl Renderer {
             }
         }
         encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: &target.resolve,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
+            wgpu::TexelCopyTextureInfo { texture: &target.resolve, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
             wgpu::TexelCopyBufferInfo {
                 buffer: &target.readback,
                 layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(padded), rows_per_image: Some(h) },

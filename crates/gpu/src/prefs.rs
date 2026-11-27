@@ -10,8 +10,8 @@
 //! The effective choice is process-wide rather than per document: it is a property of the machine,
 //! like `Prefs::graphics_backend` (which picks the *window's* API, not the canvas's renderer).
 
-use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use crate::backend::{Capability, DeviceClass};
 
@@ -78,18 +78,15 @@ pub fn resolve(choice: RenderBackend, capability: &Capability) -> Resolution {
             effective: Effective::Cpu,
             reason: format!("CPU: GPU requested but unavailable ({})", capability.reason.as_deref().unwrap_or("no adapter")),
         },
-        RenderBackend::Auto if capability.available && capability.class != DeviceClass::Software => Resolution {
-            effective: Effective::Gpu,
-            reason: format!("GPU: {} ({})", capability.name, capability.backend),
-        },
-        RenderBackend::Auto if capability.available => Resolution {
-            effective: Effective::Cpu,
-            reason: format!("CPU: {} is a software adapter", capability.name),
-        },
-        RenderBackend::Auto => Resolution {
-            effective: Effective::Cpu,
-            reason: format!("CPU: {}", capability.reason.as_deref().unwrap_or("no usable GPU adapter")),
-        },
+        RenderBackend::Auto if capability.available && capability.class != DeviceClass::Software => {
+            Resolution { effective: Effective::Gpu, reason: format!("GPU: {} ({})", capability.name, capability.backend) }
+        }
+        RenderBackend::Auto if capability.available => {
+            Resolution { effective: Effective::Cpu, reason: format!("CPU: {} is a software adapter", capability.name) }
+        }
+        RenderBackend::Auto => {
+            Resolution { effective: Effective::Cpu, reason: format!("CPU: {}", capability.reason.as_deref().unwrap_or("no usable GPU adapter")) }
+        }
     }
 }
 
@@ -172,7 +169,13 @@ mod tests {
     }
 
     fn software() -> Capability {
-        Capability { available: true, class: DeviceClass::Software, name: "Microsoft Basic Render Driver".into(), backend: "Dx12".into(), reason: None }
+        Capability {
+            available: true,
+            class: DeviceClass::Software,
+            name: "Microsoft Basic Render Driver".into(),
+            backend: "Dx12".into(),
+            reason: None,
+        }
     }
 
     #[test]
