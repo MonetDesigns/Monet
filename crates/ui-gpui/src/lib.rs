@@ -2306,12 +2306,14 @@ impl CanvasView {
                         }
                         let state = Rc::new(RefCell::new(followups::CursorChatState { text, field, focus: true }));
                         {
-                            let state = state.clone();
+                            let weak = Rc::downgrade(&state);
                             let me = cx.entity();
                             let field = state.borrow().field.clone();
                             field.update(cx, |tf, _| {
                                 tf.set_on_change(move |text: &str, _, cx: &mut App| {
-                                    state.borrow_mut().text = text.to_string();
+                                    if let Some(state) = weak.upgrade() {
+                                        state.borrow_mut().text = text.to_string();
+                                    }
                                     let text = text.to_string();
                                     me.update(cx, |cv, cx| cv.send_cursor_chat(&text, cx));
                                 });
@@ -2681,10 +2683,16 @@ impl CanvasView {
         let Some(x) = data.get("x").and_then(serde_json::Value::as_f64) else { return };
         let Some(y) = data.get("y").and_then(serde_json::Value::as_f64) else { return };
         let field = self.new_popup_field(268.0, tr("Add a comment…"), cx);
-        let state = Rc::new(RefCell::new(comments::DraftState { page, x, y, text: String::new(), field: field.clone(), focus: true }));
+        let state = Rc::new(RefCell::new(comments::DraftState { page, x, y, text: String::new(), field: field.clone(), focus: true, caret: 0 }));
         {
-            let state = state.clone();
-            field.update(cx, |tf, _| tf.set_on_change(move |text, _, _| state.borrow_mut().text = text.to_string()));
+            let weak = Rc::downgrade(&state);
+            field.update(cx, |tf, _| {
+                tf.set_on_change(move |text, _, _| {
+                    if let Some(state) = weak.upgrade() {
+                        state.borrow_mut().text = text.to_string();
+                    }
+                })
+            });
         }
         self.fields.comment_ui().borrow_mut().open = None;
         self.replace_popup(Popup::CommentDraft { state }, cx);
@@ -2719,10 +2727,25 @@ impl CanvasView {
     /// position is recomputed every frame so it follows canvas pan/zoom.
     fn open_comment_thread(&mut self, id: u64, cx: &mut Context<Self>) {
         let field = self.new_popup_field(288.0, tr("Reply…"), cx);
-        let state = Rc::new(RefCell::new(comments::ThreadState { id, reply: String::new(), field: field.clone(), focus: true, editing: None }));
+        let state = Rc::new(RefCell::new(comments::ThreadState {
+            id,
+            reply: String::new(),
+            field: field.clone(),
+            focus: true,
+            editing: None,
+            more: false,
+            reacting: None,
+            caret: 0,
+        }));
         {
-            let state = state.clone();
-            field.update(cx, |tf, _| tf.set_on_change(move |text, _, _| state.borrow_mut().reply = text.to_string()));
+            let weak = Rc::downgrade(&state);
+            field.update(cx, |tf, _| {
+                tf.set_on_change(move |text, _, _| {
+                    if let Some(state) = weak.upgrade() {
+                        state.borrow_mut().reply = text.to_string();
+                    }
+                })
+            });
         }
         self.replace_popup(Popup::CommentThread { state }, cx);
         cx.notify();
@@ -2772,6 +2795,52 @@ impl CanvasView {
         }
     }
 
+    fn mark_thread_unread(&mut self, id: u64, cx: &mut Context<Self>) {
+        match self.app.session.execute("comment.markRead", &serde_json::json!({ "id": id, "read": false })) {
+            Ok(_) => self.close_popup(cx),
+            Err(e) => self.toast(e.to_string(), cx),
+        }
+    }
+
+    fn copy_thread_link(&mut self, id: u64, cx: &mut Context<Self>) {
+        match self.app.session.execute("comment.link", &serde_json::json!({ "id": id })) {
+            Ok(v) => {
+                if let Some(link) = v.get("link").and_then(serde_json::Value::as_str) {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(link.to_string()));
+                    self.toast(tr("Link copied"), cx);
+                }
+            }
+            Err(e) => self.toast(e.to_string(), cx),
+        }
+    }
+
+    fn copy_thread_for_ai(&mut self, id: u64, cx: &mut Context<Self>) {
+        match self.app.session.execute("comment.prompt", &serde_json::json!({ "ids": [id] })) {
+            Ok(v) => {
+                let count = v.get("count").and_then(serde_json::Value::as_u64).unwrap_or(0);
+                if count == 0 {
+                    self.toast(tr("No comments to copy"), cx);
+                } else if let Some(text) = v.get("text").and_then(serde_json::Value::as_str) {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text.to_string()));
+                    self.toast(tr("Copied comments for AI"), cx);
+                }
+            }
+            Err(e) => self.toast(e.to_string(), cx),
+        }
+    }
+
+    fn react_to_message(&mut self, id: u64, index: usize, emoji: &str, cx: &mut Context<Self>) {
+        let params = if index == 0 {
+            serde_json::json!({ "id": id, "emoji": emoji })
+        } else {
+            serde_json::json!({ "id": id, "reply": index - 1, "emoji": emoji })
+        };
+        match self.app.session.execute("comment.react", &params) {
+            Ok(_) => cx.notify(),
+            Err(e) => self.toast(e.to_string(), cx),
+        }
+    }
+
     fn resolve_thread(&mut self, id: u64, resolved: bool, cx: &mut Context<Self>) {
         if let Err(e) = self.app.session.execute("comment.resolve", &serde_json::json!({ "id": id, "resolved": resolved })) {
             self.toast(e.to_string(), cx);
@@ -2786,8 +2855,14 @@ impl CanvasView {
         let field = self.new_popup_field(288.0, tr("Description (optional)"), cx);
         let state = Rc::new(RefCell::new(followups::LibraryPublishState::new(&doc, field.clone())));
         {
-            let state = state.clone();
-            field.update(cx, |tf, _| tf.set_on_change(move |text, _, _| state.borrow_mut().description = text.to_string()));
+            let weak = Rc::downgrade(&state);
+            field.update(cx, |tf, _| {
+                tf.set_on_change(move |text, _, _| {
+                    if let Some(state) = weak.upgrade() {
+                        state.borrow_mut().description = text.to_string();
+                    }
+                })
+            });
         }
         self.replace_popup(Popup::LibraryPublish { state }, cx);
         cx.notify();
@@ -8961,6 +9036,12 @@ impl Render for CanvasView {
                             });
                         });
                     }
+                    // The mention query ends at the editor's live caret, not necessarily at EOF.
+                    let caret_field = state.borrow().field.clone();
+                    let caret_chars = caret_field.read(cx).edit().read(cx).draft_caret();
+                    let caret_text = state.borrow().text.clone();
+                    let caret_byte = caret_text.char_indices().nth(caret_chars).map(|(i, _)| i).unwrap_or(caret_text.len());
+                    state.borrow_mut().caret = caret_byte;
                     let submit = {
                         let me = me.clone();
                         let state = state.clone();
@@ -8974,7 +9055,7 @@ impl Render for CanvasView {
                         Rc::new(move |name: &str, window: &mut Window, cx: &mut App| {
                             let (field, text) = {
                                 let mut s = state.borrow_mut();
-                                let range = comments::mention_query_at_end(&s.text).unwrap_or((s.text.len(), s.text.len()));
+                                let range = comments::mention_query(&s.text, s.caret).unwrap_or((s.caret, s.caret));
                                 comments::insert_mention(&mut s.text, range, name);
                                 (s.field.clone(), s.text.clone())
                             };
@@ -9006,12 +9087,34 @@ impl Render for CanvasView {
                             });
                         });
                     }
+                    let caret_field = state.borrow().field.clone();
+                    let caret_chars = caret_field.read(cx).edit().read(cx).draft_caret();
+                    let caret_text = state.borrow().reply.clone();
+                    let caret_byte = caret_text.char_indices().nth(caret_chars).map(|(i, _)| i).unwrap_or(caret_text.len());
+                    state.borrow_mut().caret = caret_byte;
                     let submit = {
                         let me = me.clone();
                         let state = state.clone();
                         Rc::new(move |_window: &mut Window, cx: &mut App| {
                             let state = state.clone();
                             me.update(cx, |cv, cx| cv.post_thread_reply(&state, cx));
+                        })
+                    };
+                    let pick_mention = {
+                        let state = state.clone();
+                        Rc::new(move |name: &str, window: &mut Window, cx: &mut App| {
+                            let (field, text) = {
+                                let mut s = state.borrow_mut();
+                                let range = comments::mention_query(&s.reply, s.caret).unwrap_or((s.caret, s.caret));
+                                comments::insert_mention(&mut s.reply, range, name);
+                                (s.field.clone(), s.reply.clone())
+                            };
+                            field.update(cx, |tf, cx| {
+                                tf.edit().update(cx, |edit, _| {
+                                    edit.set_draft_text(text);
+                                    edit.focus_editor(window);
+                                });
+                            });
                         })
                     };
                     let resolve = {
@@ -9026,6 +9129,28 @@ impl Render for CanvasView {
                             me.update(cx, |cv, cx| cv.delete_thread_message(id, reply, cx));
                         })
                     };
+                    let action = {
+                        let me = me.clone();
+                        let state = state.clone();
+                        Rc::new(move |act: comments::ThreadAction, _window: &mut Window, cx: &mut App| {
+                            match act {
+                                comments::ThreadAction::MarkUnread => {
+                                    state.borrow_mut().more = false;
+                                    me.update(cx, |cv, cx| cv.mark_thread_unread(id, cx));
+                                }
+                                comments::ThreadAction::CopyLink => {
+                                    me.update(cx, |cv, cx| cv.copy_thread_link(id, cx));
+                                }
+                                comments::ThreadAction::CopyForAi => {
+                                    me.update(cx, |cv, cx| cv.copy_thread_for_ai(id, cx));
+                                }
+                                comments::ThreadAction::React(index, emoji) => {
+                                    state.borrow_mut().reacting = None;
+                                    me.update(cx, |cv, cx| cv.react_to_message(id, index, &emoji, cx));
+                                }
+                            }
+                        })
+                    };
                     els.push(comments::thread_popover(
                         &self.app,
                         &state,
@@ -9035,6 +9160,8 @@ impl Render for CanvasView {
                         submit,
                         resolve,
                         delete,
+                        action,
+                        pick_mention,
                     ));
                 }
 

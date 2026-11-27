@@ -182,6 +182,10 @@ impl TextEdit {
         self.kept = v.clone();
         self.input.buffer.set_text(v);
     }
+    /// The live caret position as a character index (the mention query ends here, not at EOF).
+    pub(crate) fn draft_caret(&self) -> usize {
+        self.input.buffer.range().end
+    }
     pub fn set_placeholder(&mut self, p: impl Into<SharedString>) {
         self.input.set_placeholder(p);
     }

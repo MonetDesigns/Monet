@@ -15,17 +15,24 @@ pub struct LabelButton {
     label: SharedString,
     primary: bool,
     disabled: bool,
+    selected: bool,
     on_click: Option<ClickHandler>,
 }
 
 impl LabelButton {
     pub fn new(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Self {
-        Self { id: id.into(), label: label.into(), primary: true, disabled: false, on_click: None }
+        Self { id: id.into(), label: label.into(), primary: true, disabled: false, selected: false, on_click: None }
     }
 
     /// Secondary actions use the field surface instead of the accent fill.
     pub fn secondary(mut self) -> Self {
         self.primary = false;
+        self
+    }
+
+    /// A persistent on/off state (reaction chips, toggle-like actions).
+    pub fn selected(mut self, selected: bool) -> Self {
+        self.selected = selected;
         self
     }
 
@@ -47,6 +54,7 @@ impl IntoElement for LabelButton {
         let t = tokens();
         let primary = self.primary;
         let disabled = self.disabled;
+        let selected = self.selected;
         let label = self.label;
         let click = self.on_click;
         div()
@@ -62,12 +70,14 @@ impl IntoElement for LabelButton {
                 t.field
             } else if primary {
                 t.accent
+            } else if selected {
+                t.selected_row
             } else {
                 t.field
             }))
             .when(disabled, |d| d.opacity(0.45))
             .when(!disabled, |d| d.cursor_pointer())
-            .when(!disabled && !primary, |d| d.hover(|d| d.bg(rgba(t.hover))))
+            .when(!disabled && !primary && !selected, |d| d.hover(|d| d.bg(rgba(t.hover))))
             .when_some(click.filter(|_| !disabled), |d, f| d.on_click(move |_, window, cx| f(window, cx)))
             .child(
                 div()
@@ -76,6 +86,8 @@ impl IntoElement for LabelButton {
                         t.text_tertiary
                     } else if primary {
                         Color32::WHITE
+                    } else if selected {
+                        t.accent
                     } else {
                         t.text
                     }))

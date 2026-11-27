@@ -45,6 +45,8 @@ pub(crate) struct DraftState {
     pub field: Entity<TextField>,
     /// The composer asks for the keyboard on its first frame.
     pub focus: bool,
+    /// Byte offset of the live caret; `@mention` ends here, not at the end of the draft.
+    pub caret: usize,
 }
 
 /// An open thread and the reply being written into it.
@@ -55,18 +57,36 @@ pub(crate) struct ThreadState {
     pub focus: bool,
     /// The message index (0 = first message) being edited, if any.
     pub editing: Option<usize>,
+    /// The thread-level More menu is open.
+    pub more: bool,
+    /// The message whose reaction picker is open, if any.
+    pub reacting: Option<usize>,
+    /// Byte offset of the reply caret (mentions at the composer also end here).
+    pub caret: usize,
 }
 
-/// The `@query` being typed at the end of `text`: its byte range from `@` through the end.
-/// The GPUI field only exposes single-line editing, so the cursor is the end of the draft.
-pub(crate) fn mention_query_at_end(text: &str) -> Option<(usize, usize)> {
-    let at = text.rfind('@')?;
-    let q = text.get(at + 1..)?;
+/// Thread-level actions that need the view's command/clipboard plumbing.
+#[derive(Clone)]
+pub(crate) enum ThreadAction {
+    MarkUnread,
+    CopyLink,
+    CopyForAi,
+    React(usize, String),
+}
+
+/// The `@query` being typed before the live caret: its byte range from `@` through the caret.
+/// Text after the caret stays outside the range, so inserting a mention preserves it.
+pub(crate) fn mention_query(text: &str, caret: usize) -> Option<(usize, usize)> {
+    if caret > text.len() || !text.is_char_boundary(caret) {
+        return None;
+    }
+    let at = text.get(..caret)?.rfind('@')?;
+    let q = text.get(at + 1..caret)?;
     if q.contains('\n') || q.chars().count() > 40 || q.ends_with(char::is_whitespace) {
         return None;
     }
     let starts = text.get(..at)?.chars().next_back().is_none_or(|c| !c.is_alphanumeric());
-    starts.then_some((at, text.len()))
+    starts.then_some((at, caret))
 }
 
 /// People (not `me`) whose name, or a word in it, starts with `query` (any case).
@@ -86,9 +106,14 @@ pub(crate) fn mention_matches(people: &[String], query: &str, me: &str) -> Vec<S
 
 /// Replace the `@query` at `range` with `@name `.
 pub(crate) fn insert_mention(text: &mut String, range: (usize, usize), name: &str) {
-    let (a, b) = range;
+    let (a, mut b) = range;
     if a > b || b > text.len() || !text.is_char_boundary(a) || !text.is_char_boundary(b) {
         return;
+    }
+    // The caret often sits before the space that follows the query. Replace that one space too,
+    // otherwise the inserted trailing space doubles it and the next word drifts.
+    if text.get(b..b + 1) == Some(" ") {
+        b += 1;
     }
     text.replace_range(a..b, &format!("@{name} "));
 }
@@ -116,9 +141,9 @@ pub(crate) fn draft_popover(
     pick: Rc<dyn Fn(&str, &mut Window, &mut App)>,
 ) -> AnyElement {
     let t = tokens();
-    let (text, field, x, y, page) = {
+    let (text, field, x, y, page, caret) = {
         let s = state.borrow();
-        (s.text.clone(), s.field.clone(), s.x, s.y, s.page)
+        (s.text.clone(), s.field.clone(), s.x, s.y, s.page, s.caret)
     };
     // A draft only draws on its own page (the engine pins the page when the click is recorded).
     if app.session.page().is_ok_and(|p| p != page) {
@@ -128,7 +153,7 @@ pub(crate) fn draft_popover(
     let pos = Point { x: px(f32::from(at.x) + canvas_origin.0 + 36.0), y: px(f32::from(at.y) + canvas_origin.1 - 28.0) };
     let people = app.session.ds().map(|ds| ds.doc.comment_people()).unwrap_or_default();
     let me = figcraft_engine::cmd::comment::user_name(&app.session);
-    let names = mention_query_at_end(&text).map(|(a, b)| mention_matches(&people, text.get(a + 1..b).unwrap_or(""), &me)).unwrap_or_default();
+    let names = mention_query(&text, caret).map(|(a, b)| mention_matches(&people, text.get(a + 1..b).unwrap_or(""), &me)).unwrap_or_default();
     // The estimate only drives viewport clamping; include the mention list so a picker near the
     // bottom of the screen lifts instead of drawing past it.
     let estimated_h = 112.0 + names.len() as f32 * 26.0;
@@ -184,6 +209,8 @@ pub(crate) fn thread_popover(
     submit: Rc<dyn Fn(&mut Window, &mut App)>,
     resolve: Rc<dyn Fn(bool, &mut Window, &mut App)>,
     delete: Rc<dyn Fn(Option<usize>, &mut Window, &mut App)>,
+    action: Rc<dyn Fn(ThreadAction, &mut Window, &mut App)>,
+    pick_mention: Rc<dyn Fn(&str, &mut Window, &mut App)>,
 ) -> AnyElement {
     let t = tokens();
     let id = state.borrow().id;
@@ -197,6 +224,12 @@ pub(crate) fn thread_popover(
     let at = app.to_screen(x, y);
     let pos = Point { x: px(f32::from(at.x) + canvas_origin.0 + 36.0), y: px(f32::from(at.y) + canvas_origin.1 - 28.0) };
     let me = figcraft_engine::cmd::comment::user_name(&app.session);
+    let (reply, caret) = {
+        let s = state.borrow();
+        (s.reply.clone(), s.caret)
+    };
+    let people = app.session.ds().map(|ds| ds.doc.comment_people()).unwrap_or_default();
+    let names = mention_query(&reply, caret).map(|(a, b)| mention_matches(&people, reply.get(a + 1..b).unwrap_or(""), &me)).unwrap_or_default();
 
     let mut body = div().flex().flex_col().gap(px(8.0));
     body = body.child(
@@ -210,11 +243,51 @@ pub(crate) fn thread_popover(
             } else {
                 tr("Open")
             }))
-            .child(LabelButton::new("comment-thread-resolve", if c.resolved { tr("Reopen") } else { tr("Resolve") }).secondary().on_click({
-                let resolved = c.resolved;
-                move |window, cx| resolve(!resolved, window, cx)
-            })),
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap(px(6.0))
+                    .child(LabelButton::new("comment-thread-resolve", if c.resolved { tr("Reopen") } else { tr("Resolve") }).secondary().on_click({
+                        let resolved = c.resolved;
+                        move |window, cx| resolve(!resolved, window, cx)
+                    }))
+                    .child(LabelButton::new("comment-thread-more", tr("More")).secondary().on_click({
+                        let state = state.clone();
+                        move |window, cx| {
+                            let next = {
+                                let mut s = state.borrow_mut();
+                                s.more = !s.more;
+                                s.more
+                            };
+                            if next {
+                                state.borrow_mut().reacting = None;
+                            }
+                            window.refresh();
+                        }
+                    })),
+            ),
     );
+    if state.borrow().more {
+        let menu = |id: &'static str, label: &'static str, act: ThreadAction| {
+            let action = action.clone();
+            LabelButton::new(id, tr(label)).secondary().on_click(move |window, cx| action(act.clone(), window, cx))
+        };
+        body = body.child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
+                .rounded(px(6.0))
+                .bg(rgba(t.field))
+                .border_1()
+                .border_color(rgba(t.border))
+                .p(px(4.0))
+                .child(menu("comment-thread-unread", "Mark as unread", ThreadAction::MarkUnread))
+                .child(menu("comment-thread-link", "Copy link", ThreadAction::CopyLink))
+                .child(menu("comment-thread-ai", "Copy for AI", ThreadAction::CopyForAi)),
+        );
+    }
 
     let editing = state.borrow().editing;
     let mut messages = div().id("comment-thread-messages").flex().flex_col().gap(px(10.0)).max_h(px(320.0)).overflow_y_scroll();
@@ -265,6 +338,39 @@ pub(crate) fn thread_popover(
                     ),
             );
         }
+        let mut reactions = div().flex().flex_wrap().gap(px(4.0)).pl(px(30.0));
+        for (ri, r) in m.reactions.iter().enumerate() {
+            let on = r.users.iter().any(|u| u == &me);
+            let emoji = r.emoji.clone();
+            let act = ThreadAction::React(index, emoji.clone());
+            let action = action.clone();
+            let label = format!("{emoji} {}", r.users.len());
+            let id = gpui::ElementId::from(SharedString::from(format!("comment-reaction-{index}-{ri}")));
+            let button = LabelButton::new(id, label).secondary().selected(on);
+            reactions = reactions.child(button.on_click(move |window, cx| action(act.clone(), window, cx)));
+        }
+        let toggle = state.clone();
+        let add_id = gpui::ElementId::from(SharedString::from(format!("comment-react-add-{index}")));
+        reactions = reactions.child(LabelButton::new(add_id, "+").secondary().on_click(move |window, _| {
+            let mut s = toggle.borrow_mut();
+            s.reacting = if s.reacting == Some(index) { None } else { Some(index) };
+            s.more = false;
+            window.refresh();
+        }));
+        entry = entry.child(reactions);
+        if state.borrow().reacting == Some(index) {
+            let mut picker = div().flex().flex_wrap().gap(px(2.0)).pl(px(30.0));
+            for emoji in REACTIONS {
+                let action = action.clone();
+                let act = ThreadAction::React(index, emoji.to_string());
+                let pick_id = gpui::ElementId::from(SharedString::from(format!("comment-react-pick-{index}-{emoji}")));
+                picker = picker.child(LabelButton::new(pick_id, emoji).secondary().on_click(move |window, cx| {
+                    action(act.clone(), window, cx);
+                    // The picker closes after a pick; the command's result repaints the thread.
+                }));
+            }
+            entry = entry.child(picker);
+        }
         messages = messages.child(entry);
     }
     body = body.child(messages);
@@ -295,21 +401,27 @@ pub(crate) fn thread_popover(
         reply_actions =
             reply_actions.child(LabelButton::new("comment-thread-cancel", tr("Cancel")).secondary().on_click(move |window, cx| cancel(window, cx)));
     }
-    body = body.child(
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(6.0))
-            .border_t_1()
-            .border_color(rgba(t.border))
-            .pt(px(8.0))
-            .child(div().w_full().child(reply_field))
-            .child(reply_actions),
-    );
+    let mut composer = div().flex().flex_col().gap(px(4.0));
+    if !names.is_empty() {
+        let mut list = div().flex().flex_col().rounded(px(6.0)).bg(rgba(t.field)).overflow_hidden();
+        for name in names {
+            let picked = name.clone();
+            let pick = pick_mention.clone();
+            let id = gpui::ElementId::from(SharedString::from(format!("comment-reply-mention-{name}")));
+            list = list.child(LabelButton::new(id, name).secondary().on_click(move |window, cx| pick(&picked, window, cx)));
+        }
+        composer = composer.child(list);
+    }
+    composer = composer.child(div().w_full().child(reply_field));
+    body =
+        body.child(div().flex().flex_col().gap(px(6.0)).border_t_1().border_color(rgba(t.border)).pt(px(8.0)).child(composer).child(reply_actions));
     let body = with_enter_submit(body, submit);
 
     popover_window(Open::At(pos)).width(320.0).height(560.0).title(title_text(tr("Comment"))).body(body).show(viewport, dismiss).1
 }
+
+/// Reactions offered on a message (the reference's set).
+pub(crate) const REACTIONS: [&str; 8] = ["👍", "❤", "😂", "🎉", "👀", "🙏", "🔥", "✅"];
 
 /// One message: author + age, then its text (mentions stay readable as `@name`).
 fn message_row(m: &Message, me: &str) -> Div {
@@ -571,15 +683,21 @@ pub(crate) type CommentState = Rc<RefCell<CommentUi>>;
 
 #[cfg(test)]
 mod tests {
-    use super::{insert_mention, mention_matches, mention_query_at_end};
+    use super::{insert_mention, mention_matches, mention_query};
 
     #[test]
     fn mention_query_only_starts_a_token() {
-        assert_eq!(mention_query_at_end("hi @Ad"), Some((3, 6)));
-        assert_eq!(mention_query_at_end("@Ad"), Some((0, 3)));
-        assert_eq!(mention_query_at_end("mail@Ad"), None);
-        assert_eq!(mention_query_at_end("@Ad "), None);
-        assert_eq!(mention_query_at_end("no mention"), None);
+        assert_eq!(mention_query("hi @Ad", 6), Some((3, 6)));
+        assert_eq!(mention_query("@Ad", 3), Some((0, 3)));
+        assert_eq!(mention_query("mail@Ad", 7), None);
+        assert_eq!(mention_query("@Ad ", 4), None);
+        assert_eq!(mention_query("no mention", 10), None);
+    }
+
+    #[test]
+    fn mention_query_ends_at_the_caret_and_keeps_the_tail() {
+        assert_eq!(mention_query("Hi @Ad tomorrow", 6), Some((3, 6)));
+        assert_eq!(mention_query("Hi @Ad tomorrow", 15), Some((3, 15)));
     }
 
     #[test]
@@ -595,5 +713,8 @@ mod tests {
         let mut text = "hi @Ad".to_string();
         insert_mention(&mut text, (3, 6), "Ada Lovelace");
         assert_eq!(text, "hi @Ada Lovelace ");
+        let mut text = "Hi @Ad tomorrow".to_string();
+        insert_mention(&mut text, (3, 6), "Ada Lovelace");
+        assert_eq!(text, "Hi @Ada Lovelace tomorrow");
     }
 }
