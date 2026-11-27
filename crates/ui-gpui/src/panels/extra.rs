@@ -89,6 +89,12 @@ pub(crate) enum UiAction {
     /// 切到左面板的某个 tab：1 = Assets，2 = Icons（R1/R2）。不再弹居中浮层，
     /// 左面板按 `left_tab` 渲染对应面板（与 egui `LeftTab` 一致）。
     LeftTab(u8),
+    /// `view.leftSidebar`：收起 / 展开左栏（egui `ui.left_collapsed`）。
+    ToggleLeftSidebar,
+    /// `view.layers`：切回左栏的 Layers 页并确保它可见（egui `LeftTab::File`）。
+    Layers,
+    /// 打开 Home 并切到指定段落：0 Recents / 1 Online / 2 Templates。
+    Home(usize),
 }
 
 /// egui `handle_ui_requests` 里 GPUI 能落地的那部分（多窗口 / 评论 / 演示 / 对话框
@@ -103,13 +109,17 @@ pub(crate) fn ui_action(kind: &str, data: &Value, tab: u8) -> Option<UiAction> {
         "panel.shortcuts" => UiAction::Toggle(ExtraKind::Shortcuts),
         "panel.versionHistory" => UiAction::Toggle(ExtraKind::Versions),
         "panel.assets" | "panel.libraries" => UiAction::LeftTab(1),
+        "panel.leftSidebar" => UiAction::ToggleLeftSidebar,
+        "panel.layers" => UiAction::Layers,
         "view.devCompare" => UiAction::Compare {
             id: data.get("id").and_then(figcraft_engine::params::id_of),
             version: data.get("version").and_then(Value::as_str).map(str::to_string),
         },
         "panel.widths" => UiAction::Widths { left: width("left"), right: width("right") },
         "palette.actions" => UiAction::Palette,
-        "home" => UiAction::Toggle(ExtraKind::Home),
+        "home" => UiAction::Home(0),
+        "home.templates" => UiAction::Home(2),
+        "home.gettingStarted" => UiAction::Home(0),
         "present" => UiAction::Present(data.get("start").and_then(figcraft_engine::params::id_of), false),
         "preview" => UiAction::Present(data.get("start").and_then(figcraft_engine::params::id_of), true),
         "preview.close" => UiAction::PreviewClose,
@@ -1399,10 +1409,14 @@ mod tests {
         assert_eq!(ui_action("view.assets", &empty, 0), None, "Assets 请求是 panel.assets，不是命令名");
         assert_eq!(ui_action("panel.assets", &empty, 0), Some(UiAction::LeftTab(1)), "Assets 切到左面板 tab，不弹浮层（R1）");
         assert_eq!(ui_action("panel.libraries", &empty, 0), Some(UiAction::LeftTab(1)));
+        assert_eq!(ui_action("panel.leftSidebar", &empty, 0), Some(UiAction::ToggleLeftSidebar));
+        assert_eq!(ui_action("panel.layers", &empty, 0), Some(UiAction::Layers), "Alt+1 / Ctrl+1 回 Layers 页");
         assert_eq!(ui_action("view.devCompare", &json!({"version": "v1"}), 0), Some(UiAction::Compare { id: None, version: Some("v1".into()) }));
         assert_eq!(ui_action("panel.widths", &json!({"left": 320.0}), 0), Some(UiAction::Widths { left: Some(320.0), right: None }));
         assert_eq!(ui_action("palette.actions", &empty, 0), Some(UiAction::Palette));
-        assert_eq!(ui_action("home", &empty, 0), Some(UiAction::Toggle(ExtraKind::Home)));
+        assert_eq!(ui_action("home", &empty, 0), Some(UiAction::Home(0)), "doc.home 是打开，不是 toggle");
+        assert_eq!(ui_action("home.templates", &empty, 0), Some(UiAction::Home(2)));
+        assert_eq!(ui_action("home.gettingStarted", &empty, 0), Some(UiAction::Home(0)));
         assert_eq!(
             ui_action("present", &json!({"start": 7}), 0),
             Some(UiAction::Present(Some(figcraft_doc::NodeId(7)), false)),

@@ -15,6 +15,15 @@ use crate::canvas::geom::*;
 use crate::canvas::guides;
 use crate::theme::{Tokens, canvas_accent};
 
+/// 输入法组合期间的组合文档缓存。
+/// key 包含源文档指针、revision、文字层、caret 与组合内容；内容没变时复用同一个 `Arc`，
+/// 让渲染缓存的 `JobKey.doc` 稳定，不会每帧重提整页。
+#[derive(Clone)]
+pub(crate) struct PreeditDocCache {
+    pub key: (usize, u64, u64, usize, String, usize),
+    pub doc: std::sync::Arc<Document>,
+}
+
 pub struct CanvasApp {
     pub session: Session,
     pub canvas: CanvasState,
@@ -61,10 +70,22 @@ pub struct CanvasApp {
     pub(crate) connect: crate::canvas::board_connect::State,
     /// 图片裁剪模式的目标层与 fill 序号；`image.crop` UI 请求写入，画布叠加层据此画裁剪标记。
     pub crop: Option<(figcraft_doc::NodeId, usize)>,
+    /// 键盘框选的页面矩形 `[x0, y0, x1, y1]`（对应 egui `FigApp::ui.key_box`）。
+    /// `select.area` / `selectArea` 建立，方向键移动、Shift/Cmd 改大小、Enter 选中、Escape 取消。
+    pub key_box: Option<[f64; 4]>,
+    /// `key_box` 是在哪个文档/页面里打开的（文档 uid + 页面）。框的坐标是页面坐标，
+    /// 换文档/换页后若继续用旧框会选中新文档里的层；`live_key_box` 在归属不符时隐藏它。
+    pub key_box_doc: Option<(u64, NodeId)>,
+    /// 键盘框选按 Tab 后切到的“点选”停留节点（文档 uid + 节点，对应 egui `FigApp::ui.pick`）。
+    pub pick: Option<(u64, NodeId)>,
     /// 本帧画布要显示的文档（Motion 求值后的预览）；None = 源文档。
     /// 由 `CanvasView::sync_motion` 每帧设置，渲染请求与叠加层都读它，
     /// 这样 `ds.doc` 在一帧内不再被临时替换，引擎 / 撤销 / 命中 / 右栏始终看到源文档。
     pub display_doc: Option<std::sync::Arc<Document>>,
+    /// 画布文字编辑本帧光标是否处于闪烁的“亮”半周期。
+    /// 由 `CanvasView::render` 按统一的 `caret::visible_since` 写入，叠加层只读。
+    pub text_caret_visible: bool,
+    pub(crate) preedit_doc_cache: Option<PreeditDocCache>,
 }
 
 impl CanvasApp {
@@ -92,7 +113,12 @@ impl CanvasApp {
             proto: crate::canvas::proto_canvas::State::default(),
             connect: crate::canvas::board_connect::State::default(),
             crop: None,
+            key_box: None,
+            key_box_doc: None,
+            pick: None,
             display_doc: None,
+            text_caret_visible: true,
+            preedit_doc_cache: None,
         };
         // 预选一个自动布局容器：启动即可见 hatch（紧贴轮廓 + padding 蓝斜线 + spacing 粉斜线），
         // 不用先手动点选，方便核对"选中=1px / 悬停=2px"与边距斜线管线。
@@ -152,6 +178,71 @@ impl CanvasApp {
     /// 当前选中。
     pub fn selection(&self) -> Vec<NodeId> {
         self.session.ds().map(|d| d.selection.clone()).unwrap_or_default()
+    }
+
+    /// 建立键盘框选：围绕当前选中层在页面上的合并包围盒，没有选中时围绕视图中心。
+    /// 对应 egui `shortcuts::start_key_box`（已有框时再按一次则转“点选”）。
+    pub fn start_key_box(&mut self) {
+        if self.live_key_box().is_some() {
+            self.start_pick_select();
+            return;
+        }
+        let Ok(ds) = self.session.ds() else { return };
+        let zoom = ds.view.zoom.max(1e-6);
+        let center = self.to_page(self.canvas.rect.center());
+        let around = ds.selection.iter().filter_map(|id| ds.doc.world_bounds(*id)).reduce(|a, b| a.union(b));
+        let b = match around {
+            Some(r) => {
+                // 留 8 逻辑像素的边，让虚线框不压住选中轮廓（egui 同款）。
+                let r = r.inflate(8.0 / zoom, 8.0 / zoom);
+                [r.x0, r.y0, r.x1, r.y1]
+            }
+            None => [
+                center.x - 100.0 / zoom,
+                center.y - 75.0 / zoom,
+                center.x + 100.0 / zoom,
+                center.y + 75.0 / zoom,
+            ],
+        };
+        self.key_box = Some(b);
+        self.key_box_doc = Some((ds.uid, ds.page));
+        self.pick = None;
+    }
+
+    /// 键盘框选切到“点选”：停留节点取选区第一项，否则页面最上层。
+    /// 对应 egui `shortcuts::start_pick_select`。
+    pub fn start_pick_select(&mut self) -> bool {
+        let Ok(ds) = self.session.ds() else { return false };
+        let at = ds.selection.first().copied().or_else(|| ds.doc.node(ds.page).and_then(|n| n.children.last().copied()));
+        let Some(at) = at else { return false };
+        let uid = ds.uid;
+        self.key_box = None;
+        self.key_box_doc = None;
+        self.pick = Some((uid, at));
+        true
+    }
+
+    /// 当前文档/页面里仍然有效的键盘框选；换了文档或页面返回 `None`（旧框不再绘制，
+    /// 也不会再用它的页面坐标去选新文档里的层）。
+    pub fn live_key_box(&self) -> Option<[f64; 4]> {
+        let b = self.key_box?;
+        let (uid, page) = self.key_box_doc?;
+        let ds = self.session.ds().ok()?;
+        (ds.uid == uid && ds.page == page).then_some(b)
+    }
+
+    /// 当前“点选”停留的节点；换了文档或页面就自动作废（egui `FigApp::picked`）。
+    pub fn picked(&self) -> Option<NodeId> {
+        let (uid, id) = self.pick?;
+        let ds = self.session.ds().ok()?;
+        (ds.uid == uid && ds.doc.page_of(id) == Some(ds.page)).then_some(id)
+    }
+
+    /// 清掉键盘框选/点选状态（指针按下、选中完成、Escape 都走这里）。
+    pub fn clear_keyboard_box(&mut self) {
+        self.key_box = None;
+        self.key_box_doc = None;
+        self.pick = None;
     }
 }
 

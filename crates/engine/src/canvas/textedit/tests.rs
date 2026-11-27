@@ -257,6 +257,18 @@ fn preedit_state(s: &Session) -> Option<Preedit> {
 }
 
 #[test]
+fn repeated_identical_preedit_keeps_the_revision_stable() {
+    let (mut s, id) = setup("Hello world");
+    begin(&mut s, id, Some(5), false).unwrap();
+    preedit(&mut s, "にほ", Some(1)).unwrap();
+    let rev = s.ds().unwrap().revision;
+    preedit(&mut s, "にほ", Some(1)).unwrap();
+    assert_eq!(s.ds().unwrap().revision, rev, "an unchanged composition must not churn the render key");
+    preedit(&mut s, "にほん", Some(1)).unwrap();
+    assert!(s.ds().unwrap().revision > rev, "a real composition update still bumps the revision");
+}
+
+#[test]
 fn ime_composition_is_shown_but_not_in_the_document_until_committed() {
     let (mut s, id) = setup("Hello world");
     let undo_before = s.ds().unwrap().history.undo.len();

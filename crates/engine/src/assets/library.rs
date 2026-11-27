@@ -1257,6 +1257,15 @@ fn merge_components(
             }
             let Some(root) = remote.get(&r.root).copied() else { continue };
             doc.paste_nodes(&nodes, &remote, r.root, store, None)?;
+            // A fresh main keeps the source timelines of every node in its subtree; otherwise a
+            // ComponentSet child (or the root itself) would fall back to the destination
+            // page/default clock even though the component brought its animation with it.
+            // Existing components of the same key are untouched.
+            for id in other.subtree(r.root) {
+                if let (Some(settings), Some(pasted)) = (other.timelines.get(&id).copied(), remote.get(&id).copied()) {
+                    doc.timelines.insert(pasted, settings.sanitized());
+                }
+            }
             let ids = r.ids.iter().filter_map(|(lib, theirs)| remote.get(theirs).map(|l| (*lib, *l))).collect();
             doc.libraries_mut().components.push(ImportedComponent { root, ids, ..r.clone() });
         }
