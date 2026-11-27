@@ -25,17 +25,20 @@ fn weight(v: &Value, limit: usize) -> usize {
         total += 1;
         match v {
             Value::String(s) => total += s.len(),
-            // Checked before they are queued, so a huge list can't grow the worklist past the limit.
+            // Include entries already on the worklist: they will each add at least one to the
+            // final weight, so a container must not squeeze past the bound on its own.
             Value::Array(a) => {
-                if total + a.len() > limit {
-                    return total + a.len();
+                let queued = total + stack.len() + a.len();
+                if queued > limit {
+                    return queued;
                 }
                 stack.extend(a);
             }
             Value::Object(o) => {
                 total += o.keys().map(String::len).sum::<usize>();
-                if total + o.len() > limit {
-                    return total + o.len();
+                let queued = total + stack.len() + o.len();
+                if queued > limit {
+                    return queued;
                 }
                 stack.extend(o.values());
             }
@@ -279,5 +282,11 @@ mod tests {
     fn a_huge_list_is_refused_before_it_is_queued() {
         assert!(weight(&json!(vec![0; 100_000]), 1000) > 1000);
         assert!(weight(&json!(vec![0; 10]), 1000) <= 1000);
+    }
+
+    #[test]
+    fn nested_containers_count_the_worklist_they_leave_pending() {
+        // 1 root + 3 siblings + 1 nested container + 3 grandchildren = 8, not 4.
+        assert!(weight(&json!([null, null, null, [null, null, null]]), 5) > 5);
     }
 }

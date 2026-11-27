@@ -1044,6 +1044,10 @@ pub struct CanvasView {
     /// 才丢弃它发起的待处理取样。它不属于 `PaneState`，新窗口 clone 不会继承。
     pick_owner: Option<u64>,
 
+    /// 平台全屏切换是排队执行的（Windows gpui 0.2.2）：记住尚未落地的目标状态，避免同一帧
+    /// 内两个 `window.fullscreen {on:true}` 都读到旧状态而各排一次 toggle。
+    fullscreen_target: Option<bool>,
+
     /// 控制通道的请求队列（`--control <port>` 时由 [`control_server`] 往里塞）。
     control_queue: control::Queue,
 
@@ -1679,6 +1683,7 @@ impl CanvasView {
             pane_wid: 0,
 
             pick_owner: None,
+            fullscreen_target: None,
 
             control_queue: Arc::new(std::sync::Mutex::new(Vec::new())),
 
@@ -2370,7 +2375,10 @@ impl CanvasView {
                 "window.fullscreen" => {
                     let want = r.data.get("on").and_then(serde_json::Value::as_bool);
                     let now = window.is_fullscreen();
-                    if want.map_or(true, |w| w != now) {
+                    let target = self.fullscreen_target.unwrap_or(now);
+                    let next = want.unwrap_or(!target);
+                    if next != target {
+                        self.fullscreen_target = Some(next);
                         window.toggle_fullscreen();
                     }
                     cx.notify();
@@ -7237,6 +7245,9 @@ impl Render for CanvasView {
         }
         // A16：绑定本窗口的文档（含 active 回写，见 bind_window_document）。
         self.bind_window_document(window, false, cx);
+        if self.fullscreen_target == Some(window.is_fullscreen()) {
+            self.fullscreen_target = None;
+        }
         let a11y_focused = window.focused(cx);
         let a11y_scale = window.scale_factor();
         for (_, command) in a11y::commit_frame("Monet", a11y_focused.as_ref(), a11y_scale, window, cx) {
