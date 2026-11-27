@@ -817,7 +817,7 @@ pub(crate) struct RightFields {
     limit_open: std::rc::Rc<std::cell::RefCell<[bool; 4]>>,
     /// 可绑定变量的数值字段里，指针**现在停在哪一个**（`variable.bind` 的 field key）。
     /// 原版「应用变量」按钮只在 `rect_contains_pointer` 时才画，这里用一份共享的悬停态实现。
-    bind_hover: std::rc::Rc<std::cell::RefCell<Option<&'static str>>>,
+    bind_hover: std::rc::Rc<std::cell::RefCell<Option<SharedString>>>,
     /// The blend-mode dropdown's current label (egui's `dropdown` row). Clicking opens the menu.
     blend_label: std::cell::RefCell<SharedString>,
     /// Blend-mode row reveal (egui `paints.rs::appearance`'s `blend_open` local flag): the
@@ -3089,13 +3089,53 @@ pub(crate) fn auto_layout_section(
         let any_min = dims.min_w.is_some() || dims.min_h.is_some() || lo[0] || lo[2];
         let any_max = dims.max_w.is_some() || dims.max_h.is_some() || lo[1] || lo[3];
         if any_max {
-            let left = if dims.max_w.is_some() || lo[1] { f.dim_max_w.clone().into_any_element() } else { div().into_any_element() };
-            let right = if dims.max_h.is_some() || lo[3] { f.dim_max_h.clone().into_any_element() } else { div().into_any_element() };
+            let left = if dims.max_w.is_some() || lo[1] {
+                right::sections::bindable(
+                    f,
+                    "maxWidth",
+                    data.bound.get("maxWidth").map(String::as_str),
+                    &data.number_variables,
+                    f.dim_max_w.clone().into_any_element(),
+                )
+            } else {
+                div().into_any_element()
+            };
+            let right = if dims.max_h.is_some() || lo[3] {
+                right::sections::bindable(
+                    f,
+                    "maxHeight",
+                    data.bound.get("maxHeight").map(String::as_str),
+                    &data.number_variables,
+                    f.dim_max_h.clone().into_any_element(),
+                )
+            } else {
+                div().into_any_element()
+            };
             sec = sec.child(sublabel_row2(tr("Max W"), tr("Max H"))).child(field_row(vec![left, right], Vec::<IconButton>::new()));
         }
         if any_min {
-            let left = if dims.min_w.is_some() || lo[0] { f.dim_min_w.clone().into_any_element() } else { div().into_any_element() };
-            let right = if dims.min_h.is_some() || lo[2] { f.dim_min_h.clone().into_any_element() } else { div().into_any_element() };
+            let left = if dims.min_w.is_some() || lo[0] {
+                right::sections::bindable(
+                    f,
+                    "minWidth",
+                    data.bound.get("minWidth").map(String::as_str),
+                    &data.number_variables,
+                    f.dim_min_w.clone().into_any_element(),
+                )
+            } else {
+                div().into_any_element()
+            };
+            let right = if dims.min_h.is_some() || lo[2] {
+                right::sections::bindable(
+                    f,
+                    "minHeight",
+                    data.bound.get("minHeight").map(String::as_str),
+                    &data.number_variables,
+                    f.dim_min_h.clone().into_any_element(),
+                )
+            } else {
+                div().into_any_element()
+            };
             sec = sec.child(sublabel_row2(tr("Min W"), tr("Min H"))).child(field_row(vec![left, right], Vec::<IconButton>::new()));
         }
     }
@@ -3192,12 +3232,41 @@ pub(crate) fn auto_layout_section(
         if individual {
             // egui `layout_panel.rs::spacing`：开关 `layout_button_at(padding_row, 0)` 贴在
             // **第一行**的右侧 action 槽；展开后的第二行（R/B）没有开关。开关不能跟着行走。
+            let l = right::sections::bindable(
+                f,
+                "paddingLeft",
+                data.bound.get("paddingLeft").map(String::as_str),
+                &data.number_variables,
+                f.pad_l.clone().into_any_element(),
+            );
+            let t = right::sections::bindable(
+                f,
+                "paddingTop",
+                data.bound.get("paddingTop").map(String::as_str),
+                &data.number_variables,
+                f.pad_t.clone().into_any_element(),
+            );
+            let r = right::sections::bindable(
+                f,
+                "paddingRight",
+                data.bound.get("paddingRight").map(String::as_str),
+                &data.number_variables,
+                f.pad_r.clone().into_any_element(),
+            );
+            let b = right::sections::bindable(
+                f,
+                "paddingBottom",
+                data.bound.get("paddingBottom").map(String::as_str),
+                &data.number_variables,
+                f.pad_b.clone().into_any_element(),
+            );
             sec = sec
-                .child(field_row(vec![f.pad_l.clone(), f.pad_t.clone()], vec![toggle]))
-                .child(field_row(vec![f.pad_r.clone(), f.pad_b.clone()], Vec::<IconButton>::new()));
+                .child(field_row(vec![l, t], vec![toggle]))
+                .child(field_row(vec![r, b], Vec::<IconButton>::new()));
         } else {
             // 水平 / 垂直内边距同样可绑变量（`paddingHorizontal` / `paddingVertical`）。
-            // 独立四边是「一个数组一起提交」，原版也没有逐边绑定，这里保持纯数值。
+            // 独立四边在上游 `layout_panel.rs::spacing` 里也是每个边各走 `variable_ui::number_field`；
+            // 这里按 `paddingLeft/Top/Right/Bottom` 同步接上。
             let pad_h_el = right::sections::bindable(
                 f,
                 "paddingHorizontal",

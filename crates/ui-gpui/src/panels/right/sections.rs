@@ -639,11 +639,20 @@ pub(crate) fn icon_cmd(icon: Icon, cmd_id: &'static str, params: Value, f: &Righ
 /// `menu`（sizing 菜单）优先——W/H 在 auto layout / auto layout 子层 / 文本上时右端是 chevron 或
 /// `Hug`/`Fill` 字样，此时**不画变量按钮**；只有 `menu` 为空（普通形状的 W/H、opacity、gap…）
 /// 才有上面第 2 条的变量按钮。已绑定时是函数最前面的早退分支，整格换 chip，与 auto layout 无关。
-pub(crate) fn bindable(f: &RightFields, field: &'static str, bound: Option<&str>, vars: &[String], el: gpui::AnyElement) -> gpui::AnyElement {
+pub(crate) fn bindable(
+    f: &RightFields,
+    field: impl Into<SharedString>,
+    bound: Option<&str>,
+    vars: &[String],
+    el: gpui::AnyElement,
+) -> gpui::AnyElement {
     let t = tokens();
-    let hovered = *f.bind_hover.borrow() == Some(field);
+    let field: SharedString = field.into();
+    let hovered = f.bind_hover.borrow().as_ref() == Some(&field);
     let hover = f.bind_hover.clone();
     let root = f.root.clone();
+    let id_field = field.clone();
+    let hover_field = field.clone();
 
     let inner: gpui::AnyElement = match bound {
         // ── 已绑定：变量名 chip（点开换绑）+ 尾部解绑 ─────────────────────────────────
@@ -654,6 +663,8 @@ pub(crate) fn bindable(f: &RightFields, field: &'static str, bound: Option<&str>
             let list: Vec<String> = vars.to_vec();
             let cmds = f.cmds.clone();
             let bind_key = format!("bind-{field}");
+            let field_bind = field.clone();
+            let field_detach = field.clone();
             let hit = crate::popovers::window_trigger_top(&bind_key);
             let anchor_key = bind_key.clone();
             let mut chip = div()
@@ -675,7 +686,7 @@ pub(crate) fn bindable(f: &RightFields, field: &'static str, bound: Option<&str>
                 .on_mouse_down(MouseButton::Left, move |_e, window, cx: &mut App| {
                     let rows =
                         list.iter()
-                            .map(|v| (v.clone(), "variable.bind", json!({ "field": field, "variable": v })))
+                            .map(|v| (v.clone(), "variable.bind", json!({ "field": field_bind.as_str(), "variable": v })))
                             .collect::<Vec<(String, &'static str, Value)>>();
                     let top = crate::popovers::anchored_top(&anchor_key, window);
                     open_list_window_at(
@@ -704,7 +715,7 @@ pub(crate) fn bindable(f: &RightFields, field: &'static str, bound: Option<&str>
                         .cursor_pointer()
                         .on_mouse_down(MouseButton::Left, move |_e, _w, cx: &mut App| {
                             cx.stop_propagation();
-                            cmds.push(Cmd { id: "variable.bind", params: Some(json!({ "field": field, "variable": Value::Null })) });
+                            cmds.push(Cmd { id: "variable.bind", params: Some(json!({ "field": field_detach.as_str(), "variable": Value::Null })) });
                         })
                         .child(crate::widgets::icon::paint(Icon::Detach, rgba(t.text_secondary), 12.0)),
                 );
@@ -737,7 +748,7 @@ pub(crate) fn bindable(f: &RightFields, field: &'static str, bound: Option<&str>
                                 cx.stop_propagation();
                                 let rows = list
                                     .iter()
-                                    .map(|v| (v.clone(), "variable.bind", json!({ "field": field, "variable": v })))
+                                    .map(|v| (v.clone(), "variable.bind", json!({ "field": field.as_str(), "variable": v })))
                                     .collect::<Vec<(String, &'static str, Value)>>();
                                 let top = crate::popovers::anchored_top(&anchor_key, window);
                                 open_list_window_at(
@@ -763,7 +774,7 @@ pub(crate) fn bindable(f: &RightFields, field: &'static str, bound: Option<&str>
     // 悬停态只驱动这一行自己的重绘：`bind_hover` 一变就 notify（与 `text_field.rs` 的
     // `trail_hover` 同一套做法，不用全局状态）。
     div()
-        .id(gpui::ElementId::Name(SharedString::from(format!("bind-hover-{field}"))))
+        .id(gpui::ElementId::Name(SharedString::from(format!("bind-hover-{id_field}"))))
         .relative()
         .w_full()
         .h_full()
@@ -771,13 +782,13 @@ pub(crate) fn bindable(f: &RightFields, field: &'static str, bound: Option<&str>
         .items_center()
         .child(inner)
         .on_hover(move |h: &bool, _w, cx: &mut App| {
-            let cur = *hover.borrow();
+            let cur = hover.borrow().clone();
             let next = if *h {
-                Some(field)
-            } else if cur == Some(field) {
+                Some(hover_field.clone())
+            } else if cur.as_ref() == Some(&hover_field) {
                 None
             } else {
-                cur
+                cur.clone()
             };
             if next != cur {
                 *hover.borrow_mut() = next;
@@ -787,6 +798,35 @@ pub(crate) fn bindable(f: &RightFields, field: &'static str, bound: Option<&str>
             }
         })
         .into_any_element()
+}
+
+/// 给 `popovers.rs` 的效果小窗复用：打开某个字段的变量列表（等价 `bindable` 的未绑定按钮）。
+pub(crate) fn open_variable_list(
+    popups: crate::panels::PopupReqs,
+    queue: crate::panels::Cmds,
+    field: impl Into<SharedString>,
+    vars: &[String],
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let field: SharedString = field.into();
+    let trigger = format!("bind-{field}");
+    let top = crate::popovers::anchored_top(&trigger, window);
+    let rows = vars
+        .iter()
+        .map(|v| (v.clone(), "variable.bind", json!({ "field": field.to_string(), "variable": v })))
+        .collect::<Vec<(String, &'static str, Value)>>();
+    open_list_window_at(
+        popups,
+        queue,
+        cx,
+        window.mouse_position(),
+        Some(top),
+        trigger,
+        ListWindow::Variables,
+        SharedString::from(tr("Variables")),
+        rows,
+    );
 }
 
 /// 一行「已绑定的属性」：图标 + 名字 + 变量 chip（egui `variable_ui::bound_row`）。
@@ -1884,9 +1924,37 @@ pub(crate) fn paints(
             // 选 Custom 写入 `[w,w,w,w]` → 下帧 `d.stroke_sides` 命中 → 这里出现四个字段，
             // 原有的 bug 正是漏了这一块（只写了菜单命令，面板从不响应）。
             if sides_mode == "custom" && d.stroke_sides.is_some() {
+                let t = bindable(
+                    f,
+                    "strokeTopWeight",
+                    d.bound.get("strokeTopWeight").map(String::as_str),
+                    &d.number_variables,
+                    f.stroke_side_t.clone().into_any_element(),
+                );
+                let r = bindable(
+                    f,
+                    "strokeRightWeight",
+                    d.bound.get("strokeRightWeight").map(String::as_str),
+                    &d.number_variables,
+                    f.stroke_side_r.clone().into_any_element(),
+                );
+                let b = bindable(
+                    f,
+                    "strokeBottomWeight",
+                    d.bound.get("strokeBottomWeight").map(String::as_str),
+                    &d.number_variables,
+                    f.stroke_side_b.clone().into_any_element(),
+                );
+                let l = bindable(
+                    f,
+                    "strokeLeftWeight",
+                    d.bound.get("strokeLeftWeight").map(String::as_str),
+                    &d.number_variables,
+                    f.stroke_side_l.clone().into_any_element(),
+                );
                 sec = sec
-                    .child(field_row(vec![f.stroke_side_t.clone(), f.stroke_side_r.clone()], Vec::<IconButton>::new()))
-                    .child(field_row(vec![f.stroke_side_b.clone(), f.stroke_side_l.clone()], Vec::<IconButton>::new()));
+                    .child(field_row(vec![t, r], Vec::<IconButton>::new()))
+                    .child(field_row(vec![b, l], Vec::<IconButton>::new()));
             }
         }
     }
@@ -1971,15 +2039,29 @@ fn add_effect_menu(f: &RightFields) -> gpui::AnyElement {
 /// 效果行的方框：点开弹出「效果设置」小窗（egui `effect_settings` 的设置项搬进浮层），
 /// 不再是「弹出菜单切换效果类型」。类型切换在小窗顶部的下拉里，且用
 /// `Effect::of_type` 生成干净对象 —— 见 `WindowState::effect_settings` 的说明。
-fn effect_settings_button(f: &RightFields, row: &EffectRow, col: f32) -> Dropdown {
+fn effect_settings_button(f: &RightFields, d: &PanelData, row: &EffectRow, col: f32) -> Dropdown {
     let popups = f.popups();
     let cmds = f.cmds.clone();
     let effect = row.effect.clone();
     let label = SharedString::from(row.label.clone());
     let index = row.index;
+    let number_vars = d.number_variables.clone();
+    let color_vars = d.color_variables.clone();
+    let bound = d.bound.clone();
     Dropdown::new(label.clone(), col, None).fill().on_click(move |bounds, _window, cx: &mut App| {
         open_detached_with(popups.clone(), format!("effect-{index}"), Some(bounds.origin.y), cx, |anchor, cx| {
-            crate::popovers::WindowState::effect_settings(cmds.clone(), cx, anchor, index, label.clone(), effect.clone())
+            crate::popovers::WindowState::effect_settings(
+                cmds.clone(),
+                cx,
+                anchor,
+                index,
+                label.clone(),
+                effect.clone(),
+                number_vars.clone(),
+                color_vars.clone(),
+                bound.clone(),
+                popups.clone(),
+            )
         });
     })
 }
@@ -2043,7 +2125,7 @@ pub(crate) fn effects(
             effect_entries.push((tr("Paste effect").to_string(), "effect.paste", json!({ "index": row.index })));
         }
         let f_for_menu = f.clone();
-        let dd = effect_settings_button(f, row, col).into_element().on_mouse_down(MouseButton::Right, move |e, _, cx: &mut App| {
+        let dd = effect_settings_button(f, d, row, col).into_element().on_mouse_down(MouseButton::Right, move |e, _, cx: &mut App| {
             context_menu_at(&f_for_menu, e.position, 180.0, effect_entries.clone(), cx);
             cx.stop_propagation();
         });
@@ -2449,9 +2531,16 @@ fn grid_settings_rows(
         )
         .into_any_element()
     };
+    // `layoutGrids/<index>/<field>`：引擎 `field_scope` 只对 layout grid 的数值字段放行任意
+    // Number 变量，UI 之前只画普通输入框，等于绑不上。
+    let mut grid_field = |n: &mut usize, value: &str, key: &'static str| -> gpui::AnyElement {
+        let bind_key = format!("layoutGrids/{}/{}", row.index, key);
+        let el = field(n, value, key);
+        bindable(f, bind_key.clone(), d.bound.get(&bind_key).map(String::as_str), &d.number_variables, el)
+    };
     if g.kind == figcraft_doc::GridKind::Grid {
         out.push(sublabel_row(tr("Size")));
-        out.push(field_row(vec![field(n, &format!("{}", g.size), "size")], Vec::<gpui::AnyElement>::new()));
+        out.push(field_row(vec![grid_field(n, &format!("{}", g.size), "size")], Vec::<gpui::AnyElement>::new()));
     } else {
         // Count（Auto 留空）+ Type 下拉。
         out.push(sublabel_row2(tr("Count"), tr("Type")));
@@ -2477,7 +2566,7 @@ fn grid_settings_rows(
             })
             .collect();
         let dd = pick_dropdown(f, aligns[cur].0.clone(), col, choices);
-        out.push(field_row(vec![field(n, &count, "count"), dd.into_any_element()], Vec::<gpui::AnyElement>::new()));
+        out.push(field_row(vec![grid_field(n, &count, "count"), dd.into_any_element()], Vec::<gpui::AnyElement>::new()));
         let span = if g.kind == figcraft_doc::GridKind::Columns { tr("Width") } else { tr("Height") };
         match g.align {
             figcraft_doc::GridAlign::Stretch => {
@@ -2492,19 +2581,19 @@ fn grid_settings_rows(
                     .text_color(rgba(tokens().text_secondary))
                     .child(tr("Auto"))
                     .into_any_element();
-                out.push(field_row(vec![auto, field(n, &format!("{}", g.offset), "offset")], Vec::<gpui::AnyElement>::new()));
+                out.push(field_row(vec![auto, grid_field(n, &format!("{}", g.offset), "offset")], Vec::<gpui::AnyElement>::new()));
                 out.push(sublabel_row(tr("Gutter")));
-                out.push(field_row(vec![field(n, &format!("{}", g.gutter), "gutter")], Vec::<gpui::AnyElement>::new()));
+                out.push(field_row(vec![grid_field(n, &format!("{}", g.gutter), "gutter")], Vec::<gpui::AnyElement>::new()));
             }
             figcraft_doc::GridAlign::Center => {
                 out.push(sublabel_row2(span, tr("Gutter")));
-                out.push(field_row(vec![field(n, &format!("{}", g.size), "size"), field(n, &format!("{}", g.gutter), "gutter")], Vec::<gpui::AnyElement>::new()));
+                out.push(field_row(vec![grid_field(n, &format!("{}", g.size), "size"), grid_field(n, &format!("{}", g.gutter), "gutter")], Vec::<gpui::AnyElement>::new()));
             }
             _ => {
                 out.push(sublabel_row2(span, tr("Offset")));
-                out.push(field_row(vec![field(n, &format!("{}", g.size), "size"), field(n, &format!("{}", g.offset), "offset")], Vec::<gpui::AnyElement>::new()));
+                out.push(field_row(vec![grid_field(n, &format!("{}", g.size), "size"), grid_field(n, &format!("{}", g.offset), "offset")], Vec::<gpui::AnyElement>::new()));
                 out.push(sublabel_row(tr("Gutter")));
-                out.push(field_row(vec![field(n, &format!("{}", g.gutter), "gutter")], Vec::<gpui::AnyElement>::new()));
+                out.push(field_row(vec![grid_field(n, &format!("{}", g.gutter), "gutter")], Vec::<gpui::AnyElement>::new()));
             }
         }
     }
@@ -3259,9 +3348,37 @@ pub(crate) fn appearance(
     // `chunks(2).filter(|_| indep_ok)`）+ 平滑圆角按钮。折叠时整块不画——平滑按钮随之隐藏。
     if indep_open && smooth_ok {
         if d.corners_independent {
+            let tl = bindable(
+                f,
+                "topLeftRadius",
+                d.bound.get("topLeftRadius").map(String::as_str),
+                &d.number_variables,
+                f.corner_tl.clone().into_any_element(),
+            );
+            let tr = bindable(
+                f,
+                "topRightRadius",
+                d.bound.get("topRightRadius").map(String::as_str),
+                &d.number_variables,
+                f.corner_tr.clone().into_any_element(),
+            );
+            let bl = bindable(
+                f,
+                "bottomLeftRadius",
+                d.bound.get("bottomLeftRadius").map(String::as_str),
+                &d.number_variables,
+                f.corner_bl.clone().into_any_element(),
+            );
+            let br = bindable(
+                f,
+                "bottomRightRadius",
+                d.bound.get("bottomRightRadius").map(String::as_str),
+                &d.number_variables,
+                f.corner_br.clone().into_any_element(),
+            );
             sec = sec
-                .child(field_row(vec![f.corner_tl.clone(), f.corner_tr.clone()], Vec::<IconButton>::new()))
-                .child(field_row(vec![f.corner_bl.clone(), f.corner_br.clone()], vec![corner_smoothing_button(f, d).into_any_element()]));
+                .child(field_row(vec![tl, tr], Vec::<IconButton>::new()))
+                .child(field_row(vec![bl, br], vec![corner_smoothing_button(f, d).into_any_element()]));
         } else {
             // Polygon / Star 支持平滑但没有四个独立圆角字段：展开区里只留一行平滑按钮。
             sec = sec.child(field_row(Vec::<gpui::AnyElement>::new(), vec![corner_smoothing_button(f, d).into_any_element()]));
@@ -3397,7 +3514,21 @@ pub(crate) fn typography(f: &RightFields, d: &PanelData, cx: &mut App, n: &mut u
         ));
 
         // ── 行高 + 字距（池化字段，值由 `set_text_values` 每帧灌入）──
-        sec = sec.child(field_row(vec![f.line_height.clone().into_any_element(), f.letter_spacing.clone().into_any_element()], Vec::<IconButton>::new()));
+        let lh = bindable(
+            f,
+            "lineHeight",
+            d.bound.get("lineHeight").map(String::as_str),
+            &d.number_variables,
+            f.line_height.clone().into_any_element(),
+        );
+        let ls = bindable(
+            f,
+            "letterSpacing",
+            d.bound.get("letterSpacing").map(String::as_str),
+            &d.number_variables,
+            f.letter_spacing.clone().into_any_element(),
+        );
+        sec = sec.child(field_row(vec![lh, ls], Vec::<IconButton>::new()));
     }
 
     // Paragraph spacing stays in the type-settings popover; this section keeps LH / LS only.
@@ -3980,8 +4111,11 @@ pub(crate) fn section(f: &RightFields, d: &PanelData, row_w: f32, cx: &mut App, 
             let on = s.color_hex.as_ref().is_some_and(|h| h.trim_start_matches('#').eq_ignore_ascii_case(hex.trim_start_matches('#')));
             let hex = hex.to_string();
             let border = if on { rgba(tokens().accent) } else { rgba(tokens().border) };
+            let mut sw = div().size(pt(18.0)).rounded(pt(9.0)).bg(rgba(c));
+            // 上游 `section_panel.rs::SECTION_COLORS`：选中态是 2 pt accent 内描边，不是 1 pt。
+            sw = if on { sw.border_2() } else { sw.border_1() };
             swatches = swatches.child(
-                div().size(pt(18.0)).rounded(pt(9.0)).bg(rgba(c)).border_1().border_color(border).cursor_pointer().on_mouse_down(
+                sw.border_color(border).cursor_pointer().on_mouse_down(
                     MouseButton::Left,
                     move |_e, _w, _cx| {
                         cmds.push(Cmd { id: "node.set", params: Some(json!({ "props": { "fills": [hex] } })) });

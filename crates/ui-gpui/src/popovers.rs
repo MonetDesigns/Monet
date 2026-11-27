@@ -239,6 +239,31 @@ pub(crate) enum Setting {
         label: SharedString,
         field: Entity<TextField>,
     },
+    /// Effect numeric field with the `effects/<i>/<field>` variable entry. It is kept separate
+    /// from [`Self::Number`] because only effect settings need a binding chip/button.
+    EffectNumber {
+        tab: u8,
+        label: SharedString,
+        field: Entity<TextField>,
+        bind_field: SharedString,
+        bound: Option<SharedString>,
+        vars: Vec<String>,
+        popups: crate::panels::PopupReqs,
+    },
+    /// Effect colour row (swatch + hex + alpha), optionally with a colour-variable binding.
+    /// `paint` is shared so the swatch follows edits made in hex/alpha or the colour picker.
+    EffectColor {
+        tab: u8,
+        paint: Rc<RefCell<figcraft_color::Color>>,
+        hex_ed: Entity<TextEdit>,
+        op_ed: Entity<TextEdit>,
+        picker_write: Rc<dyn Fn(figcraft_color::Color, &mut Window, &mut App)>,
+        trigger: SharedString,
+        bind_field: Option<SharedString>,
+        bound: Option<SharedString>,
+        vars: Vec<String>,
+        popups: crate::panels::PopupReqs,
+    },
     /// 一条滑条行（Type settings 的可变字体轴）：左标签 + 右侧通用 `Slider`。
     /// `on_change` 在拖动时连续回调，直接往命令队列推命令（同一条命令会被队列合并）。
     Slider {
@@ -1778,7 +1803,18 @@ impl WindowState {
     /// 被引擎 `refuse_ignored_effect_keys` 判为 unknown properties 后整条 `effect.set` 拒收，
     /// 命令静默失效 —— 这就是「有一些效果点了、选中图层在画布中没有效果」的根因。
     /// `effect.add` 走 `Effect::of_type`，所以从 `+` 菜单添加一直是正常的。
-    pub(crate) fn effect_settings(cmds: Cmds, cx: &mut App, anchor: Point<Pixels>, index: usize, label: SharedString, effect: Value) -> Self {
+    pub(crate) fn effect_settings(
+        cmds: Cmds,
+        cx: &mut App,
+        anchor: Point<Pixels>,
+        index: usize,
+        label: SharedString,
+        effect: Value,
+        number_vars: Vec<String>,
+        color_vars: Vec<String>,
+        bound: std::collections::BTreeMap<String, String>,
+        popups: crate::panels::PopupReqs,
+    ) -> Self {
         let mut w = Self::base(WindowKind::EffectSettings, label.clone(), cmds.clone(), Open::Anchor(anchor));
         w.width = 248.0;
         w.height = 320.0;
@@ -1807,7 +1843,8 @@ impl WindowState {
         // 全部控件共用这一份可变 effect：任何一个写回后，其余控件的命令都从最新值起改，
         // 否则「先改 X 再改 Y」时 Y 的 effect.set 会带着开窗时的旧 X 把 X 冲掉。
         let shared = Rc::new(RefCell::new(effect.clone()));
-        settings.extend(effect_setting_rows(cx, &cmds, index, &shared, &ty));
+        let ctx = EffectBindCtx { index, number_vars, color_vars, bound, popups };
+        settings.extend(effect_setting_rows(cx, &cmds, index, &shared, &ty, &ctx));
         w.settings = Rc::new(RefCell::new(settings));
         w
     }
@@ -6226,6 +6263,210 @@ impl WindowState {
                     )
                 }
             }
+            Setting::EffectNumber { tab: st, label, field, bind_field, bound, vars, popups } => {
+                if *st != tab {
+                    return None;
+                }
+                let cmds = self.cmds.clone();
+                let mut control = div().flex_1().min_w(px(0.0)).flex().items_center().gap(pt(4.0));
+                if let Some(name) = bound {
+                    let short: SharedString = name.rsplit('/').next().unwrap_or(name).to_string().into();
+                    let field_name = (*bind_field).clone();
+                    let field_detach = field_name.clone();
+                    let list = vars.clone();
+                    let popups = (*popups).clone();
+                    let cmds_bind = cmds.clone();
+                    let cmds_detach = cmds.clone();
+                    let mut chip = div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .h(pt(24.0))
+                        .rounded(pt(4.0))
+                        .bg(rgba(t.hover))
+                        .border_1()
+                        .border_color(rgba(t.border))
+                        .flex()
+                        .items_center()
+                        .overflow_hidden()
+                        .pl(pt(8.0))
+                        .pr(pt(4.0))
+                        .text_size(pt(crate::widgets::TEXT_PT))
+                        .text_color(rgba(t.text))
+                        .cursor_pointer()
+                        .on_mouse_down(MouseButton::Left, move |_e, window, cx: &mut App| {
+                            crate::panels::right::sections::open_variable_list(
+                                popups.clone(),
+                                cmds_bind.clone(),
+                                field_name.clone(),
+                                &list,
+                                window,
+                                cx,
+                            );
+                        })
+                        .child(div().flex_1().min_w(px(0.0)).overflow_hidden().child(short))
+                        .child(
+                            div()
+                                .size(pt(18.0))
+                                .flex_none()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(pt(4.0))
+                                .hover(|s| s.bg(rgba(t.selected_row)))
+                                .cursor_pointer()
+                                .on_mouse_down(MouseButton::Left, move |_e, _w, cx: &mut App| {
+                                    cx.stop_propagation();
+                                    cmds_detach.push(Cmd {
+                                        id: "variable.bind",
+                                        params: Some(json!({ "field": field_detach.to_string(), "variable": Value::Null })),
+                                    });
+                                })
+                                .child(crate::widgets::icon::paint(Icon::Detach, rgba(t.text_secondary), 12.0)),
+                        );
+                    control = control.child(chip);
+                } else {
+                    control = control.child(div().flex_1().min_w(px(0.0)).child(field.clone()));
+                    let field_name = (*bind_field).clone();
+                    let list = vars.clone();
+                    let popups = (*popups).clone();
+                    let cmds_bind = cmds.clone();
+                    control = control.child(
+                        div()
+                            .size(pt(18.0))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .on_mouse_down(MouseButton::Left, move |_e, window, cx: &mut App| {
+                                crate::panels::right::sections::open_variable_list(
+                                    popups.clone(),
+                                    cmds_bind.clone(),
+                                    field_name.clone(),
+                                    &list,
+                                    window,
+                                    cx,
+                                );
+                            })
+                            .child(crate::widgets::variable_button()),
+                    );
+                }
+                Some(
+                    div()
+                        .w_full()
+                        .h(pt(28.0))
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(pt(6.0))
+                        .child(div().flex_none().w(pt(76.0)).text_size(pt(9.0)).text_color(rgba(t.text_secondary)).child(label.clone()))
+                        .child(control)
+                        .into_any_element(),
+                )
+            }
+            Setting::EffectColor { tab: st, paint, hex_ed, op_ed, picker_write, trigger, bind_field, bound, vars, popups } => {
+                if *st != tab {
+                    return None;
+                }
+                let color = *paint.borrow();
+                let hex = color.to_css_hex();
+                let opacity = (f64::from(color.a) * 100.0).round() as i64;
+                let width = if bind_field.is_some() { 196.0 } else { 214.0 };
+                let cf = crate::widgets::ColorField::new(
+                    cx,
+                    figcraft_color::Paint::solid(color),
+                    crate::widgets::ColorText::Hex(hex.into()),
+                    width,
+                    hex_ed.clone(),
+                    op_ed.clone(),
+                );
+                let write_picker = picker_write.clone();
+                let picker_color = *paint.borrow();
+                let color_cmds = self.cmds.clone();
+                let popups_for_swatch = (*popups).clone();
+                let trigger_for_swatch: SharedString = (*trigger).clone();
+                let mut cf = cf.on_swatch(move |point, window, cx| {
+                    let popups = popups_for_swatch.clone();
+                    let write = write_picker.clone();
+                    let current = crate::widgets::swatch::color32(picker_color);
+                    let trigger = trigger_for_swatch.clone();
+                    let cmds = color_cmds.clone();
+                    crate::panels::right::sections::open_detached_with(
+                        popups,
+                        trigger.to_string(),
+                        Some(point.y),
+                        cx,
+                        |anchor, cx| {
+                            let on_pick: Rc<dyn Fn(crate::canvas::geom::Color32, &mut Window, &mut App)> = Rc::new(move |c, w, cx| {
+                                let color = figcraft_color::Color::from_rgba8(c.0[0], c.0[1], c.0[2], c.0[3]);
+                                write(color, w, cx);
+                            });
+                            WindowState::color(cx, anchor, current, None, Default::default(), on_pick, cmds)
+                        },
+                    );
+                });
+                if let Some(name) = bound {
+                    let field_name = bind_field.clone().unwrap_or_else(|| "effects/0/color".into());
+                    let field_detach = field_name.clone();
+                    let list = vars.clone();
+                    let popups = (*popups).clone();
+                    let cmds_bind = self.cmds.clone();
+                    let cmds_detach = self.cmds.clone();
+                    cf = cf
+                        .bound(name.clone(), move |_point, window, cx| {
+                            crate::panels::right::sections::open_variable_list(
+                                popups.clone(),
+                                cmds_bind.clone(),
+                                field_name.clone(),
+                                &list,
+                                window,
+                                cx,
+                            );
+                        })
+                        .on_detach(move |_w, _cx| {
+                            cmds_detach.push(Cmd {
+                                id: "variable.bind",
+                                params: Some(json!({ "field": field_detach.to_string(), "variable": Value::Null })),
+                            });
+                        });
+                } else if bind_field.is_some() {
+                    let field_name = bind_field.clone().unwrap();
+                    let list = vars.clone();
+                    let popups = (*popups).clone();
+                    let cmds_bind = self.cmds.clone();
+                    let var = div()
+                        .size(pt(18.0))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_pointer()
+                        .on_mouse_down(MouseButton::Left, move |_e, window, cx: &mut App| {
+                            crate::panels::right::sections::open_variable_list(
+                                popups.clone(),
+                                cmds_bind.clone(),
+                                field_name.clone(),
+                                &list,
+                                window,
+                                cx,
+                            );
+                        })
+                        .child(crate::widgets::variable_button());
+                    return Some(
+                        div()
+                            .w_full()
+                            .h(pt(28.0))
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(pt(4.0))
+                            .child(div().flex_1().min_w(px(0.0)).child(cf))
+                            .child(var)
+                            .into_any_element(),
+                    );
+                }
+                Some(div().w_full().h(pt(28.0)).flex().items_center().child(cf).into_any_element())
+            }
             Setting::Slider { tab: st, label, value, min, max, step, suffix, on_change } => {
                 if *st != tab {
                     return None;
@@ -7477,13 +7718,39 @@ fn effect_with(shared: &Rc<RefCell<Value>>, key: &str, value: Value) -> Value {
 }
 
 /// 一条数值设置项：显示值 = 存储值 × `scale`（密度 / 强度这类 0..1 用 100 显示成百分比），
-/// 提交时反算、夹紧，然后只改一个键推 `effect.set`。`at = Some(i)` 用于 `offset: [x, y]`。
+/// 效果设置窗可用的变量快照（与右栏 `PanelData` 对齐）：字段绑定名、变量名列表和开窗请求。
+#[derive(Clone)]
+struct EffectBindCtx {
+    index: usize,
+    number_vars: Vec<String>,
+    color_vars: Vec<String>,
+    bound: std::collections::BTreeMap<String, String>,
+    popups: crate::panels::PopupReqs,
+}
+
+/// 效果数值字段对应的 `variable.bind` 字段名（JSON 键与引擎绑定键并不总是同名）。
+fn effect_var_key(ty: &str, key: &'static str, at: Option<usize>) -> Option<&'static str> {
+    match (ty, key, at) {
+        ("dropShadow" | "innerShadow", "offset", Some(0)) => Some("offsetX"),
+        ("dropShadow" | "innerShadow", "offset", Some(1)) => Some("offsetY"),
+        ("dropShadow" | "innerShadow", "radius" | "spread", _) => Some(key),
+        ("layerBlur" | "backgroundBlur", "radius" | "start_radius", _) => Some(if key == "start_radius" { "startRadius" } else { "radius" }),
+        ("glass", "light_angle", _) => Some("lightAngle"),
+        ("glass", "light_intensity", _) => Some("lightIntensity"),
+        ("glass", "frost", _) => Some("radius"),
+        ("glass", "refraction" | "depth" | "dispersion" | "splay", _) => Some(key),
+        _ => None,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn effect_number(
     cx: &mut App,
     cmds: &Cmds,
     index: usize,
     shared: &Rc<RefCell<Value>>,
+    ty: &str,
+    ctx: &EffectBindCtx,
     key: &'static str,
     at: Option<usize>,
     label: &'static str,
@@ -7529,16 +7796,105 @@ fn effect_number(
             queue.push(Cmd { id: "effect.set", params: Some(json!({ "index": index, "effect": e })) });
         });
     });
-    Setting::Number { tab: 0, label: SharedString::from(label), field }
+    let var_field = effect_var_key(ty, key, at).map(|f| format!("effects/{index}/{f}"));
+    if let Some(bind_field) = var_field {
+        let bound = ctx.bound.get(&bind_field).cloned().map(SharedString::from);
+        Setting::EffectNumber {
+            tab: 0,
+            label: SharedString::from(label),
+            field,
+            bind_field: bind_field.into(),
+            bound,
+            vars: ctx.number_vars.clone(),
+            popups: ctx.popups.clone(),
+        }
+    } else {
+        Setting::Number { tab: 0, label: SharedString::from(label), field }
+    }
+}
+
+/// 一条效果颜色行：色板 + hex + 透明度；`bind_field` 为 Some 时（目前只有阴影 color）带颜色变量入口。
+fn effect_color(
+    cx: &mut App,
+    cmds: &Cmds,
+    index: usize,
+    shared: &Rc<RefCell<Value>>,
+    ctx: &EffectBindCtx,
+    key: &'static str,
+    initial: figcraft_color::Color,
+    bind_field: Option<String>,
+) -> Setting {
+    let state = Rc::new(RefCell::new(initial));
+    let write_state = state.clone();
+    let live = shared.clone();
+    let queue = cmds.clone();
+    let write: Rc<dyn Fn(figcraft_color::Color, &mut Window, &mut App)> = Rc::new(move |color, _w, _cx| {
+        *write_state.borrow_mut() = color;
+        let mut e = live.borrow().clone();
+        if let Some(obj) = e.as_object_mut() {
+            obj.insert(key.to_string(), serde_json::to_value(color).unwrap_or(Value::Null));
+        }
+        *live.borrow_mut() = e.clone();
+        queue.push(Cmd { id: "effect.set", params: Some(json!({ "index": index, "effect": e })) });
+    });
+    let hex_write = write.clone();
+    let hex_state = state.clone();
+    let opacity_write = write.clone();
+    let opacity_state = state.clone();
+    let (hex_ed, op_ed) = crate::widgets::ColorField::color_row_editors(
+        cx,
+        &initial.to_css_hex(),
+        (f64::from(initial.a) * 100.0).round() as i64,
+        move |text, window, cx| {
+            let Some(mut color) = figcraft_color::Color::from_hex_or_name(text) else { return };
+            color.a = hex_state.borrow().a;
+            hex_write(color, window, cx);
+        },
+        move |v, window, cx| {
+            let mut color = *opacity_state.borrow();
+            color.a = (v / 100.0).clamp(0.0, 1.0) as f32;
+            opacity_write(color, window, cx);
+        },
+    );
+    let picker_write = {
+        let write = write.clone();
+        let hex_ed = hex_ed.clone();
+        let op_ed = op_ed.clone();
+        Rc::new(move |color: figcraft_color::Color, window: &mut Window, cx: &mut App| {
+            hex_ed.update(cx, |te, _| te.set_value(&color.to_css_hex()));
+            op_ed.update(cx, |te, _| te.set_value(&format!("{}", (f64::from(color.a) * 100.0).round())));
+            write(color, window, cx);
+        })
+    };
+    let bound = bind_field.as_ref().and_then(|f| ctx.bound.get(f)).cloned().map(SharedString::from);
+    Setting::EffectColor {
+        tab: 0,
+        paint: state,
+        hex_ed,
+        op_ed,
+        picker_write,
+        trigger: format!("effect-color-{index}-{key}").into(),
+        bind_field: bind_field.map(SharedString::from),
+        bound,
+        vars: ctx.color_vars.clone(),
+        popups: ctx.popups.clone(),
+    }
 }
 
 /// 按效果类型生成设置项（与 egui `effects.rs::effect_settings` 的字段对应；颜色需取色器，
 /// 暂不搬入小窗）。所有写回都走 `effect.set`，参数只含当前类型自己的键。
-fn effect_setting_rows(cx: &mut App, cmds: &Cmds, index: usize, shared: &Rc<RefCell<Value>>, ty: &str) -> Vec<Setting> {
+fn effect_setting_rows(
+    cx: &mut App,
+    cmds: &Cmds,
+    index: usize,
+    shared: &Rc<RefCell<Value>>,
+    ty: &str,
+    ctx: &EffectBindCtx,
+) -> Vec<Setting> {
     let mut out: Vec<Setting> = Vec::new();
     macro_rules! n {
         ($key:expr, $at:expr, $label:expr, $suffix:expr, $step:expr, $scale:expr, $min:expr, $max:expr) => {
-            out.push(effect_number(cx, cmds, index, shared, $key, $at, $label, $suffix, $step, $scale, $min, $max));
+            out.push(effect_number(cx, cmds, index, shared, ty, ctx, $key, $at, $label, $suffix, $step, $scale, $min, $max))
         };
     }
     macro_rules! tgl {
@@ -7578,6 +7934,12 @@ fn effect_setting_rows(cx: &mut App, cmds: &Cmds, index: usize, shared: &Rc<RefC
             n!("offset", Some(1), "Y", "", 1.0, 1.0, -10_000.0, 10_000.0);
             n!("radius", None, "Blur", "", 1.0, 1.0, 0.0, 10_000.0);
             n!("spread", None, "Spread", "", 1.0, 1.0, -10_000.0, 10_000.0);
+            let color = shared
+                .borrow()
+                .get("color")
+                .and_then(|v| serde_json::from_value::<figcraft_color::Color>(v.clone()).ok())
+                .unwrap_or(figcraft_color::Color::new(0.0, 0.0, 0.0, 0.25));
+            out.push(effect_color(cx, cmds, index, shared, ctx, "color", color, Some(format!("effects/{index}/color"))));
             if ty == "dropShadow" {
                 tgl!("show_behind", "Show behind transparent areas");
             }
@@ -7591,7 +7953,25 @@ fn effect_setting_rows(cx: &mut App, cmds: &Cmds, index: usize, shared: &Rc<RefC
             choice!("mode", "Mode", &[("Mono", "mono"), ("Duo", "duo"), ("Multi", "multi")]);
             n!("size", None, "Size", "", 0.1, 1.0, 0.01, 1_000.0);
             n!("density", None, "Density", "%", 1.0, 100.0, 0.0, 1.0);
-            n!("opacity", None, "Opacity", "%", 1.0, 100.0, 0.0, 1.0);
+            let mode = shared.borrow().get("mode").and_then(Value::as_str).unwrap_or("mono").to_string();
+            let color = shared
+                .borrow()
+                .get("color")
+                .and_then(|v| serde_json::from_value::<figcraft_color::Color>(v.clone()).ok())
+                .unwrap_or(figcraft_color::Color::new(0.0, 0.0, 0.0, 0.25));
+            match mode.as_str() {
+                "multi" => n!("opacity", None, "Opacity", "%", 1.0, 100.0, 0.0, 1.0),
+                "duo" => {
+                    out.push(effect_color(cx, cmds, index, shared, ctx, "color", color, None));
+                    let secondary = shared
+                        .borrow()
+                        .get("secondary")
+                        .and_then(|v| serde_json::from_value::<figcraft_color::Color>(v.clone()).ok())
+                        .unwrap_or(figcraft_color::Color::WHITE);
+                    out.push(effect_color(cx, cmds, index, shared, ctx, "secondary", secondary, None));
+                }
+                _ => out.push(effect_color(cx, cmds, index, shared, ctx, "color", color, None)),
+            }
         }
         "texture" => {
             n!("size", None, "Size", "", 0.1, 1.0, 0.01, 1_000.0);

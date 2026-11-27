@@ -10,7 +10,7 @@
 //! 全部走冻结通用控件与列表行编辑器池，没有新建控件。
 
 use super::data::{BindingData, ComponentData, ComponentDef, ComponentProp, PanelData};
-use super::sections::{icon_cmd, icon_row, open_detached_with, pick_dropdown, slot, window_open_button};
+use super::sections::{bindable, icon_cmd, icon_row, open_detached_with, pick_dropdown, slot, window_open_button};
 use crate::panels::{RightFields, RowEditCtx};
 use crate::widgets::{Icon, IconButton, PanelSection, field_row, field_row_full, field_row_full_trailing, pt, rgba, sublabel_row, tokens};
 use figcraft_doc::NodeId;
@@ -37,7 +37,7 @@ pub(crate) fn section(f: &RightFields, d: &PanelData, cx: &mut App, n: &mut usiz
         // 嵌在主组件里的实例：实例属性之外，还要能把它「显示哪个组件」绑到 instanceSwap 属性上
         // （lizard `scoped_property_row(mainComponent)`）。这一行只存在于 `binding_section`，
         // 而走到这里时 `d.component` 一定是 Some，之前就整行丢了。
-        return Some(instance_section(f, c, d.binding.as_ref(), cx, n));
+        return Some(instance_section(f, d, c, d.binding.as_ref(), cx, n));
     }
     if !c.editable_description {
         return None;
@@ -596,6 +596,7 @@ fn current_variant_rows(f: &RightFields, c: &ComponentData) -> Vec<crate::widget
 
 fn instance_section(
     f: &RightFields,
+    d: &PanelData,
     c: &ComponentData,
     binding: Option<&BindingData>,
     cx: &mut App,
@@ -642,7 +643,7 @@ fn instance_section(
         sec = sec.child(sublabel_row(tr("Properties")));
     }
     for p in &c.props {
-        sec = sec.child(instance_prop_row(f, c, None, cx, n, p));
+        sec = sec.child(instance_prop_row(f, d, c, None, cx, n, p));
     }
     // 暴露属性的嵌套实例（lizard `exposed_copies`）：名字小标题 + 它们各自的属性行。
     // 之前这块完全没接，实例里暴露的嵌套实例属性在右栏看不到。
@@ -652,7 +653,7 @@ fn instance_section(
         ));
         for p in props {
             // 打在这个嵌套副本上，不是外层选中的实例：属性名可能只有它才有。
-            sec = sec.child(instance_prop_row(f, c, Some(*copy), cx, n, p));
+            sec = sec.child(instance_prop_row(f, d, c, Some(*copy), cx, n, p));
         }
     }
     // 嵌在主组件里的实例：主组件绑定行（lizard `scoped_property_row(mainComponent)`）。
@@ -665,6 +666,7 @@ fn instance_section(
 /// 实例属性的一行（lizard `instance_props` 的 row）：类型图标 + 属性名 + 值控件。
 fn instance_prop_row(
     f: &RightFields,
+    d: &PanelData,
     c: &ComponentData,
     // 属性写在哪个实例上：外层选中的实例为 None（引擎按选中项走）；暴露属性的嵌套副本传它自己的 id，
     // 否则引擎会在外层实例的主组件里找同名属性（找不到就报 unknown property）。
@@ -765,6 +767,16 @@ fn instance_prop_row(
         }
         "slot" => slot_fill_control(f, c, p),
         _ => div().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(p.value.clone())).into_any_element(),
+    };
+    // Instance properties are variable-backed in lizard: boolean → Boolean variables, text /
+    // variant → String variables. The engine key is `componentProperties/<name>`.
+    let bind_key = format!("componentProperties/{}", p.name);
+    let control = match p.kind {
+        "boolean" => bindable(f, bind_key.clone(), d.bound.get(&bind_key).map(String::as_str), &d.bool_variables, control),
+        "text" | "variant" => {
+            bindable(f, bind_key.clone(), d.bound.get(&bind_key).map(String::as_str), &d.text_variables, control)
+        }
+        _ => control,
     };
     let line = div().flex().flex_row().items_center().gap(pt(8.0)).w_full().child(label).child(div().flex_1().min_w(px(0.0)).child(control));
     field_row_full(line)
