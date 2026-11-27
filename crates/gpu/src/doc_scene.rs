@@ -487,9 +487,9 @@ fn backdrop(
     });
 }
 
-/// Whether this node's noise is the CPU's mono grain over exactly its own SDF box fill: one mono
-/// noise, no children, no stroke, no clip, full node opacity, one plain solid fill, and no other
-/// effect (the grains ride on the layer's content alpha, which is just that fill).
+/// Whether this node's noise is the CPU's grain over exactly its own SDF box fill: one noise,
+/// no children, no stroke, no clip, full node opacity, one plain solid fill, and no other effect
+/// (the grains ride on the layer's content alpha, which is just that fill).
 fn can_noise(n: &Node, noises: &[&figcraft_doc::Noise], clip: Clip) -> bool {
     let [noise] = noises else {
         return false;
