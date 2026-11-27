@@ -476,6 +476,11 @@ fn walk(doc: &figcraft_doc::Document, id: figcraft_doc::NodeId, view: &figcraft_
     if n.is_mask {
         return None;
     }
+    // A section with hidden contents paints its frame but none of its children; the GPU walk
+    // would still emit them.
+    if n.hides_contents() {
+        return None;
+    }
     // PassThrough is a group's own "keep the children's blends" mode and looks like Normal for
     // opaque fills; anything else (Luminosity, Multiply…) would need a real blend pipeline.
     if n.opacity < 0.999
@@ -536,6 +541,9 @@ fn walk(doc: &figcraft_doc::Document, id: figcraft_doc::NodeId, view: &figcraft_
     if let Some(paint) = n.fills.first() {
         // `solid_color()` ignores `visible`; a hidden fill must produce no instance at all.
         if paint.visible {
+            if !matches!(paint.blend, figcraft_color::BlendMode::Normal | figcraft_color::BlendMode::PassThrough) {
+                return None;
+            }
             let c = paint.solid_color()?;
             // 圆角按设备像素换算；所有角半径已在上面验证为同一个值。
             let unit = if w > 0.0 { (rx1 - rx0) / w } else { 1.0 };
@@ -654,6 +662,21 @@ mod tests {
             n.corners.radii = [12.0; 4];
         }
         assert!(scene_of_node(&doc, frame, &view).is_none(), "rounded clips need partial coverage");
+    }
+
+    #[test]
+    fn multiply_fills_and_hidden_sections_use_the_cpu() {
+        let view = figcraft_render::View { origin: (0.0, 0.0), scale: 1.0, width: 200, height: 200 };
+        let mut doc = figcraft_doc::Document::default();
+        let page = doc.pages[0];
+        let rect = doc.create(page, figcraft_doc::NodeKind::Rectangle, "Rect", 10.0, 10.0, 50.0, 50.0).expect("a rectangle");
+        let mut paint = figcraft_color::Paint::solid(figcraft_color::Color::BLACK);
+        paint.blend = figcraft_color::BlendMode::Multiply;
+        doc.node_mut(rect).expect("rect").fills = vec![paint];
+        assert!(scene_of_node(&doc, rect, &view).is_none(), "an unsupported fill blend needs the CPU");
+
+        let section = doc.create(page, figcraft_doc::NodeKind::Section { contents_hidden: true }, "Section", 0.0, 0.0, 100.0, 100.0).expect("a section");
+        assert!(scene_of_node(&doc, section, &view).is_none(), "hidden section contents must not appear");
     }
 
     #[test]
