@@ -8,6 +8,8 @@
 //   - 统一网格（segmented、sublabels2 空列、field 行）一律 w_full + flex_1，禁止手算列宽。
 // 2026-11-05 补充：用户随后明确指令「重构 color_field / template 插槽隐藏 / number_field 范围 /
 // 失焦提交」，本文件按该指令解冻；以上 INVARIANT 仍保持不变。
+// 2026-11-27 补充：用户批准 P2-6，`set_multiline(rows)` 让 Developer Mode 的便签（2 行）与
+// code-connect 模板（3 行）使用真正的多行编辑；`rows=0` 仍是原单行编辑器。
 // ============================================================================
 //! `TextEdit` — `ui-egui`'s **`text_field_edit` / `field_editor`**: the editing lifecycle only.
 //!
@@ -113,6 +115,8 @@ pub struct TextEdit {
     readonly: bool,
     /// Escape clears this field (a search box).
     search_clear: bool,
+    /// Multiline mode: visible rows; `0` = the frozen single-line editor.
+    rows: usize,
 }
 
 impl TextEdit {
@@ -139,6 +143,7 @@ impl TextEdit {
             align: TextAlign::Left,
             readonly: false,
             search_clear: false,
+            rows: 0,
         }
     }
 
@@ -200,6 +205,25 @@ impl TextEdit {
     }
     pub fn set_readonly(&mut self, b: bool) {
         self.readonly = b;
+    }
+    /// Turn this field into a multiline editor with `rows` visible rows (`0` restores single-line).
+    /// Used by the Developer Mode note (2 rows) and the code-connect template (3 rows). Pool
+    /// callers must reset with `set_multiline(0)` before reusing a slot for an ordinary field.
+    pub fn set_multiline(&mut self, rows: usize) {
+        let was = self.rows > 0;
+        self.rows = rows;
+        self.input.set_multiline(rows);
+        if was && rows == 0 {
+            // The pooled field is about to be reused as a single-line field; restore the committed
+            // value without a stray line break from the previous multiline use.
+            let text = self.value.replace('\n', " ");
+            self.value = text.clone();
+            self.kept = text.clone();
+            self.input.buffer.set_text(text);
+        }
+    }
+    pub fn is_multiline(&self) -> bool {
+        self.rows > 0
     }
     pub fn set_search_clear(&mut self, b: bool) {
         self.search_clear = b;
@@ -454,15 +478,16 @@ impl Render for TextEdit {
         let entity = cx.entity();
         let focus = self.focus.clone();
         let cursor = self.editing.then_some(CursorStyle::IBeam);
+        let multiline = self.rows > 0;
         let mut el = div()
             .relative()
             .w_full()
             .h_full()
             .flex()
-            .items_center()
             .pl(pt(self.inset_left))
-            .pr(pt(self.right_pad))
-            .child(self.input.element(entity, focus, focused, cursor));
+            .pr(pt(self.right_pad));
+        el = if multiline { el.items_start().pt(pt(4.0)) } else { el.items_center() };
+        el = el.child(self.input.element(entity, focus, focused, cursor));
 
         // ── keyboard: `track_focus` registers the handle in the element tree, which is what
         //    routes keystrokes here. ──────────────────────────────────────────────────────────
@@ -637,6 +662,11 @@ impl Render for TextEdit {
                     "down" => "arrowdown",
                     k => k,
                 };
+                if ctrl && key == "enter" && this.is_multiline() {
+                    this.commit(window, cx);
+                    window.blur();
+                    return;
+                }
                 if ctrl {
                     match key {
                         "a" => this.input.buffer.select_all(),
@@ -867,6 +897,30 @@ mod tests {
             field.commit(window, cx);
             assert_eq!(field.value(), "80", "the old number must survive");
             assert_eq!(field.input.buffer.text(), "80", "the text must disappear from the field");
+        });
+    }
+
+    /// Developer Mode 的 2 行便签 / 3 行模板：Enter 插入换行而不是提交，失焦/提交仍然工作。
+    #[gpui::test]
+    async fn a_multiline_field_inserts_breaks_and_commits(cx: &mut gpui::TestAppContext) {
+        let (view, window) = cx.add_window_view(|_window, cx| {
+            let mut field = TextEdit::new(cx);
+            field.set_multiline(2);
+            field.set_value("one\ntwo");
+            field
+        });
+
+        view.update_in(window, |field, window, cx| {
+            assert!(field.is_multiline());
+            field.begin_edit(window, false);
+            field.input.buffer.move_to(3);
+            assert_eq!(field.input.buffer.key("enter", false, false), EditOutcome::Changed);
+            assert_eq!(field.input.buffer.text(), "one\n\ntwo");
+            field.commit(window, cx);
+            assert_eq!(field.value(), "one\n\ntwo");
+            field.set_multiline(0);
+            assert!(!field.is_multiline());
+            assert_eq!(field.input.buffer.text(), "one  two", "the committed value loses its breaks");
         });
     }
 }

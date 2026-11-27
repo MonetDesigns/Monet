@@ -6,7 +6,7 @@
 //! 走 `RightFields::row_field` 的编辑器池，没有新建任何控件。
 //!
 //! 语义差异（已汇报）：
-//! - egui 的注释便签是 **2 行 multiline 框**，GPUI 的 `TextEdit` 只有单行 → 单行框。
+//! - egui 的注释便签是 2 行 multiline 框；P2-6 后 GPUI `TextEdit` 也支持 2 行多行编辑。
 //! - egui 的分类色是 8 格**色板弹窗**，`MenuRow` 只画文字，子菜单又画不了色块 → 8 个 hex 下拉项。
 //! - 图标：measure 用 `Line`，ready 的「在专注视图打开」用 `Frame`，link 用 `LinkOn`。
 
@@ -14,7 +14,7 @@ use super::data::{AnnotationRow, DevResourceRow, InspectRow, MeasurementRow, Pan
 use super::inspect::local_dropdown;
 use super::sections::{icon_cmd, icon_row, pick_dropdown, slot};
 use crate::panels::{Cmd, RightFields, RowEditCtx};
-use crate::widgets::{Dropdown, Icon, IconButton, MenuRow, PanelSection, SectionHeaderVariant, field_row, field_row_full, pt, rgba, tokens};
+use crate::widgets::{Dropdown, Icon, IconButton, MenuRow, PanelSection, SectionHeaderVariant, block_row, field_row, field_row_full, pt, rgba, tokens};
 use figcraft_i18n::tr;
 use figcraft_i18n::tr_noop;
 use gpui::{App, Div, IntoElement, MouseButton, SharedString, div, prelude::*, px};
@@ -159,7 +159,7 @@ pub(crate) fn annotations(f: &RightFields, d: &PanelData, cx: &mut App, n: &mut 
     let mut sec = PanelSection::new(tr("Annotations")).variant(if empty { SectionHeaderVariant::Dim } else { SectionHeaderVariant::Normal });
     for a in &d.dev.annotations {
         sec = sec.child(field_row_full(annotation_head(f, a, node)));
-        // 便签本体（egui 是 2 行 multiline，GPUI 只有单行框）。
+        // 便签本体：egui 是 2 行 multiline，这里用 `TextEdit` 的 multiline 模式（2 行 × 24 pt）。
         let edit = f.row_field(
             cx,
             slot(n),
@@ -177,8 +177,11 @@ pub(crate) fn annotations(f: &RightFields, d: &PanelData, cx: &mut App, n: &mut 
                 nest_key: None,
             },
         );
-        edit.update(cx, |te, _| te.set_placeholder(tr("Add a note for developers")));
-        sec = sec.child(field_row_full(div().w_full().child(edit)));
+        edit.update(cx, |te, _| {
+            te.set_placeholder(tr("Add a note for developers"));
+            te.set_multiline(2);
+        });
+        sec = sec.child(block_row(div().w_full().h(pt(48.0)).pl(pt(16.0)).pr(pt(16.0)).child(edit)));
         // 钉住的属性（只读，值随图层变）。
         for p in &a.pins {
             sec = sec.child(field_row_full(pin_row(f, p)));

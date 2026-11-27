@@ -10,7 +10,7 @@ use super::data::{AssetRow, InspectData, InspectSection, PanelData, PlaygroundDa
 use super::sections::{icon_row, slot};
 use crate::panels::RightFields;
 use crate::widgets::{
-    Checkbox, Dropdown, Icon, IconButton, MenuRow, PanelSection, SectionHeader, SectionHeaderVariant, field_row, field_row_full, pt, rgba,
+    Checkbox, Dropdown, Icon, IconButton, MenuRow, PanelSection, SectionHeader, SectionHeaderVariant, block_row, field_row, field_row_full, pt, rgba,
     sublabel_row, swatch, tokens,
 };
 use figcraft_doc::{ExportFormat, NodeId};
@@ -445,8 +445,8 @@ fn connect_section(f: &RightFields, data: &InspectData, cx: &mut App, n: &mut us
     ));
 
     // ── Import path / 组件名 ──
-    let import = link_field(f, cx, n, &base, "importPath", &link.import_path, tr("Import path"));
-    let name = link_field(f, cx, n, &base, "name", &link.name, tr("Component name"));
+    let import = link_field(f, cx, n, &base, "importPath", &link.import_path, tr("Import path"), 0);
+    let name = link_field(f, cx, n, &base, "name", &link.name, tr("Component name"), 0);
     sec = sec.child(field_row_full(
         div()
             .flex()
@@ -458,9 +458,9 @@ fn connect_section(f: &RightFields, data: &InspectData, cx: &mut App, n: &mut us
             .child(div().flex_1().min_w(px(0.0)).child(name)),
     ));
 
-    // ── 模板（egui 是 3 行 multiline；GPUI 只有单行框）──
-    let template = link_field(f, cx, n, &base, "template", &link.template, "<Button size={size}>{label}</Button>");
-    sec = sec.child(field_row_full(div().w_full().child(template)));
+    // ── 模板：egui 是 3 行 multiline，这里用 `TextEdit` 的 3 行模式 ──
+    let template = link_field(f, cx, n, &base, "template", &link.template, "<Button size={size}>{label}</Button>", 3);
+    sec = sec.child(block_row(div().w_full().h(pt(72.0)).pl(pt(16.0)).pr(pt(16.0)).child(template)));
     Some(sec.child(field_row_full(note(tr("{property} is its value; {property ? \"a\" : \"b\"} picks a string. Other {…} stays as written.")))))
 }
 
@@ -473,6 +473,7 @@ fn link_field(
     key: &'static str,
     value: &str,
     placeholder: &'static str,
+    rows: usize,
 ) -> gpui::Entity<crate::widgets::TextEdit> {
     let field = f.row_field(
         cx,
@@ -491,7 +492,10 @@ fn link_field(
             nest_key: None,
         },
     );
-    field.update(cx, |te, _| te.set_placeholder(placeholder));
+    field.update(cx, |te, _| {
+        te.set_placeholder(placeholder);
+        te.set_multiline(rows);
+    });
     field
 }
 

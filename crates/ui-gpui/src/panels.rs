@@ -1838,6 +1838,7 @@ impl RightFields {
         if let Some(e) = self.row_editors.get(slot) {
             e.update(cx, |te, _| {
                 te.set_readonly(false);
+                te.set_multiline(0);
                 if opacity {
                     // 与样式编辑器共用同一套透明度配置（拖动「%」、0..100 夹紧、可编辑）。
                     crate::widgets::ColorField::configure_opacity_editor(te, value);
