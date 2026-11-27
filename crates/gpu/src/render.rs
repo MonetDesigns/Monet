@@ -18,6 +18,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use bytemuck::{Pod, Zeroable};
+use figcraft_color::BlendMode;
 use figcraft_doc::{Document, NodeId};
 use figcraft_geom::Affine;
 
@@ -326,6 +327,7 @@ struct TextureParams {
 struct GroupPlan {
     cmds: Vec<Cmd>,
     opacity: f32,
+    blend: BlendMode,
 }
 
 /// One mask run: the content layer's commands, the mask layer's commands, and how the mask's
@@ -559,7 +561,7 @@ impl CommandList {
                     }
                     let index = self.groups.len();
                     let opacity = group.opacity.clamp(0.0, 1.0);
-                    self.groups.push(GroupPlan { cmds: Vec::new(), opacity });
+                    self.groups.push(GroupPlan { cmds: Vec::new(), opacity, blend: group.blend });
                     let inner = self.build(&group.items);
                     self.groups[index].cmds = inner;
                     // The children's instances belong to the group layer only; the parent must not
@@ -626,6 +628,9 @@ struct Target {
     /// The resolved single-sample image, the copy source.
     resolve: wgpu::Texture,
     view: wgpu::TextureView,
+    /// A snapshot of the resolved frame for blend modes that need what is already under the layer.
+    under: wgpu::Texture,
+    under_view: wgpu::TextureView,
     readback: wgpu::Buffer,
 }
 
@@ -646,6 +651,8 @@ struct GroupResources {
     bind: wgpu::BindGroup,
     #[allow(dead_code)]
     opacity: wgpu::Buffer,
+    /// Present for a non-normal blend; the shader reads the frame snapshot under the layer.
+    blend: Option<wgpu::BindGroup>,
 }
 
 /// A prepared mask run: the two resolved layers and the composite that multiplies content by
@@ -672,6 +679,7 @@ pub struct Renderer {
     progressive_pipeline: wgpu::RenderPipeline,
     composite_pipeline: wgpu::RenderPipeline,
     mask_pipeline: wgpu::RenderPipeline,
+    blend_pipeline: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
     globals: wgpu::Buffer,
     bind_globals: wgpu::BindGroup,
@@ -685,12 +693,42 @@ pub struct Renderer {
     progressive_layout: wgpu::BindGroupLayout,
     composite_layout: wgpu::BindGroupLayout,
     mask_layout: wgpu::BindGroupLayout,
+    blend_layout: wgpu::BindGroupLayout,
     instances: Option<(wgpu::Buffer, wgpu::BindGroup, u64)>,
     mesh_verts: Option<(wgpu::Buffer, u64)>,
     mesh_indices: Option<(wgpu::Buffer, u64)>,
     target: Option<Target>,
     adapter: String,
     max_side: u32,
+}
+
+/// The mode code `blend.wgsl` switches on. Codes 2 and 9 stay unused so the separable table reads
+/// in Figma menu order; the shader defaults to source for anything it does not know.
+fn blend_code(mode: BlendMode) -> u32 {
+    match mode {
+        BlendMode::PassThrough | BlendMode::Normal => 0,
+        BlendMode::PlusDarker => 1,
+        BlendMode::Darken => 3,
+        BlendMode::Multiply => 4,
+        BlendMode::PlusLighter => 5,
+        BlendMode::ColorBurn => 6,
+        BlendMode::Lighten => 7,
+        BlendMode::Screen => 8,
+        BlendMode::ColorDodge => 10,
+        BlendMode::Overlay => 11,
+        BlendMode::SoftLight => 12,
+        BlendMode::HardLight => 13,
+        BlendMode::Difference => 14,
+        BlendMode::Exclusion => 15,
+        BlendMode::Hue => 16,
+        BlendMode::Saturation => 17,
+        BlendMode::Color => 18,
+        BlendMode::Luminosity => 19,
+    }
+}
+
+fn needs_blend(mode: BlendMode) -> bool {
+    blend_code(mode) != 0
 }
 
 fn blend() -> Option<wgpu::BlendState> {
@@ -778,6 +816,10 @@ impl Renderer {
         let mask_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("figcraft-gpu-mask"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/mask.wgsl").into()),
+        });
+        let blend_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("figcraft-gpu-blend"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/blend.wgsl").into()),
         });
 
         let globals_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -1107,6 +1149,42 @@ impl Renderer {
             bind_group_layouts: &[Some(&globals_layout), Some(&mask_layout)],
             immediate_size: 0,
         });
+        let blend_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("blend"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+                    count: None,
+                },
+            ],
+        });
+        let blend_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("blend"),
+            bind_group_layouts: &[Some(&blend_layout)],
+            immediate_size: 0,
+        });
         let single_state = |b: Option<wgpu::BlendState>| wgpu::ColorTargetState {
             format: wgpu::TextureFormat::Rgba8Unorm,
             blend: b,
@@ -1303,6 +1381,28 @@ impl Renderer {
             multiview_mask: None,
             cache: None,
         });
+        let blend_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("blend"),
+            layout: Some(&blend_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &blend_shader,
+                entry_point: Some("vs"),
+                buffers: &[],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &blend_shader,
+                entry_point: Some("fs"),
+                // The shader already includes the destination; replace the frame.
+                targets: &[Some(single_state(None))],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState { count: SAMPLES, mask: !0, alpha_to_coverage_enabled: false },
+            multiview_mask: None,
+            cache: None,
+        });
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("shadow"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -1340,6 +1440,7 @@ impl Renderer {
             progressive_pipeline,
             composite_pipeline,
             mask_pipeline,
+            blend_pipeline,
             sampler,
             globals,
             bind_globals,
@@ -1353,6 +1454,7 @@ impl Renderer {
             progressive_layout,
             composite_layout,
             mask_layout,
+            blend_layout,
             instances: None,
             mesh_verts: None,
             mesh_indices: None,
@@ -1766,6 +1868,28 @@ impl Renderer {
             ],
         });
         Some((buffer, bind))
+    }
+
+    /// The bind group that blends a resolved layer over a frame snapshot.
+    fn blend_bind(&self, layer: &wgpu::TextureView, under: &wgpu::TextureView, opacity: f32, mode: BlendMode) -> Option<wgpu::BindGroup> {
+        let opacity = opacity.clamp(0.0, 1.0);
+        let params = [opacity, blend_code(mode) as f32, 0.0, 0.0];
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("blend-params"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&buffer, 0, bytemuck::cast_slice(&params));
+        Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("blend"),
+            layout: &self.blend_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(under) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(layer) },
+                wgpu::BindGroupEntry { binding: 2, resource: buffer.as_entire_binding() },
+            ],
+        }))
     }
 
     /// The bind group that multiplies the content layer by the mask layer's coverage.
@@ -2226,13 +2350,24 @@ impl Renderer {
                 view_formats: &[],
             });
             let view = resolve.create_view(&wgpu::TextureViewDescriptor::default());
+            let under = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("target-under"),
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            let under_view = under.create_view(&wgpu::TextureViewDescriptor::default());
             let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("readback"),
                 size: u64::from(padded) * u64::from(h),
                 usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                 mapped_at_creation: false,
             });
-            self.target = Some(Target { width: w, height: h, msaa, msaa_view, resolve, view, readback });
+            self.target = Some(Target { width: w, height: h, msaa, msaa_view, resolve, view, under, under_view, readback });
         }
         let Some(target) = self.target.as_ref() else {
             return Err(RenderError::Device("the render target was not created".into()));
@@ -2361,15 +2496,20 @@ impl Renderer {
         let mut mask_resources: Vec<Option<MaskResources>> = (0..masks.len()).map(|_| None).collect();
         for index in (0..groups.len()).rev() {
             let plan = &groups[index];
-            let Some(target) = self.group_target(w, h) else {
+            let Some(layer_target) = self.group_target(w, h) else {
                 return Err(RenderError::Device("the group layer could not be created".into()));
             };
-            let Some((opacity, composite_bind)) = self.group_bind(&target.view, plan.opacity) else {
+            let Some((opacity, composite_bind)) = self.group_bind(&layer_target.view, plan.opacity) else {
                 return Err(RenderError::Device("the group composite bind group could not be created".into()));
             };
+            let blend =
+                if needs_blend(plan.blend) { self.blend_bind(&layer_target.view, &target.under_view, plan.opacity, plan.blend) } else { None };
+            if needs_blend(plan.blend) && blend.is_none() {
+                return Err(RenderError::Device("the group blend bind group could not be created".into()));
+            }
             self.draw_group(
                 &mut encoder,
-                &target,
+                &layer_target,
                 &plan.cmds,
                 &shadow_plans,
                 &shadow_resources,
@@ -2384,7 +2524,7 @@ impl Renderer {
                 &bind,
                 shadow_bind.as_ref().map(|(_, bind)| bind),
             );
-            group_resources[index] = Some(GroupResources { _target: target, bind: composite_bind, opacity });
+            group_resources[index] = Some(GroupResources { _target: layer_target, bind: composite_bind, opacity, blend });
         }
 
         // Mask runs need two layers. Nested masks were appended after their parent too, so build
@@ -2599,10 +2739,49 @@ impl Renderer {
                         let Some(res) = group_resources.get(index).and_then(Option::as_ref) else {
                             continue;
                         };
-                        pass.set_pipeline(&self.composite_pipeline);
-                        pass.set_bind_group(0, &self.bind_globals, &[]);
-                        pass.set_bind_group(1, &res.bind, &[]);
-                        pass.draw(0..3, 0..1);
+                        if let Some(blend_bind) = &res.blend {
+                            // A blend needs what is already under the layer. Close the pass so
+                            // the MSAA target resolves, copy that frame to the snapshot, then
+                            // resume over the same samples; the shader replaces every pixel with
+                            // the composited result, so no BlendState is needed.
+                            drop(pass);
+                            encoder.copy_texture_to_texture(
+                                wgpu::TexelCopyTextureInfo {
+                                    texture: &target.resolve,
+                                    mip_level: 0,
+                                    origin: wgpu::Origin3d::ZERO,
+                                    aspect: wgpu::TextureAspect::All,
+                                },
+                                wgpu::TexelCopyTextureInfo {
+                                    texture: &target.under,
+                                    mip_level: 0,
+                                    origin: wgpu::Origin3d::ZERO,
+                                    aspect: wgpu::TextureAspect::All,
+                                },
+                                wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                            );
+                            pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: Some("frame (blend)"),
+                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                    view: &target.msaa_view,
+                                    depth_slice: None,
+                                    resolve_target: Some(&target.view),
+                                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                                })],
+                                depth_stencil_attachment: None,
+                                timestamp_writes: None,
+                                occlusion_query_set: None,
+                                multiview_mask: None,
+                            });
+                            pass.set_pipeline(&self.blend_pipeline);
+                            pass.set_bind_group(0, blend_bind, &[]);
+                            pass.draw(0..3, 0..1);
+                        } else {
+                            pass.set_pipeline(&self.composite_pipeline);
+                            pass.set_bind_group(0, &self.bind_globals, &[]);
+                            pass.set_bind_group(1, &res.bind, &[]);
+                            pass.draw(0..3, 0..1);
+                        }
                         bound_shapes = false;
                         bound_mesh = false;
                     }

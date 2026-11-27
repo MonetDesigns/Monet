@@ -125,18 +125,28 @@ fn subtree_has_backdrop(doc: &Document, id: NodeId) -> bool {
 }
 
 /// Whether a group can be drawn as one isolated layer: it has no own paint, stroke, clip, mask or
-/// effect, a normal blend, and no background blur anywhere below it.
+/// effect, and no background blur anywhere below it. Its own non-normal blend is composited after
+/// the layer resolves; a non-normal blend *inside* the layer would need the layer's own under-frame
+/// and stays on the CPU.
 fn can_layer_group(doc: &Document, n: &Node) -> bool {
     if n.fills.iter().any(|f| f.visible) || n.has_visible_stroke() || n.clip || n.is_mask {
         return false;
     }
-    if n.effects.iter().any(|e| e.visible) || !matches!(n.blend, BlendMode::Normal | BlendMode::PassThrough) {
+    if n.effects.iter().any(|e| e.visible) {
         return false;
     }
     if doc.subtree(n.id).into_iter().any(|id| doc.node(id).is_some_and(|c| c.is_mask && c.visible)) {
         return false;
     }
+    if n.children.iter().any(|id| subtree_has_non_normal_blend(doc, *id)) {
+        return false;
+    }
     !subtree_has_backdrop(doc, n.id)
+}
+
+/// Whether a subtree carries a blend that is not plain source-over.
+fn subtree_has_non_normal_blend(doc: &Document, id: NodeId) -> bool {
+    doc.subtree(id).into_iter().any(|id| doc.node(id).is_some_and(|n| !matches!(n.blend, BlendMode::Normal | BlendMode::PassThrough)))
 }
 
 /// Whether a node kind only carries children (and possibly its own box fill).
@@ -201,7 +211,8 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, opa
     }) {
         scene.unsupported("effect", format!("`{}` has a visible effect this build cannot draw", n.name));
     }
-    if !matches!(n.blend, BlendMode::Normal | BlendMode::PassThrough) {
+    let non_normal_blend = !matches!(n.blend, BlendMode::Normal | BlendMode::PassThrough);
+    if non_normal_blend && !(container && can_layer_group(doc, n)) {
         scene.unsupported("blend", format!("`{}` blends with {:?}", n.name, n.blend));
     }
     // A mask node is only drawn in the mask layer; its run is assembled by `walk_list`.
@@ -261,14 +272,14 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, opa
         }
     }
 
-    // Group opacity that cannot be flattened onto one leaf becomes an isolated layer. Children
-    // draw transparent, then one composite applies the group alpha exactly once.
-    if container && n.opacity < 0.999 && !can_group_opacity(doc, n) {
+    // Group opacity or a non-normal blend becomes an isolated layer. Children draw transparent,
+    // then one composite applies the group alpha and blend mode exactly once.
+    if container && (n.opacity < 0.999 || non_normal_blend) && !can_group_opacity(doc, n) {
         if can_layer_group(doc, n) {
             let mut group = Scene::new(scene.width, scene.height);
             walk_list(doc, &n.children, view_xf, scale, inner, 1.0, &mut group, depth + 1);
             if group.is_supported() {
-                scene.push_group(GroupNode { items: group.items, opacity: n.opacity.clamp(0.0, 1.0) as f32 });
+                scene.push_group(GroupNode { items: group.items, opacity: n.opacity.clamp(0.0, 1.0) as f32, blend: n.blend });
                 return;
             }
             scene.absorb_unsupported(group.unsupported_features());
@@ -1039,6 +1050,13 @@ fn walk_list(doc: &Document, children: &[NodeId], view_xf: Affine, scale: f64, c
             i = end;
             continue;
         }
+        // Mask layers draw their groups with plain source-over; a non-normal blend inside would
+        // need the mask layer's own under-frame, which does not exist.
+        if std::iter::once(children[i]).chain(children[start..end].iter().copied()).any(|id| subtree_has_non_normal_blend(doc, id)) {
+            scene.unsupported("mask-blend", format!("`{}` masks a blended layer", node.name));
+            i = end;
+            continue;
+        }
         let mut mask_scene = Scene::new(scene.width, scene.height);
         walk(doc, children[i], view_xf, scale, clip, opacity, &mut mask_scene, depth + 1, true);
         let mut content = Scene::new(scene.width, scene.height);
@@ -1707,6 +1725,53 @@ mod tests {
             panic!("the run is a masked item");
         };
         assert_eq!(mask_run.content.len(), 1, "the hidden mask ends the clipped run");
+    }
+
+    #[test]
+    fn a_group_blend_becomes_an_isolated_layer() {
+        let mut doc = Document::default();
+        let page = doc.pages[0];
+        let group = doc.create(page, NodeKind::Group, "Blend", 0.0, 0.0, 120.0, 120.0).expect("group");
+        let a = doc.create(group, NodeKind::Rectangle, "A", 10.0, 10.0, 60.0, 60.0).expect("a");
+        let b = doc.create(group, NodeKind::Rectangle, "B", 50.0, 50.0, 60.0, 60.0).expect("b");
+        for (id, color) in [(a, Color::new(0.9, 0.3, 0.2, 1.0)), (b, Color::new(0.2, 0.5, 0.9, 1.0))] {
+            if let Ok(n) = doc.get_mut(id) {
+                n.fills = vec![DocPaint::solid(color)];
+            }
+        }
+        if let Ok(n) = doc.get_mut(group) {
+            n.blend = BlendMode::Multiply;
+        }
+        let scene = build(&doc, page, &view());
+        assert!(scene.is_supported(), "{:?}", scene.unsupported_features());
+        let crate::scene::Item::Group(group) = scene.items.first().expect("one item") else {
+            panic!("the blended group is a layer");
+        };
+        assert_eq!(group.blend, BlendMode::Multiply);
+        assert_eq!(group.opacity, 1.0);
+        assert_eq!(group.items.len(), 2);
+    }
+
+    #[test]
+    fn a_mask_over_a_blend_falls_back() {
+        let mut doc = Document::default();
+        let page = doc.pages[0];
+        let mask = doc.create(page, NodeKind::Rectangle, "Mask", 20.0, 20.0, 60.0, 40.0).expect("mask");
+        let group = doc.create(page, NodeKind::Group, "Blend", 0.0, 0.0, 150.0, 100.0).expect("blend");
+        let child = doc.create(group, NodeKind::Rectangle, "Child", 10.0, 10.0, 50.0, 50.0).expect("child");
+        if let Ok(n) = doc.get_mut(mask) {
+            n.is_mask = true;
+            n.fills = vec![DocPaint::solid(Color::new(1.0, 1.0, 1.0, 1.0))];
+        }
+        if let Ok(n) = doc.get_mut(group) {
+            n.blend = BlendMode::Screen;
+        }
+        if let Ok(n) = doc.get_mut(child) {
+            n.fills = vec![DocPaint::solid(Color::new(0.2, 0.5, 0.8, 1.0))];
+        }
+        let scene = build(&doc, page, &view());
+        assert!(!scene.is_supported(), "a mask layer has no under-frame for the blend");
+        assert!(scene.unsupported_features().iter().any(|u| u.feature == "mask-blend"));
     }
 
     #[test]

@@ -6,9 +6,9 @@
 //! meet again at pixels, never at this struct.
 //!
 //! Every node is a **filled shape**. A shape with three fills is three nodes, in Figma's order. Strokes,
-//! text, paths, effects, masks and non-normal blending are later milestones; when a frame uses them,
-//! [`crate::doc_scene`] records an [`Unsupported`] entry and the renderer refuses the whole frame
-//! (the caller draws it on the CPU instead).
+//! text, paths, effects, masks and non-normal blending arrive as their own [`Item`] nodes; when a frame
+//! uses a shape the CPU draws differently, [`crate::doc_scene`] records an [`Unsupported`] entry and the
+//! renderer refuses the whole frame (the caller draws it on the CPU instead).
 
 use figcraft_color::{BlendMode, Color};
 use figcraft_geom::Affine;
@@ -326,6 +326,9 @@ pub struct GroupNode {
     pub items: Vec<Item>,
     /// The group's alpha, straight (not folded into the children).
     pub opacity: f32,
+    /// How the resolved layer composits over the frame. `Normal`/`PassThrough` is plain
+    /// source-over; the other modes read the frame under the layer and blend in `blend.wgsl`.
+    pub blend: BlendMode,
 }
 
 /// One thing to draw, in painter's order: an SDF shape, a tessellated path, a shadow, a layer blur,

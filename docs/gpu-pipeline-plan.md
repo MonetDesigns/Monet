@@ -7,8 +7,9 @@
 > SDF 图元（圆角矩形/椭圆/多边形/星形）、四类渐变、裁剪、路径填充与描边网格（4× MSAA）、文字字形
 > 网格、离屏剪影 + 六 pass 盒模糊的投影/内阴影/图层模糊、八级加权混合的分级模糊、按段 resolve 的背景
 > 模糊回读、逐 cell 64 位哈希的 Mono/Duo/Multi 颗粒、整像素散射的纹理粗糙边、单叶组透明度、动画导出
-> 切到 `figcraft-gpu`、圆角裁剪、离屏组层透明度、Alpha/Luminance 蒙版的离屏双层合成、大图分块导出、
-> CPU↔GPU 像素 diff（27 项对照测试），UI 画布已接线并整帧回退。**所有内置效果按产品计划弃用，后续效果转到外置 WGSL，
+> 切到 `figcraft-gpu`、圆角裁剪、离屏组层透明度、Alpha/Luminance 蒙版的离屏双层合成、非 Normal
+> 组层混合（17 种 blend 的帧快照合成）、大图分块导出、导出取消令牌与逐 tile 进度、
+> CPU↔GPU 像素 diff（32 项对照测试），UI 画布已接线并整帧回退。**所有内置效果按产品计划弃用，后续效果转到外置 WGSL，
 > 本分支不再新增或扩展内置效果**；M5–M7 的非效果核心为设计与接口。
 > 日期：2026-11-27
 
@@ -281,9 +282,17 @@ match figcraft_gpu::render::Renderer::global().render(&scene) { Ok(rgba) => …,
   子后登记逆序准备层。`Vector` 蒙版（按轮廓而非内容）与 mask/content 含 `BackgroundBlur`（CPU 在
   `Under{clip:mask}` 上下文里裁过底层，隔离层没有）登记 `mask-vector` / `mask-backdrop` 整帧回退；
   非 Normal 混合、反向 z 序的 mask run 仍不在本子集。
-- 非 Normal 混合模式：**离屏层扩展**。组内容画进层纹理，再以 `opacity` + `blend` 合成；需为
-  Normal 以外的 15 种模式分别准备 pipeline 或 shader blend，不能只改固定 blend state。
-- **验收**：`blend` 16 种模式逐项 diff；组透明度与 CPU 的「先合成再乘 alpha」一致；蒙版边缘与
+- **已落地（过渡子集）**：非 Normal 混合的组层。组层解析后，先把当前帧 resolve 拷进 `under`
+  纹理（`Target.under`），`shaders/blend.wgsl` 再按 tiny-skia 的预乘公式逐像素混合并**替换**整帧
+  （pipeline 不启用固定 blend，因为 Multiply/Overlay 等要同时乘源与目标，硬件 blend 表达不了）。
+  覆盖 17 种非 Normal 模式：Darken、Multiply、PlusDarker、ColorBurn、Lighten、Screen、PlusLighter、
+  ColorDodge、Overlay、SoftLight、HardLight、Difference、Exclusion、Hue、Saturation、Color、
+  Luminosity；组 opacity 先乘进源层再混合。HSL 模式复刻 tiny 的 `set_sat`/`set_lum`/`clip_color`；
+  SoftLight 用等价的直色空间 W3C 公式（tiny 的预乘分支在 WGSL 里数值不稳）。
+  仅支持「容器组」：节点自身无填充/描边/裁剪/蒙版/效果，子树无 backdrop、无第二层非 Normal 混合；
+  叶子自绘的混合、组层里再套混合、蒙版内混合仍整帧回退（`blend` / `mask-blend`）。
+- **验收**：`blend` 17 种模式逐项 diff（`every_non_normal_blend_mode_matches_the_cpu` 已覆盖全部
+  17 种，含 HSL 与 SoftLight，误差 ≤6）；组透明度与 CPU 的「先合成再乘 alpha」一致；蒙版边缘与
   CPU `mask_bounds_tests` 一致（已完成 Alpha 半透明圆角 mask 与 Luminance 50% 灰 mask 两项
   CPU↔GPU 整帧对照）；圆角裁剪的角部与 CPU 裁剪路径一致（已完成 SDF/网格两项对照）；
   离屏组层已完成重叠双叶与嵌套双组两项对照。
@@ -315,9 +324,9 @@ match figcraft_gpu::render::Renderer::global().render(&scene) { Ok(rgba) => …,
 ### M7 一致性
 
 - **已落地（过渡）**：组合回归 `the_feature_zoo_matches_the_cpu_at_three_scales` 把渐变底、圆角裁剪、
-  离屏组层、投影、内阴影、描边星形、背景模糊、颗粒、纹理、图层模糊、分级模糊与 Alpha 蒙版放进
-  同一文档，在 0.5× / 1× / 2× 三档缩放下与 CPU 整帧 diff（`per_channel = 24`、3% 像素）。单项仍用
-  各自更严的口径。
+  离屏组层、投影、内阴影、描边星形、背景模糊、颗粒、纹理、图层模糊、分级模糊、Multiply 组层
+  与 Alpha 蒙版放进同一文档，在 0.5× / 1× / 2× 三档缩放下与 CPU 整帧 diff（`per_channel = 24`、
+  3% 像素）。单项仍用各自更严的口径。
 - 每个特性一组「金样文档 + 三种缩放 + 两种背景」的 diff 用例（第 6 节），CI 无适配器时跳过并标记
   `SKIP: no adapter`，不算通过也不算失败。非 Normal 混合模式尚未进组合回归（Alpha 蒙版已并入
   feature-zoo）。

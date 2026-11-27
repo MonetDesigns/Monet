@@ -12,7 +12,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use figcraft_color::{Color, Gradient, GradientKind, Paint};
+use figcraft_color::{BlendMode, Color, Gradient, GradientKind, Paint};
 use figcraft_doc::{Document, NodeId, NodeKind, StrokeJoin};
 use figcraft_gpu::Viewport;
 use figcraft_gpu::diff::{Tolerance, compare, compare_interiors, pixel};
@@ -763,6 +763,16 @@ fn the_feature_zoo_matches_the_cpu_at_three_scales() {
         }];
     }
 
+    // A multiply group: its layer blends with everything already painted. It must sit before the
+    // mask so the mask run does not include a blended layer.
+    let blend_group = doc.create(page, NodeKind::Group, "Multiply", 10.0, 10.0, 100.0, 60.0).expect("blend group");
+    rect(&mut doc, blend_group, "Warm", 0.0, 0.0, 60.0, 60.0, 8.0, Paint::solid(Color::new(0.9, 0.35, 0.2, 0.8)));
+    rect(&mut doc, blend_group, "Cool", 35.0, 10.0, 60.0, 50.0, 8.0, Paint::solid(Color::new(0.2, 0.5, 0.9, 0.75)));
+    if let Ok(n) = doc.get_mut(blend_group) {
+        n.blend = BlendMode::Multiply;
+        n.opacity = 0.9;
+    }
+
     // A rounded alpha mask, last in z order so its run is only the card right after it.
     let mask = rect(&mut doc, page, "Mask", 275.0, 150.0, 90.0, 45.0, 12.0, Paint::solid(Color::new(1.0, 1.0, 1.0, 0.7)));
     if let Ok(n) = doc.get_mut(mask) {
@@ -1203,6 +1213,107 @@ fn a_tiled_export_reports_every_tile() {
     let done: Vec<u32> = seen.iter().map(|&(done, _)| done).collect();
     assert_eq!(done, (0..=16).collect::<Vec<_>>(), "one report per tile, after the zero");
     assert!(seen.iter().all(|&(_, total)| total == 16));
+}
+
+#[test]
+fn a_multiply_group_blends_over_the_frame() {
+    let mut doc = Document::default();
+    let page = doc.pages[0];
+    transparent_page(&mut doc, page);
+    rect(&mut doc, page, "Back", 0.0, 0.0, 200.0, 200.0, 0.0, Paint::solid(Color::new(0.85, 0.9, 0.95, 1.0)));
+    let group = doc.create(page, NodeKind::Group, "Blend", 0.0, 0.0, 200.0, 200.0).expect("group");
+    rect(&mut doc, group, "Warm", 20.0, 20.0, 110.0, 110.0, 16.0, Paint::solid(Color::new(0.9, 0.35, 0.2, 0.75)));
+    rect(&mut doc, group, "Cool", 70.0, 70.0, 110.0, 110.0, 16.0, Paint::solid(Color::new(0.2, 0.45, 0.9, 0.7)));
+    if let Ok(n) = doc.get_mut(group) {
+        n.blend = BlendMode::Multiply;
+        n.opacity = 0.8;
+    }
+
+    let cpu = cpu_pixels(&doc, page);
+    let Some(gpu) = gpu_pixels(&doc, page) else {
+        eprintln!("SKIP: no adapter");
+        return;
+    };
+    let report = compare(&cpu, &gpu, Tolerance::EDGE).expect("comparable buffers");
+    assert!(report.passes(Tolerance::EDGE), "{}", report.summary());
+    for (x, y) in [(60, 60), (125, 125), (140, 40), (8, 8)] {
+        let (c, g) = (pixel(&cpu, SIZE as usize, x, y).expect("in bounds"), pixel(&gpu, SIZE as usize, x, y).expect("in bounds"));
+        for k in 0..4 {
+            assert!(c[k].abs_diff(g[k]) <= 5, "blend interior differs at {x},{y}: {c:?} vs {g:?}");
+        }
+    }
+}
+
+#[test]
+fn a_multiply_leaf_falls_back() {
+    let mut doc = Document::default();
+    let page = doc.pages[0];
+    transparent_page(&mut doc, page);
+    let card = rect(&mut doc, page, "Card", 10.0, 10.0, 80.0, 80.0, 8.0, Paint::solid(Color::new(0.2, 0.5, 0.8, 1.0)));
+    if let Ok(n) = doc.get_mut(card) {
+        n.blend = BlendMode::Multiply;
+    }
+    let scene = doc_scene::build_subtree(&doc, page, &viewport());
+    assert!(!scene.is_supported(), "a leaf with its own paint cannot be isolated by this layer path");
+    assert!(scene.unsupported_features().iter().any(|u| u.feature == "blend"));
+}
+
+#[test]
+fn every_non_normal_blend_mode_matches_the_cpu() {
+    use BlendMode as B;
+    const MODES: [BlendMode; 17] = [
+        B::Darken,
+        B::Multiply,
+        B::PlusDarker,
+        B::ColorBurn,
+        B::Lighten,
+        B::Screen,
+        B::PlusLighter,
+        B::ColorDodge,
+        B::Overlay,
+        B::SoftLight,
+        B::HardLight,
+        B::Difference,
+        B::Exclusion,
+        B::Hue,
+        B::Saturation,
+        B::Color,
+        B::Luminosity,
+    ];
+    let Some(mut renderer) = figcraft_gpu::render::Renderer::new() else {
+        eprintln!("SKIP: no adapter");
+        return;
+    };
+    let mut failures = Vec::new();
+    for mode in MODES {
+        let mut doc = Document::default();
+        let page = doc.pages[0];
+        transparent_page(&mut doc, page);
+        rect(&mut doc, page, "Back", 0.0, 0.0, 200.0, 200.0, 0.0, Paint::solid(Color::new(0.85, 0.9, 0.95, 1.0)));
+        let group = doc.create(page, NodeKind::Group, "Blend", 0.0, 0.0, 200.0, 200.0).expect("group");
+        rect(&mut doc, group, "Warm", 20.0, 20.0, 110.0, 110.0, 16.0, Paint::solid(Color::new(0.9, 0.35, 0.2, 0.75)));
+        rect(&mut doc, group, "Cool", 70.0, 70.0, 110.0, 110.0, 16.0, Paint::solid(Color::new(0.2, 0.45, 0.9, 0.7)));
+        if let Ok(n) = doc.get_mut(group) {
+            n.blend = mode;
+            n.opacity = 0.85;
+        }
+        let cpu = cpu_pixels(&doc, page);
+        let scene = doc_scene::build(&doc, page, &viewport());
+        assert!(scene.is_supported(), "{mode:?} should build: {:?}", scene.unsupported_features());
+        let gpu = renderer.render(&scene).expect("the GPU draws the blend");
+        let report = compare(&cpu, &gpu, Tolerance::EDGE).expect("comparable buffers");
+        if !report.passes(Tolerance::EDGE) {
+            failures.push(format!("{mode:?}: {}", report.summary()));
+            continue;
+        }
+        for (x, y) in [(60, 60), (125, 125), (140, 40), (8, 8)] {
+            let (c, g) = (pixel(&cpu, SIZE as usize, x, y).expect("in bounds"), pixel(&gpu, SIZE as usize, x, y).expect("in bounds"));
+            if (0..4).any(|k| c[k].abs_diff(g[k]) > 6) {
+                failures.push(format!("{mode:?} at {x},{y}: {c:?} vs {g:?}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "blend modes drifted:\n{}", failures.join("\n"));
 }
 
 #[test]
