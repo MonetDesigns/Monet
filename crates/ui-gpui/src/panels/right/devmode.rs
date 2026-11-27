@@ -212,7 +212,10 @@ pub(crate) fn annotations(f: &RightFields, d: &PanelData, cx: &mut App, n: &mut 
             },
         );
         edit.update(cx, |te, _| te.set_placeholder(tr("Add an annotation for developers")));
-        // `annotation.new` (Shift+T / tool.annotation): focus the new note field once it's built.
+        // Two hand-offs exist across branches: main publishes the freshly built field for the
+        // one-frame `new_note_field` consumer; the sync branch keeps the older explicit focus
+        // request. Keep both so neither path loses its `annotation.new` behaviour after merging.
+        f.set_new_note_field(node, edit.clone());
         if f.take_note_focus_id(node) {
             f.set_note_focus_edit(edit.clone());
         }
