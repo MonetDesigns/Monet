@@ -1256,11 +1256,14 @@ C2、C3（文案规范待全面对齐）。
 | P2-3 | 面板快照缓存 | `lib.rs::panel_data`、`panels/right/data.rs::read_with_dev` | ✅ Dev 节按 `(uid, revision, page, selection, ready_filter)` 缓存；`cargo check` 通过，缓存回归未单测 |
 | P2-4 | 资产导出对齐 | `inspect.rs::asset_row` / `export_all` | ✅ 逐项「另存为」+ `file.exportLayers` 多资产已接；格式参数细节待核 |
 | P2-5 | `code_connect` 缓存 | `code_connect.rs::import` | ✅ 同一组件多条 link 只 `describe` 一次 |
-| P2-6 | 多行输入 | `widgets/input/text_edit.rs` | 📝 方案已定：扩 `TextEdit` 支持 multiline（便签 2 行、模板 3 行）；控件层改造，待实现 |
+| P2-6 | 多行输入 | `widgets/input/text_edit.rs` | ✅ 已实现：`TextEdit::set_multiline`（便签 2 行、模板 3 行）；单行默认路径不变 |
 
 **验证**：历史记录：`cargo check -p figcraft-ui-gpui` 曾在 A 盘 target 通过，`dev_gate` / `devmode` 测试曾在
 `--features test-support` 下运行；`parity_contract` 的 `PARITY_CONTRACT_STATUS` 块由 `capabilities()` 从源码派生
-token 双向核对。**2026-11-27 复验**：先备份 `main` 与 `sync/variable-binding-2026-11`，在 `main` 的 detach
+token 双向核对。**2026-11-27 P2-6 复验**：在 `main` 的 detach worktree 上复制改动后 `cargo check` 通过；
+`widgets::input` 21/21 通过（含 multiline buffer、TextInput 2 行、TextEdit 换行/提交）。全量
+`--lib --features test-support` 为 538 passed / 13 failed；同样的 13 条在未改动的 `e95f6315` 基线也失败，
+属于既有的窗口尺寸/键盘表测试，不是 P2-6 回归。**2026-11-27 早前复验**：先备份 `main` 与 `sync/variable-binding-2026-11`，在 `main` 的 detach
 worktree 合并 PR head 后 `cargo check -p figcraft-ui-gpui --features test-support` 通过，`devmode` 6/6、
 `dev_gate` 3/3、`parity_contract` 4/4 通过；工作树未在功能分支构建。P2-1 的 codegen golden 与 P2-3 的缓存
 性能回归尚未单独跑。

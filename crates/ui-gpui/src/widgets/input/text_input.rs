@@ -6,6 +6,8 @@
 //   - 调试边框（FC_DEBUG_LAYOUT）一律按「字形墨盒」绘制，不得退回行盒（ascent+descent）。
 //   - 小标题（sublabels / sublabels2）字形上方保留 pt(4.0) 留白，不得删除。
 //   - 统一网格（segmented、sublabels2 空列、field 行）一律 w_full + flex_1，禁止手算列宽。
+// 2026-11-27 补充：用户批准 P2-6「扩 TextEdit 支持 multiline」，本文件为此增加 multiline 分支；
+// 默认 `multiline=false` 的单行路径与既有行为保持不变。
 // ============================================================================
 //! `TextInput` — Monet's most primitive, reusable single-line GPUI input.
 //!
@@ -52,7 +54,16 @@ impl TextAlign {
 
 #[derive(Default)]
 struct LayoutCache {
+    /// Single-line shaped line (kept separate so existing callers stay byte-for-byte identical).
     line: Option<ShapedLine>,
+    /// Multiline shaped lines, one per visual line.
+    lines: Vec<ShapedLine>,
+    /// Window-space origin of every multiline row.
+    line_origins: Vec<Point<Pixels>>,
+    /// Character index at which every multiline row starts.
+    line_starts: Vec<usize>,
+    /// Text of every multiline row (needed to map character indices to bytes).
+    line_texts: Vec<String>,
     bounds: Option<Bounds<Pixels>>,
     /// X of the first glyph in window coordinates (may differ from `bounds.origin.x` when centred).
     text_x: Option<Pixels>,
@@ -60,17 +71,19 @@ struct LayoutCache {
     composed: bool,
 }
 
-/// State handed from `prepaint` to `paint`.
-struct PaintState {
+/// One painted row of a multiline editor.
+struct PaintLine {
     line: ShapedLine,
-    /// Window-space point where the line starts (its baseline box top-left).
     origin: Point<Pixels>,
-    /// The line's own height (ascent + descent): what centres it in the field, as egui does.
     text_height: Pixels,
     selection: Option<PaintQuad>,
-    caret: Option<PaintQuad>,
-    /// Underline under the live IME composition, egui draws the same in `canvas/overlays.rs`.
     preedit: Option<PaintQuad>,
+}
+
+/// State handed from `prepaint` to `paint`.
+struct PaintState {
+    lines: Vec<PaintLine>,
+    caret: Option<PaintQuad>,
 }
 
 /// Where to paint `line`, and the line height to hand `ShapedLine::paint`.
@@ -131,6 +144,11 @@ pub struct TextInput {
     dim: bool,
     align: TextAlign,
     caret_blink: Rc<CaretBlink>,
+    /// Multiline mode (Developer Mode note / code-connect template). Off by default; ordinary
+    /// fields keep the frozen single-line path.
+    multiline: bool,
+    /// Visible rows in multiline mode.
+    rows: usize,
 }
 
 impl TextInput {
@@ -149,6 +167,8 @@ impl TextInput {
             dim: false,
             align: TextAlign::Left,
             caret_blink: Rc::new(CaretBlink { started: std::cell::Cell::new(None) }),
+            multiline: false,
+            rows: 1,
         }
     }
 
@@ -168,6 +188,24 @@ impl TextInput {
     }
     pub fn set_dim(&mut self, d: bool) {
         self.dim = d;
+    }
+    /// Enable/disable multiline editing. `rows = 0` restores the frozen single-line editor; any
+    /// positive value lays out that many 24 pt rows and lets `EditBuffer` keep line breaks.
+    pub fn set_multiline(&mut self, rows: usize) {
+        let was = self.multiline;
+        self.multiline = rows > 0;
+        self.rows = rows.max(1);
+        self.buffer.set_multiline(self.multiline);
+        if was && !self.multiline {
+            // Re-enter the single-line invariant: a pooled field must not keep a line break from
+            // its previous multiline use. Only on the transition, so repeated per-frame resets
+            // do not touch a live draft.
+            let text = self.buffer.text().replace('\n', " ");
+            self.buffer.set_text(text);
+        }
+    }
+    pub fn is_multiline(&self) -> bool {
+        self.multiline
     }
     /// The glyph size. The inline rename editor sets this to match the label it replaces:
     /// two different sizes mean two different line boxes, and centring each one in the row
@@ -193,7 +231,7 @@ impl TextInput {
             return (self.placeholder.clone(), false);
         }
         let shown = if self.secret { "•".repeat(self.buffer.len()) } else { c.text };
-        let suffix = if !focused { self.suffix.as_ref() } else { "" };
+        let suffix = if !focused && !self.multiline { self.suffix.as_ref() } else { "" };
         (SharedString::from(format!("{}{}", shown, suffix)), false)
     }
 
@@ -201,6 +239,15 @@ impl TextInput {
     pub fn index_for_point(&self, p: Point<Pixels>) -> usize {
         let cache = self.cache.borrow();
         let Some(bounds) = cache.bounds else { return 0 };
+        if self.multiline {
+            let Some((row, origin, line)) = self.multiline_row_at(&cache, p.y) else {
+                return self.buffer.len();
+            };
+            let x = p.x - origin.x;
+            let local = if x <= px(0.0) { 0 } else { self.buffer.from_byte(line.closest_index_for_x(x)) };
+            let start = cache.line_starts.get(row).copied().unwrap_or(0);
+            return (start + local).min(self.buffer.len());
+        }
         let text_x = cache.text_x.unwrap_or(bounds.origin.x);
         if p.x <= text_x {
             return 0;
@@ -210,6 +257,28 @@ impl TextInput {
             None => return self.buffer.len(),
         };
         self.buffer.from_byte(byte)
+    }
+
+    /// Which multiline row contains `y`, with its origin and shaped line. Clamps above/below.
+    fn multiline_row_at<'a>(&self, cache: &'a LayoutCache, y: Pixels) -> Option<(usize, Point<Pixels>, &'a ShapedLine)> {
+        if cache.line_origins.is_empty() {
+            return None;
+        }
+        let h = cache.bounds.map(|b| self.row_height(&b)).unwrap_or(px(24.0));
+        let i = cache
+            .line_origins
+            .iter()
+            .position(|o| y >= o.y && y < o.y + h)
+            .unwrap_or_else(|| if y < cache.line_origins[0].y { 0 } else { cache.line_origins.len() - 1 });
+        Some((i, *cache.line_origins.get(i)?, cache.lines.get(i)?))
+    }
+
+    fn row_height(&self, bounds: &Bounds<Pixels>) -> Pixels {
+        if self.multiline {
+            bounds.size.height / self.rows.max(1) as f32
+        } else {
+            bounds.size.height
+        }
     }
 
     // ── EntityInputHandler delegation (no editing logic duplicated) ─────────────────────────
@@ -233,6 +302,21 @@ impl TextInput {
     }
     pub fn input_bounds_for_range(&self, range: Range<usize>, element_bounds: Bounds<Pixels>) -> Option<Bounds<Pixels>> {
         let cache = self.cache.borrow();
+        if cache.composed {
+            return Some(element_bounds);
+        }
+        if self.multiline {
+            let ci = self.buffer.utf16_to_char(range.start);
+            let row = self.buffer.line_index(ci);
+            let line = cache.lines.get(row)?;
+            let origin = *cache.line_origins.get(row)?;
+            let text = cache.line_texts.get(row)?;
+            let local_start = ci.saturating_sub(cache.line_starts.get(row).copied().unwrap_or(0));
+            let local_end = self.buffer.utf16_to_char(range.end).saturating_sub(cache.line_starts.get(row).copied().unwrap_or(0));
+            let x0 = line.x_for_index(byte_at(text, local_start));
+            let x1 = line.x_for_index(byte_at(text, local_end.min(text.chars().count())));
+            return Some(Bounds { origin: point(origin.x + x0, origin.y), size: size((x1 - x0).max(px(1.0)), self.row_height(&element_bounds)) });
+        }
         let line = cache.line.as_ref()?;
         if cache.composed {
             return Some(element_bounds);
@@ -244,15 +328,14 @@ impl TextInput {
         Some(Bounds { origin: point(element_bounds.origin.x + shift + x0, element_bounds.origin.y), size: size(x1 - x0, element_bounds.size.height) })
     }
     pub fn input_character_index_for_point(&self, p: Point<Pixels>) -> Option<usize> {
-        let cache = self.cache.borrow();
-        let bounds = cache.bounds.as_ref()?;
-        let line = cache.line.as_ref()?;
-        if cache.composed {
+        let usable = {
+            let cache = self.cache.borrow();
+            cache.bounds.is_some() && !cache.composed
+        };
+        if !usable {
             return None; // composition view has no stable mapping back to the committed text
         }
-        let text_x = cache.text_x.unwrap_or(bounds.origin.x);
-        let ci = self.buffer.from_byte(line.closest_index_for_x(p.x - text_x));
-        Some(self.buffer.char_to_utf16(ci))
+        Some(self.buffer.char_to_utf16(self.index_for_point(p)))
     }
 
     /// The editor's canvas element. Registers `handle_input` in `paint` (paint-only API), draws
@@ -295,43 +378,84 @@ impl TextInput {
         let caret_color: Hsla = rgba(caret::color(&t)).into();
         let selection_color: Hsla = rgba(caret::selection(&t)).into();
         let align = self.align;
+        let multiline = self.multiline;
+        let rows = self.rows.max(1);
         let c = self.buffer.composed();
         let sel_range = if c.composing { c.mark_start..c.mark_end } else { self.buffer.range() };
-        let sel_a = byte_at(&c.text, sel_range.start);
-        let sel_b = byte_at(&c.text, sel_range.end);
-        let caret_byte = byte_at(&c.text, c.caret);
-        let preedit_bytes = c.composing.then(|| (byte_at(&c.text, c.mark_start), byte_at(&c.text, c.mark_end)));
+        let caret_char = c.caret;
+        let mark_range = c.composing.then_some((c.mark_start, c.mark_end));
         let cache = self.cache.clone();
 
         let prepaint = move |bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App| {
             let ticker_started = prepaint_ticker.clone();
-            let run = TextRun {
-                len: display.as_ref().len(),
-                font: window.text_style().font(),
-                color,
-                background_color: None,
-                underline: None,
-                strikethrough: None,
-            };
-            let line = window.text_system().shape_line(display.clone(), font_size, &[run], None);
-            let text_x = align.origin_x(bounds, line.width);
-            // 选区与光标用**同一条行盒**（`ascent + descent`），并且和文字同顶。
-            // 以前选区取 `bounds.size.height`（整个输入框的高度），高亮块比字形高一整截，
-            // 在 24pt 行里尤其明显；gpui-kit 的 Input 也是按行盒画选区与光标的。
-            let (line_origin, text_height) = centred_line_origin(bounds, &line, font_size, window);
-            let text_top = line_origin.y;
-            let selection = if sel_a != sel_b {
-                let x0 = line.x_for_index(sel_a);
-                let x1 = line.x_for_index(sel_b);
-                Some(fill(Bounds { origin: point(text_x + x0, text_top), size: size(x1 - x0, text_height) }, selection_color))
-            } else {
-                None
-            };
-            let preedit = preedit_bytes.map(|(a, b)| {
-                let x0 = line.x_for_index(a);
-                let x1 = line.x_for_index(b);
-                fill(Bounds { origin: point(text_x + x0, text_top + text_height - px(1.0)), size: size(x1 - x0, px(1.0)) }, color)
-            });
+            let source = display.to_string();
+            let raw_lines: Vec<&str> = source.split('\n').collect();
+            let row_h = if multiline { bounds.size.height / rows as f32 } else { bounds.size.height };
+            // Keep the caret's row visible when the text has more lines than the box shows.
+            let caret_row_guess = line_row(&source, caret_char);
+            let first_line = if multiline && raw_lines.len() > rows { caret_row_guess.saturating_sub(rows - 1) } else { 0 };
+            let last_line = (first_line + if multiline { rows } else { 1 }).min(raw_lines.len());
+            let mut paint_lines = Vec::new();
+            let mut cache_lines = Vec::new();
+            let mut line_origins = Vec::new();
+            let mut line_starts = Vec::new();
+            let mut line_texts = Vec::new();
+            let mut caret_quad = None;
+            let mut char_cursor = char_index_of_row(&source, first_line);
+            for idx in first_line..last_line {
+                let raw = raw_lines[idx];
+                let line_text = SharedString::from(raw.to_string());
+                let run = TextRun {
+                    len: raw.len(),
+                    font: window.text_style().font(),
+                    color,
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                };
+                let line = window.text_system().shape_line(line_text.clone(), font_size, &[run], None);
+                let text_height = line.ascent + line.descent;
+                let row_top = if multiline { bounds.origin.y + (idx - first_line) as f32 * row_h } else { bounds.origin.y };
+                let text_top = if multiline { row_top + (row_h - text_height) * 0.5 } else { centred_line_origin(bounds, &line, font_size, window).0.y };
+                let text_x = if multiline { bounds.origin.x } else { centred_line_origin(bounds, &line, font_size, window).0.x };
+                let line_start = char_cursor;
+                let line_len = raw.chars().count();
+                let line_end = line_start + line_len;
+
+                let selection = if sel_range.start < line_end && sel_range.end > line_start {
+                    let a = sel_range.start.saturating_sub(line_start).min(line_len);
+                    let b = sel_range.end.saturating_sub(line_start).min(line_len);
+                    let x0 = line.x_for_index(byte_at(raw, a));
+                    let x1 = line.x_for_index(byte_at(raw, b));
+                    Some(fill(Bounds { origin: point(text_x + x0, text_top), size: size(x1 - x0, text_height) }, selection_color))
+                } else {
+                    None
+                };
+                let preedit = mark_range.and_then(|(a, b)| {
+                    if a >= line_end || b <= line_start {
+                        return None;
+                    }
+                    let a = a.saturating_sub(line_start).min(line_len);
+                    let b = b.saturating_sub(line_start).min(line_len);
+                    let x0 = line.x_for_index(byte_at(raw, a));
+                    let x1 = line.x_for_index(byte_at(raw, b));
+                    Some(fill(Bounds { origin: point(text_x + x0, text_top + text_height - px(1.0)), size: size(x1 - x0, px(1.0)) }, color))
+                });
+                let is_caret_line = caret_char >= line_start && caret_char <= line_end;
+                if is_caret_line && focused && blink.visible() && sel_range.start == sel_range.end {
+                    let local = caret_char.saturating_sub(line_start).min(line_len);
+                    let x = line.x_for_index(byte_at(raw, local));
+                    let mut quad = fill(Bounds { origin: point(text_x + x, text_top), size: size(px(caret::WIDTH), text_height) }, caret_color);
+                    quad.corner_radii = gpui::Corners::all(px(caret::RADIUS as f32));
+                    caret_quad = Some(quad);
+                }
+                line_origins.push(point(text_x, row_top));
+                line_starts.push(line_start);
+                line_texts.push(raw.to_string());
+                cache_lines.push(line.clone());
+                paint_lines.push(PaintLine { line, origin: point(text_x, text_top), text_height, selection, preedit });
+                char_cursor = line_end + 1; // the `\n` between rows
+            }
             // Blink: one ticker per editor, 500 ms on / 500 ms off (gpui-kit's `CursorBlink`
             // default), restarted whenever the field gains focus and reset to visible when it
             // loses it.
@@ -353,39 +477,36 @@ impl TextInput {
                     .detach();
                 }
             }
-            let caret_visible = blink.visible();
-            // The caret shares the line box with the glyphs: same top, same height — both are
-            // taken from `centred_line_origin` above.
-            let caret_quad = if focused && caret_visible && sel_a == sel_b {
-                let x = line.x_for_index(caret_byte);
-                // 1 pt wide with a 0.5 pt radius: both ends are round, so the caret reads as a
-                // pill rather than a hairline rectangle.
-                let mut quad = fill(Bounds { origin: point(text_x + x, line_origin.y), size: size(px(caret::WIDTH), text_height) }, caret_color);
-                quad.corner_radii = gpui::Corners::all(px(caret::RADIUS as f32));
-                Some(quad)
-            } else {
-                None
-            };
             if std::env::var_os("FC_DEBUG_TEXT").is_some() {
-                eprintln!(
-                    "[text] bounds_y={} h={} ascent={} descent={} top={} h_line={}",
-                    bounds.origin.y, bounds.size.height, line.ascent, line.descent, text_top, text_height
-                );
+                eprintln!("[text] bounds_y={} h={} multiline={} rows={}", bounds.origin.y, bounds.size.height, multiline, rows);
             }
-            *cache.borrow_mut() = LayoutCache { line: Some(line.clone()), bounds: Some(bounds), text_x: Some(text_x), composed: is_composed };
-            PaintState { line, origin: point(text_x, text_top), text_height, selection, caret: caret_quad, preedit }
+            let text_x = if multiline { Some(bounds.origin.x) } else { cache_lines.first().map(|l| align.origin_x(bounds, l.width)) };
+            *cache.borrow_mut() = LayoutCache {
+                line: if multiline { None } else { cache_lines.first().cloned() },
+                lines: cache_lines,
+                line_origins,
+                line_starts,
+                line_texts,
+                bounds: Some(bounds),
+                text_x,
+                composed: is_composed,
+            };
+            PaintState { lines: paint_lines, caret: caret_quad }
         };
 
         let paint = move |bounds: Bounds<Pixels>, state: PaintState, window: &mut Window, cx: &mut App| {
             window.handle_input(&focus, ElementInputHandler::new(bounds, entity), cx);
-            if let Some(quad) = state.selection {
-                window.paint_quad(quad);
+            let PaintState { lines, caret } = state;
+            for line in lines {
+                if let Some(quad) = line.selection {
+                    window.paint_quad(quad);
+                }
+                let _ = line.line.paint(line.origin, line.text_height, window, cx);
+                if let Some(quad) = line.preedit {
+                    window.paint_quad(quad);
+                }
             }
-            let _ = state.line.paint(state.origin, state.text_height, window, cx);
-            if let Some(quad) = state.preedit {
-                window.paint_quad(quad);
-            }
-            if let Some(quad) = state.caret {
+            if let Some(quad) = caret {
                 window.paint_quad(quad);
             }
         };
@@ -400,6 +521,28 @@ impl TextInput {
 /// Character index → UTF-8 byte offset in an arbitrary (possibly composed) string.
 fn byte_at(s: &str, ci: usize) -> usize {
     s.char_indices().nth(ci).map(|(b, _)| b).unwrap_or(s.len())
+}
+
+/// Zero-based row containing character `ci` in `text`.
+fn line_row(text: &str, ci: usize) -> usize {
+    text.chars().take(ci).filter(|c| *c == '\n').count()
+}
+
+/// Character index at which row `row` starts in `text`.
+fn char_index_of_row(text: &str, row: usize) -> usize {
+    if row == 0 {
+        return 0;
+    }
+    let mut seen = 0;
+    for (i, c) in text.chars().enumerate() {
+        if c == '\n' {
+            seen += 1;
+            if seen == row {
+                return i + 1;
+            }
+        }
+    }
+    text.chars().count()
 }
 
 impl Default for TextInput {
@@ -443,5 +586,19 @@ mod tests {
         i.set_suffix("%");
         i.buffer.set_preedit("中", 1);
         assert_eq!(i.display(false).0.as_ref(), "a中b");
+    }
+
+    #[test]
+    fn multiline_mode_keeps_breaks_and_ignores_suffix() {
+        let mut i = TextInput::new();
+        i.set_multiline(2);
+        i.buffer.set_text("one\ntwo");
+        i.set_suffix("%");
+        assert!(i.is_multiline());
+        assert_eq!(i.display(false).0.as_ref(), "one\ntwo");
+        assert_eq!(i.buffer.line_count(), 2);
+        i.set_multiline(0);
+        assert!(!i.is_multiline());
+        assert_eq!(i.buffer.text(), "one two", "pooled reuse removes the line break");
     }
 }
