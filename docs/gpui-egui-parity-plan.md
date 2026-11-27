@@ -1230,3 +1230,30 @@ C2、C3（文案规范待全面对齐）。
 
 
 
+
+## Z. 2026-11-26 Developer Mode 差异补全（P0 / P1）
+
+> 依据：`figcraft-egui-gpui-devmode-gap-plan-2026-11-26.md`；参照 `crates/ui-egui/src/dev_mode.rs` 与
+> upstream `storytold/figcraft`。本表只记 GPUI 落地，不把 EGUI 参照当已完成。
+
+| ID | 节 | 落点 | 状态 |
+|---|---|---|---|
+| DM1 | 入口 `view.devMode` / Shift+D | `panels/extra.rs`、`lib.rs` | ✅ |
+| DM2 | 只读闸门（命令、菜单、快捷键、图层/画布/拖放） | `dev_gate.rs`、`lib.rs`、`layer_tree.rs`、`canvas/{handles,selection_spacing}.rs` | ✅ |
+| DM3 | 拒绝提示 | `dev_gate::message`、中英 i18n | ✅ |
+| DM4 | Status 参数链与 Focus / Compare 三态 | `panels/right/inspect.rs::status_actions`、`data.rs::SectionData` | ✅ |
+| DM5 | Compare 版本菜单 | `panels/extra.rs`、`open_dropdown_menu` | ✅ |
+| DM6 | 注解新建后聚焦 | `RightFields::note_focus_id`、`sync_ui_requests` | ✅ |
+| DM7 | Assets / 导出格式 | `inspect.rs::asset_row`、`asset_format_dropdown` | ✅ |
+| DM8 | Measurements 与 `devMode.addMeasurement` | `devmode.rs` | ✅ |
+| DM9 | Playground（预览 + 属性 + 出码覆盖 + 300ms 防抖） | `data.rs::read_playground`、`inspect.rs::playground_section` | ✅ |
+| DM10 | Code 语言与复制 | `inspect.rs::code_sec`、`CodeLang::ALL` | ✅ |
+| DM11 | Connect to code | `inspect.rs::connect_section` | ✅ |
+| DM12 | 只读插件命令 | `inspect.rs::plugin_section`、`data.rs::PluginRunRow` | ✅ |
+| P1-6 | 面板级测试 / 契约 | `dev_gate` 2 条、`devmode_tests` 5 条、`parity_contract` DM1–DM12 | 策略层与源码契约已接；GPUI 交互点击用例待补 |
+| P2 | 引擎 CSS/Tailwind 同步、Motion 出码、面板缓存、资产导出、code_connect 缓存、多行输入 | — | ⬜ |
+
+**验证**：`cargo check -p figcraft-ui-gpui`（A 盘 target）通过；`dev_gate` / `devmode` 测试在
+`--features test-support` 下运行；`parity_contract` 的 `PARITY_CONTRACT_STATUS` 块已加 DM1–DM12，
+由 `capabilities()` 从源码派生 token 双向核对。
+
