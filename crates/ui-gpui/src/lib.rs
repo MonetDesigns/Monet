@@ -1949,7 +1949,10 @@ impl CanvasView {
 
         let ready = self.fields.dev_ready_filter();
         let key = (ds.uid, ds.revision, page, ds.selection.clone(), ready);
-        let dev = match self.dev_cache.borrow().as_ref().filter(|(k, _)| k == &key).map(|(_, d)| d.clone()) {
+        // The read guard must be dropped before the cache can be filled below; keeping the
+        // `borrow()` temporary in the `match` scrutinee would keep it alive into the `None` arm.
+        let cached = self.dev_cache.borrow().as_ref().filter(|(k, _)| k == &key).map(|(_, d)| d.clone());
+        let dev = match cached {
             Some(d) => d,
             None => {
                 let d = panels::right::data::read_dev(&ds.doc, &ds.selection, page, ready);
