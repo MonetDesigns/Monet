@@ -120,6 +120,9 @@ mod home;
 
 mod comments;
 
+/// The last two detached surfaces: live cursor chat and the library publish form.
+mod followups;
+
 mod icons_panel;
 
 mod board_bar;
@@ -576,6 +579,18 @@ enum Popup {
 
     /// （egui `live::share_popover`）。
     Share { anchor: Bounds<Pixels> },
+
+    /// `comment.new`: an inline composer next to the click point, with an `@mention` picker.
+    CommentDraft { state: Rc<RefCell<comments::DraftState>> },
+
+    /// `comment.open`: a floating thread popover beside the pin.
+    CommentThread { state: Rc<RefCell<comments::ThreadState>> },
+
+    /// `dialog.cursorChat`: the live-session cursor chat field.
+    CursorChat { state: Rc<RefCell<followups::CursorChatState>> },
+
+    /// `panel.libraries { publish: true }`: the library publish form.
+    LibraryPublish { state: Rc<RefCell<followups::LibraryPublishState>> },
 }
 
 /// R4/R5: egui `UiState::rename_label` / `ui.rename` — a rename is a field drawn *on* the
@@ -2275,25 +2290,46 @@ impl CanvasView {
                     continue;
                 }
 
-                // Cursor chat is a live-collaboration input; the GPUI shell has no live session
-                // surface yet, so say that instead of the generic unknown-dialog message.
+                // Cursor chat is a live-collaboration surface: `/` opens the composer, and each
+                // edit is sent through `collab.cursorChat` (empty text takes the message down).
                 "dialog.cursorChat" => {
-                    let data = serde_json::json!({
-                        "title": tr("Cursor chat"),
-                        "message": tr("Live cursor chat is not available in this build yet."),
-                    });
-                    self.open_dialog(dialogs::Kind::Message, &data, cx);
+                    if !matches!(&self.popup, Some(Popup::CursorChat { .. })) {
+                        let text = self.app.session.live().chat.clone();
+                        let field = self.new_popup_field(240.0, tr("Say something…"), cx);
+                        if !text.is_empty() {
+                            field.update(cx, |f, _| f.set_value(text.clone()));
+                        }
+                        let state = Rc::new(RefCell::new(followups::CursorChatState { text, field, focus: true }));
+                        {
+                            let state = state.clone();
+                            let me = cx.entity();
+                            let field = state.borrow().field.clone();
+                            field.update(cx, |tf, _| {
+                                tf.set_on_change(move |text: &str, _, cx: &mut App| {
+                                    state.borrow_mut().text = text.to_string();
+                                    let text = text.to_string();
+                                    me.update(cx, |cv, cx| cv.send_cursor_chat(&text, cx));
+                                });
+                            });
+                        }
+                        self.popup = Some(Popup::CursorChat { state });
+                        cx.notify();
+                    }
                     continue;
                 }
 
-                // `comment.open`：引擎已把线程所在页设为当前页并标为已读；右栏只有在 Comment
-                // 工具下才显示评论列表，所以这里切到该工具并高亮线程（egui `ui.comments.show`）。
+                // `comment.open`：引擎已把线程所在页设为当前页并标为已读。右栏只有 Comment 工具
+                // 下才显示评论列表，所以切到该工具、高亮线程，并在 pin 旁打开浮动 thread popover。
                 "comment.open" => {
                     if let Some(id) = r.data.get("id").and_then(serde_json::Value::as_u64) {
                         if self.app.session.tool.tool != figcraft_engine::ToolId::Comment {
                             let _ = self.app.session.execute("tool.set", &serde_json::json!({ "tool": "comment" }));
                         }
                         self.fields.comment_ui().borrow_mut().open = Some(id);
+                        let already = matches!(&self.popup, Some(Popup::CommentThread { state }) if state.borrow().id == id);
+                        if !already {
+                            self.open_comment_thread(id, cx);
+                        }
                         cx.notify();
                     }
                     continue;
@@ -2317,9 +2353,9 @@ impl CanvasView {
                     continue;
                 }
 
-                // `comment.new`：Comment 工具在画布上点击后，用通用对话框输入正文；点的页坐标
-                // 留在按钮的固定参数里，提交时 `comment.add` 仍落在原位置。请求不带 page，
-                // 这里把**点击时**的当前页钉进按钮参数，避免对话框开着时切页、提交到别的页。
+                // `comment.new`：Comment 工具在画布上点击后，在点击点旁打开画布内联 composer；
+                // 点的页坐标留在按钮的固定参数里，提交时 `comment.add` 仍落在原位置。请求不带 page，
+                // 这里把**点击时**的当前页钉进参数，避免 composer 开着时切页、提交到别的页。
                 "comment.new" => {
                     let mut data = r.data.clone();
                     data["anchor"] = serde_json::json!(true);
@@ -2331,7 +2367,7 @@ impl CanvasView {
                     {
                         data["page"] = serde_json::json!(page.0);
                     }
-                    self.open_dialog(dialogs::Kind::Comment, &data, cx);
+                    self.open_comment_draft(&data, cx);
                     continue;
                 }
 
@@ -2505,12 +2541,16 @@ impl CanvasView {
                 panels::extra::UiAction::Toggle(kind) => self.toggle_extra(kind),
 
                 // `panel.assets` / `panel.libraries`：切到左面板的 Assets tab（R1），不弹浮层。
+                // `publish: true` 是库发布入口：除切 tab 外还要打开 `library.publish` 表单。
                 panels::extra::UiAction::LeftTab(tab) => {
                     self.left_tab = tab;
                     self.extra = None;
                     // egui `panel.assets` opens the left panel; a collapsed GPUI panel must not
                     // swallow the request.
                     self.left_collapsed = false;
+                    if tab == 1 && r.data.get("publish").and_then(serde_json::Value::as_bool) == Some(true) {
+                        self.open_library_publish(cx);
+                    }
                 }
 
                 panels::extra::UiAction::ToggleLeftSidebar => {
@@ -2619,6 +2659,127 @@ impl CanvasView {
     /// 由对话框按钮把 `{"url": …}` 交给 `text.link`。右栏按钮直接调这个入口。
     pub(crate) fn open_link_dialog(&mut self, cx: &mut Context<Self>) {
         self.open_dialog(dialogs::Kind::Link, &serde_json::json!({}), cx);
+    }
+
+    /// A popover-sized text field with no lead/trail, created once when its surface opens.
+    fn new_popup_field(&mut self, width: f32, placeholder: &str, cx: &mut Context<Self>) -> Entity<crate::widgets::TextField> {
+        let placeholder = placeholder.to_string();
+        crate::widgets::TextField::build(cx, width, move |tf, _| tf.set_placeholder(placeholder))
+    }
+
+    /// `comment.new`: open the inline composer at the request's page point and keep the page
+    /// pinned to the click, so switching pages cannot retarget the comment.
+    fn open_comment_draft(&mut self, data: &serde_json::Value, cx: &mut Context<Self>) {
+        let Some(page) = data.get("page").and_then(serde_json::Value::as_u64).map(NodeId) else { return };
+        let Some(x) = data.get("x").and_then(serde_json::Value::as_f64) else { return };
+        let Some(y) = data.get("y").and_then(serde_json::Value::as_f64) else { return };
+        let field = self.new_popup_field(268.0, tr("Add a comment…"), cx);
+        let state = Rc::new(RefCell::new(comments::DraftState { page, x, y, text: String::new(), field: field.clone(), focus: true }));
+        {
+            let state = state.clone();
+            field.update(cx, |tf, _| tf.set_on_change(move |text, _, _| state.borrow_mut().text = text.to_string()));
+        }
+        self.fields.comment_ui().borrow_mut().open = None;
+        self.popup = Some(Popup::CommentDraft { state });
+        cx.notify();
+    }
+
+    /// Post the draft through `comment.add`; only a successful add closes the composer and opens
+    /// the new thread. A failure keeps the text and reports through the usual toast.
+    fn post_comment_draft(&mut self, state: &Rc<RefCell<comments::DraftState>>, cx: &mut Context<Self>) {
+        let (page, x, y, text) = {
+            let s = state.borrow();
+            (s.page, s.x, s.y, s.text.trim().to_string())
+        };
+        if text.is_empty() {
+            return;
+        }
+        let params = serde_json::json!({ "page": page.0, "x": x, "y": y, "text": text, "anchor": true });
+        match self.app.session.execute("comment.add", &params) {
+            Ok(v) => {
+                let id = v.get("id").and_then(serde_json::Value::as_u64);
+                self.popup = None;
+                if let Some(id) = id {
+                    self.fields.comment_ui().borrow_mut().open = Some(id);
+                    self.open_comment_thread(id, cx);
+                }
+            }
+            Err(e) => self.toast(e.to_string(), cx),
+        }
+    }
+
+    /// `comment.open`: open a floating thread popover. The popover only stores the id; its pin
+    /// position is recomputed every frame so it follows canvas pan/zoom.
+    fn open_comment_thread(&mut self, id: u64, cx: &mut Context<Self>) {
+        let field = self.new_popup_field(288.0, tr("Reply…"), cx);
+        let state = Rc::new(RefCell::new(comments::ThreadState { id, reply: String::new(), field: field.clone(), focus: true }));
+        {
+            let state = state.clone();
+            field.update(cx, |tf, _| tf.set_on_change(move |text, _, _| state.borrow_mut().reply = text.to_string()));
+        }
+        self.popup = Some(Popup::CommentThread { state });
+        cx.notify();
+    }
+
+    fn post_thread_reply(&mut self, state: &Rc<RefCell<comments::ThreadState>>, cx: &mut Context<Self>) {
+        let (id, text, field) = {
+            let s = state.borrow();
+            (s.id, s.reply.trim().to_string(), s.field.clone())
+        };
+        if text.is_empty() {
+            return;
+        }
+        match self.app.session.execute("comment.reply", &serde_json::json!({ "id": id, "text": text })) {
+            Ok(_) => {
+                state.borrow_mut().reply.clear();
+                field.update(cx, |tf, _| tf.set_value(""));
+                cx.notify();
+            }
+            Err(e) => self.toast(e.to_string(), cx),
+        }
+    }
+
+    fn resolve_thread(&mut self, id: u64, resolved: bool, cx: &mut Context<Self>) {
+        if let Err(e) = self.app.session.execute("comment.resolve", &serde_json::json!({ "id": id, "resolved": resolved })) {
+            self.toast(e.to_string(), cx);
+        }
+        cx.notify();
+    }
+
+    /// `panel.libraries { publish: true }`: build the publish selection and open the form.
+    fn open_library_publish(&mut self, cx: &mut Context<Self>) {
+        let doc = self.app.session.ds().map(|ds| ds.doc.clone()).ok();
+        let Some(doc) = doc else { return };
+        let field = self.new_popup_field(288.0, tr("Description (optional)"), cx);
+        let state = Rc::new(RefCell::new(followups::LibraryPublishState::new(&doc, field.clone())));
+        {
+            let state = state.clone();
+            field.update(cx, |tf, _| tf.set_on_change(move |text, _, _| state.borrow_mut().description = text.to_string()));
+        }
+        self.popup = Some(Popup::LibraryPublish { state });
+        cx.notify();
+    }
+
+    fn publish_library(&mut self, state: &Rc<RefCell<followups::LibraryPublishState>>, cx: &mut Context<Self>) {
+        let params = followups::publish_params(&state.borrow());
+        match self.app.session.execute("library.publish", &params) {
+            Ok(_) => {
+                self.popup = None;
+                self.toast(tr("Library published"), cx);
+            }
+            Err(e) => self.toast(e.to_string(), cx),
+        }
+    }
+
+    /// Each cursor-chat edit travels as a `collab.cursorChat` signal, including the empty text
+    /// that takes the message down.
+    fn send_cursor_chat(&mut self, text: &str, _cx: &mut Context<Self>) {
+        let _ = self.app.session.execute("collab.cursorChat", &serde_json::json!({ "text": text }));
+    }
+
+    fn submit_cursor_chat(&mut self, state: &Rc<RefCell<followups::CursorChatState>>, cx: &mut Context<Self>) {
+        let text = state.borrow().text.clone();
+        self.send_cursor_chat(&text, cx);
     }
 
     /// A19：打开一个通用对话框。菜单命令与引擎 `ui_requests` 都走这一个入口，
@@ -6334,6 +6495,15 @@ impl CanvasView {
     fn close_popup(&mut self, cx: &mut Context<Self>) {
         crate::widgets::dropdown::set_active_menu(None);
 
+        // A closed thread also clears the panel's highlight; a closed cursor chat sends the
+        // empty text that takes the message down for everyone else.
+        if matches!(&self.popup, Some(Popup::CommentThread { .. })) {
+            self.fields.comment_ui().borrow_mut().open = None;
+        }
+        if matches!(&self.popup, Some(Popup::CursorChat { .. })) {
+            let _ = self.app.session.execute("collab.cursorChat", &serde_json::json!({ "text": "" }));
+        }
+
         // A flyout's open mark lives on the view, not in the popup: closing either way (outside
 
         // click, Escape, a pick) must clear it, or the caret keeps reading as open.
@@ -7903,6 +8073,10 @@ impl Render for CanvasView {
                                 | Popup::Palette { .. }
                                 | Popup::Menu { .. }
                                 | Popup::Share { .. }
+                                | Popup::CommentDraft { .. }
+                                | Popup::CommentThread { .. }
+                                | Popup::CursorChat { .. }
+                                | Popup::LibraryPublish { .. }
                         )
                     )
                 {
@@ -8733,6 +8907,129 @@ impl Render for CanvasView {
                 }
 
                 Popup::Window(w) => els.extend(w.render(cx, window, vp, dismiss.clone(), drag_start, drag_move.clone(), right_edge)),
+
+                Popup::CommentDraft { state } => {
+                    let state = state.clone();
+                    let focus = {
+                        let mut s = state.borrow_mut();
+                        let f = s.focus;
+                        s.focus = false;
+                        f
+                    };
+                    if focus {
+                        let field = state.borrow().field.clone();
+                        window.defer(cx, move |window, cx| {
+                            field.update(cx, |tf, cx| {
+                                tf.edit().update(cx, |edit, _| edit.focus_editor(window));
+                            });
+                        });
+                    }
+                    let submit = {
+                        let me = me.clone();
+                        let state = state.clone();
+                        Rc::new(move |_window: &mut Window, cx: &mut App| {
+                            let state = state.clone();
+                            me.update(cx, |cv, cx| cv.post_comment_draft(&state, cx));
+                        })
+                    };
+                    let pick = {
+                        let state = state.clone();
+                        Rc::new(move |name: &str, window: &mut Window, cx: &mut App| {
+                            let (field, text) = {
+                                let mut s = state.borrow_mut();
+                                let range = comments::mention_query_at_end(&s.text).unwrap_or((s.text.len(), s.text.len()));
+                                comments::insert_mention(&mut s.text, range, name);
+                                (s.field.clone(), s.text.clone())
+                            };
+                            field.update(cx, |tf, cx| {
+                                tf.set_value(text);
+                                tf.edit().update(cx, |edit, cx| edit.focus_editor(window));
+                            });
+                        })
+                    };
+                    els.push(comments::draft_popover(&self.app, &state, vp, dismiss.clone(), submit, pick));
+                }
+
+                Popup::CommentThread { state } => {
+                    let state = state.clone();
+                    let id = state.borrow().id;
+                    let focus = {
+                        let mut s = state.borrow_mut();
+                        let f = s.focus;
+                        s.focus = false;
+                        f
+                    };
+                    if focus {
+                        let field = state.borrow().field.clone();
+                        window.defer(cx, move |window, cx| {
+                            field.update(cx, |tf, cx| {
+                                tf.edit().update(cx, |edit, _| edit.focus_editor(window));
+                            });
+                        });
+                    }
+                    let submit = {
+                        let me = me.clone();
+                        let state = state.clone();
+                        Rc::new(move |_window: &mut Window, cx: &mut App| {
+                            let state = state.clone();
+                            me.update(cx, |cv, cx| cv.post_thread_reply(&state, cx));
+                        })
+                    };
+                    let resolve = {
+                        let me = me.clone();
+                        Rc::new(move |resolved: bool, _window: &mut Window, cx: &mut App| {
+                            me.update(cx, |cv, cx| cv.resolve_thread(id, resolved, cx));
+                        })
+                    };
+                    els.push(comments::thread_popover(&self.app, &state, vp, dismiss.clone(), submit, resolve));
+                }
+
+                Popup::CursorChat { state } => {
+                    let state = state.clone();
+                    let focus = {
+                        let mut s = state.borrow_mut();
+                        let f = s.focus;
+                        s.focus = false;
+                        f
+                    };
+                    if focus {
+                        let field = state.borrow().field.clone();
+                        window.defer(cx, move |window, cx| {
+                            field.update(cx, |tf, cx| {
+                                tf.edit().update(cx, |edit, _| edit.focus_editor(window));
+                            });
+                        });
+                    }
+                    let submit = {
+                        let me = me.clone();
+                        let state = state.clone();
+                        Rc::new(move |_window: &mut Window, cx: &mut App| {
+                            let state = state.clone();
+                            me.update(cx, |cv, cx| cv.submit_cursor_chat(&state, cx));
+                        })
+                    };
+                    let at = window.mouse_position();
+                    els.push(followups::cursor_chat_popover(
+                        &state,
+                        Point { x: at.x + px(16.0), y: at.y + px(16.0) },
+                        vp,
+                        dismiss.clone(),
+                        submit,
+                    ));
+                }
+
+                Popup::LibraryPublish { state } => {
+                    let state = state.clone();
+                    let publish = {
+                        let me = me.clone();
+                        let state = state.clone();
+                        Rc::new(move |_window: &mut Window, cx: &mut App| {
+                            let state = state.clone();
+                            me.update(cx, |cv, cx| cv.publish_library(&state, cx));
+                        })
+                    };
+                    els.push(followups::library_publish_popover(&self.app, &state, vp, dismiss.clone(), publish));
+                }
 
                 Popup::Share { anchor } => {
                     // 锚在 Share 按钮的左下角，贴边夹紧（同 Popup::Menu 的做法）。

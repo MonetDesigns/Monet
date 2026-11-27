@@ -8,11 +8,13 @@
 //! a command or a widget.
 
 use crate::panels::{Cmd, RightFields};
+use crate::widgets::input::TextField;
+use crate::widgets::popover::{Open, popover_window, title_text};
 use crate::widgets::{Dropdown, MenuRow, rgba, tokens};
-use figcraft_doc::Document;
+use figcraft_doc::{Document, Message, NodeId};
 use figcraft_engine::cmd::comment::{Filter, Query, Sort, frame_of, query};
 use figcraft_i18n::tr;
-use gpui::{App, Div, IntoElement, SharedString, Window, div, prelude::*, px};
+use gpui::{AnyElement, App, Div, Entity, IntoElement, Pixels, Point, SharedString, Size, Window, div, prelude::*, px};
 use serde_json::json;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -32,6 +34,241 @@ impl Default for CommentUi {
         // egui starts on Open (`app.ui.comments.filter`), newest activity first.
         Self { filter: Filter::Open, sort: Sort::Date, search: String::new(), open: None }
     }
+}
+
+/// A comment being written at a page point, with the field the composer draws into.
+pub(crate) struct DraftState {
+    pub page: NodeId,
+    pub x: f64,
+    pub y: f64,
+    pub text: String,
+    pub field: Entity<TextField>,
+    /// The composer asks for the keyboard on its first frame.
+    pub focus: bool,
+}
+
+/// An open thread and the reply being written into it.
+pub(crate) struct ThreadState {
+    pub id: u64,
+    pub reply: String,
+    pub field: Entity<TextField>,
+    pub focus: bool,
+}
+
+/// The `@query` being typed at the end of `text`: its byte range from `@` through the end.
+/// The GPUI field only exposes single-line editing, so the cursor is the end of the draft.
+pub(crate) fn mention_query_at_end(text: &str) -> Option<(usize, usize)> {
+    let at = text.rfind('@')?;
+    let q = text.get(at + 1..)?;
+    if q.contains('\n') || q.chars().count() > 40 || q.ends_with(char::is_whitespace) {
+        return None;
+    }
+    let starts = text.get(..at)?.chars().next_back().is_none_or(|c| !c.is_alphanumeric());
+    starts.then_some((at, text.len()))
+}
+
+/// People (not `me`) whose name, or a word in it, starts with `query` (any case).
+pub(crate) fn mention_matches(people: &[String], query: &str, me: &str) -> Vec<String> {
+    let q = query.to_lowercase();
+    people
+        .iter()
+        .filter(|n| n.as_str() != me)
+        .filter(|n| {
+            let l = n.to_lowercase();
+            l.starts_with(&q) || l.split_whitespace().any(|w| w.starts_with(&q))
+        })
+        .take(6)
+        .cloned()
+        .collect()
+}
+
+/// Replace the `@query` at `range` with `@name `.
+pub(crate) fn insert_mention(text: &mut String, range: (usize, usize), name: &str) {
+    let (a, b) = range;
+    if a > b || b > text.len() || !text.is_char_boundary(a) || !text.is_char_boundary(b) {
+        return;
+    }
+    text.replace_range(a..b, &format!("@{name} "));
+}
+
+/// A comment composer next to its pin (egui `draft_composer`). Posting hands the text back to
+/// the view, which owns the `comment.add` command and closes the popover only on success.
+pub(crate) fn draft_popover(
+    app: &crate::CanvasApp,
+    state: &Rc<RefCell<DraftState>>,
+    viewport: Size<Pixels>,
+    dismiss: Rc<dyn Fn(&mut Window, &mut App)>,
+    submit: Rc<dyn Fn(&mut Window, &mut App)>,
+    pick: Rc<dyn Fn(&str, &mut Window, &mut App)>,
+) -> AnyElement {
+    let t = tokens();
+    let (text, field, x, y, page) = {
+        let s = state.borrow();
+        (s.text.clone(), s.field.clone(), s.x, s.y, s.page)
+    };
+    // A draft only draws on its own page (the engine pins the page when the click is recorded).
+    if app.session.page().is_ok_and(|p| p != page) {
+        return div().into_any_element();
+    }
+    let at = app.to_screen(x, y);
+    let pos = Point { x: px(f32::from(at.x) + 36.0), y: px(f32::from(at.y) - 28.0) };
+    let people = app.session.ds().map(|ds| ds.doc.comment_people()).unwrap_or_default();
+    let me = figcraft_engine::cmd::comment::user_name(&app.session);
+    let names = mention_query_at_end(&text).map(|(a, b)| mention_matches(&people, text.get(a + 1..b).unwrap_or(""), &me)).unwrap_or_default();
+    // The estimate only drives viewport clamping; include the mention list so a picker near the
+    // bottom of the screen lifts instead of drawing past it.
+    let estimated_h = 112.0 + names.len() as f32 * 26.0;
+
+    let mut body = div().flex().flex_col().gap(px(6.0)).child(div().w_full().child(field));
+    if !names.is_empty() {
+        let mut list = div().flex().flex_col().rounded(px(6.0)).bg(rgba(t.field)).overflow_hidden();
+        for name in names {
+            let picked = name.clone();
+            let pick = pick.clone();
+            list = list.child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(8.0))
+                    .h(px(26.0))
+                    .px(px(8.0))
+                    .cursor_pointer()
+                    .hover(|d| d.bg(rgba(t.hover)))
+                    .id(gpui::ElementId::from(SharedString::from(format!("comment-mention-{name}"))))
+                    .on_click(move |_, window, cx| pick(&picked, window, cx))
+                    .child(avatar(&name))
+                    .child(div().text_size(px(12.0)).text_color(rgba(t.text)).child(name)),
+            );
+        }
+        body = body.child(list);
+    }
+    body = body.child(
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .child(div().text_size(px(10.0)).text_color(rgba(t.text_tertiary)).child(tr("Enter to post · @ to mention")))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .h(px(24.0))
+                    .px(px(10.0))
+                    .rounded(px(5.0))
+                    .bg(rgba(t.accent))
+                    .cursor_pointer()
+                    .id("comment-draft-post")
+                    .on_click(move |_, window, cx| submit(window, cx))
+                    .child(div().text_size(px(11.0)).text_color(rgba(crate::canvas::geom::Color32::WHITE)).child(tr("Post"))),
+            ),
+    );
+
+    popover_window(Open::At(pos)).width(300.0).height(estimated_h).title(title_text(tr("Comment"))).body(body).show(viewport, dismiss).1
+}
+
+/// A thread popover next to its pin (egui `thread`): messages, resolve state and a reply field.
+pub(crate) fn thread_popover(
+    app: &crate::CanvasApp,
+    state: &Rc<RefCell<ThreadState>>,
+    viewport: Size<Pixels>,
+    dismiss: Rc<dyn Fn(&mut Window, &mut App)>,
+    submit: Rc<dyn Fn(&mut Window, &mut App)>,
+    resolve: Rc<dyn Fn(bool, &mut Window, &mut App)>,
+) -> AnyElement {
+    let t = tokens();
+    let id = state.borrow().id;
+    let reply_field = state.borrow().field.clone();
+    let Ok(ds) = app.session.ds() else { return div().into_any_element() };
+    let Some(c) = ds.doc.comment(id).cloned() else { return div().into_any_element() };
+    if c.page != ds.page {
+        return div().into_any_element();
+    }
+    let (x, y) = c.position(&ds.doc);
+    let at = app.to_screen(x, y);
+    let pos = Point { x: px(f32::from(at.x) + 36.0), y: px(f32::from(at.y) - 28.0) };
+    let me = figcraft_engine::cmd::comment::user_name(&app.session);
+
+    let mut body = div().flex().flex_col().gap(px(8.0));
+    body = body.child(
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .child(div().text_size(px(11.0)).text_color(rgba(if c.resolved { t.text_secondary } else { t.accent })).child(if c.resolved {
+                tr("Resolved")
+            } else {
+                tr("Open")
+            }))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .h(px(22.0))
+                    .px(px(8.0))
+                    .rounded(px(5.0))
+                    .bg(rgba(t.field))
+                    .cursor_pointer()
+                    .hover(|d| d.bg(rgba(t.hover)))
+                    .id("comment-thread-resolve")
+                    .on_click({
+                        let resolved = c.resolved;
+                        move |_, window, cx| resolve(!resolved, window, cx)
+                    })
+                    .child(div().text_size(px(11.0)).text_color(rgba(t.text)).child(if c.resolved { tr("Reopen") } else { tr("Resolve") })),
+            ),
+    );
+
+    let mut messages = div().id("comment-thread-messages").flex().flex_col().gap(px(10.0)).max_h(px(320.0)).overflow_y_scroll();
+    for m in c.messages() {
+        messages = messages.child(message_row(m, &me));
+    }
+    body = body.child(messages);
+    body = body.child(
+        div().flex().flex_col().gap(px(6.0)).border_t_1().border_color(rgba(t.border)).pt(px(8.0)).child(div().w_full().child(reply_field)).child(
+            div().flex().justify_end().child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .h(px(24.0))
+                    .px(px(10.0))
+                    .rounded(px(5.0))
+                    .bg(rgba(t.accent))
+                    .cursor_pointer()
+                    .id("comment-thread-reply")
+                    .on_click(move |_, window, cx| submit(window, cx))
+                    .child(div().text_size(px(11.0)).text_color(rgba(crate::canvas::geom::Color32::WHITE)).child(tr("Reply"))),
+            ),
+        ),
+    );
+
+    popover_window(Open::At(pos)).width(320.0).height(560.0).title(title_text(tr("Comment"))).body(body).show(viewport, dismiss).1
+}
+
+/// One message: author + age, then its text (mentions stay readable as `@name`).
+fn message_row(m: &Message, me: &str) -> Div {
+    let t = tokens();
+    let mut row = div().flex().flex_col().gap(px(2.0));
+    let mut head = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(6.0))
+        .child(avatar(&m.author))
+        .child(div().text_size(px(11.0)).text_color(rgba(t.text)).child(m.author.clone()))
+        .when(m.author == me, |d| d.child(div().text_size(px(9.0)).text_color(rgba(t.text_tertiary)).child(tr("you"))))
+        .child(div().text_size(px(10.0)).text_color(rgba(t.text_tertiary)).child(ago(m.created)))
+        .when(m.edited != 0, |d| d.child(div().text_size(px(9.0)).text_color(rgba(t.text_tertiary)).child(tr("edited"))));
+    if m.agent {
+        head = head.child(div().text_size(px(9.0)).text_color(rgba(t.text_tertiary)).child(tr("AI")));
+    }
+    row = row.child(head);
+    row.child(div().pl(px(30.0)).text_size(px(12.0)).text_color(rgba(t.text)).child(m.text.clone()))
 }
 
 /// One row of the panel's list, formatted once per frame in `CanvasView::sync_panel`.
@@ -270,3 +507,32 @@ pub(crate) fn ago(created: u64) -> String {
 
 /// A local UI-state cell for the comment panel (used by `RightFields`).
 pub(crate) type CommentState = Rc<RefCell<CommentUi>>;
+
+#[cfg(test)]
+mod tests {
+    use super::{insert_mention, mention_matches, mention_query_at_end};
+
+    #[test]
+    fn mention_query_only_starts_a_token() {
+        assert_eq!(mention_query_at_end("hi @Ad"), Some((3, 6)));
+        assert_eq!(mention_query_at_end("@Ad"), Some((0, 3)));
+        assert_eq!(mention_query_at_end("mail@Ad"), None);
+        assert_eq!(mention_query_at_end("@Ad "), None);
+        assert_eq!(mention_query_at_end("no mention"), None);
+    }
+
+    #[test]
+    fn mention_matches_skips_me_and_matches_words() {
+        let people = vec!["Ada Lovelace".to_string(), "Alan Turing".to_string(), "Me".to_string()];
+        assert_eq!(mention_matches(&people, "ad", "Me"), vec!["Ada Lovelace".to_string()]);
+        assert_eq!(mention_matches(&people, "tur", "Me"), vec!["Alan Turing".to_string()]);
+        assert!(mention_matches(&people, "me", "Me").is_empty());
+    }
+
+    #[test]
+    fn insert_mention_replaces_the_query() {
+        let mut text = "hi @Ad".to_string();
+        insert_mention(&mut text, (3, 6), "Ada Lovelace");
+        assert_eq!(text, "hi @Ada Lovelace ");
+    }
+}
