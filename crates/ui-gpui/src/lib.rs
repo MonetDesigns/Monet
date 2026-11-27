@@ -2793,16 +2793,28 @@ impl CanvasView {
         };
         match self.app.session.execute(cmd, &params) {
             Ok(_) => {
-                let restore = {
+                let (was_editing, restore) = {
                     let mut s = state.borrow_mut();
-                    let restore = if s.editing.is_some() { s.reply_backup.take() } else { None };
+                    let was_editing = s.editing.is_some();
+                    let restore = if was_editing {
+                        s.reply_backup.take()
+                    } else {
+                        s.reply.clear();
+                        None
+                    };
                     s.editing = None;
-                    restore
+                    (was_editing, restore)
                 };
-                if let Some(restore) = restore {
-                    state.borrow_mut().reply = restore.clone();
+                if was_editing {
+                    if let Some(restore) = restore {
+                        state.borrow_mut().reply = restore.clone();
+                        field.update(cx, |tf, cx| {
+                            tf.edit().update(cx, |edit, _| edit.set_draft_text(restore));
+                        });
+                    }
+                } else {
                     field.update(cx, |tf, cx| {
-                        tf.edit().update(cx, |edit, _| edit.set_draft_text(restore));
+                        tf.edit().update(cx, |edit, _| edit.set_draft_text(""));
                     });
                 }
                 cx.notify();
