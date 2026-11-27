@@ -3,7 +3,7 @@
 //!
 //! 数据一律来自引擎：`figcraft_engine::keymap::{KEYS,GESTURES,Group,Platform,display}`、
 //! `DocState::versions`、`devcompare::compare`、`library::local_components`。
-//! 所有写操作都推引擎命令（`version.*` / `dev.*` / `instance.create` / `style.apply`），
+//! 所有写操作都推引擎命令（`version.*` / `dev.*` / `instance.place` / `style.apply`），
 //! 面板本身不改文档。控件全部复用冻结的 `widgets/`。
 //!
 //! ⚠️ TODO（规划错配，见 parity plan R.1 / R.7 / R.8 / R.9）：egui 把 Versions 放独立面板、
@@ -19,7 +19,7 @@
 //!   预览、Eye（预览）/Rotate（恢复）/Pencil（重命名）/Trash（删除确认）/Dup 操作、`time_ago`
 //!   相对时间、删除二次确认行。
 //! - Assets：Components / Styles 切换 tab + 搜索；Components 为本地组件/组件集缩略图网格
-//!   （2 列，GPUI 无 flex_wrap），整卡点击 `instance.create`，组件集取默认变体渲染；Styles
+//!   （2 列，GPUI 无 flex_wrap），整卡点击 `instance.place` 到视口中心，组件集取默认变体渲染；Styles
 //!   列表按类型给徽标（Paint 色板 / Text 图标 / Grid 图标 / Effect 用「fx」文字），点一行把
 //!   样式 `style.apply` 到当前选区。
 //! - Shortcuts：分组下拉 + 搜索，键位全部来自引擎 `KEYS`/`GESTURES`，一个不手抄。
@@ -1125,7 +1125,7 @@ pub(crate) fn assets_body(
         .child(state.assets_search.clone());
 
     let body = if on_components {
-        assets_components(doc, cmds, &q, root)
+        assets_components(doc, cmds, &q, root, (ds.view.cx, ds.view.cy))
     } else {
         assets_styles(doc, cmds, &q)
     };
@@ -1173,7 +1173,13 @@ fn wrap_header(body: Div, header: Div, banner: Option<Div>) -> Div {
 }
 
 /// Components tab：本地组件/组件集缩略图网格（2 列，GPUI 无 flex_wrap），点一下创建实例。
-fn assets_components(doc: &figcraft_doc::Document, cmds: &Cmds, q: &str, root: Option<Entity<crate::CanvasView>>) -> Div {
+fn assets_components(
+    doc: &figcraft_doc::Document,
+    cmds: &Cmds,
+    q: &str,
+    root: Option<Entity<crate::CanvasView>>,
+    center: (f64, f64),
+) -> Div {
     let comps: Vec<figcraft_doc::NodeId> = figcraft_engine::library::local_components(doc)
         .into_iter()
         .filter(|id| doc.node(*id).is_some_and(|n| n.name.to_lowercase().contains(q)))
@@ -1189,7 +1195,7 @@ fn assets_components(doc: &figcraft_doc::Document, cmds: &Cmds, q: &str, root: O
     for chunk in comps.chunks(2) {
         let mut row = div().flex().flex_row().w_full().gap(pt(10.0));
         for id in chunk {
-            row = row.child(component_tile(doc, cmds, *id, root.clone()));
+            row = row.child(component_tile(doc, cmds, *id, root.clone(), center));
         }
         // 末行若只有一列，补一个占位保持两列等高对齐。
         if chunk.len() == 1 {
@@ -1200,12 +1206,13 @@ fn assets_components(doc: &figcraft_doc::Document, cmds: &Cmds, q: &str, root: O
     grid
 }
 
-/// 单个组件缩略图卡片：渲染缩略图 + 名称，整卡点击创建实例。
+/// 单个组件缩略图卡片：渲染缩略图 + 名称，整卡点击把实例放到视口中心。
 fn component_tile(
     doc: &figcraft_doc::Document,
     cmds: &Cmds,
     id: figcraft_doc::NodeId,
     root: Option<Entity<crate::CanvasView>>,
+    center: (f64, f64),
 ) -> Div {
     let t = tokens();
     let Some(n) = doc.node(id) else { return div() };
@@ -1227,7 +1234,10 @@ fn component_tile(
 
     let c = cmds.clone();
     let create = move |_e: &MouseDownEvent, _w: &mut Window, _cx: &mut App| {
-        c.push(Cmd { id: "instance.create", params: Some(json!({ "component": id })) });
+        c.push(Cmd {
+            id: "instance.place",
+            params: Some(json!({ "component": id, "x": center.0, "y": center.1 })),
+        });
     };
     let hidden = figcraft_engine::library::hidden_name(&name);
     let mut tile = div()

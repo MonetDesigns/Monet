@@ -593,8 +593,8 @@ EGUI 原文件再动手，禁止再出现简化替代**；完成后同步 `CONTR
 
 | # | 交互 | EGUI 原版形态（证据） | GPUI 现状（错误） | 整改要求 |
 |---|---|---|---|---|
-| R1 | **资源面板 Assets** | 左栏 tab：`LeftTab::Assets` → `assets_panel::show` 渲染进**左面板**（同 Pages/Layers 同一栏，面板宽） | `ExtraKind::Assets` 居中浮层（`extra.rs` + `ui.set{leftTab:"assets"}`） | ⚠️ **入口已改，变体未清**（T.2）：见 R.4，Assets 进左栏 tab；但 `ExtraKind::Assets` 变体 + `render` 卡片分支仍在 |
-| R2 | **图标面板 Icons** | 左栏 tab：`LeftTab::Icons` → `icons_panel::show` 渲染进**左面板** | `ExtraKind::Icons` 居中浮层 | ⚠️ **入口已改，变体未清**（T.2）：同 R1 机制进左面板 tab 2；但 `ExtraKind::Icons` 变体仍在 |
+| R1 | **资源面板 Assets** | 左栏 tab：`LeftTab::Assets` → `assets_panel::show` 渲染进**左面板**（同 Pages/Layers 同一栏，面板宽） | `ExtraKind::Assets` 居中浮层（`extra.rs` + `ui.set{leftTab:"assets"}`） | ✅ 入口与变体均已清理：Assets 进左栏 tab，`ExtraKind` 只剩 Shortcuts/Versions/DevCompare/Home；2026-11-27 另补 library updates 横幅 |
+| R2 | **图标面板 Icons** | 左栏 tab：`LeftTab::Icons` → `icons_panel::show` 渲染进**左面板** | `ExtraKind::Icons` 居中浮层 | ✅ 入口与变体均已清理：Icons 进左面板 tab 2，`ExtraKind::Icons` 已移除 |
 | R3 | **首页 Home** | 替换**整个工作区**（占满窗口，240pt 侧栏 + 主区），不是居中小窗 | ~~`ExtraKind::Home` 居中浮层~~ **已修复**：`panels/extra.rs::render` 对 `Home` 走 `div().absolute().top(TITLE_H).left(0).right(0).bottom(0)` 占满窗口（注释明写「1:1 with egui `home.rs` CentralPanel，不是 760×520 居中卡片」） | ✅ 无需整改（视觉已占满窗口，与 EGUI 一致） |
 | R4 | **画框标签改名** `canvas.renameLabel` | `canvas/frame_labels.rs::rename_field`：**在画布标签的屏幕坐标上**盖一个内联编辑框，Enter/失焦改名、Esc 保留 | `dialogs.rs:302` → `Kind::Rename` 居中对话框 | 改回画布内联编辑：双击标签 → 在标签处画 `TextField`，走 `object.rename`；不要弹窗 |
 | R5 | **图层面板改名** `layers.rename` | 在 Layers 列表行内**就地**改（egui `layers_rename_tests.rs`） | `dialogs.rs:302` → `Kind::Rename` 居中对话框 | 改回列表行内联编辑（GPUI 左面板已用 `TextField` 做文件头改名，图层行同理） |
