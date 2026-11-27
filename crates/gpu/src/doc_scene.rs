@@ -9,7 +9,8 @@
 //! | rectangles (four corner radii, smoothing), full ellipses, arcs and rings, polygons, stars | gradient or image paint on a path/stroke |
 //! | vector networks, booleans, lines — filled and stroked through the CPU's own outlines | images, patterns |
 //! | strokes: weight, align, joins, caps, dashes, per-side weights (via `figcraft-pathops`) | group opacity, other blend modes, masks |
-//! | solid, linear/radial/angular/diamond gradients (≤ [`MAX_STOPS`] stops) on SDF shapes | visible effects (shadow, blur, glass, grain) |
+//! | solid, linear/radial/angular/diamond gradients (≤ [`MAX_STOPS`] stops) on SDF shapes | round or noisy effects this build cannot draw |
+//! | drop shadows from an opaque SDF box: offset, blur (box-approximated exactly as the CPU), tint | drop shadows that spread, blend differently, or cast from groups, text or translucent/outlined layers |
 //! | text: glyph and decoration outlines from `figcraft_text`, solid fills and strokes per run | colour glyphs (emoji, COLR) |
 //! | node opacity, visibility, ancestor clipping rectangles | rounded or rotated clips, variable-bound fills |
 
@@ -17,12 +18,12 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use figcraft_color::{BlendMode, GradientKind as DocGradientKind, Paint as DocPaint, PaintKind};
-use figcraft_doc::{Document, Node, NodeId, NodeKind, StrokeAlign};
+use figcraft_doc::{Document, EffectKind, Node, NodeId, NodeKind, StrokeAlign};
 use figcraft_geom::{Affine, BezPath, Point};
 
 use crate::geometry;
 use crate::scene::{
-    is_similarity, Clip, GradientKind, MeshNode, Paint, Rgba, Scene, ShapeKind, ShapeNode, Stop, Viewport, MAX_STOPS,
+    is_similarity, Clip, GradientKind, MeshNode, Paint, Rgba, Scene, ShapeKind, ShapeNode, ShadowNode, Stop, Viewport, MAX_STOPS,
 };
 
 /// The deepest subtree walked; a document that nests deeper is a broken file and a fallback.
@@ -39,8 +40,12 @@ pub fn build(doc: &Document, page: NodeId, view: &Viewport) -> Scene {
         scene.clear = Rgba::from_color(*background);
     }
     let view_xf = view.affine();
+    let scale = {
+        let c = view_xf.as_coeffs();
+        (c[0] * c[0] + c[1] * c[1]).sqrt()
+    };
     for &child in &page_node.children {
-        walk(doc, child, view_xf, Clip::NONE, &mut scene, 0);
+        walk(doc, child, view_xf, scale, Clip::NONE, &mut scene, 0);
     }
     scene
 }
@@ -49,7 +54,11 @@ pub fn build(doc: &Document, page: NodeId, view: &Viewport) -> Scene {
 pub fn build_subtree(doc: &Document, id: NodeId, view: &Viewport) -> Scene {
     let mut scene = Scene::new(view.width, view.height);
     let view_xf = view.affine();
-    walk(doc, id, view_xf, Clip::NONE, &mut scene, 0);
+    let scale = {
+        let c = view_xf.as_coeffs();
+        (c[0] * c[0] + c[1] * c[1]).sqrt()
+    };
+    walk(doc, id, view_xf, scale, Clip::NONE, &mut scene, 0);
     scene
 }
 
@@ -67,7 +76,7 @@ fn is_container(kind: &NodeKind) -> bool {
     )
 }
 
-fn walk(doc: &Document, id: NodeId, view_xf: Affine, clip: Clip, scene: &mut Scene, depth: usize) {
+fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, scene: &mut Scene, depth: usize) {
     if depth > MAX_DEPTH {
         scene.unsupported("depth", format!("a subtree nests deeper than {MAX_DEPTH}"));
         return;
@@ -80,8 +89,10 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, clip: Clip, scene: &mut Sce
         return;
     }
     let container = is_container(&n.kind);
-    if n.effects.iter().any(|e| e.visible) {
-        scene.unsupported("effect", format!("`{}` has a visible effect", n.name));
+    let shadows: Vec<&figcraft_doc::Shadow> =
+        n.effects.iter().filter(|e| e.visible).filter_map(|e| if let EffectKind::DropShadow(s) = &e.kind { Some(s) } else { None }).collect();
+    if n.effects.iter().any(|e| e.visible && !matches!(e.kind, EffectKind::DropShadow(_))) {
+        scene.unsupported("effect", format!("`{}` has a visible effect this build cannot draw", n.name));
     }
     if !matches!(n.blend, BlendMode::Normal | BlendMode::PassThrough) {
         scene.unsupported("blend", format!("`{}` blends with {:?}", n.name, n.blend));
@@ -125,13 +136,27 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, clip: Clip, scene: &mut Sce
         }
     }
 
+    // Drop shadows sit under the node's own content, so they are emitted before its fills and
+    // children. Only a node whose silhouette is exactly its SDF box can cast one in GPU.
+    let shape = if sized { sdf_shape(n, &m, w, h) } else { None };
+    if !shadows.is_empty() {
+        match shape {
+            Some(shape) if can_cast_shadow(n, &shadows) => {
+                for shadow in &shadows {
+                    emit_shadow(shape, m, w, h, scale, clip, shadow, scene);
+                }
+            }
+            _ => scene.unsupported("effect", format!("`{}` casts a drop shadow this build cannot draw", n.name)),
+        }
+    }
+
     // Fills: the SDF when the box is one of its primitives, the CPU's own outline tessellated
     // otherwise (vectors, booleans, lines, and boxes the SDF cannot express exactly). Text paints
     // glyph outlines instead of its box.
     if sized {
         if let NodeKind::Text(_) = n.kind {
             emit_text(n, m, clip, scene);
-        } else if let Some(shape) = sdf_shape(n, &m, w, h) {
+        } else if let Some(shape) = shape {
             emit_sdf_fills(n, shape, m, w, h, clip, scene);
         } else if n.fills.iter().any(|f| f.visible) {
             emit_path_fills(doc, n, m, clip, scene);
@@ -141,7 +166,7 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, clip: Clip, scene: &mut Sce
     // Boolean children are operands, not layers: the CPU draws the folded result and skips them.
     if !matches!(n.kind, NodeKind::BooleanOp { .. }) {
         for &child in &n.children {
-            walk(doc, child, view_xf, inner, scene, depth + 1);
+            walk(doc, child, view_xf, scale, inner, scene, depth + 1);
         }
     }
 
@@ -212,6 +237,49 @@ fn emit_sdf_fills(n: &Node, shape: ShapeKind, m: Affine, w: f64, h: f64, inner: 
             });
         }
     }
+}
+
+/// Whether this node casts its drop shadows from exactly its SDF box: an opaque solid fill or fills,
+/// no visible stroke, no children (or a clipping frame whose own fill is the whole layer), full node
+/// opacity, and shadows without spread and in normal blend mode.
+fn can_cast_shadow(n: &Node, shadows: &[&figcraft_doc::Shadow]) -> bool {
+    if n.opacity < 0.999 || n.has_visible_stroke() {
+        return false;
+    }
+    if !n.children.is_empty() && !(n.clip && n.fills.iter().any(|f| f.visible)) {
+        return false;
+    }
+    let mut painted = false;
+    for fill in n.fills.iter().filter(|f| f.visible) {
+        painted = true;
+        if !matches!(fill.blend, BlendMode::Normal) || fill.opacity < 0.999 || fill.solid_color().is_none_or(|c| c.a < 0.999) {
+            return false;
+        }
+    }
+    painted
+        && shadows.iter().all(|s| {
+            s.blend == BlendMode::Normal
+                && s.spread == 0.0
+                && s.radius.is_finite()
+                && s.radius >= 0.0
+                && s.offset.0.is_finite()
+                && s.offset.1.is_finite()
+        })
+}
+
+/// One drop shadow: the node's box offset by the shadow's device-pixel offset, a sigma the CPU's
+/// blur uses (`radius / 2 * scale`) and the tint.
+fn emit_shadow(shape: ShapeKind, m: Affine, w: f64, h: f64, scale: f64, inner: Clip, shadow: &figcraft_doc::Shadow, scene: &mut Scene) {
+    let offset = [(shadow.offset.0 * scale).round() as f32, (shadow.offset.1 * scale).round() as f32];
+    scene.push_shadow(ShadowNode {
+        mat: crate::scene::matrix(m),
+        size: [w as f32, h as f32],
+        shape,
+        offset,
+        sigma: (shadow.radius / 2.0 * scale) as f32,
+        color: Rgba::from_color(shadow.color),
+        clip: inner,
+    });
 }
 
 /// The path fallback: tessellate the CPU's own fill outline and paint each visible solid fill.
@@ -430,7 +498,7 @@ fn map_point(m: Affine, x: f64, y: f64) -> (f64, f64) {
 fn meshes(scene: &Scene) -> impl Iterator<Item = &MeshNode> {
     scene.items.iter().filter_map(|item| match item {
         crate::scene::Item::Mesh(mesh) => Some(mesh),
-        crate::scene::Item::Shape(_) => None,
+        crate::scene::Item::Shape(_) | crate::scene::Item::Shadow(_) => None,
     })
 }
 

@@ -171,11 +171,34 @@ pub struct MeshNode {
     pub clip: Clip,
 }
 
-/// One thing to draw, in painter's order: an SDF shape or a tessellated path.
+/// A drop shadow under an SDF shape: the shape's silhouette, offset, blurred and tinted. Painted
+/// **before** the shape it belongs to (the shadow sits behind the node, not on it), so it precedes
+/// the node's fill in painter's order.
+///
+/// Only shapes whose silhouette is exactly their box outline cast one (a filled primitive with no
+/// stroke and no content of its own); anything else is recorded as unsupported, because the CPU
+/// blurs the node's rendered pixels and a box would not be the same alpha.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ShadowNode {
+    /// The caster's box in document units and local → device matrix, like [`ShapeNode`].
+    pub mat: [f32; 6],
+    pub size: [f32; 2],
+    pub shape: ShapeKind,
+    /// Offset in **device pixels** (the document offset times the node's device scale).
+    pub offset: [f32; 2],
+    /// Gaussian-equivalent blur radius in device pixels (the CPU's `radius / 2 * scale`).
+    pub sigma: f32,
+    /// The tint, straight sRGB (its alpha is the shadow's strength).
+    pub color: Rgba,
+    pub clip: Clip,
+}
+
+/// One thing to draw, in painter's order: an SDF shape, a tessellated path or a drop shadow.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Item {
     Shape(ShapeNode),
     Mesh(MeshNode),
+    Shadow(ShadowNode),
 }
 
 /// A feature this milestone cannot draw. Its presence sends the **whole frame** to the CPU.
@@ -215,17 +238,26 @@ impl Scene {
         self.items.push(Item::Mesh(mesh));
     }
 
+    pub fn push_shadow(&mut self, shadow: ShadowNode) {
+        self.items.push(Item::Shadow(shadow));
+    }
+
     /// The SDF shapes, in draw order (tests and the log use this; the renderer walks `items`).
     pub fn shapes(&self) -> impl Iterator<Item = &ShapeNode> {
         self.items.iter().filter_map(|item| match item {
             Item::Shape(shape) => Some(shape),
-            Item::Mesh(_) => None,
+            Item::Mesh(_) | Item::Shadow(_) => None,
         })
     }
 
     /// How many tessellated paths the frame carries.
     pub fn mesh_count(&self) -> usize {
         self.items.iter().filter(|item| matches!(item, Item::Mesh(_))).count()
+    }
+
+    /// How many drop shadows the frame carries.
+    pub fn shadow_count(&self) -> usize {
+        self.items.iter().filter(|item| matches!(item, Item::Shadow(_))).count()
     }
 
     /// Record a feature this frame uses that this milestone cannot draw.

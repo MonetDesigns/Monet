@@ -1,10 +1,11 @@
 # 完整 GPU 管线立项（Monet / FigCraft）
 
 > 分支：`ai/gpu-pipeline`（worktree `D:\Projektdateien\GPUI\branches\gpu-pipeline`，从 `main` 拉出）
-> 状态：阶段 1（图元与填充）、阶段 2（路径与描边）与阶段 3（文字）已落地——能力探测、`auto/gpu/cpu`
-> 三档偏好（引擎命令 + Preferences ▸ Rendering）、场景 IR、实例化 SDF 图元（圆角矩形/椭圆/多边形/
-> 星形）、四类渐变、裁剪、路径填充与描边网格（4× MSAA）、文字字形网格、回读与 CPU↔GPU 像素 diff
-> （7 项对照测试），UI 画布已接线并整帧回退；M4–M7 为设计与接口
+> 状态：阶段 1（图元与填充）、阶段 2（路径与描边）、阶段 3（文字）与阶段 4 的第一块（投影/drop shadow）
+> 已落地——能力探测、`auto/gpu/cpu` 三档偏好（引擎命令 + Preferences ▸ Rendering）、场景 IR、实例化
+> SDF 图元（圆角矩形/椭圆/多边形/星形）、四类渐变、裁剪、路径填充与描边网格（4× MSAA）、文字字形
+> 网格、离屏剪影 + 六 pass 盒模糊的投影、回读与 CPU↔GPU 像素 diff（8 项对照测试），UI 画布已接线并
+> 整帧回退；M4 其余、M5–M7 为设计与接口
 > 日期：2026-11-27
 
 ## 0. 一句话结论
@@ -152,7 +153,30 @@ match figcraft_gpu::render::Renderer::global().render(&scene) { Ok(rgba) => …,
   < 3%、内区 `per_channel = 2`）。测试在找不到字体（Inter / Segoe UI / Arial）时跳过并打印 SKIP，
   因为字体由 `craft-fonts` 提供，CI 可能没有。
 
-### M4 效果
+### M4 效果（本分支已落地：drop shadow）
+
+- **剪影**：只有「轮廓 == 节点自身填充轮廓」的节点在 GPU 上投影——SDF 可表达的盒子、无可见描边、
+  无子节点（或 `clip` 且自身有填充的 frame-like）、全部可见填充为不透明纯色、节点 `opacity = 1`。
+  其余投影（组/文字/半透明/带描边的剪影）登记 `effect` 并整帧回退。
+- **模糊**：为与 CPU 逐字节一致，不做「两 pass 高斯」，而是复刻 `figcraft_render::fx::blur` 的三盒近似：
+  `box_radii(sigma)` 与 CPU `box_sizes` 同一公式（`sigma = radius / 2 * scale`），六个单盒 pass
+  （水平 r0/r1/r2 → 垂直 r0/r1/r2）；每个 pass 逐像素 `textureLoad` 窗口、`u32` 累加、整除、
+  越界按透明 0——与 CPU 的 `box_blur_row` 相同的整数语义。`shaders/blur.wgsl`。
+- **合成**：剪影先画进每阴影独立的 4× MSAA 目标并 resolve，模糊链在 `ping/pong` 单采样纹理间
+  ping-pong（写入纹理与读回纹理每 pass 互换，最后落在 `pong`）；主 pass 用全屏三角形按剪影 alpha
+  乘以投影色（straight sRGB）预乘输出，`show_behind` 由「先画影、后画节点本体」的画家顺序自然满足；
+  投影随节点的 `clip` 裁剪。`shaders/shadow.wgsl`。
+- **共享**：投影实例单独放一条实例缓冲（主实例缓冲仍只放帧内图元），六组 blur bind group 与一组
+  draw bind group 覆盖纹理、采样器与 tint/clip uniform；本帧现建，暂不做跨帧缓存池。
+- 仍登记为 Unsupported：内阴影、图层模糊、背景模糊/玻璃、颗粒、纹理粗糙边（M4 其余）；
+  spread ≠ 0、非 Normal 混合、组/文字/半透明/带描边剪影的投影。
+- **验收**：单测 `box_radii` 对 CPU 近似公式的三组值；对照测试 `a_drop_shadow_matches_the_cpu_blur`
+  （圆角矩形 + radius 12 / offset (6,10) / 55% 黑投影，剪影内区 `per_channel = 2`、`bad_ratio = 2%`，
+  并断言卡片下方确有阴影像素）。实测 GPU 与 CPU 的模糊带一致。
+- 风险：剪影边缘是 4× MSAA 覆盖率、CPU 是解析覆盖率，1 级差会随模糊扩散几像素——对照口径因此
+  放宽到 `per_channel = 2` 且允许 2% 像素；不透明度/描边/子节点等剪影不唯一的场景一律回退。
+
+### M4 效果（设计，M4 其余）
 
 - 阴影：SDF 膨胀 + 两 pass 高斯（`assets/wgsl/shadow.wgsl`）；内阴影走 stencil/裁剪。
 - 图层模糊：可分离高斯，半径按设备像素，边缘 clamp 扩边（避免透明边收缩）。

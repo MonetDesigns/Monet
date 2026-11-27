@@ -247,6 +247,49 @@ fn a_dialogue_free_ring_and_a_star_stroke_stay_gpu_drawable() {
 }
 
 #[test]
+fn a_drop_shadow_matches_the_cpu_blur() {
+    let mut doc = Document::default();
+    let page = doc.pages[0];
+    transparent_page(&mut doc, page);
+    let card = rect(&mut doc, page, "Card", 40.0, 40.0, 90.0, 60.0, 16.0, Paint::solid(Color::new(0.97, 0.97, 0.97, 1.0)));
+    if let Ok(n) = doc.get_mut(card) {
+        n.effects = vec![figcraft_doc::Effect {
+            kind: figcraft_doc::EffectKind::DropShadow(figcraft_doc::Shadow {
+                color: Color::new(0.0, 0.0, 0.0, 0.55),
+                offset: (6.0, 10.0),
+                radius: 12.0,
+                spread: 0.0,
+                blend: figcraft_color::BlendMode::Normal,
+                show_behind: false,
+            }),
+            visible: true,
+        }];
+    }
+
+    let scene = doc_scene::build(&doc, page, &viewport());
+    assert!(scene.is_supported(), "the shadow must stay on the GPU path: {:?}", scene.unsupported_features());
+    assert_eq!(scene.shadow_count(), 1);
+
+    let cpu = cpu_pixels(&doc, page);
+    let Some(gpu) = gpu_pixels(&doc, page) else {
+        eprintln!("SKIP: no adapter");
+        return;
+    };
+    // The shadow is a blur, so a one-level difference at the caster's antialiased edge spreads a few
+    // pixels; grade the interiors and allow that band to carry a couple of levels.
+    let report = compare_interiors(&cpu, &gpu, SIZE as usize, SIZE as usize, Tolerance { per_channel: 2, max_bad_ratio: 0.02 })
+        .expect("comparable");
+    assert!(report.passes(Tolerance { per_channel: 2, max_bad_ratio: 0.02 }), "{}", report.summary());
+    // Below the card's bottom edge (inside the offset, blurred shadow) both sides paint a shadow.
+    let (cpu_shadow, gpu_shadow) = (
+        pixel(&cpu, SIZE as usize, 90, 112).expect("in bounds"),
+        pixel(&gpu, SIZE as usize, 90, 112).expect("in bounds"),
+    );
+    assert!(cpu_shadow[3] > 0, "the CPU drew no shadow: {cpu_shadow:?}");
+    assert!(gpu_shadow[3] > 0, "the GPU drew no shadow: {gpu_shadow:?}");
+}
+
+#[test]
 fn text_glyphs_match_the_cpu() {
     let mut doc = Document::default();
     let page = doc.pages[0];

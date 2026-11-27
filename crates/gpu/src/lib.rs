@@ -15,7 +15,8 @@
 //! * [`diff`] — CPU↔GPU pixel comparison for the regression tests.
 //!
 //! See `docs/gpu-pipeline-plan.md` for the staged plan. Stages 1–3 (shapes and paints, paths and
-//! strokes, text) are in; effects, composition and the export path follow.
+//! strokes, text) and stage 4's drop shadows are in; the other effects, composition and the export
+//! path follow.
 
 pub mod backend;
 pub mod diff;
@@ -29,4 +30,4 @@ pub mod render;
 
 pub use backend::{Capability, DeviceClass};
 pub use prefs::{Effective, RenderBackend};
-pub use scene::{Item, MeshNode, Paint, Scene, ShapeKind, ShapeNode, Viewport};
+pub use scene::{Item, MeshNode, Paint, Scene, ShapeKind, ShapeNode, ShadowNode, Viewport};

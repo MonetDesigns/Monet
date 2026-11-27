@@ -19,7 +19,7 @@ use std::sync::{Mutex, OnceLock};
 use bytemuck::{Pod, Zeroable};
 use figcraft_geom::Affine;
 
-use crate::scene::{Item, Paint, Scene, ShapeKind, ShapeNode, Unsupported};
+use crate::scene::{Clip, Item, Paint, Rgba, Scene, ShapeKind, ShapeNode, Unsupported};
 
 /// Samples per pixel the target uses. Tessellated geometry gets its coverage from these.
 const SAMPLES: u32 = 4;
@@ -128,6 +128,66 @@ enum Cmd {
     Shapes { first: u32, count: u32 },
     /// Indices `first .. first + count` of the shared index buffer.
     Mesh { first: u32, count: u32 },
+    /// Blurred drop shadow `n` (index into the frame's shadow plans).
+    Shadow(usize),
+}
+
+/// One drop shadow to draw: its silhouette (one instance), the blur radius in device pixels and the
+/// tint. The silhouette is rendered into an offscreen target, blurred by six box passes (three
+/// across, three down, exactly as `figcraft_render::fx::blur`), then drawn as a textured quad.
+struct ShadowPlan {
+    first: u32,
+    count: u32,
+    sigma: f32,
+    color: Rgba,
+    clip: Clip,
+}
+
+/// The textures and bind groups one shadow needs for a frame.
+///
+/// The raw textures and buffers are kept alongside the views and bind groups that reference them so
+/// each frame's resources live and die together (a bind group keeps its view alive, but saying so
+/// explicitly is clearer than relying on it).
+#[allow(dead_code)]
+struct ShadowResources {
+    silhouette_msaa: wgpu::Texture,
+    silhouette_msaa_view: wgpu::TextureView,
+    silhouette: wgpu::Texture,
+    silhouette_view: wgpu::TextureView,
+    ping: wgpu::Texture,
+    ping_view: wgpu::TextureView,
+    pong: wgpu::Texture,
+    pong_view: wgpu::TextureView,
+    /// Six passes: inputs are silhouette → ping → pong → ping → pong → ping.
+    blur_binds: Vec<wgpu::BindGroup>,
+    /// Kept alive for the bind groups' uniform buffers.
+    blur_params: Vec<wgpu::Buffer>,
+    /// The final blurred texture + tint + clip.
+    draw_bind: wgpu::BindGroup,
+    tint: wgpu::Buffer,
+}
+
+/// Box radii for three passes approximating a Gaussian of `sigma` — the CPU's `fx::box_sizes`,
+/// replicated so both sides blur with the same widths.
+fn box_radii(sigma: f32) -> [u32; 3] {
+    if !(sigma.is_finite() && sigma > 0.3) {
+        return [0, 0, 0];
+    }
+    let sigma = f64::from(sigma);
+    let n = 3.0;
+    let w_ideal = (12.0 * sigma * sigma / n + 1.0).sqrt();
+    let mut wl = w_ideal.floor() as i64;
+    if wl % 2 == 0 {
+        wl -= 1;
+    }
+    let wu = wl + 2;
+    let m_ideal = (12.0 * sigma * sigma - n * (wl * wl) as f64 - 4.0 * n * wl as f64 - 3.0 * n) / (-4.0 * wl as f64 - 4.0);
+    let m = m_ideal.round() as i64;
+    let r = |i: i64| -> u32 {
+        let w = if i < m { wl } else { wu };
+        ((w.max(1) - 1) / 2) as u32
+    };
+    [r(0), r(1), r(2)]
 }
 
 struct Target {
@@ -152,9 +212,14 @@ pub struct Renderer {
     queue: wgpu::Queue,
     pipeline: wgpu::RenderPipeline,
     mesh_pipeline: wgpu::RenderPipeline,
+    blur_pipeline: wgpu::RenderPipeline,
+    shadow_pipeline: wgpu::RenderPipeline,
+    sampler: wgpu::Sampler,
     globals: wgpu::Buffer,
     bind_globals: wgpu::BindGroup,
     instances_layout: wgpu::BindGroupLayout,
+    blur_layout: wgpu::BindGroupLayout,
+    shadow_layout: wgpu::BindGroupLayout,
     instances: Option<(wgpu::Buffer, wgpu::BindGroup, u64)>,
     mesh_verts: Option<(wgpu::Buffer, u64)>,
     mesh_indices: Option<(wgpu::Buffer, u64)>,
@@ -213,6 +278,14 @@ impl Renderer {
             label: Some("figcraft-gpu-mesh"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/mesh.wgsl").into()),
         });
+        let blur_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("figcraft-gpu-blur"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/blur.wgsl").into()),
+        });
+        let shadow_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("figcraft-gpu-shadow"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/shadow.wgsl").into()),
+        });
 
         let globals_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("globals"),
@@ -235,6 +308,54 @@ impl Renderer {
                 },
                 count: None,
             }],
+        });
+        let shadow_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("shadow"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+                    count: None,
+                },
+            ],
+        });
+        let blur_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("blur"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+                    count: None,
+                },
+            ],
         });
         let shape_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("shape"),
@@ -304,6 +425,75 @@ impl Renderer {
             cache: None,
         });
 
+        let blur_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("blur"),
+            bind_group_layouts: &[Some(&blur_layout)],
+            immediate_size: 0,
+        });
+        let shadow_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("shadow"),
+            bind_group_layouts: &[Some(&globals_layout), Some(&shadow_layout)],
+            immediate_size: 0,
+        });
+        let single_state = |b: Option<wgpu::BlendState>| wgpu::ColorTargetState {
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            blend: b,
+            write_mask: wgpu::ColorWrites::ALL,
+        };
+        let blur_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("blur"),
+            layout: Some(&blur_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &blur_shader,
+                entry_point: Some("vs"),
+                buffers: &[],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &blur_shader,
+                entry_point: Some("fs"),
+                targets: &[Some(single_state(None))],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState { count: 1, mask: !0, alpha_to_coverage_enabled: false },
+            multiview_mask: None,
+            cache: None,
+        });
+        let shadow_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("shadow"),
+            layout: Some(&shadow_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shadow_shader,
+                entry_point: Some("vs"),
+                buffers: &[],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shadow_shader,
+                entry_point: Some("fs"),
+                targets: &[Some(single_state(blend()))],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() },
+            depth_stencil: None,
+            // The main pass draws into the 4× target; a full-screen quad covers every sample with the
+            // same blurred alpha, so multisampling changes nothing here.
+            multisample: wgpu::MultisampleState { count: SAMPLES, mask: !0, alpha_to_coverage_enabled: false },
+            multiview_mask: None,
+            cache: None,
+        });
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("shadow"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+            ..Default::default()
+        });
+
         let globals = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("globals"),
             size: 16,
@@ -322,9 +512,14 @@ impl Renderer {
             queue,
             pipeline,
             mesh_pipeline,
+            blur_pipeline,
+            shadow_pipeline,
+            sampler,
             globals,
             bind_globals,
             instances_layout,
+            blur_layout,
+            shadow_layout,
             instances: None,
             mesh_verts: None,
             mesh_indices: None,
@@ -337,6 +532,90 @@ impl Renderer {
     /// The adapter this renderer draws on, for the preferences row and logs.
     pub fn adapter(&self) -> &str {
         &self.adapter
+    }
+
+    /// One shadow's offscreen targets, blur bind groups and draw bind group for this frame.
+    fn shadow_resources(&self, width: u32, height: u32, plan: &ShadowPlan) -> Option<ShadowResources> {
+        use wgpu::TextureUsages as U;
+        let size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
+        let texture = |label: &str, samples: u32, usage: U| {
+            self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size,
+                mip_level_count: 1,
+                sample_count: samples,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage,
+                view_formats: &[],
+            })
+        };
+        let silhouette_msaa = texture("shadow-msaa", SAMPLES, U::RENDER_ATTACHMENT);
+        let silhouette_msaa_view = silhouette_msaa.create_view(&wgpu::TextureViewDescriptor::default());
+        let silhouette = texture("shadow-silhouette", 1, U::RENDER_ATTACHMENT | U::TEXTURE_BINDING);
+        let silhouette_view = silhouette.create_view(&wgpu::TextureViewDescriptor::default());
+        let ping = texture("shadow-ping", 1, U::RENDER_ATTACHMENT | U::TEXTURE_BINDING);
+        let ping_view = ping.create_view(&wgpu::TextureViewDescriptor::default());
+        let pong = texture("shadow-pong", 1, U::RENDER_ATTACHMENT | U::TEXTURE_BINDING);
+        let pong_view = pong.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let radii = box_radii(plan.sigma);
+        let mut blur_binds = Vec::with_capacity(6);
+        let mut blur_params = Vec::with_capacity(6);
+        let inputs: [&wgpu::TextureView; 6] = [&silhouette_view, &ping_view, &pong_view, &ping_view, &pong_view, &ping_view];
+        for (i, input) in inputs.iter().enumerate() {
+            let params = [radii[i % 3] as i32, i32::from(i < 3), 0, 0];
+            let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("blur params"),
+                size: 16,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.queue.write_buffer(&buffer, 0, bytemuck::cast_slice(&params));
+            let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("blur"),
+                layout: &self.blur_layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(input) },
+                    wgpu::BindGroupEntry { binding: 1, resource: buffer.as_entire_binding() },
+                ],
+            });
+            blur_params.push(buffer);
+            blur_binds.push(bind);
+        }
+
+        let tint = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("shadow tint"),
+            size: 32,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let tint_values = [plan.color.r, plan.color.g, plan.color.b, plan.color.a, plan.clip.0[0], plan.clip.0[1], plan.clip.0[2], plan.clip.0[3]];
+        self.queue.write_buffer(&tint, 0, bytemuck::cast_slice(&tint_values));
+        let draw_bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("shadow draw"),
+            layout: &self.shadow_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&pong_view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry { binding: 2, resource: tint.as_entire_binding() },
+            ],
+        });
+
+        Some(ShadowResources {
+            silhouette_msaa,
+            silhouette_msaa_view,
+            silhouette,
+            silhouette_view,
+            ping,
+            ping_view,
+            pong,
+            pong_view,
+            blur_binds,
+            blur_params,
+            draw_bind,
+            tint,
+        })
     }
 
     /// Draw `scene` and read it back as premultiplied RGBA8, `width * height * 4` bytes.
@@ -359,6 +638,8 @@ impl Renderer {
 
         // Walk the items once: instances, mesh vertices/indices and the draw list.
         let mut instances: Vec<GpuInstance> = Vec::new();
+        let mut shadow_instances: Vec<GpuInstance> = Vec::new();
+        let mut shadow_plans: Vec<ShadowPlan> = Vec::new();
         let mut verts: Vec<GpuMeshVertex> = Vec::new();
         let mut indices: Vec<u32> = Vec::new();
         let mut cmds: Vec<Cmd> = Vec::new();
@@ -379,6 +660,34 @@ impl Renderer {
                     let first = indices.len() as u32;
                     indices.extend(mesh.indices.iter().map(|i| i + base));
                     cmds.push(Cmd::Mesh { first, count: mesh.indices.len() as u32 });
+                }
+                Item::Shadow(shadow) => {
+                    if instances.len() > batch {
+                        cmds.push(Cmd::Shapes { first: batch as u32, count: (instances.len() - batch) as u32 });
+                        batch = instances.len();
+                    }
+                    // The silhouette is the shape itself in white: the same SDF coverage the fill has,
+                    // shifted by the shadow's offset (already in device pixels).
+                    let mut caster = ShapeNode {
+                        mat: shadow.mat,
+                        size: shadow.size,
+                        shape: shadow.shape,
+                        paint: Paint::Solid(Rgba::new(1.0, 1.0, 1.0, 1.0)),
+                        clip: shadow.clip,
+                        opacity: 1.0,
+                    };
+                    caster.mat[4] += shadow.offset[0];
+                    caster.mat[5] += shadow.offset[1];
+                    let first = shadow_instances.len() as u32;
+                    shadow_instances.push(GpuInstance::of(&caster));
+                    cmds.push(Cmd::Shadow(shadow_plans.len()));
+                    shadow_plans.push(ShadowPlan {
+                        first,
+                        count: 1,
+                        sigma: shadow.sigma,
+                        color: shadow.color,
+                        clip: shadow.clip,
+                    });
                 }
             }
         }
@@ -412,6 +721,29 @@ impl Renderer {
             return Err(RenderError::Device("the instance buffer was not created".into()));
         };
         self.queue.write_buffer(buffer, 0, &bytes);
+
+        // Shadow silhouettes get their own instance buffer; the main one holds the frame's shapes.
+        let shadow_bind: Option<(wgpu::Buffer, wgpu::BindGroup)> = if shadow_plans.is_empty() {
+            None
+        } else {
+            let bytes: Vec<u8> = bytemuck::cast_slice(&shadow_instances).to_vec();
+            let size = (bytes.len() as u64).next_power_of_two().max(256);
+            let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("shadow instances"),
+                size,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.queue.write_buffer(&buffer, 0, &bytes);
+            let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("shadow instances"),
+                layout: &self.instances_layout,
+                entries: &[wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() }],
+            });
+            Some((buffer, bind))
+        };
+        let shadow_resources: Vec<ShadowResources> =
+            shadow_plans.iter().map(|plan| self.shadow_resources(w, h, plan)).collect::<Option<Vec<_>>>().ok_or_else(|| RenderError::Device("the shadow targets were not created".into()))?;
 
         // Mesh buffers: one vertex buffer and one index buffer for the whole frame.
         if !verts.is_empty() {
@@ -489,6 +821,55 @@ impl Renderer {
 
         let clear = scene.clear;
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
+
+        // Shadows first: each silhouette into its own target, then six box passes (the CPU's blur).
+        if let Some((_, bind_shadow)) = shadow_bind.as_ref() {
+            for (plan, res) in shadow_plans.iter().zip(&shadow_resources) {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("shadow silhouette"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &res.silhouette_msaa_view,
+                        depth_slice: None,
+                        resolve_target: Some(&res.silhouette_view),
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&self.pipeline);
+                pass.set_bind_group(0, &self.bind_globals, &[]);
+                pass.set_bind_group(1, bind_shadow, &[]);
+                pass.draw(0..6, plan.first..plan.first + plan.count);
+            }
+            for res in &shadow_resources {
+                for (k, blur_bind) in res.blur_binds.iter().enumerate() {
+                    // Even passes write the ping-pong texture, odd ones the other; the last is `pong`.
+                    let view = if k % 2 == 0 { &res.ping_view } else { &res.pong_view };
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("shadow blur"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                    pass.set_pipeline(&self.blur_pipeline);
+                    pass.set_bind_group(0, blur_bind, &[]);
+                    pass.draw(0..3, 0..1);
+                }
+            }
+        }
+
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("frame"),
@@ -541,6 +922,17 @@ impl Renderer {
                         }
                         pass.draw_indexed(first..first + count, 0, 0..1);
                     }
+                    Cmd::Shadow(index) => {
+                        let Some(res) = shadow_resources.get(index) else {
+                            continue;
+                        };
+                        pass.set_pipeline(&self.shadow_pipeline);
+                        pass.set_bind_group(0, &self.bind_globals, &[]);
+                        pass.set_bind_group(1, &res.draw_bind, &[]);
+                        pass.draw(0..3, 0..1);
+                        bound_shapes = false;
+                        bound_mesh = false;
+                    }
                 }
             }
         }
@@ -592,6 +984,26 @@ impl Renderer {
 pub fn global() -> Option<&'static Mutex<Renderer>> {
     static GLOBAL: OnceLock<Option<Mutex<Renderer>>> = OnceLock::new();
     GLOBAL.get_or_init(|| Renderer::new().map(Mutex::new)).as_ref()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::box_radii;
+
+    #[test]
+    fn small_sigmas_mean_no_blur() {
+        assert_eq!(box_radii(0.0), [0, 0, 0]);
+        assert_eq!(box_radii(0.3), [0, 0, 0]);
+    }
+
+    #[test]
+    fn the_three_box_widths_follow_the_cpu_approximation() {
+        // The same arithmetic as `figcraft_render::fx::box_sizes`, checked independently here so a
+        // change on either side breaks the parity test.
+        assert_eq!(box_radii(1.0), [0, 0, 1]);
+        assert_eq!(box_radii(5.0), [4, 4, 5]);
+        assert_eq!(box_radii(10.0), [9, 9, 10]);
+    }
 }
 
 /// Draw one frame on the GPU when `effective()` says so; `None` means "draw it on the CPU".
