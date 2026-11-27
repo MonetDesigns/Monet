@@ -1950,7 +1950,6 @@ status = "draft — needs native review"
 "Everyone who reaches this server can open these files while they are shared." = "このサーバーに接続できる人は、共有されている間これらのファイルを開けます。"
 "Exact only" = "完全一致のみ"
 "Expand the interface" = "インターフェースを広げる"
-"Exported {name}; {n} 種類の内容が変更または省略されました" = "{name} を書き出しました。{n} 種類の内容が変更または省略されました"
 "Exported {n} files; some content was changed or left out" = { other = "{n} 個のファイルを書き出しました。一部の内容が変更または省略されました" }
 "Monet stopped because of an internal error." = "内部エラーにより Monet が停止しました。"
 "Format" = "形式"
