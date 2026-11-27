@@ -31,9 +31,14 @@ impl Drop for DepthReset {
 }
 
 pub fn run<T>(cmd: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
-    GUARD_DEPTH.with(|d| d.set(d.get() + 1));
-    let _reset = DepthReset;
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+    // Keep the depth counted only while `catch_unwind` is on the stack: handling or dropping
+    // the payload can itself panic, and that unwind must be reported as fatal.
+    let caught = {
+        GUARD_DEPTH.with(|d| d.set(d.get() + 1));
+        let _reset = DepthReset;
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
+    };
+    match caught {
         Ok(r) => r,
         Err(payload) => {
             let msg = payload
@@ -53,11 +58,13 @@ mod tests {
 
     #[test]
     fn a_caught_command_panic_releases_the_guard_depth() {
+        let mut inside = false;
         let result = run("test.command", || -> Result<()> {
-            assert!(catching_command_panic(), "the hook must see the guard while unwinding");
+            inside = catching_command_panic();
             panic!("boom");
         });
         assert!(matches!(result, Err(EngineError::Internal { .. })));
+        assert!(inside, "the guard must be visible while the command unwinds");
         assert!(!catching_command_panic(), "the reset must run after the panic is caught");
     }
 }

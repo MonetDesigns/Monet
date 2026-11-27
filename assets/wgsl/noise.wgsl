@@ -9,7 +9,7 @@
 //   · 值 = 3 层梯度噪声（改进 Perlin，双线性 + smoothstep 权重），每层 seed 由
 //     fract(sin(seed*91.3458 + octave*57.123 + 12.345)*43758.5453) 给出；
 //   · density 是一个**窗口**而不是阈值：
-//       lo = 10*(0.25 - d/4)（duo 的第二色用 0.75），hi = lo + 10*(d/2)，b = v*10
+//       lo = 10*(0.25 - d/4)（duo 的第二色用 0.75），hi = lo + 10*d，b = v*10
 //       keep = step(lo,b) * (1 - step(hi,b))
 //     d=0 只留最亮的峰，d=100 全留 —— 所以 density 的量程是 0..100，不是 0..1；
 //   · type 0 = multi（RGB 三通道各自一份噪声 + 第四份做 alpha），
@@ -157,7 +157,7 @@ fn density_window(v : f32, density : f32, inverted : bool) -> f32 {
     } else {
         lo = 10.0 * (0.25 - d / 4.0);
     }
-    let hi = lo + 10.0 * (d / 2.0);
+    let hi = lo + 10.0 * d;
     let b = v * 10.0;
     return step(lo, b) * (1.0 - step(hi, b));
 }

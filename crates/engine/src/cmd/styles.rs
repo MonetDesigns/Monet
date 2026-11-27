@@ -786,7 +786,11 @@ pub fn sync_text_styles(doc: &mut Document, ids: &[NodeId]) {
         let mut defs = std::borrow::Cow::Borrowed(&defs);
         for st in &varying {
             if let StyleKind::Text { style, .. } = crate::style_vars::kind_for(doc, st, id).into_owned() {
-                defs.to_mut().insert(st.id.clone(), style);
+                // The layer's spans carry the drawn (instance-scaled) lengths; compare against
+                // the same values or a linked style unlinks itself in a scaled instance.
+                let mut drawn = style;
+                scale_text_lengths(&mut drawn, scale_of(doc, id));
+                defs.to_mut().insert(st.id.clone(), drawn);
             }
         }
         let mut t2 = t.clone();
@@ -1363,7 +1367,18 @@ pub(crate) fn bake_scale(doc: &mut Document, id: NodeId) {
         if matches!(n.kind, NodeKind::Instance { .. }) {
             n.scale_factor = (n.scale_factor * k).clamp(super::arrange::MIN_SCALE_FACTOR, super::arrange::MAX_SCALE_FACTOR);
         } else {
-            n.bound.retain(|f, _| !LENGTH_FIELDS.contains(&f.as_str()));
+            n.bound.retain(|f, _| {
+                if LENGTH_FIELDS.contains(&f.as_str()) {
+                    return false;
+                }
+                // Bound effect lengths were written scaled; keeping the binding would shrink
+                // them back to the unscaled variable value on the next refresh.
+                let effect_length = f
+                    .strip_prefix("effects/")
+                    .and_then(|rest| rest.split_once('/'))
+                    .is_some_and(|(_, prop)| EFFECT_LENGTH_FIELDS.contains(&prop));
+                !effect_length
+            });
         }
     }
 }

@@ -56,6 +56,22 @@ fn abort_window(state: &Arc<(Mutex<FrameWindow>, Condvar)>) {
     cvar.notify_all();
 }
 
+/// Aborts the window when the ordered receiver unwinds (a `sink` panic), not only on an
+/// explicit `Err`; otherwise a worker waiting on the window keeps the thread scope from
+/// finishing.
+struct AbortOnDrop {
+    state: Arc<(Mutex<FrameWindow>, Condvar)>,
+    armed: bool,
+}
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        if self.armed {
+            abort_window(&self.state);
+        }
+    }
+}
+
 /// How many worker threads a frame-parallel export uses.
 fn render_threads() -> usize {
     std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).clamp(1, MAX_RENDER_THREADS)
@@ -273,7 +289,11 @@ impl Animation {
             let window = (budget_frames / 2).max(1);
             let workers = threads.min(window).max(1);
             let state = Arc::new((Mutex::new(FrameWindow { issued: 0, done: 0, aborted: false }), Condvar::new()));
-            let (tx, rx) = mpsc::sync_channel::<(usize, std::result::Result<figcraft_motion_codec::FrameRgba, String>)>(window);
+            let mut abort_guard = AbortOnDrop { state: state.clone(), armed: true };
+            // A bounded channel preallocates `capacity` slots; never allocate more slots than
+            // frames, or a 1×1 export would reserve the whole byte budget in empty slots.
+            let channel = window.min(times.len()).max(1);
+            let (tx, rx) = mpsc::sync_channel::<(usize, std::result::Result<figcraft_motion_codec::FrameRgba, String>)>(channel);
             for _ in 0..workers {
                 let tx = tx.clone();
                 let state = state.clone();
@@ -314,6 +334,7 @@ impl Animation {
                     cvar.notify_all();
                 }
             }
+            abort_guard.armed = false;
             Ok(())
         })
     }
