@@ -14,6 +14,12 @@ if ! grep -qx 'Name=Monet' packaging/linux/app.monet.design.desktop \
   echo "::error::Linux desktop entry is not the Monet app" >&2
   exit 1
 fi
+if ! grep -q 'Contents/Resources/assets/devices' packaging/macos/package.sh \
+  || ! grep -q 'assets/devices/devices.json' packaging/macos/verify.sh \
+  || ! grep -q -- '--require-signing' packaging/macos/verify.sh; then
+  echo "::error::macOS packaging lost its runtime assets or signing gate" >&2
+  exit 1
+fi
 
 python3 - <<'PYEOF'
 import yaml

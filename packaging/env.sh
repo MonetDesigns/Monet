@@ -46,6 +46,10 @@ export MONET_BUILD_DATE="${MONET_BUILD_DATE:-${FIGCRAFT_BUILD_DATE:-$(date -u +%
 export FIGCRAFT_BUILD_DATE="$MONET_BUILD_DATE"
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
 
+# Release workflows must not silently publish an ad-hoc, unnotarized macOS build. GitHub Actions
+# sets this by default; a local developer can still make an ad-hoc build, or opt in explicitly.
+export MONET_REQUIRE_SIGNING="${MONET_REQUIRE_SIGNING:-${GITHUB_ACTIONS:+1}}"
+
 # The desktop app is the only release target until the CLI, server and web front-end carry their
 # own Monet names. No package format stages a figcraft-cli binary.
 BINS=(monet)

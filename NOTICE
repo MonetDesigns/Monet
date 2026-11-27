@@ -1,5 +1,6 @@
-FigCraft
-Copyright (c) 2026 ArtCraft Team and the FigCraft contributors.
+Monet
+Copyright (c) 2026 Monet contributors.
+Derived from FigCraft, copyright (c) 2026 ArtCraft Team and the FigCraft contributors.
 Licensed under the MIT License or the Apache License, Version 2.0, at your option
 (LICENSE-MIT, LICENSE-APACHE).
 
@@ -9,9 +10,10 @@ docs/brand/LICENSE-brand.txt.
 
 Third-party material
 
-This product bundles no third-party fonts, icons or images in the repository: every icon is
-drawn in code and original to FigCraft. The per-file list (author, source, license) of any bundled
-asset is in ATTRIBUTION.md.
+This product bundles third-party device-frame artwork under assets/devices. Its author, source and
+license are recorded in ATTRIBUTION.md; release builds must only include entries whose licence
+permits redistribution. Every other icon is drawn in code and original to Monet, and the per-file
+list of bundled assets is in ATTRIBUTION.md.
 
 Release builds made with the optional craft-fonts build input (CRAFT_FONTS_DIR) embed the fonts
 listed in ATTRIBUTION.md (Inter and others, SIL Open Font License 1.1); each package carries their

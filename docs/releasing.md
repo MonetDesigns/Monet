@@ -99,10 +99,28 @@ core UI faces. Packages carry each embedded font's licence as `OFL-<family>.txt`
 (`Contents/MacOS/Monet`, `Contents/Resources/Monet.icns`, `Info.plist` from `Info.plist.in`).
 The `.icns` is generated at packaging time with `iconutil` from the committed
 `assets/app-icon/monet-<size>.png` (made by `cargo xtask icon`); it is never committed.
+
+The app reads external runtime files, so the bundle also carries
+`Contents/Resources/assets/devices` (156 files, 101.16 MiB), `Contents/Resources/assets/brushes`
+(`monet-defaults.abr`, 74.7 KB) and `Contents/Resources/assets/wgsl` (`glass.wgsl`, 17.9 KB).
+`Contents/Resources/NOTICE` and `Contents/Resources/ATTRIBUTION.md` travel with them so the binary's
+third-party notice stays inside the distributable.
+The devices are third-party device-frame artwork; `ATTRIBUTION.md` currently marks their
+redistribution licence **UNCONFIRMED**, and `--require-signing` refuses a release build until that
+entry is replaced with the real source/licence. Local ad-hoc builds may still include them for
+development.
+
 Signing goes inside-out with the hardened runtime and a timestamp (empty entitlements), then the
 app is notarized and stapled, put on a DMG with an `Applications` link (`hdiutil makehybrid` +
-`convert`), and the DMG is signed, notarized and stapled. `packaging/macos/verify.sh` checks the
-artifact as shipped (strict with secrets, warnings without).
+`convert`), and the DMG is signed, notarized and stapled. `packaging/macos/verify.sh` mounts the
+DMG, checks the inner `Monet.app` architecture with `lipo`, verifies its code signature, `Info.plist`
+identity/version keys and the three asset folders, and runs `Contents/MacOS/Monet --version` in
+addition to the DMG's own signature, notarization and Gatekeeper checks.
+
+Finder double-clicks, Open With, Dock drops and `open -a Monet.app file.figcraft` arrive through
+GPUI's macOS `open_urls` callback. Command-line files and `file://` URLs are parsed by
+`apps/monet/src/args.rs`; `figcraft://` links never open as documents. The GPUI front-end currently
+has no join dialog, so an invite link is reported instead of silently opening a bogus tab.
 
 Locally (no certificates: ad-hoc signature, no notarization):
 
@@ -111,6 +129,10 @@ packaging/macos/package.sh --arch aarch64     # quick, host-only; omit --arch fo
 packaging/macos/verify.sh --arch aarch64
 hdiutil attach -nobrowse -readonly dist/release/monet-*-macos-aarch64.dmg   # inspect, then detach
 ```
+
+Release builds must use `--require-signing` (or `MONET_REQUIRE_SIGNING=1`, which
+`packaging/env.sh` sets for GitHub Actions). Missing Apple secrets or an unconfirmed device-art
+licence then fail before an ad-hoc or unreleasable package is produced.
 
 ### Windows
 
@@ -160,14 +182,20 @@ never repo or org secrets. Names (identical in every app): `APPLE_CERTIFICATE`,
 `APPLE_CERTIFICATE_PASSWORD`, `KEYCHAIN_PASSWORD`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`,
 `WINDOWS_CERTIFICATE`, `WINDOWS_CERTIFICATE_PASSWORD`, `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`,
 `AZURE_CLIENT_SECRET`, `AZURE_SIGNING_ENDPOINT`, `AZURE_SIGNING_ACCOUNT`, `AZURE_CERT_PROFILE`.
-Each is optional: a missing one gives an unsigned artifact and a `::warning::`. An org admin
-provisions the environment, ruleset and secrets, and adds the repo to the org's Default runner
-group so `macos-15-xlarge` can pick up the job.
+The Apple set is required for a macOS release: `MONET_REQUIRE_SIGNING=1` in GitHub Actions and
+`package.sh` / `verify.sh --require-signing` fail instead of producing an ad-hoc, unnotarized
+DMG. The Windows and Linux signing sets remain optional until their channels are enabled.
+An org admin provisions the environment, ruleset and secrets, and adds the repo to the org's
+Default runner group so `macos-15-xlarge` can pick up the job.
 
 ## Checks
 
 - `.github/workflows/ci.yml` (PRs and `main`, Linux only): fmt, clippy `-D warnings`, tests,
-  layering, asset attribution, wasm32 check. No macOS in CI (playbook).
+  layering, asset attribution, wasm32 check. The default gate deliberately stays Linux-only
+  (upstream playbook).
+- `.github/workflows/macos-check.yml`: a lightweight `cargo check -p monet` on `macos-15`, only
+  for PRs labelled `full-ci` or `workflow_dispatch`; it is not a required check and does not build
+  a DMG. The real package path is the macOS job in `release.yml`.
 - `.github/workflows/packaging-lint.yml` (changes to `packaging/` or workflows): actionlint,
   shellcheck, the AppRun test, a PowerShell parse, the MSI icon check, the FreeBSD dry run, a
   grep for other products' names, xmllint, `desktop-file-validate`, `appstreamcli validate` and

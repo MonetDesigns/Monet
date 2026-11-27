@@ -99,6 +99,7 @@ trigger re-enabled.
 | Parity evidence | Share of `done` rows in the parity plan backed by a contract | 100% |
 | Gate health | `cargo xtask ci` result; entries in `docs/known-failures.md` | Green / fixed list |
 | Deliverable | Can `main` produce an installable Monet package? | Dry run first; `Yes` once a desktop `monet` package installs and starts |
+| macOS deliverable | DMG mounts, `Monet.app` loads factory devices/brushes/WGSL, and Finder opens a `.figcraft` document | Pass before the `release` trigger is re-enabled |
 | Sync cost | Files that differ from the mirror per sync | Explainable, trending down |
 
 ## Divergence register

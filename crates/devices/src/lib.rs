@@ -234,6 +234,16 @@ pub fn load_dir(dir: &Path) -> Result<usize, String> {
     Ok(n)
 }
 
+/// The standard macOS app layout: `Monet.app/Contents/Resources/assets/devices`.
+///
+/// Kept as a pure path function so it can be tested on any host. It returns `None` when the
+/// manifest is absent; callers only use it on macOS, where this layout is what packaging writes.
+fn macos_bundle_dir(exe: &Path) -> Option<PathBuf> {
+    let contents = exe.parent()?.parent()?;
+    let d = contents.join("Resources").join("assets").join("devices");
+    d.join(MANIFEST_FILE).is_file().then_some(d)
+}
+
 /// Locate the bundled factory directory (an asset beside the executable, or the repository's
 /// `assets/devices` in a development build). Never compiled in.
 fn bundled_dir() -> Option<PathBuf> {
@@ -246,6 +256,12 @@ fn bundled_dir() -> Option<PathBuf> {
     if let Ok(exe) = std::env::current_exe()
         && let Some(parent) = exe.parent()
     {
+        // A packaged Monet.app keeps the catalogue under Contents/Resources, not next to the
+        // Mach-O. Try that before the development-tree fallbacks so an installed app never
+        // depends on the build machine's source path.
+        if let Some(d) = macos_bundle_dir(&exe) {
+            return Some(d);
+        }
         let d = parent.join("assets").join("devices");
         if d.join(MANIFEST_FILE).is_file() {
             return Some(d);
@@ -378,5 +394,17 @@ mod tests {
         assert_eq!(c.families.len(), 13);
         assert_eq!(c.variant_names().len(), 25);
         assert!(!c.resolve("iPhone 17", Some("iPhone 17 Pro")).unwrap().colors.is_empty());
+    }
+
+    #[test]
+    fn macos_bundle_catalogue_is_found_from_contents_macos() {
+        let root = std::env::temp_dir().join(format!("monet-devices-bundle-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let devices = root.join("Contents").join("Resources").join("assets").join("devices");
+        std::fs::create_dir_all(&devices).unwrap();
+        std::fs::write(devices.join(MANIFEST_FILE), JSON.as_bytes()).unwrap();
+        let exe = root.join("Contents").join("MacOS").join("Monet");
+        assert_eq!(macos_bundle_dir(&exe), Some(devices));
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

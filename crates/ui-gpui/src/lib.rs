@@ -4143,6 +4143,23 @@ impl CanvasView {
         }
     }
 
+    /// Open documents requested by the shell at launch or by Finder/Open With later.
+    ///
+    /// Files are opened as documents, not imported at a drop point; a broken file reports its own
+    /// error through `execute_reporting` and does not stop the remaining files.
+    pub fn open_files(&mut self, paths: &[std::path::PathBuf], cx: &mut Context<Self>) {
+        let mut opened = 0;
+        for path in paths {
+            if self.execute_reporting("file.open", serde_json::json!({ "path": path.to_string_lossy() }), cx).is_some() {
+                opened += 1;
+            }
+        }
+        if opened > 0 {
+            self.close_home();
+        }
+        cx.notify();
+    }
+
     /// 画板工具组的一个选项被选中：`tool.{id}` 带上它的参数（颜色 / 形状 / 印章），
 
     /// 然后关掉菜单（`ui-egui/src/toolbar.rs::options_flyout`）。
@@ -9369,9 +9386,27 @@ impl drag_manager::WindowDragTarget for CanvasView {
 /// Extensions accepted by the native brush-import dialog.
 const BRUSH_EXTENSIONS: &[&str] = &["abr"];
 
+/// Everything the desktop shell can hand to the GPUI app at launch.
+///
+/// `run()` keeps the old no-argument entry point; `apps/monet` parses the command line and calls
+/// [`run_with_launch`] so a file passed by a shell (or `open -a`) is opened after the window exists.
+#[derive(Debug, Default)]
+pub struct LaunchOptions {
+    pub control_port: Option<u16>,
+    pub files: Vec<std::path::PathBuf>,
+    /// A `figcraft://` invite link. The GPUI front-end has no join dialog yet; it is never treated
+    /// as a document and is logged instead of silently opening a bogus tab.
+    pub join: Option<String>,
+}
+
 /// 应用入口。
 
 pub fn run() {
+    run_with_launch(LaunchOptions { control_port: control_port_from_args(std::env::args()), ..LaunchOptions::default() });
+}
+
+pub fn run_with_launch(options: LaunchOptions) {
+    let LaunchOptions { control_port, files: initial_files, join } = options;
     // 文档文字的量算与渲染都走 `figcraft_text`；它的字体库要显式扫一次系统字体，
 
     // 否则文字宽度会是 0/1px（画出来就是一条竖线）。egui 版在启动时也是这么做的。
@@ -9392,16 +9427,17 @@ pub fn run() {
 
     // `--control <port>`：开本地控制通道（与 `cargo run -p figcraft -- --control 7979` 同义）。
 
-    let control_port = control_port_from_args(std::env::args());
-
     // 图标走 GPUI 的 SVG 管线（`svg().path(...)` / `paint_svg`），必须由 `AssetSource` 提供字节。
-
     // GPUI 默认资源源是 `()`（load 恒返回 None），不注册图标就会静默不画。
-
     // 这是 kit `Icon` 依赖的资源注册契约，本地实现、不引入 gpui-kit crate。
-
     // `AppAssets` = 原有 IconAssets + 动态内联 SVG 文字（旋转标尺数字）。
+    let (open_url_tx, open_url_rx) = smol::channel::unbounded::<Vec<String>>();
     let app = Application::new().with_assets(crate::canvas::svg_text::AppAssets);
+    app.on_open_urls(move |urls| {
+        // AppKit calls this on the main thread, but without an `App` context. Send the URLs to a
+        // foreground task; never touch the view from the callback itself.
+        let _ = open_url_tx.try_send(urls);
+    });
 
     app.run(move |cx: &mut App| {
         a11y::init(cx);
@@ -9470,6 +9506,48 @@ pub fn run() {
 
                 cx.notify();
             });
+        }
+
+        // Launch files and Finder/Open-With URLs. Both paths use the same `open_files` method; the
+        // Apple event callback only pushes URLs into `open_url_rx`, then a foreground task drains
+        // them once the view exists.
+        if let Some(view) = &view {
+            if !initial_files.is_empty() {
+                let files = initial_files.clone();
+                let _ = view.update(cx, |this, cx| this.open_files(&files, cx));
+            }
+            if let Some(link) = &join {
+                log::warn!("figcraft:// link received, but the GPUI front-end has no join dialog yet: {link}");
+                let _ = view.update(cx, |this, cx| {
+                    this.toast("Invite links are not supported by this GPUI build.", cx);
+                });
+            }
+
+            let view_for_urls = view.downgrade();
+            cx.spawn(async move |_this, cx| {
+                while let Ok(urls) = open_url_rx.recv().await {
+                    let mut files = Vec::new();
+                    let mut invites = Vec::new();
+                    for url in urls {
+                        if let Some(path) = open_url_path(&url) {
+                            files.push(path);
+                        } else if url.get(..9).is_some_and(|s| s.eq_ignore_ascii_case("figcraft:")) {
+                            invites.push(url);
+                        }
+                    }
+                    let Some(view) = view_for_urls.upgrade() else { break };
+                    if !files.is_empty() {
+                        let _ = view.update(cx, |this, cx| this.open_files(&files, cx));
+                    }
+                    for link in invites {
+                        log::warn!("figcraft:// link received, but the GPUI front-end has no join dialog yet: {link}");
+                        let _ = view.update(cx, |this, cx| {
+                            this.toast("Invite links are not supported by this GPUI build.", cx);
+                        });
+                    }
+                }
+            })
+            .detach();
         }
 
         if let (Some(port), Some(view)) = (control_port, view) {
@@ -9606,6 +9684,49 @@ fn control_port_from_args(args: impl Iterator<Item = String>) -> Option<u16> {
     }
 
     None
+}
+
+/// Decode a `file://` URL into a local path. Finder sends file URLs for Open With and Dock drops.
+fn open_url_path(url: &str) -> Option<std::path::PathBuf> {
+    let rest = url.strip_prefix("file://")?;
+    let (authority, path) = match rest.find('/') {
+        Some(index) => (&rest[..index], &rest[index..]),
+        None => ("", rest),
+    };
+    if !matches!(authority, "" | "localhost") {
+        return None;
+    }
+
+    let decoded: String = {
+        let bytes = path.as_bytes();
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'%' && i + 2 < bytes.len() {
+                let hex = &path[i + 1..i + 3];
+                if let Ok(value) = u8::from_str_radix(hex, 16) {
+                    out.push(value);
+                    i += 3;
+                    continue;
+                }
+            }
+            out.push(bytes[i]);
+            i += 1;
+        }
+        String::from_utf8(out).ok()?
+    };
+
+    if let Some(path) = decoded.strip_prefix('/') {
+        // `file:///C:/Users/...` is the URL spelling of `C:\Users\...` on Windows.
+        let bytes = path.as_bytes();
+        if bytes.len() > 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && matches!(bytes[2], b'/' | b'\\') {
+            return Some(std::path::PathBuf::from(path));
+        }
+        // `file:///Users/...` is already absolute on Unix; decoding may turn `%2F` into `/`.
+        return Some(std::path::PathBuf::from(format!("/{path}")));
+    }
+
+    Some(std::path::PathBuf::from(decoded))
 }
 
 // ───────────────────────────── IME 输入处理器 ─────────────────────────────

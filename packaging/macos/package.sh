@@ -7,6 +7,7 @@
 # own Monet name (docs/development-model.md).
 #
 # Usage: packaging/macos/package.sh [--arch universal|aarch64|x86_64] [--skip-build]
+#        [--require-signing]
 #
 # Signing (env):
 #   MACOS_SIGN_IDENTITY   codesign identity (name or SHA-1). Default "-" = ad-hoc (local testing;
@@ -14,6 +15,8 @@
 #   MACOS_KEYCHAIN        keychain holding the identity (optional)
 # Notarization (env; all three needed, and a real identity):
 #   APPLE_ID, APPLE_PASSWORD (app-specific password), APPLE_TEAM_ID
+#   --require-signing     fail instead of warning when the identity or notarization secrets are
+#                         missing; release builds set MONET_REQUIRE_SIGNING=1 too.
 set -euo pipefail
 # shellcheck source=../env.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
@@ -21,11 +24,13 @@ HERE="$ROOT/packaging/macos"
 
 ARCH=universal
 SKIP_BUILD=0
+REQUIRE_SIGNING="${MONET_REQUIRE_SIGNING:-0}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --arch) ARCH="$2"; shift 2 ;;
     --skip-build) SKIP_BUILD=1; shift ;;
-    -h | --help) sed -n '2,16p' "$0"; exit 0 ;;
+    --require-signing) REQUIRE_SIGNING=1; shift ;;
+    -h | --help) sed -n '2,18p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -45,6 +50,20 @@ APP="$WORK/Monet.app"
 DMG="$DIST/monet-$VERSION-macos-$ARCH.dmg"
 
 NOTARIZE=0
+if [[ "$REQUIRE_SIGNING" = 1 ]]; then
+  if [[ "$IDENTITY" = "-" ]]; then
+    echo "error: --require-signing needs MACOS_SIGN_IDENTITY (ad-hoc builds are not releasable)" >&2
+    exit 2
+  fi
+  if [[ -z "${APPLE_ID:-}" || -z "${APPLE_PASSWORD:-}" || -z "${APPLE_TEAM_ID:-}" ]]; then
+    echo "error: --require-signing needs APPLE_ID, APPLE_PASSWORD and APPLE_TEAM_ID" >&2
+    exit 2
+  fi
+  if grep -q '^| `assets/devices/`.*UNCONFIRMED' "$ROOT/ATTRIBUTION.md"; then
+    echo "error: assets/devices has no recorded redistribution licence; update ATTRIBUTION.md before a release build" >&2
+    exit 2
+  fi
+fi
 if [[ "$IDENTITY" = "-" ]]; then
   warn "macOS: ad-hoc signing (no MACOS_SIGN_IDENTITY); artifacts are not notarized"
 elif [[ -n "${APPLE_ID:-}" ]] && [[ -n "${APPLE_PASSWORD:-}" ]] && [[ -n "${APPLE_TEAM_ID:-}" ]]; then
@@ -116,7 +135,17 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 # Executable and icon carry the display name (CFBundleExecutable / CFBundleIconFile).
 cp "$WORK/bin/monet" "$APP/Contents/MacOS/Monet"
 cp "$WORK/Monet.icns" "$APP/Contents/Resources/Monet.icns"
+# Runtime assets are external on purpose: the device catalogue, factory brush and default WGSL
+# material are read from files, not compiled into the binary. They must live at the standard
+# Contents/Resources path, which crates/devices, crates/abr and ui-gpui also look for.
+mkdir -p "$APP/Contents/Resources/assets"
+rm -rf "$APP/Contents/Resources/assets/devices" "$APP/Contents/Resources/assets/brushes" "$APP/Contents/Resources/assets/wgsl"
+cp -R "$ROOT/assets/devices" "$APP/Contents/Resources/assets/devices"
+cp -R "$ROOT/assets/brushes" "$APP/Contents/Resources/assets/brushes"
+cp -R "$ROOT/assets/wgsl" "$APP/Contents/Resources/assets/wgsl"
 cp "$ROOT/NOTICE" "$APP/Contents/Resources/"
+# NOTICE points at ATTRIBUTION.md for third-party assets; ship the table with it.
+cp "$ROOT/ATTRIBUTION.md" "$APP/Contents/Resources/"
 # Licences of the embedded craft-fonts fonts (only when built with CRAFT_FONTS_DIR).
 if [[ -n "${CRAFT_FONTS_DIR:-}" ]]; then
   mkdir -p "$APP/Contents/Resources/Licenses"
