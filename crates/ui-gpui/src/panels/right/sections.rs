@@ -4964,6 +4964,7 @@ pub struct LocalStyleKeyRow {
     pub bound: Vec<(String, String)>,
     pub number_variables: Vec<String>,
     pub string_variables: Vec<String>,
+    pub color_variables: Vec<String>,
     pub effects: Option<Vec<crate::panels::right::data::EffectRow>>,
     pub grids: Option<Vec<crate::panels::right::data::GridRow>>,
 }
@@ -5137,6 +5138,7 @@ fn local_styles_block(f: &RightFields, d: &PanelData, window: &mut Window, cx: &
                         bound: s.bound.clone(),
                         number_variables: s.number_variables.clone(),
                         string_variables: s.string_variables.clone(),
+                        color_variables: s.color_variables.clone(),
                         effects: s.effects.clone(),
                         grids: s.grids.clone(),
                     });
@@ -5775,6 +5777,7 @@ fn local_style_row(
         let sbound = s.bound.clone();
         let snum = s.number_variables.clone();
         let sstr = s.string_variables.clone();
+        let scol = s.color_variables.clone();
         let seff = s.effects.clone();
         let sgrid = s.grids.clone();
         Rc::new(move |window: &mut Window, cx: &mut App| {
@@ -5796,6 +5799,7 @@ fn local_style_row(
                     sbound.clone(),
                     snum.clone(),
                     sstr.clone(),
+                    scol.clone(),
                     seff.clone(),
                     sgrid.clone(),
                     popups.clone(),
@@ -6242,6 +6246,7 @@ mod view_menu_tests {
             bound: Vec::new(),
             number_variables: Vec::new(),
             string_variables: Vec::new(),
+            color_variables: Vec::new(),
             effects: None,
             grids: None,
         });
