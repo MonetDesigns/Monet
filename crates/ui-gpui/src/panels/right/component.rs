@@ -138,25 +138,32 @@ fn properties_section(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut 
     let t = tokens();
     let sec = PanelSection::new(c.title);
     // egui `component_panel.rs::description_ui`：组件 / 组件集自己的描述可编辑，提交
-    // `node.set {description}`。GPUI 的 `TextEdit` 没有多行输入，这里用单行字段（失焦提交）。
+    // `node.set {description}`。现在是 3 行多行输入（按失焦 / Enter 提交），并限制 10000 字符。
     let owner = c.main_id.unwrap_or(NodeId(0));
-    let desc = f.row_field(
+    let desc = f.row_field_multiline(
         cx,
         slot(n),
         &c.description,
         RowEditCtx {
             cmd: "node.set",
-            params: json!({ "id": owner.0 }),
+            params: json!({}),
             key: "description",
             scale: 1.0,
             string_value: true,
             paint: None,
-            nest: Some("props"),
+            nest: None,
             nest_key: None,
-            map: None,
+            map: Some(std::rc::Rc::new(move |text: &str| {
+                let value: String = text.chars().take(10_000).collect();
+                Some(json!({ "id": owner.0, "props": { "description": value } }))
+            })),
             paint_color: None,
         },
+        3,
     );
+    desc.update(cx, |te, _| {
+        te.set_placeholder(tr("Describe how and when to use this component"));
+    });
     let sec = sec.child(sublabel_row(tr("Description"))).child(crate::widgets::block_row(div().w_full().h(px(72.0)).child(desc)));
     let sec = property_rows(f, c, cx, n).into_iter().fold(sec, |s, row| s.child(row));
     // 变体值冲突警告（lizard `variant_conflicts`：同一组合出现多个变体时给黄条）。

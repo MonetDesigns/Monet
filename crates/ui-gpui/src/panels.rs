@@ -2635,7 +2635,12 @@ pub(crate) fn right_panel(
     let header_sec = right::sections::header(f, data, col);
     // Component / Instance（egui `header` 末尾的 `component_panel::instance_section`）。
     let component_sec = right::component::section(f, data, cx, &mut n);
-    let section_sec = right::sections::section(f, data, row_w, cx, &mut n);
+    // 上游只在非矢量编辑时画 Section（`vector_edit == None`）；这里同步门控。
+    let section_sec = if data.vector.is_none() {
+        right::sections::section(f, data, row_w, cx, &mut n)
+    } else {
+        None
+    };
     let modes_sec = right::sections::variable_modes(f, data, row_w);
     // Design panel: not in Motion mode, so paint rows carry no keyframe diamond. The motion queue
     // is a placeholder (never used — `keyframe_layer` is `None`), keeping the shared `paints` call
@@ -3374,17 +3379,27 @@ pub(crate) fn auto_layout_section(
                 },
             )
         };
-        let col_el = cell_field(right::sections::slot(n), cell.column.to_string(), false, col_map);
-        let row_el = cell_field(right::sections::slot(n), cell.row.to_string(), false, row_map);
-        let reset = if cell.anchored {
-            Some(right::sections::icon_cmd(Icon::Rotate, "node.set", json!({ "ids": &ids, "props": { "gridColumn": null, "gridRow": null } }), f, false))
-        } else {
-            None
-        };
-        let mut first = field_row(vec![col_el.into_any_element(), row_el.into_any_element()], reset.into_iter().collect::<Vec<_>>());
-        sec = sec.child(sublabel_row2(tr("Column"), tr("Row"))).child(first);
-        let cs = cell_field(right::sections::slot(n), cell.column_span.to_string(), false, cspan_map);
-        let rs = cell_field(right::sections::slot(n), cell.row_span.to_string(), false, rspan_map);
+        if cell.single {
+            let col_el = cell_field(right::sections::slot(n), cell.column.to_string(), false, col_map);
+            let row_el = cell_field(right::sections::slot(n), cell.row.to_string(), false, row_map);
+            let reset = if cell.anchored {
+                Some(right::sections::icon_cmd(
+                    Icon::Rotate,
+                    "node.set",
+                    json!({ "ids": &ids, "props": { "gridColumn": null, "gridRow": null } }),
+                    f,
+                    false,
+                ))
+            } else {
+                None
+            };
+            let first = field_row(vec![col_el.into_any_element(), row_el.into_any_element()], reset.into_iter().collect::<Vec<_>>());
+            sec = sec.child(sublabel_row2(tr("Column"), tr("Row"))).child(first);
+        }
+        let cspan = cell.column_span.map(|v| v.to_string()).unwrap_or_else(|| tr("Mixed").to_string());
+        let rspan = cell.row_span.map(|v| v.to_string()).unwrap_or_else(|| tr("Mixed").to_string());
+        let cs = cell_field(right::sections::slot(n), cspan, false, cspan_map);
+        let rs = cell_field(right::sections::slot(n), rspan, false, rspan_map);
         sec = sec
             .child(sublabel_row2(tr("Column span"), tr("Row span")))
             .child(field_row(vec![cs.into_any_element(), rs.into_any_element()], Vec::<IconButton>::new()));

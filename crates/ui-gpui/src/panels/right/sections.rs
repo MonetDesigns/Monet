@@ -1533,29 +1533,111 @@ pub(crate) fn paints(
     // 不再画图层 fills（egui `paints.rs::range_fill`）。
     if fills {
         if let Some(rf) = &d.range_fill {
-            let shown = rf
-                .paint
-                .as_ref()
-                .and_then(|p| p.solid_color())
+            let t = tokens();
+            let solid = rf.paint.as_ref().and_then(|p| p.solid_color());
+            let is_solid = solid.is_some();
+            let shown = solid
                 .map(|c| c.to_hex())
+                .or_else(|| rf.paint.as_ref().map(|p| crate::widgets::swatch::paint_name(p)))
                 .unwrap_or_else(|| tr("Mixed").to_string());
-            let hex = f.row_field(
-                cx,
-                slot(n),
-                &shown,
-                RowEditCtx {
-                    cmd: "text.style",
-                    params: json!({ "id": rf.id, "start": rf.start, "end": rf.end }),
-                    key: "textFills",
-                    scale: 1.0,
-                    string_value: true,
-                    paint: None,
-                    nest: None,
-                    nest_key: None,
-                    map: None,
-                    paint_color: None,
-                },
+            let current = solid.map(crate::widgets::swatch::color32).unwrap_or(Color32::BLACK);
+            let trigger = format!("range-fill-{:?}-{}-{}", rf.id, rf.start, rf.end);
+            let trigger_click = trigger.clone();
+            let swatch_paint = rf.paint.clone().unwrap_or_else(|| {
+                figcraft_color::Paint::solid(figcraft_color::Color::from_rgba8(255, 255, 255, 255))
+            });
+            let root = f.popups();
+            let queue = f.queue();
+            let contrast = f.contrast();
+            let pick_cmds = f.cmds.clone();
+            let (id, start, end) = (rf.id, rf.start, rf.end);
+            let on_pick = Rc::new(move |c: Color32, _w: &mut Window, _cx: &mut App| {
+                pick_cmds.push(Cmd {
+                    id: "text.style",
+                    params: Some(json!({
+                        "id": id,
+                        "start": start,
+                        "end": end,
+                        "textFills": [c.to_hex()],
+                    })),
+                });
+            });
+            let swatch_btn = crate::popovers::with_window_trigger(
+                div()
+                    .w(pt(24.0))
+                    .h_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .child(swatch(swatch_paint, 16.0))
+                    .on_mouse_down(MouseButton::Left, move |_e, window, cx| {
+                        cx.stop_propagation();
+                        let top = crate::popovers::anchored_top(&trigger_click, window);
+                        let trigger_click = trigger_click.clone();
+                        let root = root.clone();
+                        let queue = queue.clone();
+                        let contrast = contrast.clone();
+                        let on_pick = on_pick.clone();
+                        open_detached_with(root, trigger_click, Some(top), cx, move |anchor, cx| {
+                            crate::popovers::WindowState::color(
+                                cx,
+                                anchor,
+                                current,
+                                None,
+                                contrast,
+                                on_pick,
+                                queue,
+                            )
+                        });
+                    }),
+                &trigger,
             );
+            let center = if is_solid {
+                f.row_field(
+                    cx,
+                    slot(n),
+                    &shown,
+                    RowEditCtx {
+                        cmd: "text.style",
+                        params: json!({}),
+                        key: "textFills",
+                        scale: 1.0,
+                        string_value: true,
+                        paint: None,
+                        nest: None,
+                        nest_key: None,
+                        map: Some(Rc::new(move |text: &str| {
+                            Some(json!({ "id": id, "start": start, "end": end, "textFills": [text.trim()] }))
+                        })),
+                        paint_color: None,
+                    },
+                )
+                .into_any_element()
+            } else {
+                div()
+                    .h_full()
+                    .flex()
+                    .items_center()
+                    .px(pt(8.0))
+                    .overflow_hidden()
+                    .text_size(pt(11.0))
+                    .text_color(rgba(t.text))
+                    .child(SharedString::from(shown))
+                    .into_any_element()
+            };
+            let body = div()
+                .w_full()
+                .h(pt(crate::widgets::FIELD_H))
+                .rounded(pt(crate::widgets::RADIUS))
+                .bg(rgba(t.field))
+                .border_1()
+                .border_color(rgba(t.border))
+                .flex()
+                .items_center()
+                .overflow_hidden()
+                .child(swatch_btn)
+                .child(div().flex_1().min_w(px(0.0)).h_full().child(center));
             // 清掉范围覆盖：回到图层自己的填充。
             let detach = icon_cmd(
                 Icon::Detach,
@@ -1564,7 +1646,7 @@ pub(crate) fn paints(
                 f,
                 false,
             );
-            return Section::Full(PanelSection::new(title).child(field_row_full_trailing(hex, vec![detach])));
+            return Section::Full(PanelSection::new(title).child(field_row_full_trailing(body, vec![detach])));
         }
         // 矢量 region 选中：只画 region 自己的 fills + `+`，不画 Styles / chip / 绑定
         // （egui `paints.rs` 的 `region` 分支）。
@@ -3436,7 +3518,146 @@ mod corner_smoothing_tests {
     }
 }
 
-/// Typography 的 header 图标（egui `typography.rs`：Variable/Styles）。
+/// 文本样式 chip（egui `style_picker::chip`）：Text 图标 + 样式名（Mixed）+ Detach。
+///
+/// Paint / Effect / Grid 的通用 [`style_chip`] 只画一个 Dot 且不能点击；文本样式需要
+/// “点击换样式、点 Detach 解绑、字符链接不一致显示 Mixed”，所以这里单独实现。
+fn text_style_chip(f: &RightFields, d: &PanelData, name: SharedString) -> crate::widgets::panel_section::FieldRow {
+    let t = tokens();
+    let rows: Vec<(String, &'static str, Value)> = d
+        .styles
+        .iter()
+        .filter(|s| s.ty == "text")
+        .map(|s| {
+            (
+                s.name.clone(),
+                "style.apply",
+                json!({ "style": s.id, "ids": d.text_ids }),
+            )
+        })
+        .collect();
+    let title = SharedString::from(tr("Text styles"));
+    let root = f.popups();
+    let queue = f.queue();
+    let trigger = "styles-text-chip";
+    let trigger_click = trigger.to_string();
+    let body = crate::popovers::with_window_trigger(
+        div()
+            .id(gpui::ElementId::Name("styles-text-chip-body".into()))
+            .w_full()
+            .h_full()
+            .flex()
+            .items_center()
+            .gap(pt(8.0))
+            .cursor_pointer()
+            .hover(|s| s.bg(rgba(t.hover)))
+            .child(
+                div()
+                    .flex_none()
+                    .w(pt(14.0))
+                    .h(pt(14.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(crate::widgets::icon::paint(Icon::Text, rgba(t.text_secondary), 14.0)),
+            )
+            .child(div().flex_1().min_w(px(0.0)).overflow_hidden().text_size(pt(11.0)).text_color(rgba(t.text)).child(name))
+            .on_mouse_down(MouseButton::Left, move |_e, window, cx| {
+                let top = crate::popovers::anchored_top(&trigger_click, window);
+                open_list_window_at(
+                    root.clone(),
+                    queue.clone(),
+                    cx,
+                    window.mouse_position(),
+                    Some(top),
+                    trigger_click.clone(),
+                    ListWindow::Styles("text"),
+                    title.clone(),
+                    rows.clone(),
+                );
+            }),
+        trigger,
+    );
+    let detach = icon_cmd(
+        Icon::Detach,
+        "style.detach",
+        json!({ "ids": d.text_ids, "which": "text" }),
+        f,
+        false,
+    );
+    field_row_full_trailing(body, vec![detach])
+}
+
+/// Typography 的三个池化字段（字号 / 行高 / 字距）原本走 `node.set` 的整选区 pending；
+/// 文本选区里必须只提交 `text_ids`（egui `commit_text` / `apply_style`）。这三个字段只在本节
+/// 使用，所以在这里把 commit 回调重新绑定到当前文本 ids，避免“文本 + 矩形”混选时误伤矩形。
+fn retarget_text_edits(f: &RightFields, d: &PanelData, cx: &mut App) {
+    let cmds = f.cmds.clone();
+    let size_ids = d.text_ids.clone();
+    f.font_size.update(cx, move |tf, _| {
+        let cmds = cmds.clone();
+        let ids = size_ids.clone();
+        tf.set_on_commit(move |text, _w, _cx| {
+            if let Ok(v) = text.trim().parse::<f64>() {
+                cmds.push(Cmd {
+                    id: "node.set",
+                    params: Some(json!({ "ids": ids, "props": { "fontSize": v } })),
+                });
+            }
+        });
+    });
+
+    let line_ids = d.text_ids.clone();
+    let line_cmds = f.cmds.clone();
+    f.line_height.update(cx, move |tf, _| {
+        let cmds = line_cmds.clone();
+        let ids = line_ids.clone();
+        tf.set_on_commit(move |text, _w, _cx| {
+            let t = text.trim();
+            let val = if t.is_empty() {
+                json!("AUTO")
+            } else if let Ok(v) = t.trim_end_matches('%').trim().parse::<f64>() {
+                if t.ends_with('%') {
+                    json!(format!("{}%", v))
+                } else {
+                    json!(v)
+                }
+            } else {
+                return;
+            };
+            cmds.push(Cmd {
+                id: "node.set",
+                params: Some(json!({ "ids": ids, "props": { "lineHeight": val } })),
+            });
+        });
+    });
+
+    let ls_ids = d.text_ids.clone();
+    let ls_cmds = f.cmds.clone();
+    f.letter_spacing.update(cx, move |tf, _| {
+        let cmds = ls_cmds.clone();
+        let ids = ls_ids.clone();
+        tf.set_on_commit(move |text, _w, _cx| {
+            let t = text.trim();
+            let val = if t.is_empty() {
+                json!("AUTO")
+            } else if let Ok(v) = t.trim_end_matches('%').trim().parse::<f64>() {
+                if t.ends_with('%') {
+                    json!(format!("{}%", v))
+                } else {
+                    json!(v)
+                }
+            } else {
+                return;
+            };
+            cmds.push(Cmd {
+                id: "node.set",
+                params: Some(json!({ "ids": ids, "props": { "letterSpacing": val } })),
+            });
+        });
+    });
+}
+
 /// Typography（egui `typography.rs` → `typography/fields.rs::font_rows` + `paragraph_rows`）。
 ///
 /// 逐行照搬 egui：字体族 / 字重 / 字号 / 行高 / 字距 / 段落间距 + 自动缩放 + 水平·垂直对齐。
@@ -3447,6 +3668,7 @@ mod corner_smoothing_tests {
 /// `(Icon, tooltip)`。按「缺组件不新建、仅此处用就内联」的约定，这里改用纯文本 `Dropdown`。
 pub(crate) fn typography(f: &RightFields, d: &PanelData, cx: &mut App, n: &mut usize) -> PanelSection {
     let t = d.text.clone().unwrap_or_default();
+    retarget_text_edits(f, d, cx);
     let var = variables_window_button(
         f,
         "typography-var",
@@ -3461,20 +3683,13 @@ pub(crate) fn typography(f: &RightFields, d: &PanelData, cx: &mut App, n: &mut u
     }
 
     // 链接了文本样式：样式 chip 代替字体行；字体行只在没有链接时出现（egui `typography.rs`）。
-    if let Some(style) = &d.text_style {
-        sec = sec.child(field_row_full(
-            div()
-                .h(pt(crate::widgets::FIELD_H))
-                .w_full()
-                .rounded(pt(crate::widgets::RADIUS))
-                .bg(rgba(tokens().hover))
-                .flex()
-                .items_center()
-                .px(pt(8.0))
-                .text_size(pt(11.0))
-                .text_color(rgba(tokens().text))
-                .child(SharedString::from(style.clone())),
-        ));
+    if d.text_style_mixed || d.text_style.is_some() {
+        let name = if d.text_style_mixed {
+            tr("Mixed").to_string()
+        } else {
+            d.text_style.clone().unwrap_or_default()
+        };
+        sec = sec.child(text_style_chip(f, d, SharedString::from(name)));
     } else {
         // ── 字体族（整行）── 打开带预览的选择窗（每项用它自己的字体渲染名称）。
         sec = sec.child(field_row_full(font_picker_button(
@@ -3775,7 +3990,22 @@ pub(crate) fn vector_points(f: &RightFields, d: &PanelData, cx: &mut App, n: &mu
         const NAMES: [&str; 3] = ["align.top", "align.vcenter", "align.bottom"];
         align_cmds.push(Cmd { id: NAMES[i.min(2)], params: None });
     });
-    sec = sec.child(field_row(vec![h_align.into_any_element(), v_align.into_any_element()], Vec::<IconButton>::new()));
+    let distribute = (v.count > 2).then(|| {
+        menu_icon(
+            f,
+            Icon::DistributeH,
+            180.0,
+            vec![
+                (tr("Distribute horizontal spacing").to_string(), "distribute.horizontal", json!({})),
+                (tr("Distribute vertical spacing").to_string(), "distribute.vertical", json!({})),
+            ],
+            false,
+        )
+    });
+    sec = sec.child(field_row(
+        vec![h_align.into_any_element(), v_align.into_any_element()],
+        distribute.into_iter().collect::<Vec<_>>(),
+    ));
     sec = sec.child(sublabel_row(tr("Position"))).child(field_row(vec![f.vpt_x.clone(), f.vpt_y.clone()], Vec::<IconButton>::new()));
     if v.w.is_some() || v.h.is_some() {
         sec = sec.child(sublabel_row(tr("Dimensions"))).child(field_row(vec![f.vpt_w.clone(), f.vpt_h.clone()], Vec::<IconButton>::new()));
