@@ -100,7 +100,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 if !doc.contains(id) {
                     return Err(bad(cmd, "no such layer"));
                 }
-                let code = anim::for_language(doc, id, lang).unwrap_or_default();
+                let code = motion_code_for(doc, id, lang).unwrap_or_default();
                 Ok(json!({"code": code, "language": lang}))
             }
         ),

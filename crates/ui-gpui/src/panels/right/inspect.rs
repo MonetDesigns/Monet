@@ -165,7 +165,10 @@ pub(crate) fn panel(f: &RightFields, d: &PanelData, cx: &mut App, n: &mut usize)
     body = body.child(assets);
 
     // ── Playground：组件试值（egui `dev_mode.rs::playground_section`），只改副本，不改文档 ──
-    if let Some(pg) = &d.playground {
+    // 空属性组件没有可试的东西，EGUI 也不画这一节。
+    if let Some(pg) = &d.playground
+        && !pg.properties.is_empty()
+    {
         body = body.child(playground_section(f, pg, cx, n));
     }
 
@@ -415,7 +418,11 @@ fn connect_section(f: &RightFields, data: &InspectData, cx: &mut App, n: &mut us
     sec = sec.header_trail(icon_row(vec![btn]));
 
     // ── Connected 徽标 + 片段来源 ──
-    let from = if link.import_path.is_empty() { link.name.clone() } else { format!("{} from {}", link.name, link.import_path) };
+    let from = if link.import_path.is_empty() {
+        link.name.clone()
+    } else {
+        figcraft_i18n::trf("{name} from {path}", &[("name", &link.name), ("path", &link.import_path)])
+    };
     let badge = div()
         .flex_none()
         .px(pt(5.0))

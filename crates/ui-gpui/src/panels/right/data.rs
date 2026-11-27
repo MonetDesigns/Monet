@@ -2280,6 +2280,18 @@ fn export_rows(list: &[figcraft_doc::ExportSetting]) -> Vec<ExportRow> {
 
 /// 读取当前选区的完整快照。
 pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: usize) -> PanelData {
+    read_with_dev(doc, ids, page, ready_filter, None)
+}
+
+/// [`read`] with an already computed Dev section. `CanvasView` caches `read_dev` by document revision;
+/// the rest of the panel is cheap enough to rebuild, but `dev_items`/measurements are not.
+pub fn read_with_dev(
+    doc: &Document,
+    ids: &[NodeId],
+    page: Option<NodeId>,
+    ready_filter: usize,
+    dev: Option<DevModeData>,
+) -> PanelData {
     let mut d = PanelData::default();
     // 导出节与页面导出按钮都要用：选区、文档色彩配置在 `ids.is_empty()` 提前 return 之前填。
     d.ids = ids.to_vec();
@@ -2291,7 +2303,7 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
     // Prototype 标签的数据跟选区无关地先算好：`ids.is_empty()` 会提前 return。
     d.proto = read_proto(doc, ids, page);
     // Inspect 标签的 Dev Mode 各节：`ready` / `categories` 也与选区无关。
-    d.dev = read_dev(doc, ids, page, ready_filter);
+    d.dev = dev.unwrap_or_else(|| read_dev(doc, ids, page, ready_filter));
     // 本地样式清单同样与选区无关：空选区时 Page 节的「Local styles」要逐条列出来
     // （egui `page_section` → `style_picker::local_styles`），所以必须在提前 return 之前填。
     d.styles = doc

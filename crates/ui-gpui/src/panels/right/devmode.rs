@@ -225,6 +225,7 @@ fn annotation_head(f: &RightFields, a: &AnnotationRow, node: figcraft_doc::NodeI
     let label = a.category.as_ref().map(|c| c.0.clone()).unwrap_or_else(|| tr("No category").into());
     let dd = pick_dropdown(f, label, 116.0, cats);
     let del = icon_cmd(Icon::Minus, "annotation.remove", json!({ "id": node, "index": a.index }), f, false);
+    let note = figcraft_i18n::trf("Note {n}", &[("n", &(a.index + 1).to_string())]);
     div()
         .flex()
         .flex_row()
@@ -238,7 +239,7 @@ fn annotation_head(f: &RightFields, a: &AnnotationRow, node: figcraft_doc::NodeI
                 .text_size(pt(10.0))
                 .font_weight(crate::panels::UI_FONT_REGULAR)
                 .text_color(rgba(t.text_secondary))
-                .child(SharedString::from(format!("Note {}", a.index + 1))),
+                .child(SharedString::from(note)),
         )
         .child(dd)
         .child(del)
@@ -389,7 +390,7 @@ pub(crate) fn dev_resources(f: &RightFields, d: &PanelData, cx: &mut App, n: &mu
 /// 一条资源：链接图标 + 名字（点击打开）+ 来源或网址 +（自己的）改 / 删。
 fn resource_line(f: &RightFields, r: &DevResourceRow, node: figcraft_doc::NodeId) -> Div {
     let t = tokens();
-    let below = r.from.clone().map(|m| format!("From {m}")).unwrap_or_else(|| r.url.clone());
+    let below = r.from.clone().map(|m| figcraft_i18n::trf("From {name}", &[("name", &m)])).unwrap_or_else(|| r.url.clone());
     let url_open = r.url.clone();
     let link = div()
         .id(SharedString::from(format!("devres-{}", r.index.map(|i| i.to_string()).unwrap_or_else(|| r.url.clone()))))

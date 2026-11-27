@@ -670,7 +670,10 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let doc = s.doc()?;
     // Components and sets by name (variants are linked through their set).
-    let owners: Vec<(String, NodeId)> = doc.nodes().filter(|n| owner(doc, n.id) == Some(n.id)).map(|n| (n.name.clone(), n.id)).collect();
+    let mut owners: HashMap<&str, Vec<NodeId>> = HashMap::new();
+    for n in doc.nodes().filter(|n| owner(doc, n.id) == Some(n.id)) {
+        owners.entry(n.name.as_str()).or_default().push(n.id);
+    }
     let mut warnings: Vec<String> = Vec::new();
     let mut apply: Vec<(NodeId, CodeLink)> = Vec::new();
     // 同一组件在多条 link 里只 describe 一次（P2-5：导入耗时随组件数增长，而非条目数）。
@@ -692,7 +695,7 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
             name: name.into(),
             template: template.into(),
         };
-        let matches: Vec<NodeId> = owners.iter().filter(|(n, _)| n == component).map(|(_, id)| *id).collect();
+        let matches = owners.get(component).cloned().unwrap_or_default();
         if matches.is_empty() {
             warnings.push(format!("link {}: no component named {component:?}", i + 1));
         }

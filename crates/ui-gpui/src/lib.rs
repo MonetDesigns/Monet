@@ -808,6 +808,9 @@ pub struct PaneState {
     /// 拖动弹窗时右栏数据不变，复用上一帧的 PanelData（省掉每帧 collect / 读列表的开销）。
     last_panel: Option<panels::right::data::PanelData>,
 
+    /// Dev 节按 `(uid, revision, page, selection, ready_filter)` 缓存；其余节仍每帧重读。
+    dev_cache: std::cell::RefCell<Option<(DevCacheKey, panels::right::data::DevModeData)>>,
+
     /// 工具栏里打开着的飞出菜单（组的 key）；`None` 表示没开。
     tool_flyout: Option<&'static str>,
 
@@ -981,6 +984,9 @@ struct CanvasPane {
     canvas: CanvasState,
     worker: Worker,
 }
+
+/// `(uid, revision, page, selection, ready_filter)` for the cached Dev section.
+type DevCacheKey = (u64, u64, Option<figcraft_doc::NodeId>, Vec<figcraft_doc::NodeId>, usize);
 
 /// 画布视图：引擎会话 + 画布状态 + 交互状态。
 pub struct CanvasView {
@@ -1505,6 +1511,8 @@ impl CanvasView {
 
             last_panel: None,
 
+            dev_cache: std::cell::RefCell::new(None),
+
             tool_flyout: None,
 
             vector_more: false,
@@ -1939,7 +1947,18 @@ impl CanvasView {
 
         let page = self.app.session.page().ok();
 
-        let mut d = panels::right::data::read(&ds.doc, &ds.selection, page, self.fields.dev_ready_filter());
+        let ready = self.fields.dev_ready_filter();
+        let key = (ds.uid, ds.revision, page, ds.selection.clone(), ready);
+        let dev = match self.dev_cache.borrow().as_ref().filter(|(k, _)| k == &key).map(|(_, d)| d.clone()) {
+            Some(d) => d,
+            None => {
+                let d = panels::right::data::read_dev(&ds.doc, &ds.selection, page, ready);
+                *self.dev_cache.borrow_mut() = Some((key, d.clone()));
+                d
+            }
+        };
+
+        let mut d = panels::right::data::read_with_dev(&ds.doc, &ds.selection, page, ready, Some(dev));
 
         // 文本范围填充（egui `paints.rs::range_fill`）：编辑态选区来自 session，文档快照来自 ds。
         let text_range = figcraft_engine::textedit::selected_range(&self.app.session);
@@ -3381,7 +3400,10 @@ impl CanvasView {
 
         let can_step = list.len() > usize::from(at.is_some());
 
-        let pos = at.map_or_else(|| format!("{} ready", list.len()), |k| format!("{} of {}", k + 1, list.len()));
+        let pos = at.map_or_else(
+            || figcraft_i18n::trn("{n} ready", list.len(), &[]),
+            |k| figcraft_i18n::trf("{n} of {total}", &[("n", &(k + 1)), ("total", &list.len())]),
+        );
 
         // 一行里：图标 / 名字 / 状态徽标 / 按钮。
 
@@ -3485,7 +3507,7 @@ impl CanvasView {
                 // The right panel goes through the same Developer Mode gate as the menus: a
                 // button that would edit the design must not reach the engine (EGUI's
                 // `menus::dev_mode_refuses`, called from every panel).
-                if self.dev_refuses(&c.id, cx) {
+                if self.dev_refuses_command(&c.id, c.params.as_ref().unwrap_or(&serde_json::Value::Null), cx) {
                     continue;
                 }
                 // ⛔ 只能操作**本窗口拥有**的文档：否则第二个窗口能切到 / 关掉第一个窗口的文件
@@ -4201,7 +4223,7 @@ impl CanvasView {
     fn run_command(&mut self, id: &str, params: serde_json::Value, cx: &mut Context<Self>) {
         // Developer Mode refuses design edits from every entry (menus, toolbar, context menu,
         // dialogs, the layers panel). The engine owns the allow-list; the toast explains why.
-        if self.dev_refuses(id, cx) {
+        if self.dev_refuses_command(id, &params, cx) {
             return;
         }
         // The colour picker's eyedropper and direct pick command both use the session-wide
@@ -4416,7 +4438,12 @@ impl CanvasView {
     /// Developer Mode's single refusal gate: the policy lives in the engine, the toast lives here.
     /// Every command entry (menus, toolbar, context menu, right panel, shortcuts) calls this.
     fn dev_refuses(&mut self, id: &str, cx: &mut Context<Self>) -> bool {
-        if !dev_gate::refuses(&self.app, id) {
+        self.dev_refuses_command(id, &serde_json::Value::Null, cx)
+    }
+
+    /// [`Self::dev_refuses`] with parameters: `plugin.run` needs the plugin's access to be checked.
+    fn dev_refuses_command(&mut self, id: &str, params: &serde_json::Value, cx: &mut Context<Self>) -> bool {
+        if !dev_gate::refuses_command(&self.app, id, params) {
             return false;
         }
         self.toast(dev_gate::message(), cx);
@@ -4530,6 +4557,7 @@ impl CanvasView {
                 };
                 let dir = dir.path().to_path_buf();
 
+                let count = files.len();
                 for (name, bytes) in files {
                     let path = dir.join(name);
 
@@ -4543,7 +4571,10 @@ impl CanvasView {
                     }
                 }
 
-                let _ = this.update(cx, |_, cx| cx.notify());
+                let _ = this.update(cx, |view, cx| {
+                    let text = figcraft_i18n::trf("Exported {count} files", &[("count", &count.to_string())]);
+                    view.toast(text, cx);
+                });
                 return;
             }
 
@@ -5720,7 +5751,7 @@ impl CanvasView {
 
         // A19：带 "…" 的菜单命令先要输入。直接 execute 会用默认参数静默导出 / 查找，
         // 界面上什么都不会出现；先开通用对话框，由它的按钮带字段值提交同一条命令。
-        if self.dev_refuses(cmd, cx) {
+        if self.dev_refuses_command(cmd, &params, cx) {
             return;
         }
 
@@ -7940,7 +7971,8 @@ impl Render for CanvasView {
 
                 if e.keystroke.key == "escape" && this.extra.is_some() {
                     this.extra = None;
-
+                    // The panel owns Escape: closing Compare must not also leave Focus view.
+                    cx.stop_propagation();
                     cx.notify();
 
                     return;
