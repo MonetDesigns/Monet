@@ -1858,6 +1858,14 @@ pub struct PlaygroundData {
     pub swapped: Vec<(String, NodeId)>,
 }
 
+impl PlaygroundData {
+    /// egui hides the Playground section for a component with no properties: there is nothing to
+    /// try, so a preview/code block alone would look like a broken Inspect section.
+    pub fn has_controls(&self) -> bool {
+        !self.properties.is_empty()
+    }
+}
+
 /// Build the playground copy and read its properties, code and preview.
 /// `revision` + `values` form the thumbnail cache key, so changed values re-render without touching
 /// the document's own revision.

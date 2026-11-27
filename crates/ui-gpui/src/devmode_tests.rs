@@ -203,6 +203,20 @@ mod tests {
     }
 
     #[test]
+    fn a_playground_without_properties_has_no_controls() {
+        let mut s = Session::new();
+        let id = |v: Value| figcraft_engine::params::id_of(&v["id"]).unwrap();
+        let frame = id(s.execute("frame.create", &json!({"x": 0, "y": 0, "width": 120, "height": 40})).unwrap());
+        let comp = id(s.execute("component.create", &json!({"ids": [frame]})).unwrap());
+        let inst = id(s.execute("instance.create", &json!({"component": comp, "x": 0, "y": 300})).unwrap());
+        let doc = s.doc().unwrap().clone();
+        let p = read_playground(&doc, inst, &serde_json::Map::new(), figcraft_engine::codegen::CodeLang::React, 0)
+            .expect("a component instance still has a preview");
+        assert!(p.properties.is_empty(), "a component with no properties exposes no controls");
+        assert!(!p.has_controls(), "Inspect must not render an empty Playground section");
+    }
+
+    #[test]
     fn playground_is_absent_for_an_ordinary_layer() {
         let (s, _, _, rect) = dev_doc();
         let doc = s.doc().unwrap().clone();
