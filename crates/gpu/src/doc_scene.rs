@@ -17,7 +17,7 @@
 //! | text: glyph and decoration outlines from `figcraft_text`, solid fills and strokes per run | colour glyphs (emoji, COLR) |
 //! | mono/duo/multi grains over one SDF box fill, hashed exactly as the CPU | grains over children, strokes, clips, groups or other effects |
 //! | texture over one SDF box fill: whole-pixel scatter hashed exactly as the CPU | textures combined with children, strokes, clips, or other effects |
-//! | node opacity, single-leaf group opacity (including single-child chains), visibility, ancestor clipping rectangles | rounded or rotated clips, variable-bound fills |
+//! | node opacity, single-leaf group opacity (including single-child chains), visibility, ancestor clipping rectangles, one rounded clip over SDF/mesh content | nested or intersecting rounded clips, rounded clips over effects, variable-bound fills |
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -109,6 +109,13 @@ fn can_group_opacity(doc: &Document, n: &Node) -> bool {
 fn can_leaf_opacity(n: &Node) -> bool {
     let paints = n.fills.iter().filter(|f| f.visible).count() + n.strokes.iter().filter(|s| s.visible).count();
     paints == 1 && !n.effects.iter().any(|e| e.visible)
+}
+
+/// Whether this subtree carries any visible effect. Rounded clipping is only modelled by the shape
+/// and mesh shaders; effects paint through full-frame passes that would need their own rounded
+/// mask, so a frame that combines them falls back instead of clipping them with a plain rectangle.
+fn subtree_has_visible_effects(doc: &Document, id: NodeId) -> bool {
+    doc.subtree(id).into_iter().any(|id| doc.node(id).is_some_and(|n| n.effects.iter().any(|e| e.visible)))
 }
 
 /// Whether a node kind only carries children (and possibly its own box fill).
@@ -205,12 +212,33 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, opa
         if b.abs() > 1e-6 || c.abs() > 1e-6 {
             scene.unsupported("rotated-clip", format!("`{}` clips with a rotated frame", n.name));
         } else {
-            if n.corners.radii.iter().any(|r| *r > 0.0) {
-                scene.unsupported("rounded-clip", format!("`{}` clips with rounded corners", n.name));
-            }
             let (x0, y0) = map_point(m, 0.0, 0.0);
             let (x1, y1) = map_point(m, w, h);
-            inner = inner.intersect([x0.min(x1) as f32, y0.min(y1) as f32, (x1 - x0).abs() as f32, (y1 - y0).abs() as f32]);
+            let rect = [x0.min(x1) as f32, y0.min(y1) as f32, (x1 - x0).abs() as f32, (y1 - y0).abs() as f32];
+            let radii = n.corners.radii;
+            if radii.iter().any(|r| *r > 0.0) {
+                // A rounded rect can only be intersected with nothing: an outer clip or a nested
+                // clip would produce a shape no single rounded rect describes.
+                if !inner.is_none() || inner.has_radii() {
+                    scene.unsupported("rounded-clip-intersection", format!("`{}` clips with rounded corners under another clip", n.name));
+                } else if subtree_has_visible_effects(doc, id) {
+                    scene.unsupported("rounded-clip-effect", format!("`{}` clips rounded content with a visible effect", n.name));
+                } else {
+                    let sx = (m.as_coeffs()[0] * m.as_coeffs()[0] + m.as_coeffs()[1] * m.as_coeffs()[1]).sqrt();
+                    let sy = (m.as_coeffs()[2] * m.as_coeffs()[2] + m.as_coeffs()[3] * m.as_coeffs()[3]).sqrt();
+                    if (sx - sy).abs() > 1e-6 * sx.max(sy).max(1.0) {
+                        scene.unsupported("rounded-clip-scale", format!("`{}` clips with rounded corners under a non-uniform scale", n.name));
+                    } else {
+                        let limit = 0.5 * rect[2].min(rect[3]);
+                        let radii = radii.map(|r| (r as f32 * sx as f32).clamp(0.0, limit as f32));
+                        inner = Clip::rounded(rect, radii);
+                    }
+                }
+            } else if inner.has_radii() {
+                scene.unsupported("rounded-clip-intersection", format!("`{}` adds a rectangular clip under a rounded one", n.name));
+            } else {
+                inner = inner.intersect(rect);
+            }
         }
     }
 
@@ -1258,6 +1286,49 @@ mod tests {
         let scene = build(&doc, page, &view());
         assert!(!scene.is_supported(), "the stroke over the fill would composite twice");
         assert!(scene.unsupported_features().iter().any(|u| u.feature == "node-opacity"));
+    }
+
+    #[test]
+    fn a_rounded_clip_reaches_the_child_instance() {
+        let mut doc = Document::default();
+        let page = doc.pages[0];
+        let frame = doc.create(page, NodeKind::Frame, "Clip", 20.0, 20.0, 60.0, 40.0).expect("frame");
+        let child = doc.create(frame, NodeKind::Rectangle, "Wide", 0.0, 0.0, 100.0, 50.0).expect("child");
+        if let Ok(n) = doc.get_mut(frame) {
+            n.clip = true;
+            n.corners.radii = [12.0; 4];
+            n.fills.clear();
+        }
+        if let Ok(n) = doc.get_mut(child) {
+            n.fills = vec![DocPaint::solid(Color::new(0.2, 0.5, 0.8, 1.0))];
+        }
+        let scene = build(&doc, page, &view());
+        assert!(scene.is_supported(), "{:?}", scene.unsupported_features());
+        let shape = scene.shapes().next().expect("the child shape");
+        assert!(shape.clip.has_radii());
+        assert!((shape.clip.1[0] - 12.0).abs() < 1e-4, "{:?}", shape.clip.1);
+    }
+
+    #[test]
+    fn a_nested_clip_under_a_rounded_one_falls_back() {
+        let mut doc = Document::default();
+        let page = doc.pages[0];
+        let outer = doc.create(page, NodeKind::Frame, "Outer", 20.0, 20.0, 60.0, 40.0).expect("outer");
+        let inner = doc.create(outer, NodeKind::Frame, "Inner", 0.0, 0.0, 30.0, 20.0).expect("inner");
+        let leaf = doc.create(inner, NodeKind::Rectangle, "Leaf", 0.0, 0.0, 10.0, 10.0).expect("leaf");
+        if let Ok(n) = doc.get_mut(outer) {
+            n.clip = true;
+            n.corners.radii = [12.0; 4];
+        }
+        if let Ok(n) = doc.get_mut(inner) {
+            n.clip = true;
+        }
+        if let Ok(n) = doc.get_mut(leaf) {
+            n.fills = vec![DocPaint::solid(Color::new(0.2, 0.5, 0.8, 1.0))];
+        }
+        let scene = build(&doc, page, &view());
+        assert!(!scene.is_supported());
+        assert!(scene.unsupported_features().iter().any(|u| u.feature == "rounded-clip-intersection"));
     }
 
     #[test]

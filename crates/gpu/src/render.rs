@@ -49,7 +49,7 @@ impl std::fmt::Display for RenderError {
 
 impl std::error::Error for RenderError {}
 
-/// The SDF instance as the shader sees it. 256 bytes, every member 16-byte aligned, no padding.
+/// The SDF instance as the shader sees it. Every member is 16-byte aligned, no padding.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 struct GpuInstance {
@@ -61,6 +61,7 @@ struct GpuInstance {
     p0: [f32; 4],
     p1: [f32; 4],
     clip: [f32; 4],
+    clip_radii: [f32; 4],
     stop_pos: [f32; 8],
     stop_col: [[f32; 4]; 6],
 }
@@ -107,19 +108,21 @@ impl GpuInstance {
             p0,
             p1,
             clip: node.clip.0,
+            clip_radii: node.clip.1,
             stop_pos,
             stop_col,
         }
     }
 }
 
-/// A tessellated vertex: device pixels, premultiplied colour, device-pixel clip.
+/// A tessellated vertex: device pixels, premultiplied colour, device-pixel clip and its corner radii.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 struct GpuMeshVertex {
     pos: [f32; 2],
     color: [f32; 4],
     clip: [f32; 4],
+    clip_radii: [f32; 4],
 }
 
 /// What one draw in the pass does, in painter's order.
@@ -649,6 +652,7 @@ impl Renderer {
                 wgpu::VertexAttribute { offset: 0, shader_location: 0, format: wgpu::VertexFormat::Float32x2 },
                 wgpu::VertexAttribute { offset: 8, shader_location: 1, format: wgpu::VertexFormat::Float32x4 },
                 wgpu::VertexAttribute { offset: 24, shader_location: 2, format: wgpu::VertexFormat::Float32x4 },
+                wgpu::VertexAttribute { offset: 40, shader_location: 3, format: wgpu::VertexFormat::Float32x4 },
             ],
         };
         let mesh_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -1314,7 +1318,7 @@ impl Renderer {
                     let premul = mesh.color.premultiplied();
                     let color = [premul[0] * opacity, premul[1] * opacity, premul[2] * opacity, premul[3] * opacity];
                     let base = verts.len() as u32;
-                    verts.extend(mesh.verts.iter().map(|p| GpuMeshVertex { pos: *p, color, clip: mesh.clip.0 }));
+                    verts.extend(mesh.verts.iter().map(|p| GpuMeshVertex { pos: *p, color, clip: mesh.clip.0, clip_radii: mesh.clip.1 }));
                     let first = indices.len() as u32;
                     indices.extend(mesh.indices.iter().map(|i| i + base));
                     cmds.push(Cmd::Mesh { first, count: mesh.indices.len() as u32 });

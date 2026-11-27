@@ -12,6 +12,7 @@ struct Inst {
   p0: vec4<f32>,
   p1: vec4<f32>,
   clip: vec4<f32>,
+  clip_radii: vec4<f32>,
   stop_pos: array<f32, 8>,
   stop_col: array<vec4<f32>, 6>,
 };

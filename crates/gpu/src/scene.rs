@@ -102,31 +102,45 @@ impl Paint {
 }
 
 /// A device-pixel clip rectangle. `w < 0` means "no clip", the same sentinel the shader tests.
+///
+/// `radii` are the four corner radii in device pixels (top-left, top-right, bottom-right,
+/// bottom-left), zero for a plain rectangle. Only SDF shapes and tessellated meshes read them; a
+/// frame that puts another kind of item under a rounded clip is recorded as unsupported.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Clip(pub [f32; 4]);
+pub struct Clip(pub [f32; 4], pub [f32; 4]);
 
 impl Clip {
-    pub const NONE: Self = Self([-1.0, -1.0, -1.0, -1.0]);
+    pub const NONE: Self = Self([-1.0, -1.0, -1.0, -1.0], [0.0; 4]);
 
     pub fn is_none(self) -> bool {
         self.0[2] < 0.0
     }
 
-    /// The intersection of this clip and `rect` (`[x, y, w, h]`, device pixels).
+    pub fn has_radii(self) -> bool {
+        self.1.iter().any(|r| *r > 0.0)
+    }
+
+    pub fn rounded(rect: [f32; 4], radii: [f32; 4]) -> Self {
+        Self(rect, radii)
+    }
+
+    /// The intersection of this clip and `rect` (`[x, y, w, h]`, device pixels). A rounded clip
+    /// cannot be intersected with another rectangle exactly, so callers reject that combination
+    /// before asking; the result here is always a plain rectangle.
     pub fn intersect(self, rect: [f32; 4]) -> Self {
         if rect[2] <= 0.0 || rect[3] <= 0.0 {
             // An empty rectangle clips everything away; a zero-width clip still discards every
             // fragment, which is exactly "nothing of this subtree shows".
-            return Self([rect[0], rect[1], 0.0, 0.0]);
+            return Self([rect[0], rect[1], 0.0, 0.0], [0.0; 4]);
         }
         if self.is_none() {
-            return Self(rect);
+            return Self(rect, [0.0; 4]);
         }
         let x0 = self.0[0].max(rect[0]);
         let y0 = self.0[1].max(rect[1]);
         let x1 = (self.0[0] + self.0[2]).min(rect[0] + rect[2]);
         let y1 = (self.0[1] + self.0[3]).min(rect[1] + rect[3]);
-        if x1 <= x0 || y1 <= y0 { Self([x0, y0, 0.0, 0.0]) } else { Self([x0, y0, x1 - x0, y1 - y0]) }
+        if x1 <= x0 || y1 <= y0 { Self([x0, y0, 0.0, 0.0], [0.0; 4]) } else { Self([x0, y0, x1 - x0, y1 - y0], [0.0; 4]) }
     }
 }
 
@@ -513,7 +527,7 @@ mod tests {
 
     #[test]
     fn clips_intersect_and_an_empty_one_stays_empty() {
-        let a = Clip([0.0, 0.0, 10.0, 10.0]);
+        let a = Clip([0.0, 0.0, 10.0, 10.0], [0.0; 4]);
         let b = a.intersect([5.0, 2.0, 20.0, 20.0]);
         assert_eq!(b.0, [5.0, 2.0, 5.0, 8.0]);
         let empty = a.intersect([20.0, 20.0, 5.0, 5.0]);

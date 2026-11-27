@@ -41,6 +41,8 @@ struct Inst {
   p1: vec4<f32>,
   // device-pixel clip [x, y, w, h]; w < 0 means no clip
   clip: vec4<f32>,
+  // four corner radii of the clip in device pixels (top-left, top-right, bottom-right, bottom-left)
+  clip_radii: vec4<f32>,
   // stop positions (up to 8 slots, at most MAX_STOPS used)
   stop_pos: array<f32, 8>,
   // stop colours, premultiplied
@@ -211,16 +213,41 @@ fn paint_color(inst: Inst, local: vec2<f32>) -> vec4<f32> {
   return stop_color(inst, n, clamp(t, 0.0, 1.0));
 }
 
+// Coverage of the ancestor clip at `pos`: 1 inside, 0 outside, an antialiased edge on a rounded
+// corner. A plain rectangle keeps the hard test the shader always had.
+fn clip_mask(pos: vec2<f32>, clip: vec4<f32>, radii: vec4<f32>) -> f32 {
+  if (clip.z <= 0.0) {
+    return 1.0;
+  }
+  let rounded = radii.x > 0.0 || radii.y > 0.0 || radii.z > 0.0 || radii.w > 0.0;
+  if (!rounded) {
+    if (pos.x < clip.x || pos.y < clip.y || pos.x >= clip.x + clip.z || pos.y >= clip.y + clip.w) {
+      return 0.0;
+    }
+    return 1.0;
+  }
+  let half = clip.zw * 0.5;
+  let p = pos - (clip.xy + half);
+  var r = radii.x;
+  if (p.x >= 0.0) {
+    if (p.y < 0.0) { r = radii.y; } else { r = radii.z; }
+  } else if (p.y >= 0.0) {
+    r = radii.w;
+  }
+  let q = abs(p) - half + vec2<f32>(r);
+  let sd = length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - r;
+  let w = max(fwidth(sd), 1e-5);
+  return clamp(0.5 - sd / w, 0.0, 1.0);
+}
+
 @fragment
 fn fs(in: VsOut) -> @location(0) vec4<f32> {
   let inst = insts[in.idx];
 
-  // Ancestor clip rectangles (device pixels).
-  if (inst.clip.z > 0.0) {
-    if (in.pos.x < inst.clip.x || in.pos.y < inst.clip.y ||
-        in.pos.x >= inst.clip.x + inst.clip.z || in.pos.y >= inst.clip.y + inst.clip.w) {
-      discard;
-    }
+  // Ancestor clip rectangles/rounded rects (device pixels).
+  let clip_a = clip_mask(in.pos.xy, inst.clip, inst.clip_radii);
+  if (clip_a <= 0.0) {
+    discard;
   }
 
   let half = inst.size.xy * 0.5;
@@ -246,7 +273,7 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
   }
 
   let pm = paint_color(inst, in.local);
-  let alpha = coverage * inst.off.z;
+  let alpha = coverage * inst.off.z * clip_a;
   let out = pm * alpha;
   if (out.a <= 0.0) {
     discard;

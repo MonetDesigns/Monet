@@ -190,6 +190,75 @@ fn a_clipping_frame_stops_its_child_on_both_sides() {
 }
 
 #[test]
+fn a_rounded_clipping_frame_trims_its_child_on_both_sides() {
+    let mut doc = Document::default();
+    let page = doc.pages[0];
+    transparent_page(&mut doc, page);
+    let frame = doc.create(page, NodeKind::Frame, "Rounded clip", 20.0, 20.0, 60.0, 60.0).expect("frame");
+    if let Ok(n) = doc.get_mut(frame) {
+        n.clip = true;
+        n.corners.radii = [20.0; 4];
+        n.fills.clear();
+    }
+    let child = rect(&mut doc, frame, "Wide", 0.0, 0.0, 120.0, 120.0, 0.0, Paint::solid(Color::new(0.9, 0.8, 0.1, 1.0)));
+    let _ = child;
+
+    let scene = doc_scene::build(&doc, page, &viewport());
+    assert!(scene.is_supported(), "{:?}", scene.unsupported_features());
+    let shape = scene.shapes().next().expect("the child shape");
+    assert!(shape.clip.has_radii(), "the rounded clip reaches the instance");
+    assert!((shape.clip.1[0] - 20.0).abs() < 1e-4, "the radius scales with the view: {}", shape.clip.1[0]);
+
+    let cpu = cpu_pixels(&doc, page);
+    let Some(gpu) = gpu_pixels(&doc, page) else {
+        eprintln!("SKIP: no adapter");
+        return;
+    };
+    let report = compare(&cpu, &gpu, Tolerance::EDGE).expect("comparable buffers");
+    assert!(report.passes(Tolerance::EDGE), "{}", report.summary());
+    // The frame's top-left corner (22, 22) is outside the rounded clip; the center paints.
+    assert_eq!(pixel(&cpu, SIZE as usize, 22, 22).expect("in bounds")[3], 0, "cpu clipped the corner");
+    assert_eq!(pixel(&gpu, SIZE as usize, 22, 22).expect("in bounds")[3], 0, "gpu clipped the corner");
+    assert!(pixel(&cpu, SIZE as usize, 50, 50).expect("in bounds")[3] > 0);
+    assert!(pixel(&gpu, SIZE as usize, 50, 50).expect("in bounds")[3] > 0);
+}
+
+#[test]
+fn a_rounded_clip_trims_a_stroke_mesh() {
+    let mut doc = Document::default();
+    let page = doc.pages[0];
+    transparent_page(&mut doc, page);
+    let frame = doc.create(page, NodeKind::Frame, "Rounded clip", 20.0, 20.0, 60.0, 60.0).expect("frame");
+    if let Ok(n) = doc.get_mut(frame) {
+        n.clip = true;
+        n.corners.radii = [20.0; 4];
+        n.fills.clear();
+    }
+    let ring = rect(&mut doc, frame, "Ring", 0.0, 0.0, 60.0, 60.0, 0.0, Paint::solid(Color::new(0.1, 0.3, 0.7, 0.0)));
+    if let Ok(n) = doc.get_mut(ring) {
+        n.fills.clear();
+        n.strokes = vec![Paint::solid(Color::new(0.1, 0.3, 0.7, 1.0))];
+        n.stroke.weight = 20.0;
+        n.stroke.join = StrokeJoin::Miter;
+    }
+    let scene = doc_scene::build(&doc, page, &viewport());
+    assert!(scene.is_supported(), "{:?}", scene.unsupported_features());
+    assert_eq!(scene.mesh_count(), 1);
+
+    let cpu = cpu_pixels(&doc, page);
+    let Some(gpu) = gpu_pixels(&doc, page) else {
+        eprintln!("SKIP: no adapter");
+        return;
+    };
+    let report = compare(&cpu, &gpu, Tolerance::EDGE).expect("comparable buffers");
+    assert!(report.passes(Tolerance::EDGE), "{}", report.summary());
+    assert_eq!(pixel(&cpu, SIZE as usize, 22, 22).expect("in bounds")[3], 0, "cpu clipped the stroke corner");
+    assert_eq!(pixel(&gpu, SIZE as usize, 22, 22).expect("in bounds")[3], 0, "gpu clipped the stroke corner");
+    assert!(pixel(&cpu, SIZE as usize, 30, 50).expect("in bounds")[3] > 0, "the stroke paints along the frame edge");
+    assert!(pixel(&gpu, SIZE as usize, 30, 50).expect("in bounds")[3] > 0, "the stroke paints along the frame edge");
+}
+
+#[test]
 fn strokes_are_tessellated_from_the_cpu_outline_and_match_inside() {
     let mut doc = Document::default();
     let page = doc.pages[0];
