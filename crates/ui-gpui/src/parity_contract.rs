@@ -63,6 +63,20 @@ pub const CONTRACTS: &[Contract] = &[
         // `object.rename`) drops every token below and fails the contract.
         requires: &["object.batchRename", "batch_rename_params", "BatchRename::new", "InsertCodes", "RenamePreview", "find", "to", "regex", "start"],
     },
+    // Developer Mode (the egui Inspect surface). Each DM item names the real wiring token, so
+    // deleting a section or reverting a gate turns its contract red instead of leaving a stale ✅.
+    Contract { id: "DM1", requires: &["view.devMode", "dev_inspect"] },
+    Contract { id: "DM2", requires: &["dev_mode_allows", "dev_refuses"] },
+    Contract { id: "DM3", requires: &["Developer Mode only inspects", "dev_gate::message"] },
+    Contract { id: "DM4", requires: &["status_actions", "newest_version"] },
+    Contract { id: "DM5", requires: &["CompareWith", "dev-compare:version"] },
+    Contract { id: "DM6", requires: &["note_focus_id", "annotation.new"] },
+    Contract { id: "DM7", requires: &["asset_row", "asset_format_dropdown"] },
+    Contract { id: "DM8", requires: &["fn measurements", "devMode.addMeasurement"] },
+    Contract { id: "DM9", requires: &["playground_section", "read_playground"] },
+    Contract { id: "DM10", requires: &["code_sec", "CodeLang::ALL"] },
+    Contract { id: "DM11", requires: &["connect_section", "code_connect"] },
+    Contract { id: "DM12", requires: &["plugin_section", "PluginRunRow"] },
 ];
 
 /// Every engine command a dialog can push (buttons + per-option choice commands).
@@ -205,6 +219,37 @@ fn capabilities() -> BTreeSet<String> {
         [include_str!("../../ui-egui/src/app.rs"), include_str!("../../ui-egui/src/canvas.rs"), include_str!("../../ui-egui/src/menus.rs")].concat();
     if include_str!("naming.rs").contains("DEVELOPER_MODE: &str = \"开发\"") && !egui_ui.contains("tr(\"Dev Mode\")") {
         out.insert("developer_mode_label".into());
+    }
+
+    // DM1–DM12: Developer Mode sections and gates, derived from the files that wire them.
+    let inspect_src = include_str!("panels/right/inspect.rs");
+    let devmode_src = include_str!("panels/right/devmode.rs");
+    let data_src = include_str!("panels/right/data.rs");
+    let dev_gate_src = include_str!("dev_gate.rs");
+    for token in ["status_actions", "newest_version", "CompareWith", "asset_row", "asset_format_dropdown", "playground_section", "plugin_section", "PluginRunRow", "code_sec", "CodeLang::ALL", "connect_section"] {
+        if inspect_src.contains(token) || data_src.contains(token) || devmode_src.contains(token) {
+            out.insert(token.into());
+        }
+    }
+    for token in ["read_playground", "code_connect"] {
+        if data_src.contains(token) {
+            out.insert(token.into());
+        }
+    }
+    for token in ["fn measurements", "devMode.addMeasurement", "note_focus_id", "annotation.new"] {
+        if devmode_src.contains(token) || lib_src.contains(token) {
+            out.insert(token.into());
+        }
+    }
+    for token in ["dev_mode_allows", "dev_refuses", "dev_gate::message", "Developer Mode only inspects"] {
+        if dev_gate_src.contains(token) || lib_src.contains(token) {
+            out.insert(token.into());
+        }
+    }
+    for token in ["view.devMode", "dev_inspect", "dev-compare:version"] {
+        if lib_src.contains(token) || extra_src.contains(token) {
+            out.insert(token.into());
+        }
     }
 
     // A1: the engine's `home` ui_request actually reaches a panel.

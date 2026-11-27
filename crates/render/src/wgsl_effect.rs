@@ -186,6 +186,17 @@ pub struct UniformLayout {
 /// `<min>, <max>, <step>, <default>, <label>, <map>` of an `@fx param` / `@fx host` declaration.
 type ParamDecl = (f64, f64, f64, f64, String, String);
 
+/// What a material draws over: the canvas under the node (`Backdrop`, the default) or the node's
+/// own layer (`Layer`, a content-derived effect such as a shadow, a layer blur or noise).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Stage {
+    /// The already-rendered canvas under the node: the node's paint is replaced by the material.
+    #[default]
+    Backdrop,
+    /// The node's own content, handed to the material as `content`; the result replaces the layer.
+    Layer,
+}
+
 /// Optional declarations found in `// @fx ...` comments.
 #[derive(Clone, Debug, Default)]
 pub struct Meta {
@@ -197,6 +208,10 @@ pub struct Meta {
     pub hides: BTreeSet<String>,
     pub groups: BTreeMap<String, String>,
     pub hosts: BTreeMap<String, ParamDecl>,
+    /// `@fx stage layer` opts into the content-derived channel; absent means `Stage::Backdrop`.
+    pub stage: Stage,
+    /// `@fx reach <field>`: the uniform field (in document px) the host grows the pass rect by.
+    pub reach: Option<String>,
 }
 
 /// The result of scanning one WGSL source.
@@ -357,6 +372,15 @@ fn parse_meta(code: &str) -> Meta {
             "id" => meta.id = tail.to_string(),
             "label" => meta.label = tail.trim_matches('"').to_string(),
             "exports" => meta.exports.extend(tail.split_whitespace().map(String::from)),
+            "stage" => {
+                let s = tail.trim();
+                if s.eq_ignore_ascii_case("layer") || s.eq_ignore_ascii_case("content") {
+                    meta.stage = Stage::Layer;
+                } else if s.eq_ignore_ascii_case("backdrop") || s.eq_ignore_ascii_case("scene") {
+                    meta.stage = Stage::Backdrop;
+                }
+            }
+            "reach" => meta.reach = Some(tail.trim().to_string()),
             "hide" => meta.hides.extend(tail.split_whitespace().map(String::from)),
             "group" => {
                 let mut it = tail.split_whitespace();
@@ -759,6 +783,24 @@ impl WgslEffects {
     }
     pub fn param_value(&self, id: &str, field: &str) -> Option<f64> {
         self.effects.get(id).and_then(|l| l.params.get(field)).copied()
+    }
+
+    /// Which channel this effect draws in: `Stage::Backdrop` (the default, its pixels go under the
+    /// node's paint) or `Stage::Layer` (it takes the node's `content` and replaces the whole layer).
+    pub fn stage(&self, id: &str) -> Stage {
+        self.effects.get(id).map(|l| l.scan.meta.stage).unwrap_or_default()
+    }
+
+    /// The `@fx reach <field>` declaration: the uniform field the host reads to grow the pass rect
+    /// (in document px, before `dpr`). `None` for an effect that only paints inside its own bounds.
+    pub fn reach(&self, id: &str) -> Option<&str> {
+        self.effects.get(id).and_then(|l| l.scan.meta.reach.as_deref())
+    }
+
+    /// True when the effect needs the node's content texture (`content` binding + `Stage::Layer`).
+    pub fn needs_content(&self, id: &str) -> bool {
+        let Some(l) = self.effects.get(id) else { return false };
+        l.scan.meta.stage == Stage::Layer || l.scan.bindings.iter().any(|b| !b.uniform && b.name == "content")
     }
     pub fn set_param(&mut self, id: &str, field: &str, value: f64) -> Result<(), Error> {
         let l = self.effects.get_mut(id).ok_or_else(|| Error::NotLoaded(id.to_string()))?;

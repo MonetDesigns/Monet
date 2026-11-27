@@ -107,25 +107,25 @@ impl CanvasView {
         if let Some(c) = crate::panels::right::component::section(&self.fields, &data, cx, &mut n) {
             before.push(c.into_any_element());
         }
-        if let Some(s) = crate::panels::right::sections::section(&self.fields, &data, 0.0) {
+        if let Some(s) = crate::panels::right::sections::section(&self.fields, &data, 0.0, cx, &mut n) {
             before.push(s.into_any_element());
         }
         // Auto layout 的附加行（方向 / 对齐 / 间距 / 内边距 / 网格轨道）。Motion 的
         // Layout 段已经用关键帧字段画了 W/H，这里只要「自动布局」那部分，所以不重复尺寸行。
         if sel.has_al {
-            before.push(crate::panels::auto_layout_section(&self.fields, sel, &data, cx, &mut n, false, false));
+            before.push(crate::panels::auto_layout_section(&self.fields, sel, &data, cx, &mut n, false, false, 0.0));
         }
         if sel.all_ellipse {
             before.push(crate::panels::arc_section(&self.fields).into_any_element());
         }
         if sel.all_points {
-            before.push(crate::panels::star_section(&self.fields).into_any_element());
+            before.push(crate::panels::star_section(&self.fields, sel.all_stars).into_any_element());
         }
         if let Some(m) = crate::panels::right::sections::variable_modes(&self.fields, &data, 0.0) {
             before.push(m.into_any_element());
         }
         if sel.has_text {
-            before.push(crate::panels::right::sections::typography(&self.fields, &data).into_any_element());
+            before.push(crate::panels::right::sections::typography(&self.fields, &data, cx, &mut n).into_any_element());
         }
         let fills = crate::panels::right::sections::paints(
             &self.fields,
@@ -174,7 +174,7 @@ impl CanvasView {
         // Fill / Stroke / Effects 之后的组件专属段：Layout grid（画框）+ Export（所有图层）。
         let mut after: Vec<AnyElement> = Vec::new();
         if sel.all_frame {
-            after.push(crate::panels::right::sections::grids(&self.fields, &data, 0.0).into_element().into_any_element());
+            after.push(crate::panels::right::sections::grids(&self.fields, &data, 0.0, &mut n, cx).into_element().into_any_element());
         }
         after.push(crate::panels::right::sections::export(&self.fields, &data, 0.0, &mut n, cx, true).into_element().into_any_element());
         let mut design_sections = before;

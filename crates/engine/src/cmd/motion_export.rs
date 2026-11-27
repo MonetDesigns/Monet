@@ -10,12 +10,16 @@
 //!
 //! WebM/AV1 export is intentionally not included here — it needs the `rav1e` encoder and is a
 //! separate, larger step.
+//!
+//! MP4 first tries the Windows Media Foundation hardware H.264 encoder and re-renders on the
+//! portable CPU encoder if none is available or a hardware encode fails mid-stream.
 
+use std::sync::mpsc;
 
 use base64::Engine as _;
 use figcraft_doc::Document;
 use figcraft_doc::NodeId;
-use figcraft_doc::anim::motion::{TimelineSettings, evaluate};
+use figcraft_doc::anim::motion::{MotionPlayer, TimelineSettings, evaluate};
 use figcraft_geom::Rect;
 use figcraft_render::{Pixmap, View};
 use serde_json::{Value, json};
@@ -29,6 +33,17 @@ pub const MAX_SIDE: u32 = 8192;
 pub const MAX_FRAMES: u32 = 40_000;
 /// Largest GIF dimension the encoder handles comfortably.
 const GIF_MAX_FPS: u32 = 50;
+/// Ceiling on export render threads; one more than the machine's cores rarely helps and each
+/// worker holds its own scratch document.
+const MAX_RENDER_THREADS: usize = 32;
+/// Shared cap on raw RGBA frames queued across all export workers. A 8192² frame is 256 MiB,
+/// so this admits one such frame while allowing dozens of ordinary 1080p frames.
+const MAX_IN_FLIGHT_FRAME_BYTES: usize = 256 * 1024 * 1024;
+
+/// How many worker threads a frame-parallel export uses.
+fn render_threads() -> usize {
+    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).clamp(1, MAX_RENDER_THREADS)
+}
 
 /// Output formats of a motion export.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -81,6 +96,9 @@ pub struct Animation {
     /// never clip a frame or change its dimensions between frames.
     view: View,
     size: (u32, u32),
+    /// Draw frames through the interface's GPU hook when it can express every frame of this
+    /// animation; otherwise the CPU raster. Chosen once per export so frames never mix backends.
+    use_gpu: bool,
 }
 
 impl Animation {
@@ -96,10 +114,13 @@ impl Animation {
         let timeline = doc.timelines.get(&node).or_else(|| doc.timelines.get(&page)).copied().unwrap_or_default();
         let mut bounds: Option<Rect> = None;
         let samples = 24u32;
+        // One scratch copy reused for every sample: the old loop cloned the whole document 25
+        // times just to measure the union bounds.
+        let mut player = MotionPlayer::new(doc, page);
         for i in 0..=samples {
             let t = timeline.duration_ms as f64 * i as f64 / samples as f64;
-            let evaluated = evaluate(doc, page, t);
-            if let Some(b) = figcraft_render::export_bounds(&evaluated, node) {
+            let evaluated = player.seek(doc, t);
+            if let Some(b) = figcraft_render::export_bounds(evaluated, node) {
                 bounds = Some(match bounds {
                     None => b,
                     Some(prev) => prev.union(b),
@@ -113,7 +134,7 @@ impl Animation {
             return None;
         }
         let view = View { origin: (b.x0, b.y0), scale, width: w as u32, height: h as u32 };
-        Some(Self { base: doc.clone(), node, page, timeline, view, size: (w as u32, h as u32) })
+        Some(Self { base: doc.clone(), node, page, timeline, view, size: (w as u32, h as u32), use_gpu: false })
     }
 
     pub fn timeline(&self) -> TimelineSettings {
@@ -157,6 +178,119 @@ impl Animation {
         let mut out = Pixmap::new(self.view.width, self.view.height)?;
         figcraft_render::render_nodes_into(&evaluated, &[self.node], &self.view, &mut out);
         Some(out)
+    }
+
+    /// [`render`](Self::render) against a reusable scratch document: export loops pay one
+    /// document clone for the whole animation instead of one per frame.
+    fn render_with(&self, player: &mut MotionPlayer, t_ms: f64) -> Option<Pixmap> {
+        let evaluated = player.seek(&self.base, t_ms);
+        if self.use_gpu
+            && let Some(pix) = figcraft_render::render_frame_for_export(evaluated, &[self.node], &self.view)
+        {
+            return Some(pix);
+        }
+        let mut out = Pixmap::new(self.view.width, self.view.height)?;
+        figcraft_render::render_nodes_into(evaluated, &[self.node], &self.view, &mut out);
+        Some(out)
+    }
+
+    /// Picks GPU or CPU once for the whole export. The installed GPU scene renderer is asked about
+    /// **every** frame (structure only, no rasterisation), so an animation never exports with a
+    /// few GPU frames and the rest CPU — that would flicker on anti-aliased rounded edges.
+    fn select_backend(&mut self, times: &[f64]) {
+        if !figcraft_render::has_export_frame_hook() || times.is_empty() {
+            self.use_gpu = false;
+            return;
+        }
+        let mut player = MotionPlayer::new(&self.base, self.page);
+        self.use_gpu = times.iter().all(|&t| {
+            let doc = player.seek(&self.base, t);
+            figcraft_render::export_frame_gpu_supported(doc, &[self.node], &self.view)
+        });
+    }
+
+    /// Renders every frame of `times` to straight RGBA and hands it to `sink` **in order**,
+    /// spreading the drawing across up to `threads` worker threads.
+    ///
+    /// Frame drawing is independent, so a long export finishes in roughly `1/threads` of the
+    /// single-threaded time on a multi-core machine. Each worker owns one [`MotionPlayer`] scratch
+    /// document (no per-frame document clone) and a tiny bounded channel, so only a few frames are
+    /// ever held in memory no matter how long the animation is.
+    pub fn render_frames<F>(&self, times: &[f64], threads: usize, mut sink: F) -> std::result::Result<(), String>
+    where
+        F: FnMut(usize, figcraft_motion_codec::FrameRgba) -> std::result::Result<(), String>,
+    {
+        if times.is_empty() {
+            return Ok(());
+        }
+        let threads = threads.clamp(1, times.len()).min(MAX_RENDER_THREADS);
+        if threads <= 1 {
+            let mut player = MotionPlayer::new(&self.base, self.page);
+            for (i, t) in times.iter().enumerate() {
+                sink(i, self.frame_rgba(&mut player, *t)?)?;
+            }
+            return Ok(());
+        }
+        self.render_parallel(times, threads, &mut sink)
+    }
+
+    /// Draws one frame into straight RGBA through a reusable scratch document.
+    fn frame_rgba(&self, player: &mut MotionPlayer, t_ms: f64) -> std::result::Result<figcraft_motion_codec::FrameRgba, String> {
+        let pm = self.render_with(player, t_ms).ok_or_else(|| "a frame failed to render".to_string())?;
+        figcraft_motion_codec::FrameRgba::new(pm.width(), pm.height(), figcraft_render::to_rgba8(&pm)).map_err(|e| e.to_string())
+    }
+
+    /// Round-robin workers, one scratch document each, drained in timeline order.
+    fn render_parallel<F>(&self, times: &[f64], threads: usize, sink: &mut F) -> std::result::Result<(), String>
+    where
+        F: FnMut(usize, figcraft_motion_codec::FrameRgba) -> std::result::Result<(), String>,
+    {
+        std::thread::scope(|scope| -> std::result::Result<(), String> {
+            // A single shared queue bounds frames in flight across every worker. Counting slots
+            // per worker is not enough at 8192²: one RGBA frame is 256 MiB, so 32 workers × 2
+            // slots could hold 24 GiB before any encoder buffer. The queue capacity comes from
+            // the frame size and a shared byte budget; `threads` frames can also be in progress.
+            let frame_bytes = (self.size.0 as usize).saturating_mul(self.size.1 as usize).saturating_mul(4).max(1);
+            let budget_frames = (MAX_IN_FLIGHT_FRAME_BYTES / frame_bytes).max(1);
+            // At least one slot per worker is required: a later worker can otherwise occupy the
+            // only slot with frame 17 while the receiver waits for frame 0, and no worker can
+            // make progress. Cap the worker count by the byte budget instead of letting the
+            // queue hold one full frame per worker.
+            let workers = threads.min(budget_frames).max(1);
+            let (tx, rx) = mpsc::sync_channel::<(usize, std::result::Result<figcraft_motion_codec::FrameRgba, String>)>(workers);
+            for w in 0..workers {
+                let tx = tx.clone();
+                scope.spawn(move || self.render_worker(times, workers, w, tx));
+            }
+            // The main thread must drop its sender or `recv` never observes all workers finishing.
+            drop(tx);
+            let mut pending: std::collections::BTreeMap<usize, figcraft_motion_codec::FrameRgba> = std::collections::BTreeMap::new();
+            let mut next = 0;
+            while next < times.len() {
+                let (i, frame) = rx.recv().map_err(|_| "a frame failed to render".to_string())?;
+                let frame = frame?;
+                pending.insert(i, frame);
+                while let Some(frame) = pending.remove(&next) {
+                    sink(next, frame)?;
+                    next += 1;
+                }
+            }
+            Ok(())
+        })
+    }
+
+    /// Renders this worker's share of the frames (`start`, `start + threads`, ...) in order.
+    fn render_worker(&self, times: &[f64], threads: usize, start: usize, tx: mpsc::SyncSender<(usize, std::result::Result<figcraft_motion_codec::FrameRgba, String>)>) {
+        let mut player = MotionPlayer::new(&self.base, self.page);
+        let mut i = start;
+        while i < times.len() {
+            let frame = self.frame_rgba(&mut player, times[i]);
+            let failed = frame.is_err();
+            if tx.send((i, frame)).is_err() || failed {
+                break;
+            }
+            i += threads;
+        }
     }
 }
 
@@ -208,7 +342,7 @@ pub fn encode_animation(
     let anim = Animation::new(doc, node, scale).ok_or_else(|| bad(cmd, "nothing to export (no node, no bounds, or too large)"))?;
     // MP4/H.264 and WebM/AV1 encode 4:2:0 and require even picture sizes. GIF and PNG frames keep
     // their exact bounds; video formats get a single transparent edge pixel when needed.
-    let anim = if matches!(format, AnimFormat::Mp4 | AnimFormat::Webm) { anim.pad_even() } else { anim };
+    let mut anim = if matches!(format, AnimFormat::Mp4 | AnimFormat::Webm) { anim.pad_even() } else { anim };
     if !anim.is_animated() {
         return Err(bad(cmd, "the layer has no Motion animation to export"));
     }
@@ -226,50 +360,103 @@ pub fn encode_animation(
         return Err(bad(cmd, format!("too many frames ({} > {MAX_FRAMES}); lower fps or duration", times.len())));
     }
     let size = anim.size();
-    // WebM is streamed: `encode_webm` renders each frame itself. Rendering them up front first
-    // would double the (already slow) AV1 work, so only Gif/PngZip pre-build a frame Vec.
+    // Choose the GPU frame renderer once when the interface installed one and it can express
+    // every frame; otherwise the CPU raster (the parallel renderer below is the same either way).
+    anim.select_backend(&times);
+    // Frames are drawn in parallel and streamed straight into the encoder, so a long export both
+    // finishes much sooner and never buffers the whole animation as raw RGBA.
+    let threads = render_threads();
+    let mut render = |sink: &mut dyn FnMut(figcraft_motion_codec::FrameRgba) -> std::result::Result<(), String>| {
+        anim.render_frames(&times, threads, |_, frame| sink(frame)).map_err(|e| bad(cmd, e))
+    };
     let (bytes, ext) = match format {
         AnimFormat::Mp4 => {
-            let mut rendered = Vec::with_capacity(times.len());
-            for t in &times {
-                let pm = anim.render(*t).ok_or_else(|| bad(cmd, "a frame failed to render"))?;
-                rendered.push(figcraft_motion_codec::FrameRgba::new(pm.width(), pm.height(), figcraft_render::to_rgba8(&pm)).map_err(|e| bad(cmd, e))?);
-            }
-            let o = figcraft_motion_codec::Mp4Options { fps, crf: (100.0 - quality as f64 / 4.0) as f32 };
-            let bytes = figcraft_motion_codec::encode_mp4(&rendered, &o, [255, 255, 255]).map_err(|e| bad(cmd, e))?;
+            let o = figcraft_motion_codec::Mp4Options { fps, crf: mp4_crf(quality) };
+            let bytes = encode_mp4_stream(&mut render, size, &o, quality)?;
             (bytes, "mp4")
         }
         AnimFormat::Webm => {
-            // WebM is streamed through the codec crate. Frames are fed by a closure that draws
-            // on demand, so the (slow) AV1 work is not doubled by pre-building every Pixmap.
-            let mut rendered = Vec::with_capacity(times.len());
-            for t in &times {
-                let pm = anim.render(*t).ok_or_else(|| bad(cmd, "a frame failed to render"))?;
-                rendered.push(figcraft_motion_codec::FrameRgba::new(pm.width(), pm.height(), figcraft_render::to_rgba8(&pm)).map_err(|e| bad(cmd, e))?);
-            }
             let o = figcraft_motion_codec::WebmOptions { fps, quality, speed, ..Default::default() };
-            (figcraft_motion_codec::encode_webm(&rendered, &o).map_err(|e| bad(cmd, e))?, "webm")
+            let mut enc = figcraft_motion_codec::WebmEncoder::new(size.0, size.1, &o).map_err(|e| bad(cmd, e))?;
+            render(&mut |f| enc.push(f))?;
+            (enc.finish().map_err(|e| bad(cmd, e))?, "webm")
         }
-        _ => {
-            let mut frames = Vec::with_capacity(times.len());
-            for t in &times {
-                let pm = anim.render(*t).ok_or_else(|| bad(cmd, "a frame failed to render"))?;
-                frames.push(figcraft_motion_codec::FrameRgba::new(pm.width(), pm.height(), figcraft_render::to_rgba8(&pm)).map_err(|e| bad(cmd, e))?);
+        AnimFormat::Gif => {
+            let step = (1000.0 / fps as f64).round().max(1.0) as u32;
+            let mut out = Vec::new();
+            {
+                let mut enc = figcraft_motion_codec::GifWriter::new(&mut out, step, anim.timeline().looping).map_err(|e| bad(cmd, e))?;
+                render(&mut |f| enc.push(f))?;
+                enc.finish().map_err(|e| bad(cmd, e))?;
             }
-            match format {
-                AnimFormat::Gif => {
-                    let step = (1000.0 / fps as f64).round().max(1.0) as u32;
-                    (figcraft_motion_codec::encode_gif(&frames, &vec![step; frames.len()], anim.timeline().looping).map_err(|e| bad(cmd, e))?, "gif")
-                }
-                AnimFormat::PngZip => {
-                    let name = doc.node(node).map(|n| n.name.clone()).unwrap_or_else(|| "animation".into());
-                    (figcraft_motion_codec::write_png_zip(&frames, &name).map_err(|e| bad(cmd, e))?, "zip")
-                }
-                AnimFormat::Webm | AnimFormat::Mp4 => return Err(bad(cmd, "handled above")),
-            }
+            (out, "gif")
+        }
+        AnimFormat::PngZip => {
+            let name = doc.node(node).map(|n| n.name.clone()).unwrap_or_else(|| "animation".into());
+            let mut enc = figcraft_motion_codec::PngZipWriter::new(&name, times.len()).map_err(|e| bad(cmd, e))?;
+            render(&mut |f| enc.push(f))?;
+            (enc.finish().map_err(|e| bad(cmd, e))?, "zip")
         }
     };
     Ok(AnimationOutput { bytes, ext, frames: times.len(), fps, width: size.0, height: size.1, looping: anim.timeline().looping })
+}
+
+/// Map a 1..100 export quality to H.264 CRF (0–51, lower is better): 100 → 18, 85 → 23, 1 → 51.
+/// The old mapping `100 - quality/4` sent 85 to 78.75, which the encoder clamps to 51 — i.e. the
+/// lowest possible quality — so MP4 exports were both wrong-looking and pointlessly large.
+fn mp4_crf(quality: u8) -> f32 {
+    let q = quality.clamp(1, 100) as f32;
+    51.0 - (q - 1.0) * 33.0 / 99.0
+}
+
+/// Encode MP4 frames through Media Foundation when available, and re-render on the CPU path if
+/// the hardware encoder fails part-way through. The retry is deliberate: streaming export has
+/// already released earlier frames, so a mid-stream hardware failure cannot be repaired without
+/// drawing the animation again.
+fn encode_mp4_stream<F>(render: &mut F, size: (u32, u32), o: &figcraft_motion_codec::Mp4Options, quality: u8) -> Result<Vec<u8>>
+where
+    F: FnMut(&mut dyn FnMut(figcraft_motion_codec::FrameRgba) -> std::result::Result<(), String>) -> Result<()>,
+{
+    #[cfg(test)]
+    MP4_EXPORT_BACKEND.with(|b| b.set(0));
+    #[cfg(not(windows))]
+    let _ = quality;
+    #[cfg(windows)]
+    let force_cpu = std::env::var_os("MONET_MOTION_CPU").is_some();
+    #[cfg(windows)]
+    if !force_cpu {
+        match figcraft_motion_mediafoundation::MfMp4Encoder::new(size.0, size.1, o, [255, 255, 255], quality) {
+            Ok(mut enc) => {
+                let attempt = match render(&mut |f| enc.push(f)) {
+                    Ok(()) => enc.finish().map_err(|e| bad("motion.export", e)),
+                    Err(e) => Err(e),
+                };
+                match attempt {
+                    Ok(bytes) => {
+                        #[cfg(test)]
+                        MP4_EXPORT_BACKEND.with(|b| b.set(1));
+                        return Ok(bytes);
+                    }
+                    Err(e) => eprintln!("[motion] Media Foundation encode failed, retrying on CPU: {e}"),
+                }
+            }
+            Err(e) => eprintln!("[motion] Media Foundation encoder unavailable, using CPU: {e}"),
+        }
+    }
+    let mut enc = figcraft_motion_codec::Mp4Encoder::new(size.0, size.1, o, [255, 255, 255]).map_err(|e| bad("motion.export", e))?;
+    render(&mut |f| enc.push(f))?;
+    let bytes = enc.finish().map_err(|e| bad("motion.export", e))?;
+    #[cfg(test)]
+    MP4_EXPORT_BACKEND.with(|b| b.set(2));
+    Ok(bytes)
+}
+
+/// Test-only observation of which MP4 backend the last export in this thread used:
+/// 0 = none, 1 = Media Foundation hardware, 2 = portable CPU. It lets the hardware smoke test
+/// prove the hardware path ran instead of silently accepting the CPU fallback.
+#[cfg(test)]
+std::thread_local! {
+    static MP4_EXPORT_BACKEND: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
 }
 
 /// The `motion.export` command: no document write, no undo — it only reads and encodes.
@@ -284,7 +471,7 @@ pub fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let scale = num(p, "scale").unwrap_or(1.0);
     let fps = num(p, "fps").unwrap_or(0.0) as u32;
     let quality = num(p, "quality").unwrap_or(85.0) as u8;
-    let speed = num(p, "speed").unwrap_or(9.0) as u8;
+    let speed = num(p, "speed").unwrap_or(10.0) as u8;
     let out = encode_animation(s.doc()?, node, format, scale, fps, quality, speed)?;
     Ok(json!({
         "format": out.ext,
@@ -325,9 +512,51 @@ mod tests {
         (d, frame, id)
     }
 
+    /// End-to-end MP4 export at the minimum size accepted by the hardware encoder. Ignored because
+    /// GitHub's Windows runners have no GPU encoder; run locally with
+    /// `cargo test -p figcraft-engine hardware_mp4_export -- --ignored --nocapture`.
     #[test]
-    fn frame_times_loop_vs_one_shot() {
-        let tl = TimelineSettings { duration_ms: 1000, fps: 10, looping: true };
+    #[cfg(windows)]
+    #[ignore = "requires a Windows GPU with a hardware H.264 encoder"]
+    fn hardware_mp4_export() {
+        use serde_json::json;
+        use std::time::Instant;
+
+        let (mut d, _, _) = animated_doc();
+        let page = d.first_page().unwrap();
+        let frame = d.create(page, NodeKind::Frame, "Stage", 0.0, 0.0, 256.0, 256.0).unwrap();
+        let dot = d.create(frame, NodeKind::Rectangle, "Dot", 8.0, 8.0, 32.0, 32.0).unwrap();
+        {
+            let n = d.node_mut(dot).unwrap();
+            let pos = n.motion.ensure_track(AnimProperty::Position);
+            pos.set_key(0, AnimValue::Vec2(Vec2::new(8.0, 8.0)), None);
+            pos.set_key(500, AnimValue::Vec2(Vec2::new(216.0, 8.0)), Some(Ease::Linear));
+        }
+        d.timelines.insert(frame, TimelineSettings { duration_ms: 500, fps: 10, looping: true });
+
+        let mut s = Session::with_document(d);
+        let t = Instant::now();
+        let out = s.execute("motion.export", &json!({"id": frame.0, "format": "mp4", "fps": 10, "scale": 1.0})).unwrap();
+        assert_eq!(
+            MP4_EXPORT_BACKEND.with(|b| b.get()),
+            1,
+            "this test is only evidence when Media Foundation actually encoded it; 2 means the CPU fallback ran"
+        );
+        let data = base64::engine::general_purpose::STANDARD.decode(out["data"].as_str().unwrap()).unwrap();
+        assert_eq!(&data[4..8], b"ftyp", "an ISO BMFF file");
+        assert!(data.windows(4).any(|w| w == b"avc1"), "H.264 sample entry");
+        println!("[motion] hardware MP4 export: {} ms, {} bytes, {} frames", t.elapsed().as_millis(), data.len(), out["frames"]);
+    }
+
+    #[test]
+    fn mp4_quality_maps_to_a_sane_crf() {
+        assert!((mp4_crf(85) - 23.0).abs() < 0.5, "the default 85 must be CRF ~23, not the old 51 clamp");
+        assert!((mp4_crf(100) - 18.0).abs() < 0.01, "best quality is CRF 18");
+        assert!((mp4_crf(1) - 51.0).abs() < 0.01, "lowest quality is CRF 51");
+    }
+
+    #[test]
+    fn frame_times_loop_vs_one_shot() {        let tl = TimelineSettings { duration_ms: 1000, fps: 10, looping: true };
         let t = frame_times(&tl, 10);
         assert_eq!(t.len(), 10, "looping: 0..duration excludes the wrap-around frame");
         assert!((t[0] - 0.0).abs() < 1e-6 && (t[9] - 900.0).abs() < 1e-6);
@@ -348,6 +577,25 @@ mod tests {
         let mid = anim.render(250.0).unwrap();
         assert_eq!(first.data().len(), 24 * 24 * 4);
         assert_ne!(figcraft_render::to_rgba8(&first), figcraft_render::to_rgba8(&mid), "the Position track must actually move between frames");
+    }
+
+    #[test]
+    fn parallel_render_is_in_order_and_pixel_identical_to_single_frame_render() {
+        let (d, frame, _) = animated_doc();
+        let anim = Animation::new(&d, frame, 1.0).unwrap();
+        let times = anim.frame_times(10);
+        let expected: Vec<Vec<u8>> = times.iter().map(|t| figcraft_render::to_rgba8(&anim.render(*t).unwrap())).collect();
+        let mut got: Vec<Vec<u8>> = Vec::new();
+        // Four worker threads over five frames: every frame must arrive in timeline order and be
+        // exactly what the single-threaded path draws, so the parallel path cannot reorder or
+        // mix up frames.
+        anim.render_frames(&times, 4, |i, f| {
+            assert_eq!(i, got.len(), "frames must stream in order");
+            got.push(f.rgba);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(got, expected);
     }
 
     #[test]

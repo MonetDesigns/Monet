@@ -275,6 +275,18 @@ A16=done
 A1=done
 A2B3A27=done
 A8=done
+DM1=done
+DM2=done
+DM3=done
+DM4=done
+DM5=done
+DM6=done
+DM7=done
+DM8=done
+DM9=done
+DM10=done
+DM11=done
+DM12=done
 -->
 
 **结论（2026-11-16 更新）**：A16 多窗口已落地——不再用弹层冒充窗口，`windows.rs` 用同一个 `Entity<CanvasView>` 作为多个 OS 窗口的根视图，`Session` 因此天然共享，无需重构 475 处 `&mut Session` 调用；引擎的 `window.new` / `window.focus` 请求、标签拖出都已接。第 1 批 6 项现为 **6 项完成**。仍保留的小缺口：各窗口目前显示同一组标签，只是 active 文件各自记住（按窗口过滤标签留待后续）。
@@ -581,15 +593,15 @@ EGUI 原文件再动手，禁止再出现简化替代**；完成后同步 `CONTR
 
 | # | 交互 | EGUI 原版形态（证据） | GPUI 现状（错误） | 整改要求 |
 |---|---|---|---|---|
-| R1 | **资源面板 Assets** | 左栏 tab：`LeftTab::Assets` → `assets_panel::show` 渲染进**左面板**（同 Pages/Layers 同一栏，面板宽） | `ExtraKind::Assets` 居中浮层（`extra.rs` + `ui.set{leftTab:"assets"}`） | ⚠️ **入口已改，变体未清**（T.2）：见 R.4，Assets 进左栏 tab；但 `ExtraKind::Assets` 变体 + `render` 卡片分支仍在 |
-| R2 | **图标面板 Icons** | 左栏 tab：`LeftTab::Icons` → `icons_panel::show` 渲染进**左面板** | `ExtraKind::Icons` 居中浮层 | ⚠️ **入口已改，变体未清**（T.2）：同 R1 机制进左面板 tab 2；但 `ExtraKind::Icons` 变体仍在 |
+| R1 | **资源面板 Assets** | 左栏 tab：`LeftTab::Assets` → `assets_panel::show` 渲染进**左面板**（同 Pages/Layers 同一栏，面板宽） | `ExtraKind::Assets` 居中浮层（`extra.rs` + `ui.set{leftTab:"assets"}`） | ✅ 入口与变体均已清理：Assets 进左栏 tab，`ExtraKind` 只剩 Shortcuts/Versions/DevCompare/Home；2026-11-27 另补 library updates 横幅 |
+| R2 | **图标面板 Icons** | 左栏 tab：`LeftTab::Icons` → `icons_panel::show` 渲染进**左面板** | `ExtraKind::Icons` 居中浮层 | ✅ 入口与变体均已清理：Icons 进左面板 tab 2，`ExtraKind::Icons` 已移除 |
 | R3 | **首页 Home** | 替换**整个工作区**（占满窗口，240pt 侧栏 + 主区），不是居中小窗 | ~~`ExtraKind::Home` 居中浮层~~ **已修复**：`panels/extra.rs::render` 对 `Home` 走 `div().absolute().top(TITLE_H).left(0).right(0).bottom(0)` 占满窗口（注释明写「1:1 with egui `home.rs` CentralPanel，不是 760×520 居中卡片」） | ✅ 无需整改（视觉已占满窗口，与 EGUI 一致） |
 | R4 | **画框标签改名** `canvas.renameLabel` | `canvas/frame_labels.rs::rename_field`：**在画布标签的屏幕坐标上**盖一个内联编辑框，Enter/失焦改名、Esc 保留 | `dialogs.rs:302` → `Kind::Rename` 居中对话框 | 改回画布内联编辑：双击标签 → 在标签处画 `TextField`，走 `object.rename`；不要弹窗 |
 | R5 | **图层面板改名** `layers.rename` | 在 Layers 列表行内**就地**改（egui `layers_rename_tests.rs`） | `dialogs.rs:302` → `Kind::Rename` 居中对话框 | 改回列表行内联编辑（GPUI 左面板已用 `TextField` 做文件头改名，图层行同理） |
 | R6 | **看板文字编辑** `board.editText` | 贴着画布的内联文字编辑 | `dialogs.rs:302` → `Kind::Rename` 居中对话框 | 改回内联编辑（依赖 A2/A27 画板模式先落地） |
-| R7 | **快捷键面板 Shortcuts** | 窗口**底部**常驻条（`panels/layers.rs` 底部），非模态 | `ExtraKind::Shortcuts` 居中浮层（`extra.rs` 注释承认此差异） | 移到窗口底部 dock（或至少承认差异并登记为偏差，不要伪装成弹窗） |
-| R8 | **版本历史 Versions** | 独立**面板**（左面板宽，`versions::panel`），非居中卡片 | `ExtraKind::Versions` 居中浮层 | 改成独立面板（左栏宽或右侧抽屉），不要居中卡片 |
-| R9 | **Dev 对比 DevCompare** | 双图并排/叠加对比（占满工作区） | `ExtraKind::DevCompare` 居中浮层 | 占满主区做对比视图，不要居中卡片 |
+| R7 | **快捷键面板 Shortcuts** | 窗口**底部**常驻条（`panels/shortcuts_panel.rs` 的 `show` 锚在 `CENTER_BOTTOM`），非模态 | ✅ 2026-11-27：`panels/extra.rs::render` 对 `Shortcuts` 走 `left/right/bottom=0` 的 340pt 底部 dock，带标题与 Close，内容滚动；不再走 760×520 居中卡片 |
+| R8 | **版本历史 Versions** | 独立**面板**（左面板宽，`versions::open` 打开左栏并切 `LeftTab::File`），非居中卡片 | ✅ 2026-11-27：`panels/extra.rs::render` 对 `Versions` 走左缘 `DEFAULT_LEFT_PANEL`（240pt）、`top=TITLE_H`、`bottom=0` 的全高面板，带独立 Close 条；`versions_body` 原样复用 `PanelSection` |
+| R9 | **Dev 对比 DevCompare** | 双图并排/叠加对比（占满工作区） | ✅ 2026-11-27：`panels/extra.rs::render` 对 `DevCompare` 走 `top=TITLE_H`、`left/right/bottom=0` 的工作区全屏分支；Close/Resolve 仍由 `compare_body` 底栏持有 |
 
 ### R.2 连带的规划文件错误（需同步修订）
 
@@ -1217,4 +1229,65 @@ C2、C3（文案规范待全面对齐）。
   `menus/palette.rs`）。工具组的向上菜单仍按内容宽并贴 caret，不与工具栏同宽。
 
 
+
+
+## Z. 2026-11-26 Developer Mode 差异补全（P0 / P1）
+
+> 依据：`figcraft-egui-gpui-devmode-gap-plan-2026-11-26.md`；参照 `crates/ui-egui/src/dev_mode.rs` 与
+> upstream `storytold/figcraft`。本表只记 GPUI 落地，不把 EGUI 参照当已完成。
+
+| ID | 节 | 落点 | 状态 |
+|---|---|---|---|
+| DM1 | 入口 `view.devMode` / Shift+D | `panels/extra.rs`、`lib.rs` | ✅ |
+| DM2 | 只读闸门（命令、菜单、快捷键、图层/画布/拖放、写插件） | `dev_gate.rs`、`lib.rs`、`layer_tree.rs`、`canvas/{handles,selection_spacing}.rs` | ✅ `plugin.run` 按插件 access 额外判断 |
+| DM3 | 拒绝提示 | `dev_gate::message`、中英 i18n | ✅ |
+| DM4 | Status 参数链与 Focus / Compare 三态 | `panels/right/inspect.rs::status_actions`、`data.rs::SectionData` | ✅ |
+| DM5 | Compare 版本菜单 | `panels/extra.rs`、`open_dropdown_menu` | ✅ |
+| DM6 | 注解新建后聚焦 | `RightFields::note_focus_id`、`sync_ui_requests` | ✅ |
+| DM7 | Assets / 导出格式 | `inspect.rs::asset_row`、`asset_format_dropdown` | ✅ |
+| DM8 | Measurements 与 `devMode.addMeasurement` | `devmode.rs` | ✅ |
+| DM9 | Playground（预览 + 属性 + 出码覆盖 + 300ms 防抖） | `data.rs::read_playground`、`inspect.rs::playground_section` | ✅ |
+| DM10 | Code 语言与复制 | `inspect.rs::code_sec`、`CodeLang::ALL` | ✅ |
+| DM11 | Connect to code | `inspect.rs::connect_section` | ✅ |
+| DM12 | 只读插件命令 | `inspect.rs::plugin_section`、`data.rs::PluginRunRow` | ✅ |
+| P1-6 | 面板级测试 / 契约 | `devmode_tests.rs`（13 条）、`dev_gate` 3 条、`parity_contract` DM1–DM12 | ✅ 每个 Dev 节至少一条与面板同源的数据回归：Ready（筛选/颜色）、Categories、Annotations（pin/menu）、Dev resources、Measurements、Playground（非实例不出现），另加 annotation 聚焦请求只接受已选中层的回归；真实 GPUI 指针点击仍不在无头 harness 覆盖范围，焦点/Escape 由引擎 `devfocus_tests` 覆盖 |
+| P2-1 | 引擎 CSS/Tailwind 同步 | `codegen/css.rs`、`codegen/tailwind.rs` | ✅ 逐段 `text-wrap` 与 mobile `max-width` 保留已对齐；剩余 `codegen.rs` 为格式/anim 差异，html/code_connect/devinspect 为本地有意扩展；`cargo check` 通过 |
+| P2-2 | Motion 出码入口 | `codegen::motion_code_for`、`InspectData::motion_code`、`inspect.rs::motion_section` | ✅ Code 节按 css/swiftui/compose 显示动画块，无动画不显示 |
+| P2-3 | 面板快照缓存 | `lib.rs::panel_data`、`panels/right/data.rs::read_with_dev` | ✅ Dev 节按 `(uid, revision, page, selection, ready_filter)` 缓存；`cargo check` 通过，缓存回归未单测 |
+| P2-4 | 资产导出对齐 | `inspect.rs::asset_row` / `export_all`、`lib.rs::deliver_download` | ✅ 逐项「另存为」+ `file.exportLayers` 多资产文件夹/zip 已接；`dir` 分支完成后也报 `Exported {count} files`（不再静默返回） |
+| P2-5 | `code_connect` 缓存 | `code_connect.rs::import` | ✅ 同一组件多条 link 只 `describe` 一次 |
+| P2-6 | 多行输入 | `widgets/input/text_edit.rs` | ✅ 已实现：`TextEdit::set_multiline`（便签 2 行、模板 3 行）；单行默认路径不变 |
+
+**验证**：历史记录：`cargo check -p figcraft-ui-gpui` 曾在 A 盘 target 通过，`dev_gate` / `devmode` 测试曾在
+`--features test-support` 下运行；`parity_contract` 的 `PARITY_CONTRACT_STATUS` 块由 `capabilities()` 从源码派生
+token 双向核对。**2026-11-27 P2-6 复验**：在 `main` 的 detach worktree 上复制改动后 `cargo check` 通过；
+`widgets::input` 21/21 通过（含 multiline buffer、TextInput 2 行、TextEdit 换行/提交）。全量
+`--lib --features test-support` 为 538 passed / 13 failed；同样的 13 条在未改动的 `e95f6315` 基线也失败，
+属于既有的窗口尺寸/键盘表测试，不是 P2-6 回归。**2026-11-27 P1-6 复验**：`devmode_tests` 扩到 13 条
+（原有的 Status/闸门/Playground 策略 6 条 + Ready/Categories/Annotations/Dev resources/Measurements/
+非实例 Playground 的数据 6 条 + annotation 聚焦请求只接受已选中层 1 条），全部通过；`dev_gate` 3/3、
+`parity_contract` 4/4 仍通过。全量为 558 passed / 13 failed，仍是既有窗口尺寸/键盘表 13 条。**2026-11-27 资源面板补齐**：左栏 Assets 打开时用 `library.updates` 填充 `session.libraries` 缓存，缓存里有更新时显示
+“Library updates available / Update”横幅；按钮走 `library.acceptUpdates`，完成后 toast
+`Updated {components} and {styles}`，Dev Mode 仍由闸门拒绝该命令。**2026-11-27 早前复验**：先备份 `main` 与 `sync/variable-binding-2026-11`，在 `main` 的 detach
+worktree 合并 PR head 后 `cargo check -p figcraft-ui-gpui --features test-support` 通过，`devmode` 6/6、
+`dev_gate` 3/3、`parity_contract` 4/4 通过；工作树未在功能分支构建。P2-1 的 codegen golden 与 P2-3 的缓存
+性能回归尚未单独跑。
+
+## AF. 2026-11-27 晚：R.7 / R.8 / R.9 面板形态收口
+
+> 本轮把三块从共用的 760×520 居中浮层里拆出来，按 EGUI 的宿主形态停靠；`ExtraKind` 本身不变，
+> 只改 `panels/extra.rs::render` 的外壳分支。
+
+| 项 | 落点 | 形态 |
+|---|---|---|
+| R.7 Shortcuts | `panels/extra.rs::render` 的 `shortcuts-bar` | 窗口底部 340pt dock，`left/right/bottom=0`，独立标题与 Close，内容滚动 |
+| R.8 Versions | `panels/extra.rs::render` 的 `versions-panel` | 左缘 `DEFAULT_LEFT_PANEL`（240pt） 全高面板，`top=TITLE_H`、`bottom=0`，独立 Close 条，`versions_body` 复用 `PanelSection` |
+| R.9 DevCompare | `panels/extra.rs::render` 的 `dev-compare-screen` | `top=TITLE_H`、`left/right/bottom=0` 的工作区全屏，Close/Resolve 仍由 `compare_body` 底栏持有 |
+
+**验证**：`origin/sync/variable-binding-2026-11` rebase 到 `c8ca43b82` 后，
+`cargo check -p figcraft-ui-gpui --features test-support` 通过；`devmode_tests` 14/14
+（新增 P1-1 的「无属性组件不显示 Playground」`has_controls` 断言）。
+提交 `46af3a863`（R.9）、`3e72677a5`（R.7/R.8）。**边界**：没有无头布局断言，实际像素/Hit-test
+仍需在 exe 上手验；R.8 是覆盖左栏位置的独立 dock，不是把 `versions_body` 接进
+`layer_tree` 的 tab 容器（EGUI 的 `versions.open` 会切 `LeftTab::File` 并替换左栏内容）。
 

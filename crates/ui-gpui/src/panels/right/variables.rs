@@ -205,6 +205,47 @@ fn kind_of(k: figcraft_doc::VariableType) -> VarKind {
     }
 }
 
+/// Toggling one scope checkbox in the details panel: `None` means "all supported properties"
+/// (every scope checked), `Some([])` means hidden from pickers. Turning one off from `None`
+/// removes just that scope; checking one from an empty list starts a single-scope list.
+fn toggle_scope(kind: VarKind, current: Option<&[String]>, scope: &str, on: bool) -> Vec<String> {
+    let supported: Vec<&str> = figcraft_doc::styles::scopes_for(kind.doc_type()).iter().map(|(id, _)| *id).collect();
+    let mut list: Vec<String> = match current {
+        Some(s) => s.to_vec(),
+        None => supported.iter().map(|s| s.to_string()).collect(),
+    };
+    if on {
+        if supported.contains(&scope) && !list.iter().any(|s| s == scope) {
+            list.push(scope.to_string());
+        }
+    } else {
+        list.retain(|s| s != scope);
+    }
+    list
+}
+
+/// One undoable `command.batch` for bulk details: set the same publishing flag on every row.
+fn bulk_hidden_batch(rows: &[String], hidden: bool) -> Value {
+    let steps: Vec<Value> = rows
+        .iter()
+        .map(|id| json!({"command": "variable.update", "params": {"variable": id, "hiddenFromPublishing": hidden}}))
+        .collect();
+    json!({"label": "Edit variables", "commands": steps})
+}
+
+/// One undoable `command.batch` for bulk details: toggle `scope` on every row, each starting
+/// from its own current scope list (egui `bulk_details` applies the click per variable).
+fn bulk_scope_batch(rows: &[(String, VarKind, Option<Vec<String>>)], scope: &str, on: bool) -> Value {
+    let steps: Vec<Value> = rows
+        .iter()
+        .map(|(id, kind, scopes)| {
+            let scopes = toggle_scope(*kind, scopes.as_deref(), scope, on);
+            json!({"command": "variable.update", "params": {"variable": id, "scopes": scopes}})
+        })
+        .collect();
+    json!({"label": "Edit variables", "commands": steps})
+}
+
 fn cell_of(vars: &figcraft_doc::Variables, val: Option<&figcraft_doc::VariableValue>) -> VarCell {
     use figcraft_doc::VariableValue as V;
     let Some(val) = val else { return VarCell::Empty };
@@ -229,6 +270,59 @@ fn cell_of(vars: &figcraft_doc::Variables, val: Option<&figcraft_doc::VariableVa
         }
         _ => VarCell::Empty,
     }
+}
+
+/// Renaming group `group` to `new` (egui `group_renames`): `new` replaces the group's last path
+/// segment, and a `/` in it nests the group under a new parent. Each path part is trimmed and
+/// empty parts are dropped. Moves are returned deepest remainder first, so a variable moving into
+/// the group's own new path (`Orange` → `Orange/Warm`) never takes a name another still holds.
+/// `None` when nothing changes.
+fn group_renames(members: &[(String, String)], group: &str, new: &str) -> Option<(String, Vec<(String, String)>)> {
+    let new = new.split('/').map(str::trim).filter(|p| !p.is_empty()).collect::<Vec<_>>().join("/");
+    if new.is_empty() {
+        return None;
+    }
+    let renamed = match group.rsplit_once('/') {
+        Some((parent, _)) => format!("{parent}/{new}"),
+        None => new,
+    };
+    if renamed == group {
+        return None;
+    }
+    let prefix = format!("{group}/");
+    let mut moved: Vec<(&str, &str)> = members.iter().filter_map(|(id, rest)| Some((id.as_str(), rest.as_str()))).collect();
+    moved.sort_by_key(|(_, rest)| std::cmp::Reverse(rest.len()));
+    Some((renamed.clone(), moved.into_iter().map(|(id, rest)| (id.to_string(), format!("{renamed}/{rest}"))).collect()))
+}
+
+/// The first of `base`, `base 2`, `base 3`… that `taken` doesn't hold (egui `unique`).
+fn unique_name(base: &str, taken: impl Fn(&str) -> bool) -> String {
+    (1..10_000).map(|k| if k == 1 { base.to_string() } else { format!("{base} {k}") }).find(|n| !taken(n)).unwrap_or_else(|| base.to_string())
+}
+
+/// `command.batch` params copying the local variables under `group` into the next free sibling
+/// group (`Brand` → `Brand 2`), every mode and scope included. Mirrors egui `duplicate_group`:
+/// each copy is `variable.duplicate` then a rename through the `$ref` tag, so one undo step
+/// restores the whole group. Inherited (library-extension) members are skipped: the engine
+/// rejects them and one failure would roll the entire batch back.
+fn duplicate_group_batch(rows: &[VarRow], groups: &[String], group: &str) -> Option<Value> {
+    let (parent, leaf) = group.rsplit_once('/').map_or(("", group), |(p, l)| (p, l));
+    let copy_leaf = unique_name(leaf, |n| {
+        let full = if parent.is_empty() { n.to_string() } else { format!("{parent}/{n}") };
+        full == group || groups.contains(&full) || rows.iter().any(|r| r.full_name.starts_with(&format!("{full}/")))
+    });
+    let copy = if parent.is_empty() { copy_leaf } else { format!("{parent}/{copy_leaf}") };
+    let prefix = format!("{group}/");
+    let mut steps: Vec<Value> = Vec::new();
+    for (k, r) in rows.iter().filter(|r| !r.inherited && r.full_name.starts_with(&prefix)).enumerate() {
+        let tag = format!("copy{k}");
+        steps.push(json!({"command": "variable.duplicate", "params": {"variable": r.id}, "as": tag}));
+        steps.push(json!({
+            "command": "variable.update",
+            "params": {"variable": {"$ref": tag}, "name": format!("{copy}/{}", &r.full_name[prefix.len()..])},
+        }));
+    }
+    (!steps.is_empty()).then(|| json!({"label": tr("Duplicate group"), "commands": steps}))
 }
 
 /// 把分组连同它的所有祖先分组一起收集（`Varia/bl/k` → `Varia`、`Varia/bl`）。
@@ -407,8 +501,8 @@ impl MenuItem {
 /// The context menu of a row that is part of a selection of several (egui `bulk_menu`):
 /// edit / delete / move to a group / scope all act on every selected variable in one undo step.
 fn bulk_menu_items(rows: &[(String, String, VarKind)], groups: &[String]) -> Vec<MenuItem> {
-    let mut items = vec![MenuItem::new(tr("Edit variable"), "ui.details", json!({ "variable": rows[0].0 }))];
-    let mut items = vec![MenuItem::new(tr("Edit variables"), "ui.details", json!({ "variable": rows[0].0 }))];
+    let ids: Vec<Value> = rows.iter().map(|(id, ..)| json!(id)).collect();
+    let mut items = vec![MenuItem::new(tr("Edit variables"), "ui.details", json!({ "variables": ids }))];
     let n = rows.len();
     let n_text = n.to_string();
     let delete_steps: Vec<Value> =
@@ -433,11 +527,14 @@ fn bulk_menu_items(rows: &[(String, String, VarKind)], groups: &[String]) -> Vec
             items.push(MenuItem::new(label, "command.batch", json!({"label": "Move variables", "commands": steps})));
         }
     }
-    let mut scopes: Vec<(&'static str, &'static str)> = Vec::new();
-    for (_, _, kind) in rows {
-        for s in figcraft_doc::styles::scopes_for(kind.doc_type()) {
-            if !scopes.contains(s) {
-                scopes.push(*s);
+    let mut scopes: Vec<(&'static str, &'static str)> =
+        rows.first().map(|(_, _, kind)| figcraft_doc::styles::scopes_for(kind.doc_type()).to_vec()).unwrap_or_default();
+    // egui offers the union of every selected kind's scopes; `scope_item` already skips rows
+    // whose kind cannot take that scope, so an intersection needlessly hides valid controls.
+    for (_, _, kind) in rows.iter().skip(1) {
+        for (id, label) in figcraft_doc::styles::scopes_for(kind.doc_type()) {
+            if !scopes.iter().any(|(existing, _)| *existing == *id) {
+                scopes.push((id, label));
             }
         }
     }
@@ -649,6 +746,10 @@ pub struct EditorState {
     pub collapsed: BTreeSet<String>,
     /// 正在编辑详情的变量 id（egui `details`）。
     pub details: Option<String>,
+    /// 多选时「Edit variables」批量详情的变量 id 列表（egui `bulk_details`）。
+    pub bulk_details: Option<Vec<String>>,
+    /// 批量详情当前页签：0 = Details，1 = Scope。
+    pub bulk_details_tab: usize,
     /// 「+ Create variable」按钮的真实矩形（prepaint 写入，开菜单时读，用作锚点）。
     pub add_anchor: Option<Bounds<Pixels>>,
     /// 搜索旁过滤眼睛按钮的真实矩形（同上）。
@@ -715,6 +816,8 @@ impl EditorState {
             group_order: Vec::new(),
             collapsed: BTreeSet::new(),
             details: None,
+            bulk_details: None,
+            bulk_details_tab: 0,
             details_pos: None,
             details_drag: None,
             details_h: None,
@@ -939,27 +1042,26 @@ impl VariablesEditor {
             let q = st.clone();
             let c = cmds.clone();
             move |text: &str, _, _| {
-                let name = text.trim().replace('/', "-");
+                let name = text.trim().to_string();
                 let old = q.borrow_mut().rename_group.take();
                 if let Some(old) = old {
-                    if !name.is_empty() && name != old {
+                    let members = gm.borrow().clone();
+                    if let Some((renamed, moves)) = group_renames(&members, &old, &name) {
                         // 整组改名是**一个手势**：合成一步撤销（`command.batch`）。
-                        // `old` 是完整组路径（如 `Brand/Buttons`），编辑器里只有短名。
-                        // 改名的只是最后一段，父路径必须原样保留（否则 `Brand/Buttons`
-                        // 改成 `Controls` 会把成员移出 `Brand`，CodeRabbit PR#29 折叠项）。
-                        let parent = match old.rsplit_once('/') {
-                            Some((p, _)) => format!("{p}/"),
-                            None => String::new(),
-                        };
-                        let steps: Vec<Value> = gm
-                            .borrow()
-                            .iter()
-                            .map(|(id, rest)| {
-                                json!({ "command": "variable.update", "params": { "variable": id, "name": format!("{parent}{name}/{rest}") } })
-                            })
+                        // `old` 是完整组路径（如 `Brand/Buttons`），编辑器里只有短名；
+                        // `group_renames` 保留父路径，`/` 则把组嵌进新父组。
+                        let steps: Vec<Value> = moves
+                            .into_iter()
+                            .map(|(id, name)| json!({ "command": "variable.update", "params": { "variable": id, "name": name } }))
                             .collect();
                         if !steps.is_empty() {
                             c.push(Cmd { id: "command.batch", params: Some(json!({ "label": tr("Rename group"), "commands": steps })) });
+                            let mut s = q.borrow_mut();
+                            if let Some(sel) = s.group.clone() {
+                                if sel == old || sel.starts_with(&format!("{old}/")) {
+                                    s.group = Some(format!("{renamed}{}", &sel[old.len()..]));
+                                }
+                            }
                         }
                     }
                 }
@@ -1136,7 +1238,7 @@ impl VariablesEditor {
             // 没有内部状态时：先释放选中 / 关详情，再一次 Escape 才交给外层关窗口。
             let had = {
                 let s = self.state.borrow();
-                !s.selected.is_empty() || s.selected_mode.is_some() || s.details.is_some()
+                !s.selected.is_empty() || s.selected_mode.is_some() || s.details.is_some() || s.bulk_details.is_some()
             };
             if had {
                 let mut s = self.state.borrow_mut();
@@ -1144,6 +1246,7 @@ impl VariablesEditor {
                 s.anchor = None;
                 s.selected_mode = None;
                 s.details = None;
+                s.bulk_details = None;
                 return true;
             }
             return false;
@@ -2228,7 +2331,8 @@ impl VariablesEditor {
                                         f32::from(e.position.x),
                                         f32::from(e.position.y),
                                         vec![
-                                            MenuItem::new(tr("Rename group"), "ui.renameGroup", json!({ "group": g_toggle, "name": g_short })),
+                                            MenuItem::new(tr("Rename group"), "ui.renameGroup", json!({ "group": g_toggle.clone(), "name": g_short })),
+                                            MenuItem::new(tr("Duplicate group"), "ui.duplicateGroup", json!({ "group": g_toggle.clone() })),
                                             MenuItem::new(tr("Delete group"), "ui.deleteGroup", json!({ "variables": vars })),
                                         ],
                                     ));
@@ -3443,8 +3547,17 @@ impl VariablesEditor {
                                 }
                             }
                             "ui.details" => {
-                                if let Some(v) = params["variable"].as_str() {
-                                    state.borrow_mut().details = Some(v.to_string());
+                                let ids: Vec<String> =
+                                    params["variables"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect();
+                                let mut s = state.borrow_mut();
+                                s.details_drag = None;
+                                if ids.len() > 1 {
+                                    s.bulk_details = Some(ids);
+                                    s.bulk_details_tab = 0;
+                                    s.details = None;
+                                } else if let Some(v) = ids.first().cloned().or_else(|| params["variable"].as_str().map(str::to_string)) {
+                                    s.details = Some(v);
+                                    s.bulk_details = None;
                                 }
                             }
                             "ui.export" => Self::export_dialog(&cmds, params["format"].as_str().unwrap_or("json")),
@@ -3465,6 +3578,15 @@ impl VariablesEditor {
                             "ui.pasteColumn" => {
                                 if let Some(m) = params["mode"].as_str() {
                                     Self::paste_column(&state, &cmds, &data, m);
+                                }
+                            }
+                            "ui.duplicateGroup" => {
+                                let Some(g) = params["group"].as_str() else { return };
+                                let colls = Self::collections(&state, &data);
+                                let ci = state.borrow().collection.min(colls.len().saturating_sub(1));
+                                let Some(c) = colls.get(ci) else { return };
+                                if let Some(batch) = duplicate_group_batch(&c.rows, &c.groups, g) {
+                                    cmds.push(Cmd { id: "command.batch", params: Some(batch) });
                                 }
                             }
                             "ui.deleteGroup" => {
@@ -3708,7 +3830,158 @@ impl VariablesEditor {
 
     /// 变量详情（egui `details()`）。外壳用**通用 `Popover`**（40pt 标题栏 / 13 圆角 / 标准阴影 /
     /// 统一 X），不再手搓 absolute 卡片。Name 用完整名，改名才不会丢掉分组前缀。
+    /// 多选「Edit variables」：egui `bulk_details` 的 GPUI 版。Details 页签只放
+    /// 「Hide from publishing」三态；Scope 页签只列出所有选中类型共有的范围。每次点击
+    /// 对每个选中变量发一条 `variable.update`，包进一个 `command.batch` 作为一步撤销。
+    fn bulk_details_overlay(&mut self, st: &State, cx: &mut App, viewport: Size<Pixels>) -> AnyElement {
+        let t = tokens();
+        if st.borrow().library.is_some() {
+            st.borrow_mut().bulk_details = None;
+            return div().into_any_element();
+        }
+        let ids = st.borrow().bulk_details.clone().unwrap_or_default();
+        let rows: Vec<VarRow> = self
+            .data
+            .collections
+            .iter()
+            .flat_map(|c| c.rows.iter())
+            .filter(|r| ids.iter().any(|id| id == &r.id))
+            .cloned()
+            .collect();
+        if rows.len() < 2 {
+            let mut s = st.borrow_mut();
+            s.bulk_details = None;
+            s.details_drag = None;
+            if let Some(row) = rows.first() {
+                s.details = Some(row.id.clone());
+            }
+            return div().into_any_element();
+        }
+        let tab = st.borrow().bulk_details_tab.min(1);
+        let mut body = crate::widgets::popover::popover_body();
+        let tab_st = st.clone();
+        body = body.child(
+            crate::widgets::segmented::Segmented::new(vec![
+                crate::widgets::segmented::SegItem::text(tr("Details")),
+                crate::widgets::segmented::SegItem::text(tr("Scope")),
+            ])
+            .active(Some(tab))
+            .on_pick(move |i, _, _| tab_st.borrow_mut().bulk_details_tab = i)
+            .build(),
+        );
+        if tab == 0 {
+            let all_hidden = rows.iter().all(|r| r.hidden);
+            let cmds = self.cmds.clone();
+            let row_ids: Vec<String> = rows.iter().map(|r| r.id.clone()).collect();
+            body = body.child(
+                Checkbox::new(gpui::ElementId::Name("bulk-details-hidden".into()))
+                    .label(tr("Hide from publishing"))
+                    .text_xs()
+                    .checked(all_hidden)
+                    .on_change(move |next: &bool, _, _| {
+                        cmds.push(Cmd {
+                            id: "command.batch",
+                            params: Some(bulk_hidden_batch(&row_ids, *next)),
+                        });
+                    }),
+            );
+        } else {
+            let mut common: Vec<(&'static str, &'static str)> =
+                rows.first().map(|r| figcraft_doc::styles::scopes_for(r.kind.doc_type()).to_vec()).unwrap_or_default();
+            for row in rows.iter().skip(1) {
+                let kind_scopes = figcraft_doc::styles::scopes_for(row.kind.doc_type());
+                common.retain(|(id, _)| kind_scopes.iter().any(|(sid, _)| sid == id));
+            }
+            let all_scopes = rows.iter().all(|r| r.scopes.is_none());
+            let cmds = self.cmds.clone();
+            let row_ids: Vec<String> = rows.iter().map(|r| r.id.clone()).collect();
+            body = body.child(
+                Checkbox::new(gpui::ElementId::Name("bulk-all-scopes".into()))
+                    .label(tr("All supported properties"))
+                    .text_xs()
+                    .checked(all_scopes)
+                    .on_change(move |next: &bool, _, _| {
+                        let steps: Vec<Value> = row_ids
+                            .iter()
+                            .map(|id| {
+                                json!({"command": "variable.update", "params": {"variable": id, "scopes": if *next { Value::Null } else { json!([]) }}})
+                            })
+                            .collect();
+                        cmds.push(Cmd {
+                            id: "command.batch",
+                            params: Some(json!({"label": "Edit variables", "commands": steps})),
+                        });
+                    }),
+            );
+            for &(sid, label) in &common {
+                let checked = rows.iter().all(|r| r.scopes.as_ref().is_none_or(|s| s.iter().any(|x| x == sid)));
+                let cmds = self.cmds.clone();
+                let per_row: Vec<(String, VarKind, Option<Vec<String>>)> =
+                    rows.iter().map(|r| (r.id.clone(), r.kind, r.scopes.clone())).collect();
+                let sid_owned = sid.to_string();
+                body = body.child(div().pl(pt(16.0)).child(
+                    Checkbox::new(gpui::ElementId::Name(format!("bulk-scope-{sid}").into()))
+                        .label(tr(label))
+                        .text_xs()
+                        .checked(checked)
+                        .on_change(move |next: &bool, _, _| {
+                            cmds.push(Cmd {
+                                id: "command.batch",
+                                params: Some(bulk_scope_batch(&per_row, &sid_owned, *next)),
+                            });
+                        }),
+                ));
+            }
+            if common.is_empty() {
+                body = body.child(
+                    div()
+                        .text_size(pt(11.0))
+                        .text_color(rgba(t.text_secondary))
+                        .child(tr("No scope is shared by all the selected variables")),
+                );
+            }
+        }
+        let close_st = st.clone();
+        let dismiss: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(move |_, _| {
+            let mut s = close_st.borrow_mut();
+            s.bulk_details = None;
+            s.details_drag = None;
+        });
+        let at = st.borrow().details_pos.unwrap_or(point(px(300.0), px(60.0)));
+        let est_h = st.borrow().details_h.unwrap_or_else(|| {
+            if tab == 0 {
+                88.0
+            } else {
+                let scope_rows = rows
+                    .first()
+                    .map(|r| figcraft_doc::styles::scopes_for(r.kind.doc_type()).len() as f32 * 22.0)
+                    .unwrap_or(0.0);
+                40.0 + 22.0 + 32.0 + scope_rows
+            }
+        });
+        let measure_st = st.clone();
+        let pop = popover_window(PopoverOpen::At(at))
+            .width(280.0)
+            .height(est_h)
+            .on_measure(move |h: Pixels| measure_st.borrow_mut().details_h = Some(f32::from(h)))
+            .pad(16.0)
+            .surface(Surface::Panel)
+            .title(title_text(tr("Edit variables")));
+        let origin = pop.origin(viewport);
+        let drag_st = st.clone();
+        pop.on_drag_start(move |e: &MouseDownEvent, _, _| {
+            let mut s = drag_st.borrow_mut();
+            s.details_drag = Some(point(e.position.x - origin.x, e.position.y - origin.y));
+        })
+        .body(body)
+        .show(viewport, dismiss)
+        .1
+    }
+
     fn details_overlay(&mut self, st: &State, cx: &mut App, viewport: Size<Pixels>) -> AnyElement {
+        if st.borrow().bulk_details.is_some() {
+            return self.bulk_details_overlay(st, cx, viewport);
+        }
         let t = tokens();
         // egui：库变量（只读）不显示详情。
         if st.borrow().library.is_some() {
@@ -3771,9 +4044,23 @@ impl VariablesEditor {
                     });
                 }),
         );
-        for scope in row.scopes.clone().unwrap_or_default() {
-            body =
-                body.child(div().pl(pt(16.0)).h(pt(22.0)).flex().items_center().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(scope));
+        for (id, label) in figcraft_doc::styles::scopes_for(row.kind.doc_type()) {
+            let checked = row.scopes.as_ref().is_none_or(|s| s.iter().any(|x| x == id));
+            let current = row.scopes.clone();
+            let cmds = self.cmds.clone();
+            let vid = row.id.clone();
+            let kind = row.kind;
+            let sid = id.to_string();
+            body = body.child(div().pl(pt(16.0)).child(
+                Checkbox::new(gpui::ElementId::Name(format!("d-scope-{}-{}", row.id, id).into()))
+                    .label(tr(label))
+                    .text_xs()
+                    .checked(checked)
+                    .on_change(move |next: &bool, _, _| {
+                        let scopes = toggle_scope(kind, current.as_deref(), &sid, *next);
+                        cmds.push(Cmd { id: "variable.update", params: Some(json!({ "variable": vid, "scopes": scopes })) });
+                    }),
+            ));
         }
         let close_st = st.clone();
         let dismiss: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(move |_, _| {
@@ -3788,7 +4075,7 @@ impl VariablesEditor {
         // 首帧按内容给个估算，之后用 on_measure 回写的实测值（CodeRabbit PR#29）。
         let est_h = st.borrow().details_h.unwrap_or_else(|| {
             let code_rows = row.code.len() as f32 * 40.0;
-            let scope_rows = row.scopes.as_ref().map(|s| s.len() as f32).unwrap_or(0.0) * 22.0;
+            let scope_rows = figcraft_doc::styles::scopes_for(row.kind.doc_type()).len() as f32 * 22.0;
             40.0 + 22.0 + 40.0 + 22.0 + 40.0 + 32.0 + 22.0 + code_rows + 22.0 + 32.0 + scope_rows + 32.0
         });
         let measure_st = st.clone();
@@ -3966,6 +4253,7 @@ fn kind_glyph(r: &VarRow) -> AnyElement {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui::Styled;
 
     fn order() -> Vec<String> {
         ["a", "b", "c", "d"].iter().map(|s| s.to_string()).collect()
@@ -4000,6 +4288,221 @@ mod tests {
     }
 
     #[test]
+    fn plain_click_replaces_the_selection() {
+        let mut st = EditorState::new();
+        st.selected = vec!["a".into(), "d".into()];
+        st.anchor = Some("a".into());
+        select_var(&mut st, "b", &order(), &Modifiers::default());
+        assert_eq!(st.selected, ["b"]);
+        assert_eq!(st.anchor.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn shift_click_without_a_valid_anchor_toggles() {
+        // The anchor must still be selected; a stale one makes Shift behave like Cmd/Ctrl.
+        let mut st = EditorState::new();
+        st.selected = vec!["d".into()];
+        st.anchor = Some("a".into());
+        select_var(&mut st, "c", &order(), &Modifiers { shift: true, ..Default::default() });
+        assert_eq!(st.selected, ["d", "c"]);
+        assert_eq!(st.anchor.as_deref(), Some("c"));
+    }
+
+    #[gpui::test]
+    async fn escape_clears_the_selection(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            let wake: Rc<dyn Fn()> = Rc::new(|| {});
+            let mut st = VariablesEditor::new(
+                Cmds::new(&wake),
+                VariablesData::default(),
+                cx,
+                None,
+                Rc::new(|_, _| {}),
+                Rc::new(|_| {}),
+            );
+            {
+                let mut s = st.state.borrow_mut();
+                s.selected = vec!["a".into(), "b".into()];
+                s.anchor = Some("a".into());
+            }
+            assert!(st.key("escape", false));
+            assert!(st.state.borrow().selected.is_empty());
+            assert!(st.state.borrow().anchor.is_none());
+            // The next Escape has nothing left to release and must reach the panel/window.
+            assert!(!st.key("escape", false));
+        });
+    }
+
+    #[test]
+    fn bulk_menu_omits_a_move_that_changes_nothing() {
+        let rows = vec![("1".to_string(), "Brand/Primary".to_string(), VarKind::Color)];
+        let items = bulk_menu_items(&rows, &["Brand".into(), "Other".into()]);
+        // Already in Brand: `Brand/Primary` would be the same name, so no step and no item.
+        assert!(!items.iter().any(|i| i.label.contains("Move to group Brand")), "{:?}", items.iter().map(|i| &i.label).collect::<Vec<_>>());
+        assert!(items.iter().any(|i| i.label.contains("Move out of any group")));
+        assert!(items.iter().any(|i| i.label.contains("Move to group Other")));
+    }
+
+    #[test]
+    fn bulk_menu_scopes_are_the_union_of_every_selected_type() {
+        let rows = vec![
+            ("1".to_string(), "Brand/Primary".to_string(), VarKind::Color),
+            ("2".to_string(), "Flag/On".to_string(), VarKind::Boolean),
+        ];
+        let items = bulk_menu_items(&rows, &[]);
+        // egui offers every scope supported by *any* selected kind; a boolean has no scopes, so
+        // the colour scopes stay visible and the scope action skips the boolean row.
+        assert!(items.iter().any(|i| i.label.starts_with("Scope: only")), "{:?}", items.iter().map(|i| &i.label).collect::<Vec<_>>());
+        assert!(items.iter().any(|i| i.label == "Scope: hidden from pickers"));
+        assert!(items.iter().any(|i| i.label == "Scope: all supported properties"));
+    }
+
+    #[test]
+    fn scope_checkboxes_narrow_and_widen_the_scope_list() {
+        // "All supported properties" starts with every colour scope checked; turning Frame fill
+        // off keeps the rest instead of collapsing to a single scope.
+        let all_off = toggle_scope(VarKind::Color, None, "FRAME_FILL", false);
+        assert_eq!(all_off, ["SHAPE_FILL", "TEXT_FILL", "STROKE_COLOR", "EFFECT_COLOR"]);
+        // From an explicit single scope, checking another appends it.
+        let start = vec!["FRAME_FILL".to_string()];
+        let wider = toggle_scope(VarKind::Color, Some(&start), "STROKE_COLOR", true);
+        assert_eq!(wider, ["FRAME_FILL", "STROKE_COLOR"]);
+        // Unchecking the last scope means hidden from pickers (empty list, not `None`).
+        let last = vec!["FRAME_FILL".to_string()];
+        assert!(toggle_scope(VarKind::Color, Some(&last), "FRAME_FILL", false).is_empty());
+        // Booleans have no scopes at all (egui `booleans_share_no_scope`).
+        assert!(figcraft_doc::styles::scopes_for(figcraft_doc::VariableType::Boolean).is_empty());
+    }
+
+    #[test]
+    fn bulk_menu_lists_every_group_so_the_popup_can_scroll() {
+        let groups: Vec<String> = (0..40).map(|i| format!("Group {i}")).collect();
+        let rows = vec![("1".to_string(), "Brand/Primary".to_string(), VarKind::Color)];
+        let items = bulk_menu_items(&rows, &groups);
+        assert_eq!(items.iter().filter(|i| i.label.starts_with("Move to group ")).count(), 40);
+    }
+
+    #[test]
+    fn group_rename_keeps_the_parent_and_nests_on_a_slash() {
+        let members = vec![("1".to_string(), "Primary".to_string()), ("2".to_string(), "Disabled".to_string())];
+        let (renamed, moves) = group_renames(&members, "Brand/Buttons", "Controls").expect("a rename");
+        assert_eq!(renamed, "Brand/Controls");
+        assert!(moves.iter().any(|(_, n)| n == "Brand/Controls/Primary"));
+        assert!(moves.iter().any(|(_, n)| n == "Brand/Controls/Disabled"));
+
+        let (renamed, moves) = group_renames(&members, "Brand/Buttons", "Palette/Orange").expect("a nested rename");
+        assert_eq!(renamed, "Brand/Palette/Orange");
+        assert!(moves.iter().any(|(_, n)| n == "Brand/Palette/Orange/Primary"));
+    }
+
+    #[test]
+    fn group_rename_does_nothing_when_the_path_is_unchanged() {
+        let members = vec![("1".to_string(), "Primary".to_string())];
+        assert!(group_renames(&members, "Brand", "Brand").is_none());
+        assert!(group_renames(&members, "Brand", " / ").is_none());
+    }
+
+    fn var_row(id: &str, full_name: &str, inherited: bool) -> VarRow {
+        let (group, name) = full_name.rsplit_once('/').map_or(("", full_name), |(g, n)| (g, n));
+        VarRow {
+            id: id.to_string(),
+            full_name: full_name.to_string(),
+            name: name.to_string(),
+            group: group.to_string(),
+            kind: VarKind::Color,
+            values: Vec::new(),
+            overrides: Vec::new(),
+            description: String::new(),
+            hidden: false,
+            code: Vec::new(),
+            scopes: None,
+            inherited,
+        }
+    }
+
+    #[test]
+    fn bulk_menu_moves_every_selected_variable_in_one_batch() {
+        let rows = vec![
+            ("1".to_string(), "Brand/Primary".to_string(), VarKind::Color),
+            ("2".to_string(), "Brand/Secondary".to_string(), VarKind::Color),
+        ];
+        let items = bulk_menu_items(&rows, &["Space".into()]);
+        let moving = items.iter().find(|i| i.label.contains("Move to group Space")).expect("the move item");
+        let steps = moving.params["commands"].as_array().expect("batch steps");
+        assert_eq!(steps.len(), 2);
+        assert_eq!(steps[0]["params"]["name"], "Space/Primary");
+        assert_eq!(steps[1]["params"]["name"], "Space/Secondary");
+    }
+
+    #[test]
+    fn bulk_menu_scope_change_sets_the_same_scope_on_every_selected_variable() {
+        let rows = vec![
+            ("1".to_string(), "Brand/Primary".to_string(), VarKind::Color),
+            ("2".to_string(), "Brand/Secondary".to_string(), VarKind::Color),
+        ];
+        let items = bulk_menu_items(&rows, &[]);
+        let scoped = items.iter().find(|i| i.label == "Scope: only Frame fill").expect("the fill scope item");
+        let steps = scoped.params["commands"].as_array().expect("batch steps");
+        assert_eq!(steps.len(), 2);
+        for step in steps {
+            assert_eq!(step["params"]["scopes"], json!(["FRAME_FILL"]));
+        }
+    }
+
+    #[test]
+    fn edit_variables_sets_stroke_on_all_selected_in_one_batch() {
+        let rows = vec![
+            ("1".to_string(), VarKind::Color, Some(vec!["FRAME_FILL".to_string(), "STROKE_COLOR".to_string()])),
+            ("2".to_string(), VarKind::Color, Some(vec!["FRAME_FILL".to_string(), "STROKE_COLOR".to_string()])),
+            ("3".to_string(), VarKind::Color, Some(vec!["FRAME_FILL".to_string()])),
+        ];
+        let batch = bulk_scope_batch(&rows, "STROKE_COLOR", true);
+        assert_eq!(batch["label"], "Edit variables");
+        let steps = batch["commands"].as_array().expect("batch steps");
+        assert_eq!(steps.len(), 3, "every selected variable, one undoable batch");
+        // Already-scoped rows keep their existing list; the unscoped row gains Stroke.
+        assert_eq!(steps[0]["params"]["scopes"], json!(["FRAME_FILL", "STROKE_COLOR"]));
+        assert_eq!(steps[2]["params"]["scopes"], json!(["FRAME_FILL", "STROKE_COLOR"]));
+    }
+
+    #[test]
+    fn edit_variables_hides_all_selected_in_one_batch() {
+        let ids = vec!["1".to_string(), "2".to_string()];
+        let batch = bulk_hidden_batch(&ids, true);
+        assert_eq!(batch["label"], "Edit variables");
+        let steps = batch["commands"].as_array().expect("batch steps");
+        assert_eq!(steps.len(), 2);
+        assert!(steps.iter().all(|s| s["params"]["hiddenFromPublishing"] == true));
+    }
+
+    #[test]
+    fn duplicate_group_copies_every_local_variable_under_the_next_free_name() {
+        let rows = vec![
+            var_row("1", "Brand/Primary", false),
+            var_row("2", "Brand/Secondary", false),
+            var_row("3", "Other/Tertiary", false),
+        ];
+        let groups = vec!["Brand".into(), "Brand 2".into(), "Other".into()];
+        let batch = duplicate_group_batch(&rows, &groups, "Brand").expect("a batch");
+        assert_eq!(batch["label"], "Duplicate group");
+        let steps = batch["commands"].as_array().expect("steps");
+        assert_eq!(steps.len(), 4, "two copies, each duplicate + rename");
+        assert_eq!(steps[0]["as"], "copy0");
+        assert_eq!(steps[1]["params"]["variable"]["$ref"], "copy0");
+        assert_eq!(steps[1]["params"]["name"], "Brand 3/Primary");
+        assert_eq!(steps[3]["params"]["name"], "Brand 3/Secondary");
+    }
+
+    #[test]
+    fn duplicate_group_skips_inherited_members_and_empty_groups() {
+        let rows = vec![var_row("1", "Brand/Primary", false), var_row("2", "Brand/Library", true)];
+        let groups = vec!["Brand".into()];
+        let batch = duplicate_group_batch(&rows, &groups, "Brand").expect("a batch");
+        assert_eq!(batch["commands"].as_array().map(Vec::len), Some(2), "only the local member");
+        assert_eq!(duplicate_group_batch(&[var_row("3", "Other/x", false)], &["Other".into()], "Empty"), None);
+    }
+
+    #[test]
     fn bulk_menu_acts_on_every_selected_variable() {
         let rows = vec![
             ("1".to_string(), "Brand/Primary".to_string(), VarKind::Color),
@@ -4010,5 +4513,95 @@ mod tests {
         assert_eq!(items[1].params["commands"].as_array().map(Vec::len), Some(2));
         assert!(items.iter().any(|i| i.label.contains("Move to group Space")));
         assert!(items.iter().any(|i| i.label == "Scope: hidden from pickers"));
+    }
+
+    fn style_row(id: &str, name: &str) -> VarRow {
+        VarRow {
+            id: id.to_string(),
+            full_name: name.to_string(),
+            name: name.to_string(),
+            group: String::new(),
+            kind: VarKind::Color,
+            values: Vec::new(),
+            overrides: Vec::new(),
+            description: String::new(),
+            hidden: false,
+            code: Vec::new(),
+            scopes: None,
+            inherited: false,
+        }
+    }
+
+    /// A selected row uses the theme's selected-row fill; an unselected one has no background
+    /// until hover (`var_row`). Mirrors egui `selected_rows_are_painted_with_the_selected_row_colour`.
+    #[gpui::test]
+    async fn selected_rows_are_painted_with_the_selected_row_colour(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            let wake: Rc<dyn Fn()> = Rc::new(|| {});
+            let cmds = Cmds::new(&wake);
+            let caches = Rc::new(RefCell::new(RowCaches::default()));
+            let row = style_row("a", "Alpha");
+            let collection = CollectionSnap {
+                id: "c".into(),
+                name: "Collection".into(),
+                modes: Vec::new(),
+                rows: vec![row.clone()],
+                groups: Vec::new(),
+                library: None,
+                extends: None,
+                editable: true,
+            };
+            let ids = vec!["a".into()];
+            let tops = Rc::new(vec![0.0]);
+            let bulk_rows = Rc::new(vec![("a".into(), "Alpha".into(), VarKind::Color)]);
+            let bulk_groups = Rc::new(Vec::new());
+            let state = Rc::new(RefCell::new(EditorState::new()));
+
+            state.borrow_mut().selected = vec!["a".into()];
+            let mut selected = VariablesEditor::var_row(
+                &state,
+                &cmds,
+                &caches,
+                &collection,
+                &row,
+                0,
+                &ids,
+                tops.clone(),
+                200.0,
+                100.0,
+                0.0,
+                bulk_rows.clone(),
+                bulk_groups.clone(),
+                cx,
+            );
+            assert_eq!(
+                selected.style().background.as_ref().and_then(|f| f.color()),
+                Some(rgba(tokens().selected_row).into()),
+                "selected row background"
+            );
+
+            state.borrow_mut().selected.clear();
+            let mut unselected = VariablesEditor::var_row(
+                &state,
+                &cmds,
+                &caches,
+                &collection,
+                &row,
+                0,
+                &ids,
+                tops,
+                200.0,
+                100.0,
+                0.0,
+                bulk_rows,
+                bulk_groups,
+                cx,
+            );
+            assert_eq!(
+                unselected.style().background.as_ref().and_then(|f| f.color()),
+                None,
+                "unselected row has no fill until hover"
+            );
+        });
     }
 }

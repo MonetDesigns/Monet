@@ -1017,6 +1017,10 @@ pub fn import(doc: &mut Document, lib: &PublishedLibrary, keys: &[NodeId], updat
             nodes.push(n);
         }
         doc.paste_nodes(&nodes, &map, *u, store, None)?;
+        // An instance whose main is missing became a plain frame: its lengths stay as drawn (#2090).
+        if let Some(root) = map.get(u).copied() {
+            crate::cmd::styles::bake_stale_scales(doc, root);
+        }
     }
     copy_images(doc, src, &hashes);
     for (u, sub) in &write {
@@ -1149,10 +1153,12 @@ pub fn prune(doc: &mut Document, library: &str) -> Result<()> {
         doc.styles.retain(|s| !unused.contains(&s.id));
         doc.libraries_mut().styles.retain(|r| !unused.contains(&r.local));
     }
-    // Variables layers bind or set, local variables alias or extend (with what those alias).
+    // Variables layers bind or set, styles bind, local variables alias or extend (with what those
+    // alias).
     let seeds = doc
         .nodes()
         .flat_map(|n| n.bound.values().map(String::as_str).chain(action_variables(n)))
+        .chain(doc.styles.iter().flat_map(|s| s.bound.values().map(String::as_str)))
         .chain(doc.variables.variables.iter().filter_map(|v| v.extends.as_deref()))
         .map(str::to_string)
         .chain(
@@ -1257,6 +1263,7 @@ fn merge_components(
             }
             let Some(root) = remote.get(&r.root).copied() else { continue };
             doc.paste_nodes(&nodes, &remote, r.root, store, None)?;
+            crate::cmd::styles::bake_stale_scales(doc, root);
             // A fresh main keeps the source timelines of every node in its subtree; otherwise a
             // ComponentSet child (or the root itself) would fall back to the destination
             // page/default clock even though the component brought its animation with it.

@@ -24,6 +24,8 @@ pub struct SolidRect {
     /// 非预乘 sRGB + alpha（0–1），写进着色器前由它自己乘 alpha。
     pub color: [f32; 4],
     pub radius: f32,
+    /// 设备像素裁剪框 `[x, y, w, h]`；`w < 0` 表示不裁剪。导出时由祖先裁剪帧求交得到。
+    pub clip: [f32; 4],
 }
 
 /// 一帧要画的纯色矩形。
@@ -42,9 +44,17 @@ impl Scene {
     }
 
     pub fn push(&mut self, rect: [f32; 4], color: [f32; 4], radius: f32) {
-        self.rects.push(SolidRect { rect, color, radius });
+        self.push_clipped(rect, color, radius, NO_CLIP);
+    }
+
+    /// 同 [`push`](Self::push)，并限制在设备像素裁剪框 `clip` 内（`[x, y, w, h]`）。
+    pub fn push_clipped(&mut self, rect: [f32; 4], color: [f32; 4], radius: f32, clip: [f32; 4]) {
+        self.rects.push(SolidRect { rect, color, radius, clip });
     }
 }
+
+/// 不裁剪的哨兵值：`w < 0`（着色器里只在 `clip.z >= 0` 时才判断裁剪）。
+pub const NO_CLIP: [f32; 4] = [-1.0, -1.0, -1.0, -1.0];
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -61,6 +71,8 @@ struct Instance {
     /// x = 圆角半径（用 vec4 而不是 `f32 + vec3`：后者的对齐会把结构体撑到 64 字节，
     /// 与 Rust 这边算出来的大小对不上，wgpu 会直接报 validation error）。
     extra: [f32; 4],
+    /// 设备像素裁剪框 `[x, y, w, h]`；`w < 0` 表示不裁剪。
+    clip: [f32; 4],
 }
 
 const SHADER: &str = r#"
@@ -71,6 +83,7 @@ struct Inst {
   rect: vec4<f32>,     // x, y, w, h（设备像素，左上角为原点、y 向下）
   color: vec4<f32>,    // 非预乘 sRGB + alpha
   extra: vec4<f32>,    // x = 圆角半径
+  clip: vec4<f32>,     // x, y, w, h；w < 0 表示不裁剪
 };
 @group(1) @binding(0) var<storage, read> insts: array<Inst>;
 
@@ -80,6 +93,7 @@ struct VsOut {
   @location(1) half: vec2<f32>,
   @location(2) @interpolate(flat) color: vec4<f32>,
   @location(3) @interpolate(flat) radius: f32,
+  @location(4) @interpolate(flat) clip: vec4<f32>,
 };
 
 @vertex
@@ -97,6 +111,7 @@ fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VsOut
   o.half = inst.rect.zw * 0.5;
   o.color = inst.color;
   o.radius = inst.extra.x;
+  o.clip = inst.clip;
   return o;
 }
 
@@ -109,6 +124,12 @@ fn sd_round_box(p: vec2<f32>, b: vec2<f32>, r: f32) -> f32 {
 
 @fragment
 fn fs(in: VsOut) -> @location(0) vec4<f32> {
+  // 祖先裁剪帧：片元位置在设备像素里，越界直接丢弃（canvas 上被裁掉的部分）。
+  if (in.clip.z >= 0.0 &&
+      (in.pos.x < in.clip.x || in.pos.y < in.clip.y ||
+       in.pos.x >= in.clip.x + in.clip.z || in.pos.y >= in.clip.y + in.clip.w)) {
+    discard;
+  }
   let p = in.local - in.half;
   let d = sd_round_box(p, in.half, in.radius);
   // 半像素覆盖：d = 0 时 0.5，向内 0.5px 后 1。
@@ -255,6 +276,19 @@ impl Gpu {
     }
 
     /// 把一帧场景渲染成 **预乘 RGBA8** 像素（长度 = w × h × 4，行序自上而下）。
+    /// Whether this device can allocate the export texture and its padded readback. An
+    /// over-limit texture is an uncaptured wgpu validation error (a panic on the locked version),
+    /// not `None`, so the caller must decline before calling [`render`](Self::render).
+    pub fn supports_frame(&self, width: u32, height: u32) -> bool {
+        let limits = self.device.limits();
+        if width == 0 || height == 0 || width > limits.max_texture_dimension_2d || height > limits.max_texture_dimension_2d {
+            return false;
+        }
+        let unpadded = u64::from(width) * 4;
+        let padded = unpadded.div_ceil(u64::from(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)) * u64::from(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+        padded.saturating_mul(u64::from(height)) <= limits.max_buffer_size
+    }
+
     pub fn render(&mut self, scene: &Scene) -> Vec<u8> {
         self.draw(scene, true)
     }
@@ -271,8 +305,11 @@ impl Gpu {
         self.queue.write_buffer(&self.globals_buf, 0, bytemuck::bytes_of(&globals));
 
         // 实例缓冲：至少留一个（空场景也建缓冲，省一条分支）。
-        let instances: Vec<Instance> =
-            scene.rects.iter().map(|r| Instance { rect: r.rect, color: r.color, extra: [r.radius, 0.0, 0.0, 0.0] }).collect();
+        let instances: Vec<Instance> = scene
+            .rects
+            .iter()
+            .map(|r| Instance { rect: r.rect, color: r.color, extra: [r.radius, 0.0, 0.0, 0.0], clip: r.clip })
+            .collect();
         let count = instances.len().max(1) as u64;
         let bytes = if instances.is_empty() { vec![0u8; std::mem::size_of::<Instance>()] } else { bytemuck::cast_slice(&instances).to_vec() };
         // 容量不够才重建（只增不减），否则直接覆写。
@@ -405,24 +442,61 @@ pub fn scene_of(doc: &figcraft_doc::Document, page: figcraft_doc::NodeId, view: 
         s.clear = [background.r, background.g, background.b, background.a];
     }
     for &c in &pn.children {
-        walk(doc, c, view, &mut s)?;
+        walk(doc, c, view, &mut s, NO_CLIP)?;
     }
     Some(s)
 }
 
-fn walk(doc: &figcraft_doc::Document, id: figcraft_doc::NodeId, view: &figcraft_render::View, out: &mut Scene) -> Option<()> {
+/// One node subtree (not the whole page) as a [`Scene`], for animated exports: the same strict
+/// subset as [`scene_of`], with a transparent background (an export frame is transparent where
+/// nothing paints). A page node still exposes its children, but its background is **not** filled:
+/// CPU Motion export leaves unpainted page space transparent even when the page has a colour.
+pub fn scene_of_node(doc: &figcraft_doc::Document, node: figcraft_doc::NodeId, view: &figcraft_render::View) -> Option<Scene> {
+    use figcraft_doc::NodeKind;
+    let mut s = Scene::new(view.width, view.height);
+    let n = doc.node(node)?;
+    if let NodeKind::Page { .. } = &n.kind {
+        for &c in &n.children {
+            walk(doc, c, view, &mut s, NO_CLIP)?;
+        }
+    } else {
+        walk(doc, node, view, &mut s, NO_CLIP)?;
+    }
+    Some(s)
+}
+
+fn walk(doc: &figcraft_doc::Document, id: figcraft_doc::NodeId, view: &figcraft_render::View, out: &mut Scene, mut clip: [f32; 4]) -> Option<()> {
     use figcraft_doc::NodeKind;
     let n = doc.node(id)?;
     if !n.visible {
         return Some(());
     }
-    if n.opacity < 0.999 || n.blend != figcraft_color::BlendMode::Normal || n.clip || n.effects.iter().any(|e| e.visible) {
+    // Masks need the CPU's grouped mask run; drawing the mask rectangle as an ordinary fill
+    // would show content the CPU hides.
+    if n.is_mask {
+        return None;
+    }
+    // PassThrough is a group's own "keep the children's blends" mode and looks like Normal for
+    // opaque fills; anything else (Luminosity, Multiply…) would need a real blend pipeline.
+    if n.opacity < 0.999
+        || !matches!(n.blend, figcraft_color::BlendMode::Normal | figcraft_color::BlendMode::PassThrough)
+        || n.effects.iter().any(|e| e.visible)
+    {
         return None;
     }
     if !n.strokes.is_empty() {
         return None;
     }
     if n.fills.len() > 1 {
+        return None;
+    }
+    // `walk` emits children in raw document order; a reverse-stacking auto-layout paints its
+    // first child last, which this path cannot reproduce.
+    if n.layout.as_ref().is_some_and(|l| l.reverse_z) {
+        return None;
+    }
+    // The GPU instance has one radius for all four corners and no corner smoothing.
+    if n.corners.uniform().is_none() || n.corners.smoothing != 0.0 {
         return None;
     }
     let xf = doc.world_transform(id);
@@ -444,17 +518,54 @@ fn walk(doc: &figcraft_doc::Document, id: figcraft_doc::NodeId, view: &figcraft_
     let (x0, y0) = map(m, 0.0, 0.0);
     let (x1, y1) = map(m, w, h);
     let (rx0, ry0, rx1, ry1) = (x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1));
+    let own = [rx0 as f32, ry0 as f32, (rx1 - rx0) as f32, (ry1 - ry0) as f32];
+    // A clipping frame narrows what it and everything below it may paint. The GPU clips against
+    // `own` (a rectangle) with a hard edge, while the CPU clips against the rounded frame outline
+    // with partial coverage, so only whole-pixel square clips are faithful.
+    let clip = if n.clip {
+        if n.corners.radii.iter().any(|r| *r > 0.0) {
+            return None;
+        }
+        if [rx0, ry0, rx1, ry1].iter().any(|v| (v - v.round()).abs() > 0.0001) {
+            return None;
+        }
+        intersect_clip(clip, own)
+    } else {
+        clip
+    };
     if let Some(paint) = n.fills.first() {
-        let c = paint.solid_color()?;
-        // 圆角按设备像素换算（四角取最大，够用；四角不同半径是后续再加的字段）。
-        let unit = if w > 0.0 { (rx1 - rx0) / w } else { 1.0 };
-        let radius = n.corners.radii.iter().copied().fold(0.0_f64, f64::max) * unit;
-        out.push([rx0 as f32, ry0 as f32, (rx1 - rx0) as f32, (ry1 - ry0) as f32], [c.r, c.g, c.b, c.a], radius as f32);
+        // `solid_color()` ignores `visible`; a hidden fill must produce no instance at all.
+        if paint.visible {
+            let c = paint.solid_color()?;
+            // 圆角按设备像素换算；所有角半径已在上面验证为同一个值。
+            let unit = if w > 0.0 { (rx1 - rx0) / w } else { 1.0 };
+            let radius = n.corners.radii[0] * unit;
+            out.push_clipped(own, [c.r, c.g, c.b, c.a], radius as f32, clip);
+        }
     }
     for &c in &n.children {
-        walk(doc, c, view, out)?;
+        walk(doc, c, view, out, clip)?;
     }
     Some(())
+}
+
+/// 两个设备像素裁剪框的交集；`w < 0` 是“不裁剪”，空交集给零宽（着色器会丢弃全部片元）。
+fn intersect_clip(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+    if a[2] < 0.0 {
+        return b;
+    }
+    if b[2] < 0.0 {
+        return a;
+    }
+    let x0 = a[0].max(b[0]);
+    let y0 = a[1].max(b[1]);
+    let x1 = (a[0] + a[2]).min(b[0] + b[2]);
+    let y1 = (a[1] + a[3]).min(b[1] + b[3]);
+    if x1 <= x0 || y1 <= y0 {
+        [x0, y0, 0.0, 0.0]
+    } else {
+        [x0, y0, x1 - x0, y1 - y0]
+    }
 }
 
 fn map(m: figcraft_geom::Affine, x: f64, y: f64) -> (f64, f64) {
@@ -484,13 +595,110 @@ mod tests {
         let _ = rect;
     }
 
-    /// 文档里有这条路径画不了的东西（文字）时，必须明确回退，不能画出半对不对的图。
+    /// 文档里有这条路径画不了的东西（椭圆）时，必须明确回退，不能画出半对不对的图。
     #[test]
-    fn a_document_with_text_falls_back() {
-        let doc = crate::app::sample_doc();
+    fn a_document_with_an_unsupported_shape_falls_back() {
+        let mut doc = figcraft_doc::Document::default();
         let page = doc.pages[0];
-        let scene = scene_of(&doc, page, &figcraft_render::View { origin: (0.0, 0.0), scale: 1.0, width: 800, height: 600 });
-        assert!(scene.is_none(), "the sample document has text and gradients: the GPU scene must decline it");
+        let frame = doc.create(page, figcraft_doc::NodeKind::Frame, "Frame", 0.0, 0.0, 100.0, 100.0).expect("a frame");
+        let _ellipse = doc
+            .create(frame, figcraft_doc::NodeKind::Ellipse { start: 0.0, sweep: std::f64::consts::TAU, inner: 0.0 }, "Ellipse", 10.0, 10.0, 20.0, 20.0)
+            .expect("an ellipse");
+        let scene = scene_of_node(&doc, frame, &figcraft_render::View { origin: (0.0, 0.0), scale: 1.0, width: 800, height: 600 });
+        assert!(scene.is_none(), "an ellipse is not expressible: the GPU scene must decline it");
+    }
+
+    /// 动画导出的单帧只需画被导出的那棵子树，透明背景，不能带上页面上别的层。
+    #[test]
+    fn a_node_subtree_scene_has_a_transparent_background_and_no_siblings() {
+        let mut doc = figcraft_doc::Document::default();
+        let page = doc.pages[0];
+        let frame = doc.create(page, figcraft_doc::NodeKind::Frame, "Frame", 10.0, 10.0, 100.0, 100.0).expect("a frame");
+        let inside = doc.create(frame, figcraft_doc::NodeKind::Rectangle, "Inside", 20.0, 20.0, 30.0, 30.0).expect("a rectangle");
+        if let Ok(n) = doc.get_mut(inside) {
+            n.fills = vec![figcraft_color::Paint::solid(figcraft_color::Color::BLACK)];
+        }
+        let _sibling = doc.create(page, figcraft_doc::NodeKind::Rectangle, "Sibling", 300.0, 300.0, 50.0, 50.0).expect("a sibling");
+        let view = figcraft_render::View { origin: (0.0, 0.0), scale: 1.0, width: 200, height: 200 };
+        let scene = scene_of_node(&doc, frame, &view).expect("the frame subtree is expressible");
+        assert_eq!(scene.clear, [0.0, 0.0, 0.0, 0.0], "an export frame is transparent where nothing paints");
+        assert_eq!(scene.rects.len(), 2, "the frame's own fill and its child, but not the page sibling");
+        assert!(scene.rects.iter().all(|r| r.rect[0] < 120.0 && r.rect[1] < 120.0), "no sibling rect at 300,300");
+    }
+
+    /// Scene conversion declines every construct whose GPU approximation would differ from the
+    /// CPU raster: masks, non-uniform corners, reverse stacking, rounded clips and hidden fills.
+    #[test]
+    fn scene_conversion_declines_approximations() {
+        let view = figcraft_render::View { origin: (0.0, 0.0), scale: 1.0, width: 200, height: 200 };
+        let mut doc = figcraft_doc::Document::default();
+        let page = doc.pages[0];
+        let frame = doc.create(page, figcraft_doc::NodeKind::Frame, "Frame", 10.0, 10.0, 100.0, 100.0).expect("a frame");
+        let rect = doc.create(frame, figcraft_doc::NodeKind::Rectangle, "Rect", 0.0, 0.0, 50.0, 50.0).expect("a rectangle");
+        doc.node_mut(rect).expect("rect").is_mask = true;
+        assert!(scene_of_node(&doc, frame, &view).is_none(), "a mask subtree must use the CPU");
+
+        doc.node_mut(rect).expect("rect").is_mask = false;
+        doc.node_mut(rect).expect("rect").corners.radii = [30.0, 0.0, 0.0, 0.0];
+        assert!(scene_of_node(&doc, frame, &view).is_none(), "one-radius-per-corner GPU cannot keep square corners");
+
+        doc.node_mut(rect).expect("rect").corners.radii = [0.0; 4];
+        let mut layout: figcraft_doc::props::AutoLayout = Default::default();
+        layout.reverse_z = true;
+        doc.node_mut(frame).expect("frame").layout = Some(layout);
+        assert!(scene_of_node(&doc, frame, &view).is_none(), "reverse stacking changes paint order");
+
+        doc.node_mut(frame).expect("frame").layout = None;
+        if let Some(n) = doc.node_mut(frame) {
+            n.clip = true;
+            n.corners.radii = [12.0; 4];
+        }
+        assert!(scene_of_node(&doc, frame, &view).is_none(), "rounded clips need partial coverage");
+    }
+
+    #[test]
+    fn a_hidden_fill_emits_no_instance_but_keeps_walking_children() {
+        let mut doc = figcraft_doc::Document::default();
+        let page = doc.pages[0];
+        let frame = doc.create(page, figcraft_doc::NodeKind::Frame, "Frame", 10.0, 10.0, 100.0, 100.0).expect("a frame");
+        if let Some(n) = doc.node_mut(frame) {
+            n.fills.clear();
+        }
+        let rect = doc.create(frame, figcraft_doc::NodeKind::Rectangle, "Rect", 0.0, 0.0, 50.0, 50.0).expect("a rectangle");
+        if let Some(n) = doc.node_mut(rect) {
+            let mut paint = figcraft_color::Paint::solid(figcraft_color::Color::BLACK);
+            paint.visible = false;
+            n.fills = vec![paint];
+        }
+        let scene = scene_of_node(&doc, frame, &figcraft_render::View { origin: (0.0, 0.0), scale: 1.0, width: 200, height: 200 }).expect("still expressible");
+        assert!(scene.rects.is_empty(), "a hidden fill must not become an instance");
+    }
+
+    #[test]
+    fn an_animated_page_scene_keeps_its_space_transparent() {
+        let mut doc = figcraft_doc::Document::default();
+        let page = doc.pages[0];
+        if let Some(n) = doc.node_mut(page)
+            && let figcraft_doc::NodeKind::Page { background, .. } = &mut n.kind
+        {
+            *background = figcraft_color::Color::WHITE;
+        }
+        let scene = scene_of_node(&doc, page, &figcraft_render::View { origin: (0.0, 0.0), scale: 1.0, width: 200, height: 200 }).expect("page children are expressible");
+        assert_eq!(scene.clear, [0.0, 0.0, 0.0, 0.0], "CPU Motion export leaves unpainted page space transparent");
+    }
+
+    #[test]
+    fn a_rect_clipped_by_a_frame_stops_at_the_clip_box() {
+        let Some(mut gpu) = Gpu::new() else {
+            eprintln!("no GPU adapter available — skipping");
+            return;
+        };
+        let mut s = Scene::new(64, 64);
+        // A red rect covering everything, clipped to the left half by its ancestor frame.
+        s.push_clipped([0.0, 0.0, 64.0, 64.0], [1.0, 0.0, 0.0, 1.0], 0.0, [0.0, 0.0, 32.0, 64.0]);
+        let out = gpu.render(&s);
+        assert_eq!(px(&out, 64, 16, 32)[3], 255, "inside the clip box the rect paints");
+        assert_eq!(px(&out, 64, 48, 32)[3], 0, "past the clip box the fragment is discarded");
     }
 
     fn px(buf: &[u8], w: u32, x: u32, y: u32) -> [u8; 4] {
@@ -515,8 +723,7 @@ mod tests {
     }
 
     #[test]
-    fn the_corner_radius_is_cut_out() {
-        let Some(mut gpu) = Gpu::new() else {
+    fn the_corner_radius_is_cut_out() {        let Some(mut gpu) = Gpu::new() else {
             eprintln!("no GPU adapter available — skipping");
             return;
         };

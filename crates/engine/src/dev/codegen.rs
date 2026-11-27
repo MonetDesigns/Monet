@@ -100,11 +100,18 @@ pub fn specs() -> Vec<CommandSpec> {
                 if !doc.contains(id) {
                     return Err(bad(cmd, "no such layer"));
                 }
-                let code = anim::for_language(doc, id, lang).unwrap_or_default();
+                let code = motion_code_for(doc, id, lang).unwrap_or_default();
                 Ok(json!({"code": code, "language": lang}))
             }
         ),
     ]
+}
+
+/// Motion animation code for a layer and everything below it, in one of `css` / `swiftui` /
+/// `compose`. Empty when nothing animates. `inspect.motionCode` is the command path; this is the
+/// pure entry the UI panel reads (alongside [`code_for`] for the static styles).
+pub fn motion_code_for(doc: &Document, id: NodeId, language: &str) -> Option<String> {
+    anim::for_language(doc, id, language)
 }
 
 /// Languages the Inspect panel offers.

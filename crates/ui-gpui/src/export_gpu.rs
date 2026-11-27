@@ -12,19 +12,50 @@
 
 #![cfg(feature = "gpu")]
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use figcraft_doc::{Document, NodeId};
 use figcraft_geom::Rect;
 use figcraft_render::Pixmap;
 use figcraft_render::shade::ShadeBoard;
 
+use crate::gpu::{Gpu, scene_of_node};
 use crate::shade_gpu;
 use crate::wgsl_runner::WgslRunner;
 
-/// Install the export hook once, from [`crate::app::CanvasApp::new`].
+/// Install the export hooks once, from [`crate::app::CanvasApp::new`].
 pub fn install() {
     figcraft_render::set_export_material_hook(Arc::new(render_export));
+    figcraft_render::set_export_frame_hook(Arc::new(render_frame_gpu), Arc::new(gpu_frame_supported));
+}
+
+/// Shared offscreen GPU for animated-export frames. Export renders frames on several worker
+/// threads, so the device is behind a mutex: one submission at a time, while the driver still uses
+/// the GPU internally. Created lazily on first use; `None` when the machine has no adapter.
+static FRAME_GPU: Mutex<Option<Gpu>> = Mutex::new(None);
+
+/// Whether the GPU scene renderer can draw this frame faithfully (structure only, no pixels).
+fn gpu_frame_supported(doc: &Document, ids: &[NodeId], view: &figcraft_render::View) -> bool {
+    match ids {
+        [id] => scene_of_node(doc, *id, view).is_some(),
+        _ => false,
+    }
+}
+
+/// One animated-export frame on the GPU. `None` means "not expressible" or "no adapter", and the
+/// caller falls back to the CPU raster.
+fn render_frame_gpu(doc: &Document, ids: &[NodeId], view: &figcraft_render::View) -> Option<Pixmap> {
+    let scene = scene_of_node(doc, *ids.first()?, view)?;
+    let mut guard = FRAME_GPU.lock().ok()?;
+    if guard.is_none() {
+        *guard = Gpu::new();
+    }
+    let gpu = guard.as_mut()?;
+    if !gpu.supports_frame(view.width, view.height) {
+        return None;
+    }
+    let data = gpu.render(&scene);
+    figcraft_render::pixmap_from_premultiplied_rgba(data, view.width, view.height)
 }
 
 /// Render `ids` over `area` at `scale`, with every external material resolved at that scale.
@@ -63,6 +94,31 @@ mod tests {
     use super::*;
     use figcraft_doc::Document;
     use serde_json::json;
+
+    /// The animated-export hook: a solid-shape frame is accepted and rendered through the GPU
+    /// (premultiplied pixels wrapped as a `Pixmap`), with the CPU path staying the fallback.
+    #[test]
+    fn an_export_frame_goes_through_the_gpu_hook() {
+        if WgslRunner::new().is_none() {
+            eprintln!("skip: no GPU adapter");
+            return;
+        }
+        install();
+        let mut doc = Document::default();
+        let page = doc.pages[0];
+        let frame = doc.create(page, figcraft_doc::NodeKind::Frame, "Frame", 10.0, 10.0, 100.0, 100.0).expect("a frame");
+        let rect = doc.create(frame, figcraft_doc::NodeKind::Rectangle, "Rect", 0.0, 0.0, 40.0, 40.0).expect("a rectangle");
+        if let Ok(n) = doc.get_mut(rect) {
+            n.fills = vec![figcraft_color::Paint::solid(figcraft_color::Color::BLACK)];
+        }
+        let view = figcraft_render::View { origin: (0.0, 0.0), scale: 1.0, width: 200, height: 200 };
+        assert!(figcraft_render::export_frame_gpu_supported(&doc, &[frame], &view), "the scene subset accepts this frame");
+        let pix = figcraft_render::render_frame_for_export(&doc, &[frame], &view).expect("a rendered frame");
+        assert_eq!((pix.width(), pix.height()), (200, 200));
+        let alpha = |x: usize, y: usize| pix.data()[(y * 200 + x) * 4 + 3];
+        assert!(alpha(50, 50) > 0, "inside the frame paints");
+        assert_eq!(alpha(190, 190), 0, "outside the frame stays transparent");
+    }
 
     #[test]
     fn external_wgsl_material_is_in_a_raster_export() {

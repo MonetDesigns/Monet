@@ -88,6 +88,7 @@ fn flow_line(f: &RightFields, flow: &FlowRow, cx: &mut App, n: &mut usize) -> Di
             paint: None,
             nest: None,
             nest_key: None,
+            map: None,
             paint_color: None,
         },
     );
@@ -172,7 +173,7 @@ fn settings_section(f: &RightFields, p: &ProtoData, _cx: &mut App, _n: &mut usiz
         bg,
         RowEditCtx {
             cmd: "proto.settings", params: json!({}), key: "background", scale: 1.0, string_value: true,
-            paint: None, nest: None, nest_key: None, paint_color: None,
+            map: None, paint: None, nest: None, nest_key: None, paint_color: None,
         },
     );
     let line = div().flex().flex_row().items_center().gap(pt(8.0)).w_full().child(dot).child(hex);
@@ -215,6 +216,7 @@ fn flow_point_section(f: &RightFields, mine: Option<&FlowRow>, cx: &mut App, n: 
                 paint: None,
                 nest: None,
                 nest_key: None,
+                map: None,
                 paint_color: None,
             },
         );
@@ -369,6 +371,7 @@ fn editor_rows(
                 paint: None,
                 nest: Some("trigger"),
                 nest_key: None,
+                map: None,
                 paint_color: None,
             },
         );
@@ -388,6 +391,7 @@ fn editor_rows(
                 paint: None,
                 nest: None,
                 nest_key: None,
+                map: None,
                 paint_color: None,
             },
         );
@@ -441,6 +445,7 @@ fn editor_rows(
                         paint: None,
                         nest: Some("action"),
                         nest_key: None,
+                        map: None,
                         paint_color: None,
                     },
                 );
@@ -517,6 +522,7 @@ fn editor_rows(
             paint: None,
             nest: None,
             nest_key: None,
+            map: None,
             paint_color: None,
         },
     );
@@ -636,6 +642,7 @@ fn conditional_rows(f: &RightFields, action: &Value, i: usize, k: usize, cx: &mu
                     paint: None,
                     nest: None,
                     nest_key: None,
+                    map: None,
                     paint_color: None,
                 },
             );

@@ -1888,7 +1888,7 @@ status = "draft — needs native review"
 "Curved" = "Cong"
 "Dart constants for Flutter…" = "Hằng số Dart cho Flutter…"
 "Database" = "Cơ sở dữ liệu"
-"Delete {n} variables" = "Xóa {n} biến"
+"Delete {n} variables" = { other = "Xóa {n} biến" }
 "Design panel" = "Bảng thiết kế"
 "Detach calculation" = "Tách phép tính"
 "Dev Mode only inspects: switch to Design (Shift+D) to edit" = "Chế độ nhà phát triển chỉ để xem: chuyển sang Thiết kế (Shift+D) để sửa"
@@ -1908,8 +1908,8 @@ status = "draft — needs native review"
 "Everyone who reaches this server can open these files while they are shared." = "Bất kỳ ai kết nối được máy chủ này đều có thể mở các tệp khi chúng được chia sẻ."
 "Exact only" = "Chỉ khớp chính xác"
 "Expand the interface" = "Mở rộng giao diện"
-"Exported {name}; {n} kinds of content were changed or left out" = "Đã xuất {name}; {n} loại nội dung bị thay đổi hoặc bỏ qua"
-"Exported {n} files; some content was changed or left out" = "Đã xuất {n} tệp; một phần nội dung bị thay đổi hoặc bỏ qua"
+"Exported {name}; {n} kinds of content were changed or left out" = { other = "Đã xuất {name}; {n} loại nội dung bị thay đổi hoặc bỏ qua" }
+"Exported {n} files; some content was changed or left out" = { other = "Đã xuất {n} tệp; một phần nội dung bị thay đổi hoặc bỏ qua" }
 "Monet stopped because of an internal error." = "Monet đã dừng do lỗi nội bộ."
 "Flow chart" = "Lưu đồ"
 "Format" = "Định dạng"
@@ -2066,11 +2066,11 @@ status = "draft — needs native review"
 "{count} in it now · Changed {date}" = "hiện có {count} bên trong · Đã đổi {date}"
 "{insertions} · {detachments}" = "{insertions} · {detachments}"
 "{name}, disconnected from its live session" = "{name}, đã ngắt khỏi phiên trực tiếp"
-"{n} detached" = "{n} đã tách"
-"{n} inserted" = "{n} đã chèn"
+"{n} detached" = { other = "{n} đã tách" }
+"{n} inserted" = { other = "{n} đã chèn" }
 "{n} min" = "{n} phút"
-"{n} votes" = "{n} phiếu"
-"{n} votes left" = "còn {n} phiếu"
+"{n} votes" = { other = "{n} phiếu" }
+"{n} votes left" = { other = "còn {n} phiếu" }
 "{period}: {counts}" = "{period}: {counts}"
 "{used} · {detached}" = "{used} · {detached}"
 "{used} · {inserted}" = "{used} · {inserted}"

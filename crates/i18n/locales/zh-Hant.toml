@@ -2054,7 +2054,7 @@ status = "draft — needs native review"
 "Scrubbing at 1x" = "拖曳步進 1 倍"
 "Scrubbing at 1/2" = "拖曳步進 1/2"
 "Scrubbing at 1/4" = "拖曳步進 1/4"
-"Delete {n} variables" = "刪除 {n} 個變數"
+"Delete {n} variables" = { other = "刪除 {n} 個變數" }
 "Move out of any group" = "移出所在群組"
 "Move to group {group}" = "移到群組 {group}"
 "Scope: all supported properties" = "範圍：所有支援的屬性"

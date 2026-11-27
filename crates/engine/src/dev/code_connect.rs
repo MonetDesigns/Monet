@@ -12,6 +12,7 @@
 
 use figcraft_doc::{CodeLink, Document, NodeId, NodeKind};
 use serde_json::{Value, json};
+use std::collections::HashMap;
 
 use crate::cmd::CommandSpec;
 use crate::codegen::{CodeLang, Ctx};
@@ -669,9 +670,14 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let doc = s.doc()?;
     // Components and sets by name (variants are linked through their set).
-    let owners: Vec<(String, NodeId)> = doc.nodes().filter(|n| owner(doc, n.id) == Some(n.id)).map(|n| (n.name.clone(), n.id)).collect();
+    let mut owners: HashMap<&str, Vec<NodeId>> = HashMap::new();
+    for n in doc.nodes().filter(|n| owner(doc, n.id) == Some(n.id)) {
+        owners.entry(n.name.as_str()).or_default().push(n.id);
+    }
     let mut warnings: Vec<String> = Vec::new();
     let mut apply: Vec<(NodeId, CodeLink)> = Vec::new();
+    // 同一组件在多条 link 里只 describe 一次（P2-5：导入耗时随组件数增长，而非条目数）。
+    let mut described: HashMap<NodeId, Option<Component>> = HashMap::new();
     for (i, e) in entries.iter().enumerate() {
         let field = |k: &str| e.get(k).and_then(Value::as_str).map(str::trim);
         let (Some(component), Some(lang), Some(name), Some(template)) =
@@ -689,13 +695,14 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
             name: name.into(),
             template: template.into(),
         };
-        let matches: Vec<NodeId> = owners.iter().filter(|(n, _)| n == component).map(|(_, id)| *id).collect();
+        let matches = owners.get(component).cloned().unwrap_or_default();
         if matches.is_empty() {
             warnings.push(format!("link {}: no component named {component:?}", i + 1));
         }
         for id in matches {
-            let Some(c) = main_of(doc, id).and_then(|m| describe(doc, m)) else { continue };
-            match check(&c, &link, lang) {
+            let c = described.entry(id).or_insert_with(|| main_of(doc, id).and_then(|m| describe(doc, m)));
+            let Some(c) = c.as_ref() else { continue };
+            match check(c, &link, lang) {
                 Ok(_) => apply.push((id, link.clone())),
                 Err(err) => warnings.push(format!("link {} ({component}): {err}", i + 1)),
             }
