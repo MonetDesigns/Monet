@@ -19,6 +19,8 @@ figcraft-geom = { workspace = true }
 figcraft-color = { workspace = true }
 figcraft-doc = { workspace = true }
 figcraft-render = { workspace = true }
+figcraft-text = { workspace = true }
+figcraft-pathops = { workspace = true }
 log = { workspace = true }
 # Path fills: the CPU's own stroke/tessellation input is `figcraft_pathops`, so GPU geometry is the
 # same `BezPath`; lyon only turns it into triangles.

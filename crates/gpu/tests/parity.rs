@@ -247,21 +247,41 @@ fn a_dialogue_free_ring_and_a_star_stroke_stay_gpu_drawable() {
 }
 
 #[test]
-fn a_text_layer_is_refused_instead_of_approximated() {
+fn text_glyphs_match_the_cpu() {
     let mut doc = Document::default();
     let page = doc.pages[0];
     transparent_page(&mut doc, page);
-    let _text = doc.create(page, NodeKind::Text(Default::default()), "Hello", 0.0, 0.0, 80.0, 24.0).expect("text");
+    let Some(family) = ["Inter", "Segoe UI", "Arial"].into_iter().find(|f| figcraft_text::find_face(f, "Regular").is_some()) else {
+        eprintln!("SKIP: no text font is installed here");
+        return;
+    };
+    let mut data = figcraft_doc::TextData::new("Hi Monet");
+    data.style.font_size = 32.0;
+    data.style.font_family = family.into();
+    let text = doc.create(page, NodeKind::Text(data), "Hello", 10.0, 10.0, 180.0, 50.0).expect("text");
+    if let Ok(n) = doc.get_mut(text) {
+        n.fills = vec![Paint::solid(Color::new(0.05, 0.05, 0.05, 1.0))];
+    }
     let scene = doc_scene::build(&doc, page, &viewport());
-    assert!(!scene.is_supported());
-    let Some(mut renderer) = figcraft_gpu::render::Renderer::new() else {
+    if scene.mesh_count() == 0 {
+        eprintln!("SKIP: no Inter font here laid the text out");
+        return;
+    }
+    assert!(scene.is_supported(), "{:?}", scene.unsupported_features());
+
+    let cpu = cpu_pixels(&doc, page);
+    let Some(gpu) = gpu_pixels(&doc, page) else {
         eprintln!("SKIP: no adapter");
         return;
     };
-    match renderer.render(&scene) {
-        Err(figcraft_gpu::render::RenderError::Unsupported(items)) => {
-            assert!(items.iter().any(|u| u.feature == "text"), "{items:?}");
-        }
-        other => panic!("the GPU must refuse a text frame, got {other:?}"),
-    }
+    // Glyph stems are a couple of pixels wide, so the edge band covers most of the ink: compare the
+    // total coverage (summed alpha) to catch a mis-sized or mis-placed layout, and grade the
+    // interiors that survive the edge mask.
+    let mass = |bytes: &[u8]| bytes.chunks_exact(4).map(|p| u64::from(p[3])).sum::<u64>();
+    let (cpu_mass, gpu_mass) = (mass(&cpu), mass(&gpu));
+    assert!(cpu_mass > 0, "the CPU did not draw the text either");
+    let relative = (cpu_mass as f64 - gpu_mass as f64).abs() / cpu_mass as f64;
+    assert!(relative < 0.03, "text coverage {cpu_mass} vs {gpu_mass} ({:.2}%)", relative * 100.0);
+    let report = compare_interiors(&cpu, &gpu, SIZE as usize, SIZE as usize, Tolerance::SOLID).expect("comparable");
+    assert!(report.passes(Tolerance::SOLID), "{}", report.summary());
 }

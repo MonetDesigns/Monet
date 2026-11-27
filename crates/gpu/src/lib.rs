@@ -14,7 +14,8 @@
 //! * [`render`] (feature `wgpu`) — device, pipeline, draw, readback.
 //! * [`diff`] — CPU↔GPU pixel comparison for the regression tests.
 //!
-//! See `docs/gpu-pipeline-plan.md` for the staged plan (M1 shapes and paints is this commit).
+//! See `docs/gpu-pipeline-plan.md` for the staged plan. Stages 1–3 (shapes and paints, paths and
+//! strokes, text) are in; effects, composition and the export path follow.
 
 pub mod backend;
 pub mod diff;

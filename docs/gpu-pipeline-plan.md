@@ -1,10 +1,10 @@
 # 完整 GPU 管线立项（Monet / FigCraft）
 
 > 分支：`ai/gpu-pipeline`（worktree `D:\Projektdateien\GPUI\branches\gpu-pipeline`，从 `main` 拉出）
-> 状态：阶段 1（图元与填充）与阶段 2（路径与描边）已落地——能力探测、`auto/gpu/cpu` 三档偏好
-> （引擎命令 + Preferences ▸ Rendering）、场景 IR、实例化 SDF 图元（圆角矩形/椭圆/多边形/星形）、
-> 四类渐变、裁剪、路径填充与描边网格（4× MSAA）、回读与 CPU↔GPU 像素 diff（7 项对照测试），
-> UI 画布已接线并整帧回退；M3–M7 为设计与接口
+> 状态：阶段 1（图元与填充）、阶段 2（路径与描边）与阶段 3（文字）已落地——能力探测、`auto/gpu/cpu`
+> 三档偏好（引擎命令 + Preferences ▸ Rendering）、场景 IR、实例化 SDF 图元（圆角矩形/椭圆/多边形/
+> 星形）、四类渐变、裁剪、路径填充与描边网格（4× MSAA）、文字字形网格、回读与 CPU↔GPU 像素 diff
+> （7 项对照测试），UI 画布已接线并整帧回退；M4–M7 为设计与接口
 > 日期：2026-11-27
 
 ## 0. 一句话结论
@@ -138,6 +138,19 @@ match figcraft_gpu::render::Renderer::global().render(&scene) { Ok(rgba) => …,
 - 混排/换行/字距全部沿用 CPU 的 `TextLayout`，GPU **不重新排版**——排版只有一份。
 - **验收**：字形覆盖、亚像素定位、斜体/描边文字与 CPU diff；图集重建（新增字形）不闪帧。
 - 风险：iOS 上 `skrifa` 与 CoreText 的 hinting 差异 → 只比覆盖率，不比 hinting。
+
+### M3 文字（本分支已落地）
+
+- 轮廓**不再重新排版**：直接取 `figcraft_text::layout_node(n)` 产出的字形与装饰线轮廓（与 CPU 同一个
+  `TextLayout`、同一个 `dy`），按 run 的 `style` 分组成 `BezPath`，用 Winding 三角化。
+- 每个 run 用自己的 fills（`TextStyle.fills`，缺省回落到节点 `n.fills`），只支持纯色；文字描边复用
+  `figcraft_pathops::stroke_outline_of`（closed = true）与 CPU 的 `stroke_rule`（内/外/虚线 → even-odd）。
+- 仍登记为 Unsupported：彩色字形（emoji 位图、COLR 分层）、文字渐变/图案填充、文字虚线渐变描边。
+- 已知差异：CPU 的 LOD `greeked`（低缩放下画灰条）GPU 未实现——GPU 始终画真实字形；只影响低缩放
+  预览的观感，不影响 100% 导出。列入 M7 对齐项。
+- **验收**：单测 `text_glyphs_become_meshes`；对照测试 `text_glyphs_match_the_cpu`（覆盖率总量误差
+  < 3%、内区 `per_channel = 2`）。测试在找不到字体（Inter / Segoe UI / Arial）时跳过并打印 SKIP，
+  因为字体由 `craft-fonts` 提供，CI 可能没有。
 
 ### M4 效果
 

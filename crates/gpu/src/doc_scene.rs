@@ -5,19 +5,20 @@
 //!
 //! | accepted | recorded as unsupported |
 //! |---|---|
-//! | page/frame/group/section/component/instance containers and their fills | text |
-//! | rectangles (four corner radii, smoothing), full ellipses, arcs and rings, polygons, stars | icons and slices |
-//! | vector networks, booleans, lines — filled and stroked through the CPU's own outlines | gradient or image paint on a path/stroke |
-//! | strokes: weight, align, joins, caps, dashes, per-side weights (via `figcraft-pathops`) | images, patterns |
-//! | solid, linear/radial/angular/diamond gradients (≤ [`MAX_STOPS`] stops) on SDF shapes | group opacity, other blend modes, masks |
-//! | node opacity, visibility, ancestor clipping rectangles | visible effects (shadow, blur, glass, grain) |
-//! | | rounded or rotated clips, variable-bound fills |
+//! | page/frame/group/section/component/instance containers and their fills | icons and slices |
+//! | rectangles (four corner radii, smoothing), full ellipses, arcs and rings, polygons, stars | gradient or image paint on a path/stroke |
+//! | vector networks, booleans, lines — filled and stroked through the CPU's own outlines | images, patterns |
+//! | strokes: weight, align, joins, caps, dashes, per-side weights (via `figcraft-pathops`) | group opacity, other blend modes, masks |
+//! | solid, linear/radial/angular/diamond gradients (≤ [`MAX_STOPS`] stops) on SDF shapes | visible effects (shadow, blur, glass, grain) |
+//! | text: glyph and decoration outlines from `figcraft_text`, solid fills and strokes per run | colour glyphs (emoji, COLR) |
+//! | node opacity, visibility, ancestor clipping rectangles | rounded or rotated clips, variable-bound fills |
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use figcraft_color::{BlendMode, GradientKind as DocGradientKind, Paint as DocPaint, PaintKind};
-use figcraft_doc::{Document, Node, NodeId, NodeKind};
-use figcraft_geom::{Affine, Point};
+use figcraft_doc::{Document, Node, NodeId, NodeKind, StrokeAlign};
+use figcraft_geom::{Affine, BezPath, Point};
 
 use crate::geometry;
 use crate::scene::{
@@ -95,7 +96,6 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, clip: Clip, scene: &mut Sce
         scene.unsupported("variable-fill", format!("`{}` has a fill bound to a variable", n.name));
     }
     match &n.kind {
-        NodeKind::Text(_) => scene.unsupported("text", format!("`{}` is text", n.name)),
         NodeKind::Icon { .. } | NodeKind::Slice => scene.unsupported("icon", format!("`{}` is an icon or slice", n.name)),
         _ => {}
     }
@@ -126,9 +126,12 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, clip: Clip, scene: &mut Sce
     }
 
     // Fills: the SDF when the box is one of its primitives, the CPU's own outline tessellated
-    // otherwise (vectors, booleans, lines, and boxes the SDF cannot express exactly).
+    // otherwise (vectors, booleans, lines, and boxes the SDF cannot express exactly). Text paints
+    // glyph outlines instead of its box.
     if sized {
-        if let Some(shape) = sdf_shape(n, &m, w, h) {
+        if let NodeKind::Text(_) = n.kind {
+            emit_text(n, m, clip, scene);
+        } else if let Some(shape) = sdf_shape(n, &m, w, h) {
             emit_sdf_fills(n, shape, m, w, h, clip, scene);
         } else if n.fills.iter().any(|f| f.visible) {
             emit_path_fills(doc, n, m, clip, scene);
@@ -142,8 +145,9 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, clip: Clip, scene: &mut Sce
         }
     }
 
-    // Strokes paint over the node's children, like the CPU.
-    if n.has_visible_stroke() {
+    // Strokes paint over the node's children, like the CPU. Text strokes follow its glyphs and are
+    // part of `emit_text`.
+    if n.has_visible_stroke() && !matches!(n.kind, NodeKind::Text(_)) {
         emit_stroke(doc, n, m, clip, scene);
     }
 }
@@ -274,6 +278,84 @@ fn emit_stroke(doc: &Document, n: &Node, m: Affine, inner: Clip, scene: &mut Sce
                 clip: inner,
             }),
             None => scene.unsupported("stroke-paint", format!("`{}` stroke {index} is a gradient or an image", n.name)),
+        }
+    }
+}
+
+/// Text: the CPU's glyph and decoration outlines (`figcraft_text::layout_node`), tessellated like any
+/// other path. Runs keep their own fills; colour glyphs (emoji, COLR layers) are not expressible and
+/// send the frame to the CPU.
+fn emit_text(n: &Node, base: Affine, inner: Clip, scene: &mut Scene) {
+    let Some((layout, dy)) = figcraft_text::layout_node(n) else { return };
+    let gxf = base * Affine::translate((0.0, dy));
+    let scale = gxf.determinant().abs().sqrt();
+    let mut by_style: BTreeMap<usize, BezPath> = BTreeMap::new();
+    for glyph in &layout.glyphs {
+        if glyph.color(scale).is_some() {
+            scene.unsupported("text-color", format!("`{}` has colour glyphs (emoji or COLR)", n.name));
+            return;
+        }
+        by_style.entry(glyph.style).or_default().extend(glyph.path().elements().iter().copied());
+    }
+    for decoration in &layout.decorations {
+        by_style.entry(decoration.style).or_default().extend(decoration.path().elements().iter().copied());
+    }
+    for (style, path) in &by_style {
+        let fills = layout.styles.get(*style).and_then(|s| s.fills.as_ref()).unwrap_or(&n.fills);
+        push_path(n, path, figcraft_render::FillRule::Winding, fills, gxf, inner, scene, "text fill", "text-gradient");
+    }
+    if n.has_visible_stroke() {
+        let rule = text_stroke_rule(n);
+        for path in by_style.values() {
+            let area = figcraft_pathops::stroke_outline_of(path, &n.stroke, true, None);
+            push_path(n, &area, rule, &n.strokes, gxf, inner, scene, "text stroke", "text-stroke-paint");
+        }
+    }
+}
+
+/// The rule CPU text strokes fill their glyph band by (`stroke_rule` with `closed = true`).
+fn text_stroke_rule(n: &Node) -> figcraft_render::FillRule {
+    if n.stroke.sides.is_some() || (n.stroke.dashes.is_empty() && n.stroke.align != StrokeAlign::Center) {
+        figcraft_render::FillRule::EvenOdd
+    } else {
+        figcraft_render::FillRule::Winding
+    }
+}
+
+/// Tessellate `path` and push one mesh per visible solid paint.
+fn push_path(
+    n: &Node,
+    path: &BezPath,
+    rule: figcraft_render::FillRule,
+    paints: &[DocPaint],
+    m: Affine,
+    clip: Clip,
+    scene: &mut Scene,
+    what: &str,
+    gradient_feature: &'static str,
+) {
+    let tris = geometry::tessellate(path, rule);
+    if tris.is_empty() {
+        return;
+    }
+    let (verts, indices) = device_geometry(&tris, m);
+    for (index, paint) in paints.iter().enumerate() {
+        if !paint.visible {
+            continue;
+        }
+        if !matches!(paint.blend, BlendMode::Normal) {
+            scene.unsupported("paint-blend", format!("`{}` {what} {index} blends with {:?}", n.name, paint.blend));
+            continue;
+        }
+        match paint.solid_color() {
+            Some(color) => scene.push_mesh(MeshNode {
+                verts: verts.clone(),
+                indices: indices.clone(),
+                color: Rgba::from_color(color),
+                opacity: n.opacity.clamp(0.0, 1.0),
+                clip,
+            }),
+            None => scene.unsupported(gradient_feature, format!("`{}` {what} {index} is a gradient or an image", n.name)),
         }
     }
 }
@@ -426,13 +508,24 @@ mod tests {
     }
 
     #[test]
-    fn text_is_recorded_and_the_frame_falls_back() {
+    fn text_glyphs_become_meshes() {
+        let Some(family) = ["Inter", "Segoe UI", "Arial"].into_iter().find(|f| figcraft_text::find_face(f, "Regular").is_some()) else {
+            eprintln!("SKIP: no text font is installed here");
+            return;
+        };
         let mut doc = Document::default();
         let page = doc.pages[0];
-        let _text = doc.create(page, NodeKind::Text(Default::default()), "Hi", 0.0, 0.0, 10.0, 10.0).expect("text");
+        let mut data = figcraft_doc::TextData::new("Hi");
+        data.style.font_size = 32.0;
+        data.style.font_family = family.into();
+        let text = doc.create(page, NodeKind::Text(data), "Hi", 10.0, 10.0, 80.0, 40.0).expect("text");
+        if let Ok(n) = doc.get_mut(text) {
+            n.fills = vec![DocPaint::solid(Color::new(0.0, 0.0, 0.0, 1.0))];
+        }
         let scene = build(&doc, page, &view());
-        assert!(!scene.is_supported());
-        assert!(scene.unsupported_features().iter().any(|u| u.feature == "text"));
+        assert!(scene.is_supported(), "{:?}", scene.unsupported_features());
+        assert!(scene.mesh_count() >= 1, "each run's glyph outlines are a mesh");
+        assert_eq!(scene.shapes().count(), 0, "text is never an SDF box");
     }
 
     #[test]
