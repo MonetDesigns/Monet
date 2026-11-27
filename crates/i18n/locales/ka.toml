@@ -1996,7 +1996,7 @@ status = "draft — reviewed by a native speaker, awaiting a maintainer's approv
 "Crop image" = "სურათის მოჭრა"
 "Ctrl+Alt+← ↑ → ↓" = "Ctrl+Alt+← ↑ → ↓"
 "Ctrl+click a padding field" = "Ctrl+დაწკაპუნება შიდა დაშორების ველზე"
-"Delete {n} variables" = "{n} ცვლადის წაშლა"
+"Delete {n} variables" = { other = "{n} ცვლადის წაშლა" }
 "Detach calculation" = "გამოთვლის მოშორება"
 "Disconnected. Reconnecting…" = "კავშირი გაწყდა. ხელახლა დაკავშირება…"
 "Disconnected. Your edits stay here and sync when the connection returns. Reconnecting…" = "კავშირი გაწყდა. თქვენი ცვლილებები აქ რჩება და სინქრონიზდება კავშირის დაბრუნებისას. ხელახლა დაკავშირება…"
@@ -2085,8 +2085,8 @@ status = "draft — reviewed by a native speaker, awaiting a maintainer's approv
 "{count} in it now · Changed {date}" = "ახლა შიგნით {count} · შეცვლილია {date}"
 "{insertions} · {detachments}" = "{insertions} · {detachments}"
 "{name}, disconnected from its live session" = "{name}, გათიშულია ცოცხალი სესიიდან"
-"{n} detached" = "{n} მოშორებული"
-"{n} inserted" = "{n} ჩასმული"
+"{n} detached" = { other = "{n} მოშორებული" }
+"{n} inserted" = { other = "{n} ჩასმული" }
 "{period}: {counts}" = "{period}: {counts}"
 "{used} · {detached}" = "{used} · {detached}"
 "{used} · {inserted}" = "{used} · {inserted}"

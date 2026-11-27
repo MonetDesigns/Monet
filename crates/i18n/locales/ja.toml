@@ -1932,7 +1932,7 @@ status = "draft — needs native review"
 "Ctrl+Alt+← ↑ → ↓" = "Ctrl+Alt+← ↑ → ↓"
 "Ctrl+click a padding field" = "Ctrl+クリックで余白の項目"
 "Dart constants for Flutter…" = "Flutter 用の Dart 定数…"
-"Delete {n} variables" = "{n} 個の変数を削除"
+"Delete {n} variables" = { other = "{n} 個の変数を削除" }
 "Detach calculation" = "計算を切り離す"
 "Disconnected. Reconnecting…" = "切断されました。再接続中…"
 "Disconnected. Your edits stay here and sync when the connection returns. Reconnecting…" = "切断されました。編集内容はここに残り、接続が戻ると同期されます。再接続中…"
@@ -1951,7 +1951,7 @@ status = "draft — needs native review"
 "Exact only" = "完全一致のみ"
 "Expand the interface" = "インターフェースを広げる"
 "Exported {name}; {n} 種類の内容が変更または省略されました" = "{name} を書き出しました。{n} 種類の内容が変更または省略されました"
-"Exported {n} files; some content was changed or left out" = "{n} 個のファイルを書き出しました。一部の内容が変更または省略されました"
+"Exported {n} files; some content was changed or left out" = { other = "{n} 個のファイルを書き出しました。一部の内容が変更または省略されました" }
 "Monet stopped because of an internal error." = "内部エラーにより Monet が停止しました。"
 "Format" = "形式"
 "Free fonts come from Google Fonts and Noto, through jsDelivr and GitHub. Each file is checked against the font index before it is installed into the font folder the Craft apps share. Nothing is downloaded until you allow it." = "無料フォントは Google Fonts と Noto から jsDelivr と GitHub 経由で取得します。各ファイルはフォント索引と照合してから、Craft 各アプリが共有するフォントフォルダーにインストールされます。許可するまで何もダウンロードされません。"
@@ -1977,7 +1977,7 @@ status = "draft — needs native review"
 "Nothing counted yet" = "まだ数えるものがありません"
 "Nothing to pick: the page is empty" = "選ぶものがありません：ページが空です"
 "Opening the file…" = "ファイルを開いています…"
-"Opening {n} files as new files" = "{n} 個のファイルを新しいファイルとして開いています"
+"Opening {n} files as new files" = { other = "{n} 個のファイルを新しいファイルとして開いています" }
 "Other" = "その他"
 "Past 30 days" = "過去 30 日"
 "Past 90 days" = "過去 90 日"
@@ -2069,9 +2069,9 @@ status = "draft — needs native review"
 "{count} in it now · Changed {date}" = "現在 {count} 件 · {date} に変更"
 "{insertions} · {detachments}" = "{insertions} · {detachments}"
 "{name}, disconnected from its live session" = "{name}、ライブセッションから切断されました"
-"{n} detached" = "{n} 件を切り離し"
-"{n} inserted" = "{n} 件を挿入"
-"{n} text layers" = "テキストレイヤー {n} 件"
+"{n} detached" = { other = "{n} 件を切り離し" }
+"{n} inserted" = { other = "{n} 件を挿入" }
+"{n} text layers" = { other = "テキストレイヤー {n} 件" }
 "{percent}%" = "{percent}%"
 "{period}: {counts}" = "{period}：{counts}"
 "{used} · {detached}" = "{used} · {detached}"
@@ -2082,7 +2082,7 @@ status = "draft — needs native review"
 "⌥ double-click an edge of an auto layout child" = "⌥ ダブルクリックでオートレイアウトの子の辺"
 "⌥⌘ ← ↑ → ↓" = "⌥⌘ ← ↑ → ↓"
 
-"Exported {name}; {n} kinds of content were changed or left out" = "{name} を書き出しました。{n} 種類の内容が変更または省略されました"
+"Exported {name}; {n} kinds of content were changed or left out" = { other = "{name} を書き出しました。{n} 種類の内容が変更または省略されました" }
 [commands]
 "align.bottom" = "下揃え"
 "align.hcenter" = "水平方向の中央揃え"

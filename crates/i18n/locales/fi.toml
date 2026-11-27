@@ -2043,7 +2043,7 @@ status = "draft — needs native review"
 "Anyone on your network with this code can look at the file, not change it, while this app stays open." = "Kuka tahansa verkossasi tämän koodin kanssa voi katsoa tiedostoa mutta ei muuttaa sitä, kun tämä sovellus on auki."
 "Auto: by the first letter with a direction" = "Automaattinen: ensimmäisen kirjaimen ja kirjoitussuunnan mukaan"
 "Ctrl+click a padding field" = "Ctrl+napsauta sisennyskenttää"
-"Delete {n} variables" = "Poista {n} muuttujaa"
+"Delete {n} variables" = { other = "Poista {n} muuttujaa" }
 "Disconnected. Reconnecting…" = "Yhteys katkesi. Yhdistetään uudelleen…"
 "Disconnected. Your edits stay here and sync when the connection returns. Reconnecting…" = "Yhteys katkesi. Muutoksesi pysyvät täällä ja synkronoituvat, kun yhteys palaa. Yhdistetään uudelleen…"
 "Dismiss" = "Hylkää"
