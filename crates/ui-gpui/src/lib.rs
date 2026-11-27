@@ -548,46 +548,6 @@ pub(crate) fn opacity_key(app: &mut CanvasApp, key: &str, now: f64) -> bool {
     true
 }
 
-/// 键盘选择框激活时的按键（上游 `shortcuts.rs::key_box`）：方向键移动/改大小、Enter 选中、
-/// Escape 取消。返回 `true` 表示这次按键已被消费。框本身画在 `canvas::overlays` 里。
-pub(crate) fn key_box_key(app: &mut CanvasApp, key: &str, m: &Modifiers) -> bool {
-    let Some(mut b) = app.key_box else { return false };
-    let size = m.shift || m.platform || m.control;
-    let step = if (m.shift && (m.platform || m.control)) { 50.0 } else { 10.0 } / app.session.ds().map_or(1.0, |d| d.view.zoom.max(1e-6));
-    let (dx, dy) = match key {
-        "left" | "ArrowLeft" => (-step, 0.0),
-        "right" | "ArrowRight" => (step, 0.0),
-        "up" | "ArrowUp" => (0.0, -step),
-        "down" | "ArrowDown" => (0.0, step),
-        _ => (0.0, 0.0),
-    };
-    if (dx, dy) != (0.0, 0.0) {
-        if !size {
-            b[0] += dx;
-            b[1] += dy;
-        }
-        b[2] += dx;
-        b[3] += dy;
-        app.key_box = Some(b);
-        return true;
-    }
-    match key {
-        "enter" | "Enter" => {
-            app.key_box = None;
-            let _ = app.session.execute(
-                "select.area",
-                &serde_json::json!({"x": b[0], "y": b[1], "width": b[2] - b[0], "height": b[3] - b[1], "add": m.shift, "deep": m.platform || m.control}),
-            );
-            true
-        }
-        "escape" | "Escape" => {
-            app.key_box = None;
-            true
-        }
-        _ => false,
-    }
-}
-
 /// Common value of `f` across `ids` (`None` when mixed or empty) — the same helper `ui-egui`'s
 
 /// right panel uses, so multi-selection shows "Mixed" exactly like the original.
@@ -2465,32 +2425,6 @@ impl CanvasView {
                         self.begin_inline_rename(vec![id], InlineRenameTarget::Label, cx);
                     }
 
-                    continue;
-                }
-
-                // `select.area` 无参时由引擎发这个请求：开一个键盘选择框（上游
-                // `commands.rs:241 start_key_box`）。已有框时再按 Alt+Space 转拾取模式。
-                "selectArea" => {
-                    if self.app.key_box.take().is_some() {
-                        // 上游第二次触发转 pick select；GPUI 的拾取模式尚未实现，先取消框。
-                        self.toast(tr("Selection box cancelled"), cx);
-                    } else if let Ok(ds) = self.app.session.ds() {
-                        let zoom = ds.view.zoom.max(1e-6);
-                        let around = ds.selection.iter().filter_map(|i| ds.doc.world_bounds(*i)).reduce(|a, b| a.union(b));
-                        let r = match around {
-                            Some(r) => r.inflate(8.0 / zoom, 8.0 / zoom),
-                            None => {
-                                let c = self.app.to_page(self.app.canvas.rect.center());
-                                figcraft_geom::Rect::new(c.x - 100.0 / zoom, c.y - 75.0 / zoom, c.x + 100.0 / zoom, c.y + 75.0 / zoom)
-                            }
-                        };
-                        self.app.key_box = Some([r.x0, r.y0, r.x1, r.y1]);
-                        self.toast(
-                            tr("Selection box: arrows move it, Shift+arrows size it, Enter selects, Escape cancels"),
-                            cx,
-                        );
-                    }
-                    cx.notify();
                     continue;
                 }
 
