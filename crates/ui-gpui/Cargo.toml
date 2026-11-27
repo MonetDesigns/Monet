@@ -19,7 +19,7 @@ default = ["gpu"]
 # GPU 渲染后端（docs/migration-egui-to-gpui.md §18 的第 1、2 步）。默认开启：外置 WGSL
 # 材质、栅格导出和预览都走同一条 GPU 通道；CPU 画布仍是 tiny-skia，两条路可对比。
 # 无 GPU 的构建/CI 用 `--no-default-features` 显式关掉。
-gpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck"]
+gpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck", "dep:figcraft-gpu"]
 # 只在跑单元测试时手动启用：cargo test -p figcraft-ui-gpui --lib --features test-support。
 # ⚠️ 绝不能放进 [dev-dependencies]：examples 也使用 dev-dependencies，Cargo 会把 gpui 的
 # test-support（→ leak-detection → backtrace）统一进 *example 构建*，于是每个 Entity 句柄的
@@ -67,6 +67,8 @@ smol = "2"
 wgpu = { version = "30", optional = true }
 pollster = { version = "0.4", optional = true }
 bytemuck = { version = "1", features = ["derive"], optional = true }
+# 画布的 GPU 管线（SDF 图元 / 渐变 / 裁剪 / 回读）：CPU 出不了的帧它整帧让回 tiny-skia。
+figcraft-gpu = { path = "../gpu", features = ["wgpu"], optional = true }
 # 只在 test-support feature 下给图标 SVG 解析测试用；默认构建不链接。
 usvg = { version = "0.48", optional = true }
 

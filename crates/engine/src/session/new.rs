@@ -96,6 +96,9 @@ impl Session {
 
     /// Files new to the session start with the View toggles the preferences keep.
     pub fn apply_view_prefs(&mut self) {
+        // The canvas renderer follows the preference from here on (a frame already in flight keeps
+        // whatever it started with; the next one reads this).
+        figcraft_render::set_render_backend(&self.prefs.render_backend);
         for ds in self.docs.iter_mut().filter(|d| !d.view_from_prefs) {
             cmd::view::apply_kept(&self.prefs, &mut ds.view);
             ds.view_from_prefs = true;

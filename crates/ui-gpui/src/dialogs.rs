@@ -668,6 +668,10 @@ pub(crate) fn spec(kind: Kind, data: &Value) -> Spec {
             };
             let theme = text("theme");
             let theme_active = ["light", "dark", "system"].iter().position(|t| theme.eq_ignore_ascii_case(t)).unwrap_or(2);
+            // `render_backend` 是画布用 GPU 还是 CPU 画（窗口的图形 API 仍由 `graphics_backend`
+            // 决定，两者不是一回事）。默认 auto：有硬件适配器就走 GPU。
+            let backend = text("render_backend");
+            let backend_active = ["auto", "gpu", "cpu"].iter().position(|b| backend.eq_ignore_ascii_case(b)).unwrap_or(0);
             let lang = text("language");
             let lang_codes = ["system", "en", "zh-Hans", "ja", "de", "fr"];
             let lang_active = lang_codes.iter().position(|c| lang.eq_ignore_ascii_case(c)).unwrap_or(0);
@@ -733,6 +737,23 @@ pub(crate) fn spec(kind: Kind, data: &Value) -> Spec {
                         json!({"language": "fr"}),
                     ]),
                 )
+                .field(Field::Section { title: tr("Rendering") })
+                .field(
+                    Field::choice(
+                        "renderBackend",
+                        tr("Canvas renderer"),
+                        vec![tr("Automatic"), "GPU", "CPU"],
+                        backend_active,
+                    )
+                    .commands(vec!["pref.renderBackend"; 3])
+                    .with_params(vec![
+                        json!({"backend": "auto"}),
+                        json!({"backend": "gpu"}),
+                        json!({"backend": "cpu"}),
+                    ]),
+                )
+                // 灰字：这台机器实际用哪边走，以及为什么（没有适配器 / 软件适配器 / 强制 CPU）。
+                .field(Field::Note { text: render_backend_note() })
                 .with_cancel()
         }
         Kind::About => Spec::new(tr("About Monet"))
@@ -1627,6 +1648,20 @@ fn dialog_button(label: &'static str, primary: bool, enabled: bool, on_click: im
         .text_color(rgba(if primary && enabled { t.accent_on } else { t.text_secondary }))
         .child(SharedString::from(label));
     if enabled { d.cursor_pointer().on_mouse_down(MouseButton::Left, on_click) } else { d }
+}
+
+/// The line under Preferences ▸ Rendering: which side this machine actually draws the canvas on,
+/// and why (no adapter, a software adapter, or "CPU is the chosen renderer").
+fn render_backend_note() -> String {
+    #[cfg(feature = "gpu")]
+    {
+        let status = figcraft_gpu::prefs::status();
+        format!("{} {}", tr("Now drawing on"), status.reason)
+    }
+    #[cfg(not(feature = "gpu"))]
+    {
+        tr("This build has no GPU renderer: the canvas draws on the CPU.").to_string()
+    }
 }
 
 #[cfg(test)]

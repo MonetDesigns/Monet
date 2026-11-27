@@ -2519,6 +2519,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "figcraft-gpu"
+version = "2648.15.0"
+dependencies = [
+ "bytemuck",
+ "figcraft-color",
+ "figcraft-doc",
+ "figcraft-geom",
+ "figcraft-render",
+ "log",
+ "pollster 0.4.0",
+ "tiny-skia 0.12.0",
+ "wgpu",
+]
+
+[[package]]
 name = "figcraft-i18n"
 version = "2648.15.0"
 dependencies = [
@@ -2725,6 +2740,7 @@ dependencies = [
  "figcraft-engine",
  "figcraft-format",
  "figcraft-geom",
+ "figcraft-gpu",
  "figcraft-i18n",
  "figcraft-layout",
  "figcraft-render",

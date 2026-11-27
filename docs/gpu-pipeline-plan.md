@@ -1,0 +1,241 @@
+# 完整 GPU 管线立项（Monet / FigCraft）
+
+> 分支：`ai/gpu-pipeline`（worktree `D:\Projektdateien\GPUI\branches\gpu-pipeline`，从 `main` 拉出）
+> 状态：阶段 1（图元与填充）已落地——能力探测、`auto/gpu/cpu` 三档偏好（引擎命令 + Preferences ▸
+> Rendering）、场景 IR、实例化 SDF 图元（圆角矩形/椭圆/多边形/星形）、四类渐变、裁剪、
+> 回读与 CPU↔GPU 像素 diff（5 项对照测试），UI 画布已接线并整帧回退；M2–M7 为设计与接口
+> 日期：2026-11-27
+
+## 0. 一句话结论
+
+画布从「CPU 栅格 → 纹理上传」迁到「GPU 直接出帧」，**不是换渲染器，而是加一条与 CPU 并行的
+出图通道**：同一份 `Document`，两条路径产出同一张 `Pixmap`，逐特性做像素 diff，任何一条画不准
+的帧整帧回退 CPU。默认 `auto`：探测到硬件 GPU 走 GPU，否则（含软件适配器、设备丢失、场景含未
+支持特性）走 CPU。
+
+本分支交付：`figcraft-gpu` crate（能力探测 / 后端选择 / 场景 IR / 实例化 SDF 渲染 / 回读导出 /
+diff 工具）、引擎与偏好面板的开关接线、CPU↔GPU 像素回归。M2 起按第 4 节推进。
+
+## 1. 现状盘点（为什么不是从零开始）
+
+| 已有 | 位置 | 对本项的作用 |
+|---|---|---|
+| CPU 出图（tiny-skia） | `crates/render`（`Retained`、`draw.rs`、`glass.rs`…） | 对照基准与回退路径，**不动** |
+| 窗口与 UI（GPUI；egui 版已移出默认构建） | `crates/ui-gpui`（画布 worker、WGSL 材质、导出通道） | 本轮 GPU 画布的接线点；wgpu 设备与 `graphics_backend` 偏好都在这条线上 |
+| 最小 GPU 场景渲染（纯色圆角矩形） | `crates/ui-gpui/src/gpu.rs`（`feature = "gpu"`） | 实例化 + SDF + 回读的既有写法，M1 在其之上扩成通用管线 |
+| 外置 WGSL 材质跑 GPU | `ui-gpui/wgsl_runner.rs`、`shade_gpu.rs`、`render::wgsl_effect` | 效果阶段的着色器加载/绑定约定 |
+| 效果着色器数学 | `assets/wgsl/{shadow,layer_blur,background_blur,glass,noise}.wgsl` | M4 直接复用 |
+| 文字排版与字形轮廓 | `crates/text`（skrifa / harfrust，`TextLayout`、`Glyph`、glyph outlines） | M3 的字形图集来源 |
+| 路径代数 | `crates/pathops`、`figcraft_geom`（kurbo 形状构造） | M2 的三角化输入；`lyon` 尚未引入 |
+
+结论：M1 的「图元 + 填充」已有可复用的内核，缺的是**与 UI 解耦的公共 crate、完整的图元/填充
+表达、逐特性回退判定和回归口径**。
+
+## 2. 架构
+
+### 2.1 分层
+
+```text
+Document (crates/doc)
+   │  doc_scene::build(doc, page|ids, view)      ← 唯一做「文档语义 → 绘制语义」的地方
+   ▼
+Scene (crates/gpu/src/scene.rs)                   ← 纯数据：宽高、底色、图元、裁剪、未支持项
+   │  renderer::render(scene)                    ← 只认 Scene，不认 Document，可单测
+   ▼
+PassGraph（层 → 效果 → 合成）                     ← M4/M5
+   ▼
+GPU 纹理（Rgba8UnormSrgb 工作，预乘混合）
+   │  readback / encoder
+   ▼
+Pixmap / PNG / JPEG / WebP / 视频帧
+```
+
+- **`Scene` 是契约**。GPU 侧不读 `Document`，CPU 侧也不读 `Scene`：两侧都从 `Document` 各自出图，
+  diff 才有意义（否则是拿同一份中间表示自证）。
+- **`Unsupported` 是显式数据**，不是 `Option::None`。`Scene.unsupported` 列出「这一帧哪里画不准」，
+  `doc_scene` 收集它，渲染器见非空即拒绝整帧——保证画布上不会出现「看着差不多、其实错」的像素。
+- **不混帧**。一帧内一部分图元 GPU、一部分 CPU 需要坐标/混合/AA 口径完全一致，代价远大于收益；
+  M1–M6 一律「整帧 GPU 或整帧 CPU」，M7 后再评估按层混排（离屏层作为纹理交给 CPU 合成）。
+
+### 2.2 crate 边界
+
+```text
+figcraft-gpu
+├─ backend.rs     能力探测（适配器、后端名、硬件/软件分类），OnceLock 缓存
+├─ prefs.rs       RenderBackend::{Auto,Gpu,Cpu}、进程级选择、resolve() 规则
+├─ scene.rs       Scene / ShapeKind / Paint / Clip / Unsupported（无 wgpu 依赖）
+├─ doc_scene.rs   Document → Scene（阶段 1 子集；不支持项逐条登记）
+├─ render.rs      wgpu 设备/管线/绘制/回读（feature = "wgpu"）
+├─ shaders/shape.wgsl
+└─ diff.rs        CPU/GPU 像素比对（无 wgpu 依赖）
+```
+
+依赖：`figcraft-geom`、`figcraft-color`、`figcraft-doc`（`doc_scene`）、可选 `wgpu` / `pollster` /
+`bytemuck`。**默认 feature 为空**：不把 wgpu 拖进默认 workspace 构建；UI 侧显式开 `wgpu`。
+`ui-egui`、`ui-gpui` 共享同一 crate，GPU 代码只写一份。
+
+### 2.3 关键接口（M1 已实现）
+
+```rust
+figcraft_gpu::prefs::set(RenderBackend::Auto);          // 偏好/启动时设置
+figcraft_gpu::prefs::effective();                       // 当前生效后端（含降级原因）
+figcraft_gpu::doc_scene::build(&doc, page, &view) -> Scene;
+match figcraft_gpu::render::Renderer::global().render(&scene) { Ok(rgba) => …, Err(_) => CPU }
+```
+
+## 3. 后端选择与回退契约（三条铁律）
+
+1. **偏好三档**：`auto`（默认）/ `gpu` / `cpu`。
+   - `auto`：探测到**硬件**适配器才用 GPU；`DeviceType::Cpu`（WARP / lavapipe / Swiftshader）与
+     `DeviceType::Other` 一律当「没有 GPU」，走 CPU。理由：软件适配器像素正确但比 tiny-skia 慢，
+     用它只会让画布更卡。
+   - `gpu`：明确要求。没有可用适配器时**不失败**，记录原因后走 CPU，并在 UI 上说明。
+   - `cpu`：强制 CPU（排查 GPU 差异、旧驱动、远程桌面）。
+2. **逐帧回退**：`Scene.unsupported` 非空、设备创建失败、管线验证失败、映射读回失败 → 本帧 CPU。
+   回退是**每帧判定**，不是一次性开关：文档里加一个文字层不会让整次会话掉到 CPU。
+3. **失败锁定**：设备丢失（`DeviceLost`）或连续 3 帧 GPU 出错 → 本会话锁定 CPU，直到用户改偏好或
+   重启；同时写日志（`log::warn!`）与「关于/偏好」里的可见状态。绝不静默降级。
+
+## 4. 分阶段计划
+
+每阶段都以「能 diff 通过 + 能回退」为完成线，不以「看着像」为完成线。
+
+### M1 图元与填充（本分支已落地）
+
+- 图元：矩形（四角独立半径）、椭圆（整圆）、正多边形、星形；任意仿射（旋转/斜切）由实例矩阵承担。
+- 填充：纯色；线性 / 径向 / 角度 / 菱形渐变（Figma 三手柄：`from`/`to`/`width`，单位盒坐标）；
+  多层填充按 Figma 顺序叠加；`paint.opacity`、节点 `opacity`、可见性、祖先裁剪矩形。
+- 抗锯齿：局部空间 SDF + `fwidth` 屏幕空间覆盖，1px 边缘，任意缩放下线宽恒定。
+- **验收**：矩形/椭圆/多边形/星形 × 纯色/四种渐变 × 旋转 × 裁剪，CPU↔GPU 像素 diff 达标（第 6 节）。
+- 未做（登记为 Unsupported，走 CPU）：图片填充、图案填充、描边、圆角 smoothing、弧形/环形椭圆、
+  文字、效果、非 Normal 混合、组透明度、蒙版。
+
+### M2 路径与描边
+
+- 三角化：优先 `lyon`（`fill` + `stroke` 的 join/cap/dash 已成熟），失败再退回 compute 光栅；
+  输入是 `figcraft_geom::BezPath`，与 CPU 的 `pathops` 同源。
+- 描边：`StrokeProps` 的 weight/align（内/中/外）/join（miter/round/bevel）/cap/虚线；
+  外描边与内描边通过几何偏移（offset）实现，不用扩边技巧。
+- **验收**：与 CPU 的 `stroke_fill`、`dash` 结果 diff；尖角 miter limit 与 dash phase 逐项对齐。
+- 风险：lyon 的 miter 与 tiny-skia 的 miter 在极限角度下不同 → 用「描边覆盖率」容差而非逐像素等值。
+
+### M3 文字
+
+- `figcraft_text::TextLayout` 已有字形与位置；用 skrifa 取轮廓 → 栅格进 **R8 字形图集**（按
+  `(font, size, subpixel offset, gamma)` 缓存，LRU 上限），GPU 侧只画四边形 + UV + 颜色。
+- 颜色字形（emoji，`text::ColorBitmap`）单独一层 RGBA 图集。
+- 混排/换行/字距全部沿用 CPU 的 `TextLayout`，GPU **不重新排版**——排版只有一份。
+- **验收**：字形覆盖、亚像素定位、斜体/描边文字与 CPU diff；图集重建（新增字形）不闪帧。
+- 风险：iOS 上 `skrifa` 与 CoreText 的 hinting 差异 → 只比覆盖率，不比 hinting。
+
+### M4 效果
+
+- 阴影：SDF 膨胀 + 两 pass 高斯（`assets/wgsl/shadow.wgsl`）；内阴影走 stencil/裁剪。
+- 图层模糊：可分离高斯，半径按设备像素，边缘 clamp 扩边（避免透明边收缩）。
+- 背景模糊/玻璃：多 pass（降采样 → 模糊 → 折射/色散 → 合成），复用 `glass.wgsl` 的 uniform 约定；
+  与 CPU `glass.rs` 的「玻璃切分」口径对齐。
+- 颗粒：`noise.wgsl`，按帧种子固定（导出可复现）。
+- **验收**：每种效果单独 diff；效果叠加顺序与 `figcraft_render::effect_order_tests` 一致。
+- 风险：模糊核在不同后端（DX12/Metal/Vulkan）的采样精度差异 → 核系数用 f16 存储时先量化。
+
+### M5 组合
+
+- 组透明度 / 非 Normal 混合模式 / 蒙版：**离屏层**。组内容画进 `Rgba8UnormSrgb` 层纹理，再以
+  `opacity` + `blend` 合成；蒙版用 stencil（Metal 的 `depthStencil` 等价）或 `mask_type` 对应的
+  alpha/outline/luminance 采样。
+- **验收**：`blend` 16 种模式逐项 diff；组透明度与 CPU 的「先合成再乘 alpha」一致；蒙版边缘与
+  CPU `mask_bounds_tests` 一致。
+
+### M6 导出链路
+
+- GPU 出帧 → 回读（`COPY_BYTES_PER_ROW_ALIGNMENT` 处理）→ 直接交编码器（PNG/JPEG/WebP/视频）。
+- 大图分块：超过 `max_texture_dimension_2d` 时按 band 渲染再拼；导出进度回调 + 取消令牌
+  （`AtomicBool`），取消后释放纹理。
+- 与 `render::set_export_frame_hook` 的既有钩子合并：动画导出只保留一条 GPU 路径。
+- **验收**：同一文档 GPU 导出与 CPU 导出 diff 达标；取消在 1 帧内生效；4K/8K 不 OOM。
+
+### M7 一致性
+
+- 每个特性一组「金样文档 + 三种缩放 + 两种背景」的 diff 用例（第 6 节），CI 无适配器时跳过并标记
+  `SKIP: no adapter`，不算通过也不算失败。
+- 新增特性必须同时提交：`doc_scene` 支持判定、WGSL 实现、diff 用例、Unsupported 回退用例。
+- **验收**：`cargo test -p figcraft-gpu --features wgpu` 全绿；`--no-default-features` 下纯逻辑测试全绿。
+
+## 5. 跨平台
+
+| 平台 | 后端 | 说明 |
+|---|---|---|
+| Windows | DX12（默认）/ Vulkan | WARP 视为软件适配器 → `auto` 不用；`gpu` 强制时仍可跑 |
+| Linux | Vulkan（默认）/ GL | lavapipe 视为软件；远程桌面（llvmpipe）同理 |
+| iOS | Metal | 无表面设备（离屏纹理）；`MTLCommandQueue` 单线程提交，回读用 shared buffer |
+| macOS | Metal | 同 iOS |
+| wasm | WebGPU / WebGL2 | **本阶段不支持**：WebGL2 无 storage buffer，`figcraft-gpu` 不参与 web 构建 |
+
+设备请求：`Limits::downlevel_defaults().using_resolution(adapter.limits())` 起步，额外要求
+`max_storage_buffers_per_shader_stage >= 4`（实例缓冲在片元里读）。不满足 → 视为不可用（CPU）。
+
+## 6. 一致性回归（diff 口径）
+
+指标（预乘 RGBA8，逐通道）：
+
+- `max_delta`：全图最大通道差；
+- `mean_delta`：全图平均通道差；
+- `bad_ratio`：通道差 > `per_channel` 的像素占比；
+- 分级容差：
+  - **实心内部**（离边缘 ≥ 2px）：`per_channel = 2`，`bad_ratio = 0`；
+  - **边缘带**（SDF 覆盖率 0–1 的 1–2px 环）：`per_channel = 24`，`bad_ratio ≤ 2%`
+    （tiny-skia 解析 AA 与 SDF `fwidth` AA 的天然差异）；
+  - **渐变内部**：`per_channel = 6`（插值空间差；见风险 1）。
+
+边缘带用「CPU 结果的 alpha 梯度」自动圈定，不手写坐标。金样存 `crates/gpu/tests/golden/`（PNG，
+仅存 CPU 基准，GPU 结果现算，避免二进制随平台漂移）。
+
+## 7. 导出
+
+- 回读：`copy_texture_to_buffer` + `map_async` + `device.poll(Wait)`；行对齐按
+  `COPY_BYTES_PER_ROW_ALIGNMENT`（256）补列后裁掉。
+- 编码：PNG/JPEG/WebP 走 `crates/render` 既有 `encode_export`；视频帧走 `motion-codec`
+  （`craft-video` h264-encode 已是依赖）。
+- 进度/取消：`ExportJob { done: AtomicU32, total: u32, cancel: AtomicBool }`；每 band 检查一次，
+  取消后 `cancel` 返回 `Err(Cancelled)`，已用纹理立即 drop。
+
+## 8. 偏好设置
+
+| 项 | 值 |
+|---|---|
+| 键 | `Prefs.render_backend`（`"auto"` 默认 / `"gpu"` / `"cpu"`；手改文件容错为 `auto`） |
+| 命令 | `pref.renderBackend {backend}`（`auto` / `gpu` / `cpu`） |
+| UI | Preferences ▸ **Rendering**：Auto / GPU / CPU 三选一；下方灰字显示**当前实际生效**的后端与原因（如「GPU：NVIDIA RTX 4070（DX12）」/「CPU：没有可用的 GPU 适配器」） |
+| 生效 | 立即（下一帧），无需重启；已缓存的设备保留，切到 `cpu` 只是不再调用 |
+| 与 `graphics_backend` 的区别 | 后者选 **窗口** 的图形 API（dx12/vulkan/gl/metal），前者选 **画布** 是否用 GPU 出图 |
+| 环境变量 | `FIGCRAFT_RENDER=cpu` 覆盖偏好（排查用，优先级最高） |
+| 默认 | `auto` |
+
+接线（本分支已做）：`Prefs.render_backend` 在 `pref.renderBackend` 与 `Session::apply_view_prefs`
+里同时写入 `figcraft_render::set_render_backend()`；`figcraft_gpu::prefs::requested()` 依次看
+`FIGCRAFT_RENDER` 环境变量 → 进程内 `set()` → 这个镜像值（所以 GPU crate 不必依赖 engine）。
+`figcraft-ui-gpui` 的 `canvas/render_worker::run_gpu` 每帧问一次 `render_if_gpu`，返回 `None`
+就整帧让回 tiny-skia——偏好只决定「先试哪边」，决定不了「画不出来还硬画」。
+
+## 9. 分支与构建
+
+- 分支 `ai/gpu-pipeline` 从 `main`（`c3bf6c1c`）拉出，worktree 在统一分支根
+  `D:\Projektdateien\GPUI\branches\gpu-pipeline`。
+- 按 `docs/local-branch-policy.md`，功能分支默认不构建；**本分支经 owner 明确授权**允许在
+  worktree 内自行 `cargo check/test`（等价于一个普通 PR 分支的自测），因此本分支的构建不违反
+  「主分支唯一构建」的初衷，但产物仍落 `A:\Temp\monet-target`，不新建 `target/`。
+- 合入前照常：`Backup-Refs.ps1` → `Merge-ToMain.ps1`（`--no-ff`）。合并后才允许启动测试。
+
+## 10. 风险与开放问题
+
+1. **颜色空间与插值**：tiny-skia 的渐变在预乘 sRGB 上插值，GPU 侧按 sRGB 加权；两端在中间色上
+   可能差 2–6 级。M1 先用容差覆盖，M7 前决定是否统一到线性空间（会影响 CPU 既有输出，需单独立项）。
+2. **AA 口径**：解析覆盖率 vs SDF `fwidth` 在 1px 边缘的差异不可消除，只能定容差与边缘带。
+3. **非均匀缩放下的圆角**：SDF 在局部空间求值，非均匀缩放会把圆角拉成椭圆（与 CPU 真实几何不同）。
+   M2 用三角化后不再有该问题；M1 遇到 `scale` 工具的非均匀缩放登记 Unsupported。
+4. **iOS 线程模型**：Metal 的 `MTLCommandQueue` 不适合多线程并发提交；导出 worker 需串行化
+   （`Mutex<Renderer>`，与现有 `FRAME_GPU` 同策略）。
+5. **性能基线**：M1 只保证正确性；实例化 + storage buffer 的吞吐在 10k 图元级别实测后再定
+   「何时该走 GPU」的阈值（现在 `auto` 只要有硬件就走 GPU，可能在小画布上不如 CPU）。
+6. **stencil 与 Metal**：Metal 支持 stencil，但 wgpu 的 `depth_stencil` 需要显式格式；
+   M5 的蒙版要确认 `Stencil8` 在 iOS 可用。

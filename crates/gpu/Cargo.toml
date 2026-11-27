@@ -1,0 +1,29 @@
+[package]
+name = "figcraft-gpu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Monet GPU render pipeline: backend choice with CPU fallback, a document-to-scene front end, instanced SDF shapes and gradients, offscreen layers, export readback and CPU/GPU pixel diffs"
+
+[lints]
+workspace = true
+
+# `wgpu` is opt-in: the default workspace build stays on tiny-skia, and the UI crates that want the
+# GPU canvas turn this feature on. The rest of the crate (scene IR, prefs, diffs) builds anywhere.
+[features]
+default = []
+wgpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck"]
+
+[dependencies]
+figcraft-geom = { workspace = true }
+figcraft-color = { workspace = true }
+figcraft-doc = { workspace = true }
+figcraft-render = { workspace = true }
+log = { workspace = true }
+bytemuck = { version = "1", features = ["derive"], optional = true }
+wgpu = { version = "30", optional = true }
+pollster = { version = "0.4", optional = true }
+
+# The CPU renderer's pixels, for the parity tests that compare them with the GPU's.
+[dev-dependencies]
+tiny-skia = { workspace = true }

@@ -81,6 +81,24 @@ pub fn has_export_frame_hook() -> bool {
     EXPORT_FRAME_HOOK.get().is_some()
 }
 
+/// Which renderer the app asks for (`"auto"`, `"gpu"` or `"cpu"`), mirrored here from
+/// `Prefs::render_backend` so the GPU crate can read it without depending on the engine. Empty
+/// until the engine applies preferences, which reads as `auto`.
+static RENDER_BACKEND: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+/// Publish the preference (the engine does when preferences are applied, and when
+/// `pref.renderBackend` changes it, so a change takes effect on the next frame).
+pub fn set_render_backend(name: &str) {
+    if let Ok(mut value) = RENDER_BACKEND.lock() {
+        *value = name.to_string();
+    }
+}
+
+/// The preference as published; empty when nobody set it yet.
+pub fn render_backend() -> String {
+    RENDER_BACKEND.lock().map(|value| value.clone()).unwrap_or_default()
+}
+
 /// Whether the installed GPU renderer can draw `ids` in `view` faithfully. `false` without a hook.
 pub fn export_frame_gpu_supported(doc: &Document, ids: &[NodeId], view: &View) -> bool {
     EXPORT_FRAME_HOOK.get().is_some_and(|h| (h.supports)(doc, ids, view))
