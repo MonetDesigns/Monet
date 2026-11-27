@@ -146,8 +146,39 @@ pub(super) fn request_render(
     } else {
         (scale, visible_w, visible_h)
     };
-    // 本帧显示文档由 CanvasApp 显式给出（Motion 预览时是求值后的文档）。
-    let doc = display_doc.unwrap_or_else(|| ds.doc.clone());
+    // 输入法组合中画的是「组合文档」：preedit 还没进文档，但必须和光标一起实时显示。
+    // 组合优先于 Motion 预览（编辑文字时不会同时播放预览）。
+    // 内容没变时复用同一个 Arc，否则 JobKey.doc 每次都变，普通重绘也会反复提交整页。
+    let mut composed = None;
+    if let Ok(ds) = app.session.ds()
+        && let Some(te) = ds.text_edit.as_ref()
+        && let Some(pe) = te.preedit.as_ref()
+    {
+        let key = (
+            Arc::as_ptr(&ds.doc) as usize,
+            ds.revision,
+            te.id.0,
+            te.caret,
+            pe.text.clone(),
+            pe.cursor,
+        );
+        composed = app
+            .preedit_doc_cache
+            .as_ref()
+            .filter(|cache| cache.key == key)
+            .map(|cache| cache.doc.clone());
+        if composed.is_none() {
+            if let Some((d, _, _)) = figcraft_engine::textedit::preedit_doc(&app.session) {
+                let doc = Arc::new(d);
+                app.preedit_doc_cache = Some(crate::app::PreeditDocCache { key, doc: doc.clone() });
+                composed = Some(doc);
+            }
+        }
+    }
+    if composed.is_none() {
+        app.preedit_doc_cache = None;
+    }
+    let doc = composed.or(display_doc).unwrap_or_else(|| ds.doc.clone());
     let outlined = if ds.view.outlines_selection { ds.selection.clone() } else { vec![] };
     let proof = ds.view.proof_srgb && !doc.color_profile.is_srgb();
     let outline_extras = figcraft_render::Outline { hidden: ds.view.outline_hidden, bounds: ds.view.outline_bounds, light: false };

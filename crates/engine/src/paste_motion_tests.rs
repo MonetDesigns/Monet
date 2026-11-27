@@ -178,3 +178,155 @@ fn pasted_instance_keeps_the_main_timeline_duration() {
     assert!(!s.doc().unwrap().timelines.contains_key(&pasted[0]), "instances have no clock of their own");
     assert_eq!(s.doc().unwrap().timeline_settings_for(pasted[0]), settings(600, 24, true), "an animated component's clock travels with its instance");
 }
+
+#[test]
+fn pasting_two_animated_frames_grows_each_scope_by_its_own_end() {
+    let mut s = Session::new();
+    let slow = frame(&mut s, 0.0, 0.0, 200.0, 200.0);
+    let slow_dot = rect(&mut s, Some(slow), 10.0, 10.0);
+    key(&mut s, slow_dot, 0, 10.0, 10.0);
+    key(&mut s, slow_dot, 3000, 150.0, 10.0);
+    s.doc_mut().unwrap().timelines.insert(slow, settings(400, 30, false));
+
+    let quick = frame(&mut s, 300.0, 0.0, 200.0, 200.0);
+    let quick_dot = rect(&mut s, Some(quick), 10.0, 10.0);
+    key(&mut s, quick_dot, 0, 10.0, 10.0);
+    key(&mut s, quick_dot, 900, 150.0, 10.0);
+    s.doc_mut().unwrap().timelines.insert(quick, settings(500, 24, true));
+
+    s.set_selection(vec![slow, quick]);
+    s.execute("edit.copy", &json!({})).unwrap();
+    s.set_selection(vec![]);
+    let pasted = paste(&mut s, json!({}));
+    assert_eq!(pasted.len(), 2);
+    let mut durations: Vec<(u32, u32, bool)> = pasted
+        .iter()
+        .map(|root| {
+            let st = s.doc().unwrap().timeline_settings_for(*root);
+            (st.duration_ms, st.fps, st.looping)
+        })
+        .collect();
+    durations.sort();
+    assert_eq!(
+        durations,
+        vec![(900, 24, true), (3000, 30, false)],
+        "each pasted frame grows only for the animation it contains"
+    );
+}
+
+#[test]
+fn pasting_a_section_extends_the_frames_inside_it_not_just_the_page() {
+    let mut s = Session::new();
+    let page = s.doc().unwrap().first_page().unwrap();
+    let (sec, inner, dot) = {
+        let doc = s.doc_mut().unwrap();
+        let sec = doc
+            .create(page, figcraft_doc::NodeKind::Section { contents_hidden: false }, "Section", 0.0, 0.0, 300.0, 300.0)
+            .unwrap();
+        let inner = doc.create(sec, figcraft_doc::NodeKind::Frame, "Inner", 10.0, 10.0, 200.0, 200.0).unwrap();
+        let dot = doc.create(inner, figcraft_doc::NodeKind::Rectangle, "Dot", 10.0, 10.0, 20.0, 20.0).unwrap();
+        (sec, inner, dot)
+    };
+    key(&mut s, dot, 0, 10.0, 10.0);
+    key(&mut s, dot, 1200, 60.0, 10.0);
+    s.doc_mut().unwrap().timelines.insert(inner, settings(400, 30, false));
+
+    copy(&mut s, sec);
+    s.set_selection(vec![]);
+    let pasted = paste(&mut s, json!({}));
+    let doc = s.doc().unwrap();
+    let pasted_frame = doc
+        .subtree(pasted[0])
+        .into_iter()
+        .find(|id| matches!(doc.node(*id).unwrap().kind, figcraft_doc::NodeKind::Frame))
+        .expect("the section brings its frame");
+    assert_eq!(
+        doc.timeline_settings_for(pasted_frame).duration_ms,
+        1200,
+        "the frame inside the pasted section grows to fit its own animation"
+    );
+    assert_eq!(
+        doc.timeline_settings_for(page).duration_ms,
+        2000,
+        "the page clock is not stretched by an animation inside a frame"
+    );
+}
+
+#[test]
+fn pasting_a_top_level_instance_does_not_create_an_instance_timeline() {
+    let mut s = Session::new();
+    let page = s.doc().unwrap().first_page().unwrap();
+    s.doc_mut().unwrap().timelines.insert(page, settings(300, 30, false));
+
+    let main = frame(&mut s, 0.0, 0.0, 100.0, 100.0);
+    let dot = rect(&mut s, Some(main), 10.0, 10.0);
+    key(&mut s, dot, 0, 10.0, 10.0);
+    key(&mut s, dot, 600, 60.0, 10.0);
+    s.doc_mut().unwrap().timelines.insert(main, settings(600, 24, true));
+    let comp = id(&s.execute("component.create", &json!({"ids": [main]})).unwrap());
+
+    copy(&mut s, comp);
+    s.set_selection(vec![]);
+    let pasted = paste(&mut s, json!({}));
+    let doc = s.doc().unwrap();
+    assert!(matches!(doc.node(pasted[0]).unwrap().kind, figcraft_doc::NodeKind::Instance { .. }));
+    assert!(!doc.timelines.contains_key(&pasted[0]), "the instance still follows its main, not a private clock");
+    assert_eq!(doc.timelines.get(&page), Some(&settings(300, 30, false)), "the page clock is left alone");
+    assert_eq!(doc.timeline_settings_for(pasted[0]), settings(600, 24, true));
+}
+
+#[test]
+fn pasting_an_instance_keeps_a_foreign_mains_timeline() {
+    use figcraft_doc::ImportedComponent;
+
+    let mut s = Session::new();
+    let (main, dot) = {
+        let doc = s.doc_mut().unwrap();
+        let store = doc.ensure_library_store();
+        let main = doc
+            .create(
+                store,
+                figcraft_doc::NodeKind::Component {
+                    description: String::new(),
+                    props: Default::default(),
+                    prop_order: Vec::new(),
+                },
+                "Main",
+                0.0,
+                0.0,
+                100.0,
+                100.0,
+            )
+            .unwrap();
+        let dot = doc.create(main, figcraft_doc::NodeKind::Rectangle, "Dot", 10.0, 10.0, 20.0, 20.0).unwrap();
+        (main, dot)
+    };
+    key(&mut s, dot, 0, 10.0, 10.0);
+    key(&mut s, dot, 700, 60.0, 10.0);
+    let main = main;
+    {
+        let doc = s.doc_mut().unwrap();
+        doc.timelines.insert(main, settings(700, 24, true));
+        doc.libraries_mut().components.push(ImportedComponent {
+            library: "Other".into(),
+            key: main,
+            root: main,
+            version: 1,
+            ids: [(main, main)].into(),
+        });
+    }
+    let inst = id(&s.execute("instance.create", &json!({"component": main, "x": 200, "y": 0})).unwrap());
+
+    copy(&mut s, inst);
+    s.execute("file.new", &json!({"name": "Other"})).unwrap();
+    let pasted = paste(&mut s, json!({}));
+    assert_eq!(pasted.len(), 1);
+    let doc = s.doc().unwrap();
+    let main = match doc.node(pasted[0]).unwrap().kind {
+        figcraft_doc::NodeKind::Instance { component, .. } => component,
+        ref other => panic!("pasted an instance, got {other:?}"),
+    };
+    assert!(doc.is_remote(main), "the pasted instance uses the adopted library main");
+    assert_eq!(doc.timelines.get(&main), Some(&settings(700, 24, true)), "the adopted main brings its own clock");
+    assert_eq!(doc.timeline_settings_for(pasted[0]), settings(700, 24, true));
+}

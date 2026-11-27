@@ -14,6 +14,7 @@ use super::outline::{crisp_line, draw_outline, node_quad, outline_colour, quad, 
 use super::painter::{Label, Painter, text_size};
 use super::rulers::fmt;
 use crate::app::CanvasApp;
+use crate::widgets::input::caret;
 use crate::theme::{COMPONENT, SLOT, Tokens, stroke as s};
 
 /// 三次贝塞尔在 `t` 处的点（GPUI 画笔没有贝塞尔图元，段要采样成折线）。
@@ -266,6 +267,11 @@ pub(super) fn overlays(
         }
     }
 
+    // ── 键盘点选光标（egui `canvas/overlays.rs` 的 `pick_outline`）：粉色 2px 描边。
+    if let Some(p) = app.picked() {
+        draw_outline(app, painter, &doc, p, stroke(super::handles::PINK, 2.0));
+    }
+
     // ── 选中：每个选中层的真实轮廓 + 变换框。
     // 选中框的尺寸标签，测量标签要避开它。
     let mut size_label = None;
@@ -421,10 +427,8 @@ pub(super) fn overlays(
         }
     }
 
-    // ── 框选框（鼠标拖拽的引擎 overlay，或 Alt+Space/F8 的键盘选择框）。
-    // 两者互斥：键盘框打开时优先画它（上游 `FigApp::ui.key_box`）。
-    let box_rect = app.key_box.or(ov.marquee);
-    if let Some([x0, y0, x1, y1]) = box_rect {
+    // ── 框选框（指针拖出的优先，其次是键盘框选 `selectArea` 建的框）。
+    if let Some([x0, y0, x1, y1]) = ov.marquee.or(app.live_key_box()) {
         let r = Rect::from_two_pos(app.to_screen(x0, y0), app.to_screen(x1, y1));
         painter.rect_filled(r, CornerRadius::ZERO, accent.gamma_multiply(0.1));
         painter.rect_stroke(r, CornerRadius::ZERO, stroke(accent, 1.0), StrokeKind::Inside);
@@ -505,20 +509,51 @@ pub(super) fn overlays(
         }
     }
 
-    // ── 文字编辑：光标与选中。
+    // ── 文字编辑：光标、选中，以及输入法组合（preedit）的下划线与组合光标。
+    // 组合中的文字还没进文档，用引擎给的「组合文档」排版，光标/选区才不会错位。
+    let preedit = figcraft_engine::textedit::preedit_doc(&app.session);
+    let edoc: &Document = preedit.as_ref().map(|(d, _, _)| d).unwrap_or(&doc);
     if let Some(te) = ds.text_edit.clone()
-        && let Some(text) = super::outline::TextOnScreen::of(&doc, te.id)
+        && let Some(text) = super::outline::TextOnScreen::of(edoc, te.id)
     {
-        if let Some(q) = node_quad(app, &doc, te.id) {
+        if let Some(q) = node_quad(app, edoc, te.id) {
             quad(painter, q, stroke(accent, 1.0));
         }
         let (a, b) = (te.caret.min(te.anchor), te.caret.max(te.anchor));
-        if a != b {
+        if a != b && preedit.is_none() {
+            // 选区色与普通输入框共用同一份定义。
+            let selection_colour = caret::selection(t);
             for q in text.selection(app, a, b) {
-                painter.add(Shape::convex_polygon(q.to_vec(), accent.gamma_multiply(0.3), Stroke::NONE));
+                painter.add(Shape::convex_polygon(q.to_vec(), selection_colour, Stroke::NONE));
             }
         }
-        painter.line_segment(text.caret(app, te.caret, zoom), stroke(t.text, 1.0));
+        if let Some((_, (mark_start, mark_end), _)) = preedit.as_ref() {
+            for r in text.layout.selection_rects(*mark_start, *mark_end) {
+                // 下划线画在基线下方三分之一行高处，只覆盖组合中的字符。
+                let Some(line) = text.layout.lines.iter().find(|l| (l.top - r.y0).abs() < 1e-6) else { continue };
+                let x1 = text
+                    .layout
+                    .glyphs
+                    .get(line.glyph_start..line.glyph_end)
+                    .unwrap_or(&[])
+                    .iter()
+                    .filter(|g| g.char_end > g.char_start && g.char_start >= *mark_start && g.char_end <= *mark_end)
+                    .map(|g| g.x + g.advance)
+                    .fold(r.x0, f64::max);
+                let y = line.baseline + (line.top + line.height - line.baseline) * 0.35;
+                painter.line_segment([text.at(app, r.x0, y), text.at(app, x1, y)], stroke(t.text, 1.0));
+            }
+        }
+        let caret_index = preedit.as_ref().map(|(_, _, cursor)| *cursor).unwrap_or(te.caret);
+        // 光标粗细、圆角、颜色和闪烁都跟普通输入框共用同一套参数。
+        if app.text_caret_visible {
+            let [a, b] = text.caret(app, caret_index, zoom);
+            let (y0, y1) = (a.y.min(b.y), a.y.max(b.y));
+            if y1 > y0 {
+                let r = Rect::from_min_size(pos2(a.x, y0), vec2(caret::WIDTH, y1 - y0));
+                painter.rect_filled(r, CornerRadius::same(caret::RADIUS), caret::color(t));
+            }
+        }
     }
 
     // ── 智能参考线与测量标注（标签避开尺寸标签）。
@@ -785,6 +820,57 @@ mod size_pill_tests {
         let (long, _) = pill_rect("1000 × 1000", pos2(0.0, 0.0), Align2::CENTER_TOP, 6.0);
         assert!(long.width() > short.width() + 20.0, "{} vs {}", long.width(), short.width());
         assert_eq!(short.height(), long.height()); // 上下边距固定 2
+    }
+}
+
+#[cfg(test)]
+mod text_edit_colour_tests {
+    use super::*;
+    use crate::app::{CanvasApp, sample_doc};
+    use crate::canvas::painter::Op;
+    use figcraft_engine::textedit;
+
+    /// 画布文字编辑的选区/光标必须和普通输入框同一套颜色，
+    /// 不能再用画布强调色和正文墨色。
+    #[test]
+    fn text_selection_and_caret_match_the_input_field_colours() {
+        let mut app = CanvasApp::new(sample_doc());
+
+        app.canvas.rect = Rect { min: pos2(0.0, 0.0), max: pos2(800.0, 600.0) };
+
+        let v = app.session.execute("text.create", &serde_json::json!({"text": "Hello 世界", "x": 100.0, "y": 100.0})).expect("create text");
+        let id: NodeId = serde_json::from_value(v["id"].clone()).expect("text id");
+
+        if let Ok(ds) = app.session.ds_mut()
+            && let Some(NodeKind::Text(t)) = ds.doc_mut().node_mut(id).map(|n| &mut n.kind)
+        {
+            t.style.font_family = "MiSans".into();
+        }
+
+        textedit::begin(&mut app.session, id, Some(0), false).expect("begin");
+        textedit::set_caret(&mut app.session, 5, true).expect("select");
+
+        let doc = app.session.ds().expect("session").doc.clone();
+        let Some(text) = crate::canvas::outline::TextOnScreen::of(&doc, id) else { return };
+        if text.layout.glyphs.is_empty() {
+            return; // no fonts installed: geometry is not testable
+        }
+
+        let t = Tokens::dark();
+        let mut painter = Painter::new(app.canvas.rect);
+        let _ = overlays(&app, &mut painter, &t, doc, None);
+
+        let selection = painter.ops.iter().find_map(|op| match op {
+            Op::Poly { fill, .. } if fill.a() > 0 => Some(*fill),
+            _ => None,
+        });
+        assert_eq!(selection, Some(Color32::from_white_alpha(56)), "dark theme selection must be 22% white like the input field");
+
+        let caret = painter.ops.iter().find_map(|op| match op {
+            Op::Rect { radius, fill, .. } if *fill == t.accent && *radius == CornerRadius::same(caret::RADIUS) => Some(*fill),
+            _ => None,
+        });
+        assert_eq!(caret, Some(t.accent), "caret must use the same accent and rounded 1pt shape as the input field");
     }
 }
 

@@ -322,15 +322,28 @@ pub fn paste_into(s: &mut Session, parent: NodeId, at: Option<(f64, f64)>) -> Re
     // has no animation (and its clips paint over the shaded past-duration area). Grow the
     // scope the pasted layers will be shown in — never shrink it — so the copy is visible
     // where it was pasted, the manual "set the frame's duration" workaround done for the user.
-    if let Some(first) = out.first().copied() {
-        let scope = doc.top_level_frame(first).or_else(|| doc.page_of(first)).unwrap_or(first);
+    // Group animated descendants by the frame that contains them: a section root can hold
+    // several frames, and each frame's clock must cover its own contents rather than stretching
+    // only the page. Layers outside any frame (groups, page-level layers) share the page scope.
+    let mut scopes: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
+    for root in &out {
+        for id in doc.subtree(*root) {
+            let scope = doc.top_level_frame(id).or_else(|| doc.page_of(id)).unwrap_or(id);
+            scopes.entry(scope).or_default().push(id);
+        }
+    }
+    for (scope, ids) in scopes {
+        // An instance follows its main's clock and must not get an instance-owned entry:
+        // `timeline_settings_for` would then stop forwarding later main duration/fps/loop
+        // changes. There is no unambiguous destination to extend here, so leave the main alone.
+        if doc.node(scope).is_some_and(|n| matches!(n.kind, NodeKind::Instance { .. })) {
+            continue;
+        }
         let mut settings = doc.timeline_settings_for(scope).sanitized();
         let mut end = settings.duration_ms;
-        for root in &out {
-            for id in doc.subtree(*root) {
-                if let Some((_, hi)) = doc.node(id).and_then(|n| n.motion.span_ms(settings.duration_ms)) {
-                    end = end.max(hi);
-                }
+        for id in &ids {
+            if let Some((_, hi)) = doc.node(*id).and_then(|n| n.motion.span_ms(settings.duration_ms)) {
+                end = end.max(hi);
             }
         }
         if end > settings.duration_ms {

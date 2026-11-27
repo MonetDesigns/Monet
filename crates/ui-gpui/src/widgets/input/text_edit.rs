@@ -411,15 +411,18 @@ impl TextEdit {
 fn resolve_number_with(number: Option<NumberConfig>, percent_unit: bool, kept: &str, text: &str) -> String {
     let Some(cfg) = number else { return text.to_string() };
     let t = text.trim();
+    // 数字框提交时只接受能解析成数字（或算术/相对编辑）的文本；空输入、中文、英文
+    // 之类一律退回编辑开始时的值。否则这些字会被当成新值写回字段，提交后一直留在
+    // 数字框里（用户 2026-11-26）。上游 egui 的 `typed()` 解析失败也是不提交。
     if t.is_empty() {
-        return text.to_string();
+        return kept.to_string();
     }
     if cfg.auto && t.eq_ignore_ascii_case("auto") {
         return "0".to_string();
     }
     let cur = kept.parse::<f64>().ok();
     let parsed = crate::field_math::eval(t, cur, percent_unit);
-    parsed.map(|v| fmt_num(cfg.clamp(v))).unwrap_or_else(|| text.to_string())
+    parsed.map(|v| fmt_num(cfg.clamp(v))).unwrap_or_else(|| kept.to_string())
 }
 
 impl Render for TextEdit {
@@ -834,8 +837,11 @@ mod tests {
         assert_eq!(s("+50", "80", Some(cfg)), "100");
         assert_eq!(s("*3", "80", Some(cfg)), "100");
         assert_eq!(s("/2", "80", Some(cfg)), "40");
-        assert_eq!(s("/0", "80", Some(cfg)), "/0");
-        assert_eq!(s("  ", "80", Some(cfg)), "  ");
+        // 解析失败（除零、只有空格、中文/英文）提交时退回原值，不能把文字留在数字框里。
+        assert_eq!(s("/0", "80", Some(cfg)), "80");
+        assert_eq!(s("  ", "80", Some(cfg)), "80");
+        assert_eq!(s("中文", "80", Some(cfg)), "80");
+        assert_eq!(s("hello", "80", Some(cfg)), "80");
         assert_eq!(s("250", "100", None), "250");
         // A22 之外的字段通用行为：算术与百分比相对编辑。
         assert_eq!(s("(10+5)*2", "10", Some(cfg)), "30");
@@ -843,5 +849,24 @@ mod tests {
         assert_eq!(s("50%", "80", Some(cfg)), "40");
         assert_eq!(s("+10%", "80", Some(cfg)), "88");
         assert_eq!(resolve_number_with(Some(cfg), true, "80", "50%"), "50");
+    }
+
+    /// 用户报的「数字框输入中文/英文，提交后文字不消失」：提交必须把草稿退回原值。
+    #[gpui::test]
+    async fn a_numeric_field_reverts_text_that_is_not_a_number_on_commit(cx: &mut gpui::TestAppContext) {
+        let (view, window) = cx.add_window_view(|_window, cx| {
+            let mut field = TextEdit::new(cx);
+            field.set_value("80");
+            field.set_numeric("", 1.0);
+            field
+        });
+
+        view.update_in(window, |field, window, cx| {
+            field.begin_edit(window, false);
+            field.input.buffer.set_text("中文");
+            field.commit(window, cx);
+            assert_eq!(field.value(), "80", "the old number must survive");
+            assert_eq!(field.input.buffer.text(), "80", "the text must disappear from the field");
+        });
     }
 }

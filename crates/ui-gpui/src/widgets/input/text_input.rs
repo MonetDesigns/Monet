@@ -18,7 +18,7 @@
 //! reported by `ShapedLine` to character indices, painting quads and caching the last layout for
 //! hit-tests. No editing algorithm is duplicated here.
 
-use crate::widgets::input::EditBuffer;
+use crate::widgets::input::{EditBuffer, caret};
 use crate::widgets::{TEXT_PT, pt, rgba, tokens};
 use gpui::{
     App, Bounds, ElementInputHandler, Entity, EntityInputHandler, FocusHandle, Hsla, IntoElement, PaintQuad, Pixels, Point, ShapedLine, SharedString,
@@ -91,11 +91,27 @@ pub fn centred_line_origin(bounds: Bounds<Pixels>, line: &ShapedLine, _font_size
     (point(bounds.origin.x, top), line_height)
 }
 
-/// Blink state shared across every frame of one editor: `visible` flips every 530 ms while the
-/// field has focus. `started` keeps the ticker from being spawned once per frame.
+/// Blink state shared across every frame of one editor. The visible/hidden rhythm comes from the
+/// same `caret` module the canvas uses; `started` only keeps the repaint ticker from being spawned
+/// once per frame.
 struct CaretBlink {
-    visible: std::cell::Cell<bool>,
-    started: std::cell::Cell<bool>,
+    started: std::cell::Cell<Option<std::time::Instant>>,
+}
+
+impl CaretBlink {
+    fn visible(&self) -> bool {
+        caret::visible_since(self.started.get(), std::time::Instant::now())
+    }
+
+    fn clear(&self) {
+        self.started.set(None);
+    }
+
+    fn start(&self) {
+        if self.started.get().is_none() {
+            self.started.set(Some(std::time::Instant::now()));
+        }
+    }
 }
 
 /// A primitive single-line editor. Embed it in any view: hold a `TextInput`, render
@@ -108,8 +124,6 @@ pub struct TextInput {
     color: Hsla,
     placeholder_color: Hsla,
     dim_color: Hsla,
-    caret_color: Hsla,
-    selection_color: Hsla,
     placeholder: SharedString,
     secret: bool,
     suffix: SharedString,
@@ -129,14 +143,12 @@ impl TextInput {
             color: rgba(t.text).into(),
             placeholder_color: rgba(t.text_tertiary).into(),
             dim_color: Hsla { h: 0.0, s: 0.0, l: 1.0, a: 0.5 },
-            caret_color: rgba(t.accent).into(),
-            selection_color: Hsla { h: 0.0, s: 0.0, l: 1.0, a: 0.22 },
             placeholder: SharedString::new(""),
             secret: false,
             suffix: SharedString::new(""),
             dim: false,
             align: TextAlign::Left,
-            caret_blink: Rc::new(CaretBlink { visible: std::cell::Cell::new(true), started: std::cell::Cell::new(false) }),
+            caret_blink: Rc::new(CaretBlink { started: std::cell::Cell::new(None) }),
         }
     }
 
@@ -164,10 +176,10 @@ impl TextInput {
         self.font_size = size;
     }
 
-    pub fn set_colors(&mut self, text: Hsla, placeholder: Hsla, caret: Hsla) {
+    /// Caret colour is shared by every editor; the third parameter is kept for API compatibility.
+    pub fn set_colors(&mut self, text: Hsla, placeholder: Hsla, _caret: Hsla) {
         self.color = text;
         self.placeholder_color = placeholder;
-        self.caret_color = caret;
     }
 
     /// What the line shows: composed text (IME), masked text, the value + suffix while not
@@ -254,6 +266,8 @@ impl TextInput {
     ) -> impl IntoElement {
         let (display, is_composed) = self.display(focused);
         let blink = self.caret_blink.clone();
+        let ticker_started = Rc::new(std::cell::Cell::new(false));
+        let prepaint_ticker = ticker_started.clone();
         let blink_entity = entity.clone();
         let font_size = self.font_size;
         // ⛔ 颜色**每帧从 `tokens()` 重新取**，不要用构造时存下来的 `self.color`：
@@ -277,11 +291,9 @@ impl TextInput {
             ink
         }
         .into();
-        let caret_color: Hsla = rgba(t.accent).into();
-        // 选区：暗色下用 22% 白，亮色下用 22% 黑（原来固定 22% 白，亮色主题里等于看不见）。
-        let selection_color: Hsla =
-            if t.dark { rgba(crate::canvas::geom::Color32::from_white_alpha(56)) } else { rgba(crate::canvas::geom::Color32::from_black_alpha(56)) }
-                .into();
+        // 光标与选区色统一从 `caret` 取，画布文字编辑用的是同一份。
+        let caret_color: Hsla = rgba(caret::color(&t)).into();
+        let selection_color: Hsla = rgba(caret::selection(&t)).into();
         let align = self.align;
         let c = self.buffer.composed();
         let sel_range = if c.composing { c.mark_start..c.mark_end } else { self.buffer.range() };
@@ -292,6 +304,7 @@ impl TextInput {
         let cache = self.cache.clone();
 
         let prepaint = move |bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App| {
+            let ticker_started = prepaint_ticker.clone();
             let run = TextRun {
                 len: display.as_ref().len(),
                 font: window.text_style().font(),
@@ -323,32 +336,32 @@ impl TextInput {
             // default), restarted whenever the field gains focus and reset to visible when it
             // loses it.
             if !focused {
-                blink.visible.set(true);
-                blink.started.set(false);
-            } else if !blink.started.get() {
-                blink.started.set(true);
-                let b = blink.clone();
-                let e = blink_entity.clone();
-                cx.spawn(async move |cx: &mut gpui::AsyncApp| {
-                    loop {
-                        cx.background_executor().timer(std::time::Duration::from_millis(500)).await;
-                        b.visible.set(!b.visible.get());
-                        if e.update(cx, |_, cx| cx.notify()).is_err() {
-                            break;
+                blink.clear();
+            } else {
+                blink.start();
+                if !ticker_started.get() {
+                    ticker_started.set(true);
+                    let e = blink_entity.clone();
+                    cx.spawn(async move |cx: &mut gpui::AsyncApp| {
+                        loop {
+                            cx.background_executor().timer(caret::BLINK).await;
+                            if e.update(cx, |_, cx| cx.notify()).is_err() {
+                                break;
+                            }
                         }
-                    }
-                })
-                .detach();
+                    })
+                    .detach();
+                }
             }
-            let caret_visible = blink.visible.get();
+            let caret_visible = blink.visible();
             // The caret shares the line box with the glyphs: same top, same height — both are
             // taken from `centred_line_origin` above.
             let caret_quad = if focused && caret_visible && sel_a == sel_b {
                 let x = line.x_for_index(caret_byte);
                 // 1 pt wide with a 0.5 pt radius: both ends are round, so the caret reads as a
                 // pill rather than a hairline rectangle.
-                let mut quad = fill(Bounds { origin: point(text_x + x, line_origin.y), size: size(px(1.0), text_height) }, caret_color);
-                quad.corner_radii = gpui::Corners::all(px(0.5));
+                let mut quad = fill(Bounds { origin: point(text_x + x, line_origin.y), size: size(px(caret::WIDTH), text_height) }, caret_color);
+                quad.corner_radii = gpui::Corners::all(px(caret::RADIUS as f32));
                 Some(quad)
             } else {
                 None

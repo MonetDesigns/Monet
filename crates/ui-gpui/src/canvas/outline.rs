@@ -53,11 +53,38 @@ impl TextOnScreen {
     pub(crate) fn caret(&self, app: &CanvasApp, index: usize, zoom: f64) -> [Pos2; 2] {
         let (cx, li) = self.layout.caret(index);
         match self.layout.lines.get(li).or(self.layout.lines.last()) {
-            Some(line) => [self.at(app, cx, line.top), self.at(app, cx, line.top + line.height)],
+            // 和普通输入框一致：光标占字体的 ascent+descent 行盒，不把行距（leading）算进去。
+            Some(line) => [self.at(app, cx, line.baseline - line.ascent), self.at(app, cx, line.baseline + line.descent)],
             None => {
                 let p = self.at(app, 0.0, 0.0);
                 [p, p + vec2(0.0, 14.0 * zoom as f32)]
             }
+        }
+    }
+
+    /// 页面坐标 `p` 落在第几个字符前（和引擎 `text_index_at` 同一条命中规则）。
+    pub(crate) fn index_at(&self, p: Point) -> usize {
+        let local = self.world.inverse() * p;
+        self.layout.hit(local.x, local.y - self.dy)
+    }
+
+    /// 第 `index` 个字符前的光标窗口矩形：IME 候选窗按这个矩形定位。
+    ///
+    /// `app.to_screen` 给的是画布局部坐标（`canvas.rect` 原点恒为 0），而
+    /// `EntityInputHandler::bounds_for_range` 要的是窗口坐标；`origin` 就是画布
+    /// 在窗口里的原点（GPUI 传进来的 `element_bounds.origin`）。
+    pub(crate) fn caret_bounds(
+        &self,
+        app: &CanvasApp,
+        index: usize,
+        zoom: f64,
+        origin: gpui::Point<gpui::Pixels>,
+    ) -> gpui::Bounds<gpui::Pixels> {
+        let [a, b] = self.caret(app, index, zoom);
+        let (x0, y0, x1, y1) = (a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y));
+        gpui::Bounds {
+            origin: gpui::point(gpui::px(x0) + origin.x, gpui::px(y0) + origin.y),
+            size: gpui::size(gpui::px((x1 - x0).max(1.0)), gpui::px((y1 - y0).max(1.0))),
         }
     }
 }
