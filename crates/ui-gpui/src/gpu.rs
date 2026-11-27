@@ -276,6 +276,19 @@ impl Gpu {
     }
 
     /// 把一帧场景渲染成 **预乘 RGBA8** 像素（长度 = w × h × 4，行序自上而下）。
+    /// Whether this device can allocate the export texture and its padded readback. An
+    /// over-limit texture is an uncaptured wgpu validation error (a panic on the locked version),
+    /// not `None`, so the caller must decline before calling [`render`](Self::render).
+    pub fn supports_frame(&self, width: u32, height: u32) -> bool {
+        let limits = self.device.limits();
+        if width == 0 || height == 0 || width > limits.max_texture_dimension_2d || height > limits.max_texture_dimension_2d {
+            return false;
+        }
+        let unpadded = u64::from(width) * 4;
+        let padded = unpadded.div_ceil(u64::from(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)) * u64::from(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+        padded.saturating_mul(u64::from(height)) <= limits.max_buffer_size
+    }
+
     pub fn render(&mut self, scene: &Scene) -> Vec<u8> {
         self.draw(scene, true)
     }
@@ -436,13 +449,13 @@ pub fn scene_of(doc: &figcraft_doc::Document, page: figcraft_doc::NodeId, view: 
 
 /// One node subtree (not the whole page) as a [`Scene`], for animated exports: the same strict
 /// subset as [`scene_of`], with a transparent background (an export frame is transparent where
-/// nothing paints). A page node keeps its page background and walks its children.
+/// nothing paints). A page node still exposes its children, but its background is **not** filled:
+/// CPU Motion export leaves unpainted page space transparent even when the page has a colour.
 pub fn scene_of_node(doc: &figcraft_doc::Document, node: figcraft_doc::NodeId, view: &figcraft_render::View) -> Option<Scene> {
     use figcraft_doc::NodeKind;
     let mut s = Scene::new(view.width, view.height);
     let n = doc.node(node)?;
-    if let NodeKind::Page { background, .. } = &n.kind {
-        s.clear = [background.r, background.g, background.b, background.a];
+    if let NodeKind::Page { .. } = &n.kind {
         for &c in &n.children {
             walk(doc, c, view, &mut s, NO_CLIP)?;
         }
@@ -458,6 +471,11 @@ fn walk(doc: &figcraft_doc::Document, id: figcraft_doc::NodeId, view: &figcraft_
     if !n.visible {
         return Some(());
     }
+    // Masks need the CPU's grouped mask run; drawing the mask rectangle as an ordinary fill
+    // would show content the CPU hides.
+    if n.is_mask {
+        return None;
+    }
     // PassThrough is a group's own "keep the children's blends" mode and looks like Normal for
     // opaque fills; anything else (Luminosity, Multiply…) would need a real blend pipeline.
     if n.opacity < 0.999
@@ -470,6 +488,15 @@ fn walk(doc: &figcraft_doc::Document, id: figcraft_doc::NodeId, view: &figcraft_
         return None;
     }
     if n.fills.len() > 1 {
+        return None;
+    }
+    // `walk` emits children in raw document order; a reverse-stacking auto-layout paints its
+    // first child last, which this path cannot reproduce.
+    if n.layout.as_ref().is_some_and(|l| l.reverse_z) {
+        return None;
+    }
+    // The GPU instance has one radius for all four corners and no corner smoothing.
+    if n.corners.uniform().is_none() || n.corners.smoothing != 0.0 {
         return None;
     }
     let xf = doc.world_transform(id);
@@ -491,15 +518,30 @@ fn walk(doc: &figcraft_doc::Document, id: figcraft_doc::NodeId, view: &figcraft_
     let (x0, y0) = map(m, 0.0, 0.0);
     let (x1, y1) = map(m, w, h);
     let (rx0, ry0, rx1, ry1) = (x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1));
-    // A clipping frame narrows what it and everything below it may paint.
     let own = [rx0 as f32, ry0 as f32, (rx1 - rx0) as f32, (ry1 - ry0) as f32];
-    let clip = if n.clip { intersect_clip(clip, own) } else { clip };
+    // A clipping frame narrows what it and everything below it may paint. The GPU clips against
+    // `own` (a rectangle) with a hard edge, while the CPU clips against the rounded frame outline
+    // with partial coverage, so only whole-pixel square clips are faithful.
+    let clip = if n.clip {
+        if n.corners.radii.iter().any(|r| *r > 0.0) {
+            return None;
+        }
+        if [rx0, ry0, rx1, ry1].iter().any(|v| (v - v.round()).abs() > 0.0001) {
+            return None;
+        }
+        intersect_clip(clip, own)
+    } else {
+        clip
+    };
     if let Some(paint) = n.fills.first() {
-        let c = paint.solid_color()?;
-        // 圆角按设备像素换算（四角取最大，够用；四角不同半径是后续再加的字段）。
-        let unit = if w > 0.0 { (rx1 - rx0) / w } else { 1.0 };
-        let radius = n.corners.radii.iter().copied().fold(0.0_f64, f64::max) * unit;
-        out.push_clipped(own, [c.r, c.g, c.b, c.a], radius as f32, clip);
+        // `solid_color()` ignores `visible`; a hidden fill must produce no instance at all.
+        if paint.visible {
+            let c = paint.solid_color()?;
+            // 圆角按设备像素换算；所有角半径已在上面验证为同一个值。
+            let unit = if w > 0.0 { (rx1 - rx0) / w } else { 1.0 };
+            let radius = n.corners.radii[0] * unit;
+            out.push_clipped(own, [c.r, c.g, c.b, c.a], radius as f32, clip);
+        }
     }
     for &c in &n.children {
         walk(doc, c, view, out, clip)?;
@@ -582,6 +624,67 @@ mod tests {
         assert_eq!(scene.clear, [0.0, 0.0, 0.0, 0.0], "an export frame is transparent where nothing paints");
         assert_eq!(scene.rects.len(), 2, "the frame's own fill and its child, but not the page sibling");
         assert!(scene.rects.iter().all(|r| r.rect[0] < 120.0 && r.rect[1] < 120.0), "no sibling rect at 300,300");
+    }
+
+    /// Scene conversion declines every construct whose GPU approximation would differ from the
+    /// CPU raster: masks, non-uniform corners, reverse stacking, rounded clips and hidden fills.
+    #[test]
+    fn scene_conversion_declines_approximations() {
+        let view = figcraft_render::View { origin: (0.0, 0.0), scale: 1.0, width: 200, height: 200 };
+        let mut doc = figcraft_doc::Document::default();
+        let page = doc.pages[0];
+        let frame = doc.create(page, figcraft_doc::NodeKind::Frame, "Frame", 10.0, 10.0, 100.0, 100.0).expect("a frame");
+        let rect = doc.create(frame, figcraft_doc::NodeKind::Rectangle, "Rect", 0.0, 0.0, 50.0, 50.0).expect("a rectangle");
+        doc.node_mut(rect).expect("rect").is_mask = true;
+        assert!(scene_of_node(&doc, frame, &view).is_none(), "a mask subtree must use the CPU");
+
+        doc.node_mut(rect).expect("rect").is_mask = false;
+        doc.node_mut(rect).expect("rect").corners.radii = [30.0, 0.0, 0.0, 0.0];
+        assert!(scene_of_node(&doc, frame, &view).is_none(), "one-radius-per-corner GPU cannot keep square corners");
+
+        doc.node_mut(rect).expect("rect").corners.radii = [0.0; 4];
+        let mut layout: figcraft_doc::props::AutoLayout = Default::default();
+        layout.reverse_z = true;
+        doc.node_mut(frame).expect("frame").layout = Some(layout);
+        assert!(scene_of_node(&doc, frame, &view).is_none(), "reverse stacking changes paint order");
+
+        doc.node_mut(frame).expect("frame").layout = None;
+        if let Some(n) = doc.node_mut(frame) {
+            n.clip = true;
+            n.corners.radii = [12.0; 4];
+        }
+        assert!(scene_of_node(&doc, frame, &view).is_none(), "rounded clips need partial coverage");
+    }
+
+    #[test]
+    fn a_hidden_fill_emits_no_instance_but_keeps_walking_children() {
+        let mut doc = figcraft_doc::Document::default();
+        let page = doc.pages[0];
+        let frame = doc.create(page, figcraft_doc::NodeKind::Frame, "Frame", 10.0, 10.0, 100.0, 100.0).expect("a frame");
+        if let Some(n) = doc.node_mut(frame) {
+            n.fills.clear();
+        }
+        let rect = doc.create(frame, figcraft_doc::NodeKind::Rectangle, "Rect", 0.0, 0.0, 50.0, 50.0).expect("a rectangle");
+        if let Some(n) = doc.node_mut(rect) {
+            let mut paint = figcraft_color::Paint::solid(figcraft_color::Color::BLACK);
+            paint.visible = false;
+            n.fills = vec![paint];
+        }
+        let scene = scene_of_node(&doc, frame, &figcraft_render::View { origin: (0.0, 0.0), scale: 1.0, width: 200, height: 200 }).expect("still expressible");
+        assert!(scene.rects.is_empty(), "a hidden fill must not become an instance");
+    }
+
+    #[test]
+    fn an_animated_page_scene_keeps_its_space_transparent() {
+        let mut doc = figcraft_doc::Document::default();
+        let page = doc.pages[0];
+        if let Some(n) = doc.node_mut(page)
+            && let figcraft_doc::NodeKind::Page { background, .. } = &mut n.kind
+        {
+            *background = figcraft_color::Color::WHITE;
+        }
+        let scene = scene_of_node(&doc, page, &figcraft_render::View { origin: (0.0, 0.0), scale: 1.0, width: 200, height: 200 }).expect("page children are expressible");
+        assert_eq!(scene.clear, [0.0, 0.0, 0.0, 0.0], "CPU Motion export leaves unpainted page space transparent");
     }
 
     #[test]

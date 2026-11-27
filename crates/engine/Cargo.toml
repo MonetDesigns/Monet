@@ -46,5 +46,8 @@ zip = { workspace = true }
 craft-font-store = { workspace = true, features = ["bundled-index"] }
 craft-font-catalog = { workspace = true }
 
+[target.'cfg(windows)'.dependencies]
+figcraft-motion-mediafoundation = { workspace = true }
+
 [dev-dependencies]
 wat = { workspace = true }

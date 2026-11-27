@@ -1,0 +1,15 @@
+[package]
+name = "figcraft-motion-mediafoundation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Windows Media Foundation hardware H.264 encoder for Monet Motion exports (optional backend; the CPU codec remains the fallback)."
+
+# This crate exists to contain the unavoidable Media Foundation FFI. The rest of the workspace
+# keeps `unsafe_code = "forbid"`; the surface here is a safe push/finish encoder wrapper.
+[lints.rust]
+unsafe_code = "allow"
+
+[target.'cfg(windows)'.dependencies]
+figcraft-motion-codec = { workspace = true }
+windows = { version = "0.62", default-features = false, features = ["Win32_Media_MediaFoundation", "Win32_System_Com"] }

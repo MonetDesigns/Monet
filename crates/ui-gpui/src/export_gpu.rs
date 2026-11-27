@@ -51,6 +51,9 @@ fn render_frame_gpu(doc: &Document, ids: &[NodeId], view: &figcraft_render::View
         *guard = Gpu::new();
     }
     let gpu = guard.as_mut()?;
+    if !gpu.supports_frame(view.width, view.height) {
+        return None;
+    }
     let data = gpu.render(&scene);
     figcraft_render::pixmap_from_premultiplied_rgba(data, view.width, view.height)
 }
