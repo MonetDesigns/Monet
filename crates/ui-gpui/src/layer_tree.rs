@@ -1432,7 +1432,10 @@ impl CanvasView {
             } else {
                 vec![rows[j]]
             };
-            let a = if m.shift { anchor.filter(|a| sel.contains(a)).unwrap_or(rows[i]) } else { rows[j] };
+            // The stored anchor must also be *visible*: a hidden selected row cannot define the
+            // range, or the next Shift+Down starts from the wrong end (egui uses the effective
+            // visible anchor).
+            let a = if m.shift { anchor.filter(|a| sel.contains(a) && rows.contains(a)).unwrap_or(rows[i]) } else { rows[j] };
             self.layer_tree.anchor = Some(a);
             let _ = self.app.session.execute("select.set", &json!({ "ids": ids }));
             cx.notify();

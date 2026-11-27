@@ -8441,18 +8441,6 @@ impl Render for CanvasView {
                 // `popup_context_key` 之后的分支），否则 Shift+F10 打开的菜单会被框选先吃掉
                 // ArrowDown/Escape。
 
-                // 焦点在图层面板：方向键走图层导航，不移动画布选区。
-                if this.layer_tree.focused
-                    && !this.popup_owns_keyboard()
-                    && !e.keystroke.modifiers.platform
-                    && !e.keystroke.modifiers.control
-                    && !e.keystroke.modifiers.alt
-                    && this.layer_key_nav(&canonical_key(&e.keystroke.key), e.keystroke.modifiers, cx)
-                {
-                    cx.stop_propagation();
-                    return;
-                }
-
                 // 取色器渐变：选中某个断点时 Delete / Backspace 删除它（至少保留 2 个）。
                 if matches!(e.keystroke.key.as_str(), "delete" | "backspace")
                     && let Some(Popup::Window(w)) = this.popup.as_mut()
@@ -8494,6 +8482,21 @@ impl Render for CanvasView {
                         cx.stop_propagation();
                         return;
                     }
+                }
+                // Keyboard selection box outranks layer navigation: a box started with
+                // Ctrl+Space must move even while a layer row still owns `focused`.
+                if this.layer_tree.focused
+                    && !this.popup_owns_keyboard()
+                    && !this.left_collapsed
+                    && this.left_tab != 1
+                    && !(this.variables_open && this.variables_full)
+                    && !e.keystroke.modifiers.platform
+                    && !e.keystroke.modifiers.control
+                    && !e.keystroke.modifiers.alt
+                    && this.layer_key_nav(&key, e.keystroke.modifiers, cx)
+                {
+                    cx.stop_propagation();
+                    return;
                 }
 
                 // ── Motion 时间轴快捷键（egui timeline.rs:1093-1158）──
@@ -10885,9 +10888,13 @@ impl Render for CanvasView {
                 if this.dialog.is_none()
                     && this.app.session.ds().is_ok_and(|d| d.text_edit.is_none())
                 {
-                    // 焦点在图层面板（焦点在左栏行上）：方向键走图层导航。
+                    // 焦点在图层面板（焦点在左栏行上）：方向键走图层导航。面板收起或切到
+                    // Assets / 全屏变量时必须停用，否则焦点残留会把方向键吃掉。
                     if this.layer_tree.focused
                         && !this.popup_owns_keyboard()
+                        && !this.left_collapsed
+                        && this.left_tab != 1
+                        && !(this.variables_open && this.variables_full)
                         && !e.keystroke.modifiers.platform
                         && !e.keystroke.modifiers.control
                         && !e.keystroke.modifiers.alt
