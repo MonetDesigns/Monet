@@ -354,6 +354,10 @@ pub(crate) enum Setting {
         spacing_field: Entity<TextField>,
         style_id: String,
         text: Rc<RefCell<serde_json::Value>>,
+        /// 样式的字段绑定（`字段 -> 变量名`）与可绑定的数字 / 字符串变量。
+        bound: Vec<(String, String)>,
+        number_variables: Vec<String>,
+        string_variables: Vec<String>,
         family_anchor: Rc<RefCell<Option<Bounds<Pixels>>>>,
         style_anchor: Rc<RefCell<Option<Bounds<Pixels>>>>,
     },
@@ -664,6 +668,11 @@ pub(crate) struct StyleEditState {
     pub paints: Vec<figcraft_color::Paint>,
     /// 文本样式的完整 `TextStyle` JSON：编辑某一字段时整体写回 `style.update {value}`。
     pub text: Option<serde_json::Value>,
+    /// 样式的字段绑定：`字段 -> 变量名`（刷新时从 `Style::bound` 重建）。
+    pub bound: Vec<(String, String)>,
+    /// 样式编辑器变量菜单里的数字 / 字符串变量名。
+    pub number_variables: Vec<String>,
+    pub string_variables: Vec<String>,
     /// 效果样式的完整 effects 数组（每行带原始 JSON，供写回 `style.update {value}`）。
     pub effects: Option<Vec<EffectRow>>,
     /// 网格样式的完整 grids 数组（每行带原始 JSON，供写回 `style.update {value}`）。
@@ -683,6 +692,9 @@ struct StyleSnap {
     description: String,
     paints: Vec<figcraft_color::Paint>,
     text: Option<serde_json::Value>,
+    bound: Vec<(String, String)>,
+    number_variables: Vec<String>,
+    string_variables: Vec<String>,
     effects: Option<Vec<EffectRow>>,
     grids: Option<Vec<GridRow>>,
 }
@@ -2389,6 +2401,7 @@ impl WindowState {
         current: Option<&str>,
         anchor: Point<Pixels>,
         ids: Option<Vec<figcraft_doc::NodeId>>,
+        range: Option<(figcraft_doc::NodeId, usize, usize)>,
     ) -> Self {
         let mut w = Self::base(WindowKind::FontPicker, tr("Font family"), cmds, Open::Anchor(anchor));
         // Figma `typePanel.fontFamily.fontPickerWindow`：宽 `15rem`(=240)，窗口背景是
@@ -2402,11 +2415,16 @@ impl WindowState {
         w.rows = figcraft_text::family_names()
             .into_iter()
             .map(|fam| {
-                let mut params = json!({ "props": { "fontFamily": fam.clone() } });
-                if let Some(ids) = &ids {
-                    params["ids"] = json!(ids);
-                }
-                let mut row = Row::new(fam.clone(), "node.set", params).font_family(fam.clone());
+                let (cmd, params) = if let Some((id, start, end)) = range {
+                    ("text.style", json!({ "id": id, "start": start, "end": end, "fontFamily": fam.clone() }))
+                } else {
+                    let mut params = json!({ "props": { "fontFamily": fam.clone() } });
+                    if let Some(ids) = &ids {
+                        params["ids"] = json!(ids);
+                    }
+                    ("node.set", params)
+                };
+                let mut row = Row::new(fam.clone(), cmd, params).font_family(fam.clone());
                 if Some(fam.as_str()) == current {
                     row = row.trail("✓");
                 }
@@ -2539,6 +2557,9 @@ impl WindowState {
         properties: Vec<String>,
         paints: Vec<figcraft_color::Paint>,
         text: Option<serde_json::Value>,
+        bound: Vec<(String, String)>,
+        number_variables: Vec<String>,
+        string_variables: Vec<String>,
         effects: Option<Vec<EffectRow>>,
         grids: Option<Vec<GridRow>>,
         popups: crate::panels::PopupReqs,
@@ -2579,11 +2600,26 @@ impl WindowState {
             description.clone(),
             paints.clone(),
             text.clone(),
+            bound.clone(),
+            number_variables.clone(),
+            string_variables.clone(),
             effects.clone(),
             grids.clone(),
             cmds.clone(),
         );
-        w.style_edit = Some(StyleEditState { id, has_selection: false, paints, text, effects, grids, popups, picker: Rc::new(RefCell::new(None)) });
+        w.style_edit = Some(StyleEditState {
+            id,
+            has_selection: false,
+            paints,
+            text,
+            bound,
+            number_variables,
+            string_variables,
+            effects,
+            grids,
+            popups,
+            picker: Rc::new(RefCell::new(None)),
+        });
         w.settings = Rc::new(RefCell::new(settings));
         w
     }
@@ -2598,6 +2634,9 @@ impl WindowState {
         description: String,
         paints: Vec<figcraft_color::Paint>,
         text: Option<serde_json::Value>,
+        bound: Vec<(String, String)>,
+        number_variables: Vec<String>,
+        string_variables: Vec<String>,
         effects: Option<Vec<EffectRow>>,
         grids: Option<Vec<GridRow>>,
         cmds: Cmds,
@@ -2768,6 +2807,9 @@ impl WindowState {
                     spacing_field,
                     style_id: tid,
                     text: text_state,
+                    bound: bound.clone(),
+                    number_variables: number_variables.clone(),
+                    string_variables: string_variables.clone(),
                     family_anchor: Rc::new(RefCell::new(None)),
                     style_anchor: Rc::new(RefCell::new(None)),
                 });
@@ -2839,8 +2881,13 @@ impl WindowState {
     }
 
     /// 样式编辑弹窗刷新用的文档快照：命令回写文档后，据此重建正文 `settings`。
-    fn style_snapshot(st: &figcraft_doc::Style) -> StyleSnap {
+    fn style_snapshot(st: &figcraft_doc::Style, doc: &figcraft_doc::Document) -> StyleSnap {
         let ty = st.kind.type_name();
+        let bound: Vec<(String, String)> = st.bound.iter().filter_map(|(k, v)| doc.variables.get(v).map(|x| (k.clone(), x.name.clone()))).collect();
+        let number_variables: Vec<String> =
+            doc.variables.variables.iter().filter(|v| v.kind == figcraft_doc::VariableType::Number).map(|v| v.name.clone()).collect();
+        let string_variables: Vec<String> =
+            doc.variables.variables.iter().filter(|v| v.kind == figcraft_doc::VariableType::String).map(|v| v.name.clone()).collect();
         let (paints, text, effects, grids) = match &st.kind {
             figcraft_doc::StyleKind::Paint { paints } => (paints.clone(), None, None, None),
             figcraft_doc::StyleKind::Text { style, .. } => (Vec::new(), serde_json::to_value(style).ok(), None, None),
@@ -2897,7 +2944,7 @@ impl WindowState {
                 )
             }
         };
-        StyleSnap { ty, name: st.name.clone(), description: st.description.clone(), paints, text, effects, grids }
+        StyleSnap { ty, name: st.name.clone(), description: st.description.clone(), paints, text, bound, number_variables, string_variables, effects, grids }
     }
 
     /// 卡片高度估算（与 `style_editor` 打开时一致）：命令增删属性行后重算，避免卡片定位偏移。
@@ -2924,7 +2971,7 @@ impl WindowState {
 
     /// 命令回写文档后，用新快照原地重建正文 `settings`（保留位置 / 拖动状态），让界面即时反映。
     pub(crate) fn apply_style_snapshot(&mut self, cx: &mut App, snap: StyleSnap) {
-        let StyleSnap { ty, name, description, paints, text, effects, grids } = snap;
+        let StyleSnap { ty, name, description, paints, text, bound, number_variables, string_variables, effects, grids } = snap;
         let id = self.style_edit.as_ref().map(|e| e.id.clone()).unwrap_or_default();
         let mut settings = Self::style_editor_settings(
             cx,
@@ -2934,6 +2981,9 @@ impl WindowState {
             description,
             paints.clone(),
             text.clone(),
+            bound.clone(),
+            number_variables.clone(),
+            string_variables.clone(),
             effects.clone(),
             grids.clone(),
             self.cmds.clone(),
@@ -2961,6 +3011,9 @@ impl WindowState {
         if let Some(edit) = self.style_edit.as_mut() {
             edit.paints = paints;
             edit.text = text;
+            edit.bound = bound;
+            edit.number_variables = number_variables;
+            edit.string_variables = string_variables;
             edit.effects = effects;
             edit.grids = grids;
         }
@@ -2980,7 +3033,7 @@ impl WindowState {
         };
         match doc.style(&id) {
             Some(st) => {
-                self.apply_style_snapshot(cx, Self::style_snapshot(st));
+                self.apply_style_snapshot(cx, Self::style_snapshot(st, doc));
                 true
             }
             None => false,
@@ -2996,7 +3049,7 @@ impl WindowState {
         text_state: Rc<RefCell<serde_json::Value>>,
         cmds: Cmds,
     ) -> Entity<TextField> {
-        let field = crate::widgets::number_field(cx, 120.0, Some(value), "", 1.0, Slot::None);
+        let field = crate::widgets::number_field(cx, 100.0, Some(value), "", 1.0, Slot::None);
         let cid = style_id.clone();
         let ck = key;
         let cts = text_state.clone();
@@ -3034,7 +3087,7 @@ impl WindowState {
         // 与 `text_number` 同逻辑，只是初始值可能是 None。number_field 对 None 默认给 "Mixed"
         // 占位，但 lizard 的 `LineHeight::label()` / `LetterSpacing::label()` 分别是 "Auto" / "0%"，
         // 覆盖占位符以对齐；真正的写回值仍由 on_commit 决定。
-        let field = crate::widgets::number_field(cx, 120.0, value, "", 1.0, Slot::None);
+        let field = crate::widgets::number_field(cx, 100.0, value, "", 1.0, Slot::None);
         if value.is_none() {
             let hint = if key == "line_height" { tr("Auto") } else { tr("0") };
             field.update(cx, |tf, _| tf.set_placeholder(hint));
@@ -7101,6 +7154,9 @@ impl WindowState {
                 spacing_field,
                 style_id,
                 text,
+                bound,
+                number_variables,
+                string_variables,
                 family_anchor,
                 style_anchor,
             } => {
@@ -7164,16 +7220,89 @@ impl WindowState {
                     }
                     trigger.into_any_element()
                 };
-                let family_select = make_select("style-family", family, 248.0, "font_family", families, family_anchor);
-                let style_select = make_select("style-weight", font_style, 120.0, "font_style", font_styles, style_anchor);
-                // 数字框必须在 120 宽的 flex_none 容器里：直接作为 flex_row 子项会被交叉轴/剩余
-                // 空间拉宽，第二行「字号」会一路撑到卡片右边（lizard 是固定 ControlWidth::Fixed(120)）。
+                let family_select = make_select("style-family", family, 228.0, "font_family", families, family_anchor);
+                let style_select = make_select("style-weight", font_style, 100.0, "font_style", font_styles, style_anchor);
+                // 数字框必须在 100 宽的 flex_none 容器里（与字段 wrapper 的 20pt 变量按钮合计 120，
+                // 和 lizard 的固定 120 列一致）；直接作为 flex_row 子项会被剩余空间拉宽。
                 let fixed = |w: f32, el: AnyElement| div().w(pt(w)).h(pt(24.0)).flex_none().child(el).into_any_element();
+                // 样式字段的绑定：未绑定时字段右侧是变量按钮，绑定时整格换 chip；菜单推
+                // `style.bind {style, field, variable}`。字重与样式共用一格，同时列字符串和数字变量。
+                let style_targets = |field: &'static str, vars: &[String]| -> Vec<(String, String, String)> {
+                    vars.iter().map(|v| (v.clone(), field.to_string(), v.clone())).collect()
+                };
+                let family_targets = style_targets("fontFamily", string_variables);
+                let family_select = style_bind_control(
+                    248.0,
+                    family_select,
+                    "fontFamily",
+                    bound.iter().find(|(f, _)| f.as_str() == "fontFamily").map(|(_, n)| n.clone()),
+                    family_targets,
+                    style_id.clone(),
+                    self.cmds.clone(),
+                    self.overlays.clone(),
+                    self.overlay_dismiss.clone(),
+                    self.viewport,
+                );
+                let mut weight_targets = style_targets("fontStyle", string_variables);
+                weight_targets.extend(style_targets("fontWeight", number_variables));
+                let weight_field = if bound.iter().any(|(f, _)| f.as_str() == "fontWeight") { "fontWeight" } else { "fontStyle" };
+                let style_select = style_bind_control(
+                    120.0,
+                    style_select,
+                    weight_field,
+                    bound
+                        .iter()
+                        .find(|(f, _)| f.as_str() == "fontWeight")
+                        .or_else(|| bound.iter().find(|(f, _)| f.as_str() == "fontStyle"))
+                        .map(|(_, n)| n.clone()),
+                    weight_targets,
+                    style_id.clone(),
+                    self.cmds.clone(),
+                    self.overlays.clone(),
+                    self.overlay_dismiss.clone(),
+                    self.viewport,
+                );
+                let size_field = style_bind_control(
+                    120.0,
+                    size_field.clone().into_any_element(),
+                    "fontSize",
+                    bound.iter().find(|(f, _)| f.as_str() == "fontSize").map(|(_, n)| n.clone()),
+                    style_targets("fontSize", number_variables),
+                    style_id.clone(),
+                    self.cmds.clone(),
+                    self.overlays.clone(),
+                    self.overlay_dismiss.clone(),
+                    self.viewport,
+                );
+                let line_field = style_bind_control(
+                    120.0,
+                    line_field.clone().into_any_element(),
+                    "lineHeight",
+                    bound.iter().find(|(f, _)| f.as_str() == "lineHeight").map(|(_, n)| n.clone()),
+                    style_targets("lineHeight", number_variables),
+                    style_id.clone(),
+                    self.cmds.clone(),
+                    self.overlays.clone(),
+                    self.overlay_dismiss.clone(),
+                    self.viewport,
+                );
+                let spacing_field = style_bind_control(
+                    120.0,
+                    spacing_field.clone().into_any_element(),
+                    "letterSpacing",
+                    bound.iter().find(|(f, _)| f.as_str() == "letterSpacing").map(|(_, n)| n.clone()),
+                    style_targets("letterSpacing", number_variables),
+                    style_id.clone(),
+                    self.cmds.clone(),
+                    self.overlays.clone(),
+                    self.overlay_dismiss.clone(),
+                    self.viewport,
+                );
                 let row = |el: AnyElement| {
                     div().w_full().h(pt(24.0)).flex().flex_row().items_center().pl(pt(16.0)).gap(pt(8.0)).child(el).into_any_element()
                 };
                 let mut r2 = div().w_full().h(pt(24.0)).flex().flex_row().items_center().pl(pt(16.0)).gap(pt(8.0)).child(style_select);
-                r2 = r2.child(fixed(120.0, size_field.clone().into_any_element()));
+                r2 = r2.child(fixed(120.0, size_field));
                 let mut r3 = div()
                     .w_full()
                     .h(pt(24.0))
@@ -7182,8 +7311,8 @@ impl WindowState {
                     .items_center()
                     .pl(pt(16.0))
                     .gap(pt(8.0))
-                    .child(fixed(120.0, line_field.clone().into_any_element()))
-                    .child(fixed(120.0, spacing_field.clone().into_any_element()));
+                    .child(fixed(120.0, line_field))
+                    .child(fixed(120.0, spacing_field));
                 // 行尾 Dots：打开 Type settings —— 和「选中文本节点」的同一个面板，只是写入
                 // 目标换成本样式（`style.update`）。它作为**本卡片的子浮层**排在左侧，不占
                 // root 的 `popup` 单槽，所以点开它不会把样式面板本身关掉。
@@ -7718,7 +7847,140 @@ fn effect_with(shared: &Rc<RefCell<Value>>, key: &str, value: Value) -> Value {
 }
 
 /// 一条数值设置项：显示值 = 存储值 × `scale`（密度 / 强度这类 0..1 用 100 显示成百分比），
-/// 效果设置窗可用的变量快照（与右栏 `PanelData` 对齐）：字段绑定名、变量名列表和开窗请求。
+/// 样式字段的绑定命令：`variable = null` 即解绑（与引擎 `style.bind` 的契约一致）。
+fn style_bind_cmd(style_id: &str, field: &str, variable: Value) -> Cmd {
+    Cmd { id: "style.bind", params: Some(json!({ "style": style_id, "field": field, "variable": variable })) }
+}
+
+/// 样式编辑器里的一个可绑定字段：未绑定时是原控件 + 右侧变量按钮；绑定时是同宽 chip，
+/// 点 chip 换变量、右侧 detach 解绑。变量菜单直接推 `style.bind`，与 egui
+/// `widgets/style_picker.rs` 的 `text_binding` 同一语义。
+#[allow(clippy::too_many_arguments)]
+fn style_bind_control(
+    width: f32,
+    control: AnyElement,
+    field: &'static str,
+    bound: Option<String>,
+    targets: Vec<(String, String, String)>,
+    style_id: String,
+    cmds: Cmds,
+    overlays: Rc<RefCell<Vec<AnyElement>>>,
+    dismissers: Rc<RefCell<Vec<Rc<dyn Fn(&mut Window, &mut App)>>>>,
+    viewport: Size<Pixels>,
+) -> AnyElement {
+    let t = tokens();
+    let open = {
+        let style_id = style_id.clone();
+        let cmds = cmds.clone();
+        let overlays = overlays.clone();
+        let dismissers = dismissers.clone();
+        let targets = targets.clone();
+        let current = bound.clone();
+        Rc::new(move |at: Point<Pixels>| {
+            let rows: Vec<MenuRow> = targets
+                .iter()
+                .map(|(label, ..)| MenuRow::row(label.clone()).checked(Some(current.as_deref() == Some(label.as_str()))))
+                .collect();
+            let dismiss: Rc<dyn Fn(&mut Window, &mut App)> = {
+                let overlays = overlays.clone();
+                let dismissers = dismissers.clone();
+                Rc::new(move |_, _| {
+                    overlays.borrow_mut().clear();
+                    dismissers.borrow_mut().clear();
+                })
+            };
+            let pick = {
+                let style_id = style_id.clone();
+                let cmds = cmds.clone();
+                let targets = targets.clone();
+                let dismiss = dismiss.clone();
+                Rc::new(move |picked: &str, window: &mut Window, cx: &mut App| {
+                    if let Some((_, field, variable)) = targets.iter().find(|(label, ..)| label == picked) {
+                        cmds.push(style_bind_cmd(&style_id, field, json!(variable)));
+                    }
+                    dismiss(window, cx);
+                })
+            };
+            let el = menu_popup_in(
+                Bounds { origin: at, size: size(px(1.0), px(0.0)) },
+                Some(220.0),
+                rows,
+                pick,
+                dismiss.clone(),
+                f32::from(viewport.width),
+                f32::from(viewport.height),
+            );
+            overlays.borrow_mut().push(el);
+            dismissers.borrow_mut().push(dismiss);
+        })
+    };
+    let Some(name) = bound else {
+        let button_w = 20.0;
+        let open = open.clone();
+        return div()
+            .w(pt(width))
+            .h(pt(24.0))
+            .flex()
+            .items_center()
+            .child(div().w(pt(width - button_w)).h_full().flex_none().child(control))
+            .child(
+                div()
+                    .w(pt(button_w))
+                    .h_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(pt(4.0))
+                    .hover(|s| s.bg(rgba(t.hover)))
+                    .on_mouse_down(MouseButton::Left, move |e: &MouseDownEvent, _, _| open(e.position))
+                    .child(crate::widgets::icon::paint(Icon::Variable, rgba(t.text_secondary), 14.0)),
+            )
+            .into_any_element();
+    };
+    let short = name.rsplit('/').next().unwrap_or(name.as_str()).to_string();
+    let detach_cmds = cmds.clone();
+    let detach_style = style_id.clone();
+    let chip_open = open.clone();
+    div()
+        .w(pt(width))
+        .h(pt(24.0))
+        .flex()
+        .items_center()
+        .rounded(pt(4.0))
+        .bg(rgba(t.hover))
+        .border_1()
+        .border_color(rgba(t.border))
+        .pl(pt(6.0))
+        .pr(pt(2.0))
+        .overflow_hidden()
+        .text_size(pt(11.0))
+        .text_color(rgba(t.text))
+        .child(
+            div()
+                .flex_1()
+                .min_w(pt(0.0))
+                .h_full()
+                .flex()
+                .items_center()
+                .overflow_hidden()
+                .on_mouse_down(MouseButton::Left, move |e: &MouseDownEvent, _, _| chip_open(e.position))
+                .child(short),
+        )
+        .child(
+            div()
+                .w(pt(18.0))
+                .h_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .on_mouse_down(MouseButton::Left, move |_: &MouseDownEvent, _, _| {
+                    detach_cmds.push(style_bind_cmd(&detach_style, field, Value::Null));
+                })
+                .child(crate::widgets::icon::paint(Icon::Detach, rgba(t.text_secondary), 12.0)),
+        )
+        .into_any_element()
+}
+
 #[derive(Clone)]
 struct EffectBindCtx {
     index: usize,
@@ -8540,6 +8802,21 @@ fn contrast_ratio(a: Color32, b: Color32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn style_bind_commands_bind_and_unbind_text_fields() {
+        let bind = style_bind_cmd("S:1", "fontWeight", json!("Weight/Bold"));
+        assert_eq!(bind.id, "style.bind");
+        let params = bind.params.expect("params");
+        assert_eq!(params["style"], "S:1");
+        assert_eq!(params["field"], "fontWeight");
+        assert_eq!(params["variable"], "Weight/Bold");
+
+        let unbind = style_bind_cmd("S:1", "fontWeight", Value::Null);
+        let unbind_params = unbind.params.expect("params");
+        assert_eq!(unbind_params["field"], "fontWeight");
+        assert_eq!(unbind_params["variable"], Value::Null);
+    }
 
     /// 浮层内菜单的定位/关闭不变量（用户 2026-11-19 逐条指定）：
     /// - AA 设置菜单：通用控件 + 宽度自适应(None) + 与按钮**中心对齐**(BottomCenter)；

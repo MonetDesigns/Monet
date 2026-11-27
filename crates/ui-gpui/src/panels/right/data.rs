@@ -1571,10 +1571,13 @@ pub struct GridTracksData {
 pub struct GridCellData {
     pub column: u32,
     pub row: u32,
+    /// 只有单选时 Column/Row 才有确定值；多选时上游不画这一行。
+    pub single: bool,
     /// 有显式 `gridColumn` / `gridRow`（显示 Reset 按钮）；Auto 放置时为 `false`。
     pub anchored: bool,
-    pub column_span: u32,
-    pub row_span: u32,
+    /// 多选时 `None` = 各子层 span 不一致（上游 `common` 后显示 Mixed）。
+    pub column_span: Option<u32>,
+    pub row_span: Option<u32>,
     pub align_h: Option<&'static str>,
     pub align_v: Option<&'static str>,
     /// H / V 对齐多选不一致。
@@ -1834,6 +1837,11 @@ pub struct LocalStyleRow {
     /// 文本样式的完整 `TextStyle` JSON（camelCase，引擎 `text_style_json` 也认 snake_case）；
     /// 编辑时整体写回 `style.update {value: …}`，缺字段会被引擎按默认重置，所以必须整段保留。
     pub text: Option<serde_json::Value>,
+    /// 样式的字段绑定：`字段 -> 变量名`（`Style::bound` 的显示快照；样式编辑器据此画 chip）。
+    pub bound: Vec<(String, String)>,
+    /// 样式编辑器可绑定的数字 / 字符串变量名（按类型过滤后的快照）。
+    pub number_variables: Vec<String>,
+    pub string_variables: Vec<String>,
     /// 效果样式的完整 effects 数组（每个含原始 JSON，供写回 `style.update {value: …}`）。
     pub effects: Option<Vec<EffectRow>>,
     /// 网格样式的完整 grids 数组（每个含原始 JSON，供写回 `style.update {value: …}`）。
@@ -1853,6 +1861,14 @@ pub struct PlaygroundData {
     pub tried: bool,
     /// Components an `instanceSwap` property may point at (name + main id), from the copy.
     pub swapped: Vec<(String, NodeId)>,
+}
+
+impl PlaygroundData {
+    /// egui hides the Playground section for a component with no properties: there is nothing to
+    /// try, so a preview/code block alone would look like a broken Inspect section.
+    pub fn has_controls(&self) -> bool {
+        !self.properties.is_empty()
+    }
 }
 
 /// Build the playground copy and read its properties, code and preview.
@@ -1964,6 +1980,9 @@ pub struct PanelData {
     pub text_ids: Vec<NodeId>,
     /// 选中的文本链接的共享文本样式名；`Some` 时字体行让位给样式 chip（egui `typography.rs`）。
     pub text_style: Option<String>,
+    /// 文本样式链接是否不一致（有的字符链接样式、有的没有，或链接到不同样式）。
+    /// `text_style` 为 `None` 时，这个布尔区分“完全没有样式”和“Mixed”。
+    pub text_style_mixed: bool,
     /// 正在编辑的文本选区（`textedit::selected_range`）；`Some` 时 Fill 节改画范围填充单行。
     pub selected_text_range: Option<(NodeId, usize, usize)>,
     /// 文本范围填充的单行快照（由 `selected_text_range` 与文档内容算出）。
@@ -2205,7 +2224,16 @@ fn paint_pattern_sources(doc: &Document, ids: &[NodeId], page: Option<NodeId>) -
 }
 
 fn paint_rows(doc: &Document, ids: &[NodeId], page: Option<NodeId>, fills: bool) -> Option<Vec<PaintRow>> {
-    let list = common(doc, ids, |n| if fills { n.fills.clone() } else { n.strokes.clone() })?;
+    // 文本的 Fill 是“字符实际显示的 fills”：各 span 共享一份时取那一份，不共享就是 Mixed。
+    // 非文本节点 `character_fills` 直接返回图层 fills，所以这里可以统一走它。
+    let list = common(doc, ids, |n| {
+        if fills {
+            figcraft_engine::cmd::lists::character_fills(n)
+        } else {
+            Some(n.strokes.clone())
+        }
+    })
+    .flatten()?;
     let color_vars: Vec<String> =
         doc.variables.variables.iter().filter(|v| v.kind == figcraft_doc::VariableType::Color).map(|v| v.name.clone()).collect();
     let pattern_sources = paint_pattern_sources(doc, ids, page);
@@ -2392,6 +2420,9 @@ pub fn read_with_dev(
                 properties,
                 paints,
                 text,
+                bound: s.bound.iter().filter_map(|(k, v)| doc.variables.get(v).map(|x| (k.clone(), x.name.clone()))).collect(),
+                number_variables: doc.variables.variables.iter().filter(|v| v.kind == figcraft_doc::VariableType::Number).map(|v| v.name.clone()).collect(),
+                string_variables: doc.variables.variables.iter().filter(|v| v.kind == figcraft_doc::VariableType::String).map(|v| v.name.clone()).collect(),
                 effects,
                 grids,
             }
@@ -2867,10 +2898,19 @@ pub fn read_with_dev(
     d.text = text;
     // ── 文本样式链接（egui `style_picker::text_link`）：有链接时 Typography 只留样式 chip，
     // 字体族 / 字重 / 字号行隐藏（字符样式不一致的文本仍显示字体行）。──
-    d.text_style = common(doc, &text_ids, |n| n.styles.text.clone())
-        .flatten()
-        .and_then(|id| doc.style(&id))
-        .map(|s| s.name.clone());
+    let style_links: Vec<Option<String>> = text_ids
+        .iter()
+        .map(|id| doc.node(*id).and_then(|n| n.styles.text.clone()))
+        .collect();
+    let style_first = style_links.first().cloned().flatten();
+    d.text_style_mixed = style_links
+        .first()
+        .is_some_and(|first| style_links.iter().any(|link| link != first));
+    d.text_style = if d.text_style_mixed {
+        None
+    } else {
+        style_first.and_then(|id| doc.style(&id)).map(|s| s.name.clone())
+    };
     // `characters` 的绑定行只看文本节点；整选区里混进矩形时不能拿矩形的空绑定把行吞掉。
     d.bound.remove("characters");
     let char_bindings: Vec<Option<String>> = text_ids
@@ -2946,12 +2986,22 @@ pub fn read_with_dev(
             };
             let (align_h, align_h_mixed) = pick(&aligns);
             let (align_v, align_v_mixed) = pick(&vs);
+            let column_spans: Vec<u32> =
+                ids.iter().filter_map(|i| doc.node(*i)).map(|n| n.child_layout.column_span()).collect();
+            let row_spans: Vec<u32> =
+                ids.iter().filter_map(|i| doc.node(*i)).map(|n| n.child_layout.row_span()).collect();
+            let pick_span = |values: Vec<u32>| {
+                let first = *values.first()?;
+                values.iter().all(|v| *v == first).then_some(first)
+            };
+            let single = ids.len() == 1;
             Some(GridCellData {
                 column: cell.column as u32 + 1,
                 row: cell.row as u32 + 1,
+                single,
                 anchored: n.child_layout.grid_column.is_some() || n.child_layout.grid_row.is_some(),
-                column_span: n.child_layout.column_span(),
-                row_span: n.child_layout.row_span(),
+                column_span: pick_span(column_spans),
+                row_span: pick_span(row_spans),
                 align_h,
                 align_v,
                 align_h_mixed,

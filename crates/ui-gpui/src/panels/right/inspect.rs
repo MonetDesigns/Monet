@@ -167,7 +167,7 @@ pub(crate) fn panel(f: &RightFields, d: &PanelData, cx: &mut App, n: &mut usize)
     // ── Playground：组件试值（egui `dev_mode.rs::playground_section`），只改副本，不改文档 ──
     // 空属性组件没有可试的东西，EGUI 也不画这一节。
     if let Some(pg) = &d.playground
-        && !pg.properties.is_empty()
+        && pg.has_controls()
     {
         body = body.child(playground_section(f, pg, cx, n));
     }

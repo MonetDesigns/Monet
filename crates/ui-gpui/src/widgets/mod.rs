@@ -28,6 +28,8 @@ pub mod dropdown;
 pub mod icon;
 pub mod icon_button;
 pub mod input;
+/// A labelled text action added for the comment / cursor-chat / library-publish popovers.
+pub mod label_button;
 pub mod layer_icons;
 pub mod menu;
 /// 通用菜单行为文件（安全三角 / 瞄准意图 / 悬停延迟）：主菜单、右键菜单共用同一份状态机。
@@ -52,6 +54,7 @@ pub mod variable;
 pub use checkbox::Checkbox;
 pub use color_field::{ColorField, ColorText, paint_label};
 pub use dropdown::{DropLead, Dropdown, MenuAnchor, dropdown, dropdown_lead, menu_anchor, set_active_menu};
+pub use label_button::LabelButton;
 pub use menu::{MenuRow, color_picker, menu_popup, popup_backdrop};
 pub use menu_aim::{AimAction, MENU_AIM_ENABLED, MENU_AIM_REST, MENU_HOVER_DELAY, MenuAim, toward};
 pub use menu_popup::{Menu, RectAlign, Width, at_point, menu, menu_surface, point_anchor};
