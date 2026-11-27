@@ -1,7 +1,9 @@
-//! P0 regression tests for Developer Mode parity (gate / Status / Compare).
+//! Developer Mode parity tests (gate / Status / Compare / every Inspect Dev section).
 //!
-//! These stay pure: they exercise the decisions the panels make, not a live GPUI window.
-//! A future `TestAppContext` pass can build on them without repeating the policy.
+//! The policy and section-data tests stay pure: they exercise what the panels decide and the
+//! same `read_dev` / `read_playground` the panels consume, without a live GPUI window. Engine
+//! suites (`devfocus_tests`, `devmode_behaviour_tests`, `devcompare_tests`) cover the canvas
+//! half: focus navigation, hit testing, Escape and compare lifecycle.
 
 #[cfg(test)]
 mod tests {
