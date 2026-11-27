@@ -4230,25 +4230,59 @@ impl CanvasView {
             }
         }
 
-        let items: Vec<(panels::Prop, f64)> = self.pending.borrow_mut().drain(..).collect();
+        let items: Vec<(panels::Prop, field_math::Typed)> = self.pending.borrow_mut().drain(..).collect();
 
         if !items.is_empty() {
             // Slider / property-row edits reach the engine through this queue, not `run_command`.
             if self.dev_refuses("node.set", cx) {
                 // Drop the edits; the panel rebuilds from the document next frame.
             } else {
-                let ids = self.app.session.ds().ok().map(|d| d.selection.clone()).unwrap_or_default();
+                // 把文档和选区 clone 出来，避免持有 `ds` 的不可变借用时再可变借 session 执行命令。
+                let snap = self.app.session.ds().ok().map(|d| (d.doc.clone(), d.selection.clone()));
+                let ids = snap.as_ref().map(|(_, ids)| ids.clone()).unwrap_or_default();
 
                 if !ids.is_empty() {
-                    for (prop, v) in items {
-                        let mut props = serde_json::Map::new();
-
-                        props.insert(prop.key().to_string(), serde_json::json!(prop.map(v)));
-
-                        let _ = self.app.session.execute("node.set", &serde_json::json!({"ids": ids, "props": props}));
+                    let mut any = false;
+                    for (prop, typed) in items {
+                        match typed {
+                            // 绝对值：一次发给所有选中的层（原来的行为）。
+                            field_math::Typed::Value(v) => {
+                                let mut props = serde_json::Map::new();
+                                props.insert(prop.key().to_string(), serde_json::json!(prop.map(v)));
+                                if self.app.session.execute("node.set", &serde_json::json!({"ids": ids, "props": props})).is_ok() {
+                                    any = true;
+                                }
+                            }
+                            // 相对编辑：按每层自己的当前值结算，放进一次交互提交（一个撤销步）。
+                            // 上游 `field_of` 的同名行为；Mixed 字段没有旧值可解析，只能走这里。
+                            field_math::Typed::Rel(rel) => {
+                                // 同一批 drain 里前面的 Value/Rel 已经写进文档；相对值必须基于
+                                // 写后的当前值结算，否则 `+10` 连着两次只加一次。
+                                let Some(doc) = self.app.session.ds().ok().map(|d| d.doc.clone()) else { continue };
+                                let mut values: Vec<(figcraft_doc::NodeId, f64)> = ids.iter().filter_map(|id| {
+                                    let n = doc.node(*id)?;
+                                    let cur = prop.shown(&doc, n)?;
+                                    rel.apply(cur).map(|v| (*id, prop.map(v)))
+                                }).collect();
+                                if prop.key() == "absoluteRotation" {
+                                    values.sort_by_key(|(id, _)| doc.ancestors(*id).len());
+                                }
+                                if values.is_empty() || self.app.session.begin_interaction("Edit").is_err() {
+                                    continue;
+                                }
+                                for (id, v) in values {
+                                    let mut props = serde_json::Map::new();
+                                    props.insert(prop.key().to_string(), serde_json::json!(v));
+                                    let _ = self.app.session.execute("node.set", &serde_json::json!({"ids": [id], "props": props}));
+                                    any = true;
+                                }
+                                let _ = self.app.session.commit_interaction();
+                            }
+                        }
                     }
-
-                    cx.notify();
+                    if any {
+                        cx.notify();
+                    }
                 }
             }
         }
@@ -7959,6 +7993,8 @@ impl Render for CanvasView {
                     // 点画布才把焦点给画布（不再每帧强抢，右栏输入框才能保留焦点）。
 
                     this.focus.focus(window);
+                    // 焦点离开图层面板：方向键恢复移动画布选区。
+                    this.layer_tree.focused = false;
 
                     this.mods = e.modifiers;
 
@@ -8446,6 +8482,21 @@ impl Render for CanvasView {
                         cx.stop_propagation();
                         return;
                     }
+                }
+                // Keyboard selection box outranks layer navigation: a box started with
+                // Ctrl+Space must move even while a layer row still owns `focused`.
+                if this.layer_tree.focused
+                    && !this.popup_owns_keyboard()
+                    && !this.left_collapsed
+                    && this.left_tab != 1
+                    && !(this.variables_open && this.variables_full)
+                    && !e.keystroke.modifiers.platform
+                    && !e.keystroke.modifiers.control
+                    && !e.keystroke.modifiers.alt
+                    && this.layer_key_nav(&key, e.keystroke.modifiers, cx)
+                {
+                    cx.stop_propagation();
+                    return;
                 }
 
                 // ── Motion 时间轴快捷键（egui timeline.rs:1093-1158）──
@@ -10836,11 +10887,28 @@ impl Render for CanvasView {
                 // - 对话框打开、正在编辑文字、或处于 a11y 区域导航（上面已处理）时不接管。
                 if this.dialog.is_none()
                     && this.app.session.ds().is_ok_and(|d| d.text_edit.is_none())
-                    && arrow_key(&mut this.app, &canonical_key(&e.keystroke.key), &e.keystroke.modifiers)
                 {
+                    // 焦点在图层面板（焦点在左栏行上）：方向键走图层导航。面板收起或切到
+                    // Assets / 全屏变量时必须停用，否则焦点残留会把方向键吃掉。
+                    if this.layer_tree.focused
+                        && !this.popup_owns_keyboard()
+                        && !this.left_collapsed
+                        && this.left_tab != 1
+                        && !(this.variables_open && this.variables_full)
+                        && !e.keystroke.modifiers.platform
+                        && !e.keystroke.modifiers.control
+                        && !e.keystroke.modifiers.alt
+                        && this.layer_key_nav(&canonical_key(&e.keystroke.key), e.keystroke.modifiers, cx)
+                    {
+                        cx.stop_propagation();
+                        return;
+                    }
+                    if arrow_key(&mut this.app, &canonical_key(&e.keystroke.key), &e.keystroke.modifiers)
+                    {
                     cx.notify();
                     cx.stop_propagation();
                     return;
+                    }
                 }
 
                 // Escape 撤掉内联改名（`TextEdit` 自己不处理 Escape，只靠这条）。

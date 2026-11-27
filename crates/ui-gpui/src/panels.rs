@@ -222,7 +222,8 @@ impl Prop {
     pub(crate) fn range(self) -> (Option<f64>, Option<f64>) {
         match self {
             Prop::Opacity | Prop::ArcInner | Prop::StarRatio => (Some(0.0), Some(100.0)),
-            Prop::Corner | Prop::FontSize | Prop::StrokeWeight => (Some(0.0), None),
+            Prop::FontSize => (Some(1.0), Some(5000.0)),
+            Prop::Corner | Prop::StrokeWeight => (Some(0.0), None),
             Prop::PointCount => (Some(3.0), Some(60.0)),
             _ => (None, None),
         }
@@ -236,13 +237,51 @@ impl Prop {
             Prop::Corner => v.max(0.0),
             Prop::ArcInner | Prop::StarRatio => (v / 100.0).clamp(0.0, 1.0),
             Prop::PointCount => v.round().clamp(3.0, 60.0),
+            Prop::FontSize => v.clamp(1.0, 5000.0),
+            Prop::StrokeWeight => v.max(0.0),
             _ => v,
         }
     }
+    /// 图层上这个字段当前显示的值（与 `selected_values` 的读数规则一致）。相对编辑
+    /// （`+10` / `*2`）要靠它按**每层自己的值**结算，而不是把同一个绝对值发给全部层。
+    pub(crate) fn shown(self, doc: &figcraft_doc::Document, n: &figcraft_doc::Node) -> Option<f64> {
+        // Relative edits (`+10` / `*2`) must start from the stored value, not the rounded display
+        // text: 33.3333 + 10 must be 43.3333, not 43.33 + 10. The number widgets round their own
+        // display, so return the raw value here.
+        Some(match self {
+            Prop::X => doc.frame_relative(n.id).as_coeffs()[4],
+            Prop::Y => doc.frame_relative(n.id).as_coeffs()[5],
+            Prop::W => n.width,
+            Prop::H => n.height,
+            Prop::Rotation => figcraft_geom::rotation_degrees(n.transform),
+            Prop::Opacity => f64::from(n.opacity) * 100.0,
+            // A nonuniform corner has no single display value, but egui starts a relative edit
+            // from the largest radius instead of dropping the node.
+            Prop::Corner => n.corners.radii.iter().copied().fold(0.0_f64, f64::max),
+            Prop::ArcStart => match &n.kind { figcraft_doc::NodeKind::Ellipse { start, .. } => start.to_degrees(), _ => return None },
+            Prop::ArcSweep => match &n.kind { figcraft_doc::NodeKind::Ellipse { sweep, .. } => sweep.to_degrees(), _ => return None },
+            Prop::ArcInner => match &n.kind { figcraft_doc::NodeKind::Ellipse { inner, .. } => inner * 100.0, _ => return None },
+            Prop::PointCount => match &n.kind {
+                figcraft_doc::NodeKind::Polygon { count, .. } | figcraft_doc::NodeKind::Star { count, .. } => *count as f64,
+                _ => return None,
+            },
+            Prop::StarRatio => match &n.kind {
+                figcraft_doc::NodeKind::Star { inner_ratio, .. } => inner_ratio * 100.0,
+                _ => return None,
+            },
+            Prop::FontSize => match &n.kind {
+                figcraft_doc::NodeKind::Text(t) => t.style.font_size,
+                _ => return None,
+            },
+            Prop::StrokeWeight => n.stroke.weight,
+        })
+    }
 }
 
-/// Fields push `(prop, document value)` here on commit; the view drains it and runs `node.set`.
-pub(crate) type Pending = std::rc::Rc<std::cell::RefCell<Vec<(Prop, f64)>>>;
+
+/// 右栏数字框的待提交队列。携带 `field_math::Typed` 而不只是 f64，这样 `+10` / `*2`
+/// 这类相对编辑能传到提交处，按每个图层自己的当前值结算（上游 `Edit::Each`）。
+pub(crate) type Pending = std::rc::Rc<std::cell::RefCell<Vec<(Prop, crate::field_math::Typed)>>>;
 /// A panel command raised against the selection: an id plus an optional extra params object that is
 /// merged into `{"ids": ids}` when executed. egui runs `app.run(cmd, {"ids": ids})`, but several
 /// commands need more — `effect.add {type:"dropShadow"}`, `grid.add`, `layout.add`, … — so the
@@ -895,12 +934,13 @@ fn nf(
     TextField::build(cx, DEFAULT_COL, move |tf, _| {
         tf.set_value(shown);
         tf.set_lead(Slot::Text(SharedString::from(lead)));
+        let percent_unit = suffix == "%";
         tf.set_numeric(suffix, step);
         if let Some(prop) = prop {
             let (lo, hi) = prop.range();
             tf.set_range(lo, hi);
-            tf.set_on_commit(move |text, _window, _cx| {
-                if let Ok(v) = text.trim().parse::<f64>() {
+            tf.set_on_commit_draft(move |text, _window, _cx| {
+                if let Some(v) = crate::field_math::parse(&text, percent_unit) {
                     pending.borrow_mut().push((prop, v));
                     wake();
                 }
@@ -1441,8 +1481,8 @@ impl RightFields {
                 te.set_value("100");
                 // `paint_alpha`: the number is right-aligned in its 44 pt cell.
                 te.set_align(crate::widgets::input::TextAlign::Right);
-                te.set_on_commit(move |text, _window, _cx| {
-                    if let Ok(v) = text.trim().parse::<f64>() {
+                te.set_on_commit_draft(move |text, _window, _cx| {
+                    if let Some(v) = crate::field_math::parse(&text, true) {
                         pending.borrow_mut().push((Prop::Opacity, v));
                         wake();
                     }
@@ -3818,6 +3858,36 @@ mod visibility_tests {
         assert!(visibility::dim_header(Some(0)), "an empty list dims the header");
         assert!(!visibility::dim_header(Some(1)));
         assert!(!visibility::dim_header(Some(7)));
+    }
+
+    #[test]
+    fn relative_corner_and_opacity_start_from_stored_values() {
+        use super::Prop;
+        let mut doc = figcraft_doc::Document::default();
+        let page = doc.pages[0];
+        let rect = doc.create(page, figcraft_doc::NodeKind::Rectangle, "Rect", 0.0, 0.0, 50.0, 50.0).expect("a rectangle");
+        let n = doc.node_mut(rect).expect("rect");
+        n.corners.radii = [4.0, 8.0, 12.0, 20.0];
+        n.opacity = 0.3333;
+        let n = doc.node(rect).expect("rect");
+        assert_eq!(Prop::Corner.shown(&doc, n), Some(20.0), "nonuniform corners start from the largest radius");
+        assert!((Prop::Opacity.shown(&doc, n).expect("opacity") - 33.33).abs() < 1e-6, "relative percent edits use the unrounded opacity");
+    }
+
+    #[test]
+    /// 混合选区相对编辑：`+10` / `*2` / `50%` 要解析成 `Typed::Rel`，并按每层当前值结算，
+    /// 而不是先解析成绝对值（上游 `field_of` 的 `Edit::Each`）。
+    fn field_typed_keeps_relative_edits_for_each_layer() {
+        use crate::field_math::{Rel, Typed, parse};
+        let cur = [10.0, 20.0, 40.0];
+        let add = match parse("+10", false) { Some(Typed::Rel(r)) => r, other => panic!("+10 must be relative: {other:?}") };
+        let got: Vec<f64> = cur.iter().map(|v| add.apply(*v).unwrap()).collect();
+        assert_eq!(got, vec![20.0, 30.0, 50.0], "each layer starts from its own value");
+        let mul = match parse("50%", false) { Some(Typed::Rel(r)) => r, other => panic!("50% must be relative: {other:?}") };
+        assert_eq!(mul, Rel::Mul(0.5));
+        let got: Vec<f64> = cur.iter().map(|v| mul.apply(*v).unwrap()).collect();
+        assert_eq!(got, vec![5.0, 10.0, 20.0]);
+        assert_eq!(parse("12.5", false), Some(Typed::Value(12.5)), "plain numbers stay absolute");
     }
 
     #[test]
