@@ -50,9 +50,7 @@ pub fn build(doc: &Document, page: NodeId, view: &Viewport) -> Scene {
         let c = view_xf.as_coeffs();
         (c[0] * c[0] + c[1] * c[1]).sqrt()
     };
-    for &child in &page_node.children {
-        walk(doc, child, view_xf, scale, Clip::NONE, 1.0, &mut scene, 0);
-    }
+    walk_list(doc, &page_node.children, view_xf, scale, Clip::NONE, 1.0, &mut scene, 0);
     scene
 }
 
@@ -64,7 +62,7 @@ pub fn build_subtree(doc: &Document, id: NodeId, view: &Viewport) -> Scene {
         let c = view_xf.as_coeffs();
         (c[0] * c[0] + c[1] * c[1]).sqrt()
     };
-    walk(doc, id, view_xf, scale, Clip::NONE, 1.0, &mut scene, 0);
+    walk(doc, id, view_xf, scale, Clip::NONE, 1.0, &mut scene, 0, false);
     scene
 }
 
@@ -135,6 +133,9 @@ fn can_layer_group(doc: &Document, n: &Node) -> bool {
     if n.effects.iter().any(|e| e.visible) || !matches!(n.blend, BlendMode::Normal | BlendMode::PassThrough) {
         return false;
     }
+    if doc.subtree(n.id).into_iter().any(|id| doc.node(id).is_some_and(|c| c.is_mask && c.visible)) {
+        return false;
+    }
     !subtree_has_backdrop(doc, n.id)
 }
 
@@ -152,7 +153,7 @@ fn is_container(kind: &NodeKind) -> bool {
     )
 }
 
-fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, opacity: f32, scene: &mut Scene, depth: usize) {
+fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, opacity: f32, scene: &mut Scene, depth: usize, allow_mask: bool) {
     if depth > MAX_DEPTH {
         scene.unsupported("depth", format!("a subtree nests deeper than {MAX_DEPTH}"));
         return;
@@ -162,6 +163,10 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, opa
         return;
     };
     if !n.visible {
+        return;
+    }
+    if n.is_mask && !allow_mask {
+        scene.unsupported("mask", format!("`{}` is a mask", n.name));
         return;
     }
     let container = is_container(&n.kind);
@@ -199,9 +204,7 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, opa
     if !matches!(n.blend, BlendMode::Normal | BlendMode::PassThrough) {
         scene.unsupported("blend", format!("`{}` blends with {:?}", n.name, n.blend));
     }
-    if n.is_mask {
-        scene.unsupported("mask", format!("`{}` is a mask", n.name));
-    }
+    // A mask node is only drawn in the mask layer; its run is assembled by `walk_list`.
     // A layer blur already folds the node alpha into its tint (the CPU blurs the one-fill layer,
     // then composites it), so it does not need the plain-leaf rule.
     if !container && n.opacity < 0.999 && layer_blurs.is_empty() && !can_leaf_opacity(n) {
@@ -263,9 +266,7 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, opa
     if container && n.opacity < 0.999 && !can_group_opacity(doc, n) {
         if can_layer_group(doc, n) {
             let mut group = Scene::new(scene.width, scene.height);
-            for &child in &n.children {
-                walk(doc, child, view_xf, scale, inner, 1.0, &mut group, depth + 1);
-            }
+            walk_list(doc, &n.children, view_xf, scale, inner, 1.0, &mut group, depth + 1);
             if group.is_supported() {
                 scene.push_group(GroupNode { items: group.items, opacity: n.opacity.clamp(0.0, 1.0) as f32 });
                 return;
@@ -348,9 +349,7 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, opa
 
     // Boolean children are operands, not layers: the CPU draws the folded result and skips them.
     if !matches!(n.kind, NodeKind::BooleanOp { .. }) {
-        for &child in &n.children {
-            walk(doc, child, view_xf, scale, inner, node_opacity, scene, depth + 1);
-        }
+        walk_list(doc, &n.children, view_xf, scale, inner, node_opacity, scene, depth + 1);
     }
 
     // Strokes paint over the node's children, like the CPU. Text strokes follow its glyphs and are
@@ -995,6 +994,72 @@ fn paint_of(fill: &DocPaint, scene: &mut Scene, name: &str, index: usize) -> Opt
     }
 }
 
+/// Walk a sibling list, folding `is_mask` nodes and the run that follows them into mask layers.
+/// The CPU draws the mask node itself into a transparent layer, then clips every sibling after it
+/// (until the next mask) through that layer's alpha or luminance.
+fn walk_list(doc: &Document, children: &[NodeId], view_xf: Affine, scale: f64, clip: Clip, opacity: f32, scene: &mut Scene, depth: usize) {
+    let mut i = 0;
+    while i < children.len() {
+        let Some(node) = doc.node(children[i]) else {
+            walk(doc, children[i], view_xf, scale, clip, opacity, scene, depth + 1, false);
+            i += 1;
+            continue;
+        };
+        if !node.is_mask || !node.visible {
+            walk(doc, children[i], view_xf, scale, clip, opacity, scene, depth + 1, false);
+            i += 1;
+            continue;
+        }
+        if node.mask_type == figcraft_doc::MaskType::Vector {
+            // A vector mask paints the subtree outline white; this build draws the mask's own
+            // content instead, which is not the same for strokes and open paths.
+            scene.unsupported("mask-vector", format!("`{}` is a vector mask", node.name));
+            return;
+        }
+        let start = i + 1;
+        let mut end = start;
+        while end < children.len() {
+            // The CPU's `paint_runs_of` ends a run at the next mask even when that mask is hidden:
+            // a hidden mask starts its own (empty) run, and the content after it is not clipped.
+            if doc.node(children[end]).is_some_and(|c| c.is_mask) {
+                break;
+            }
+            end += 1;
+        }
+        if start == end {
+            // Nothing is clipped; the CPU also paints no mask layer.
+            i = end;
+            continue;
+        }
+        // The CPU draws the run in an `Under { clip: mask }` context, so a backdrop inside the
+        // mask or the content reads the frame clipped by it. The two isolated layers here have
+        // no such under-layer, so those runs stay on the CPU.
+        if std::iter::once(children[i]).chain(children[start..end].iter().copied()).any(|id| subtree_has_backdrop(doc, id)) {
+            scene.unsupported("mask-backdrop", format!("`{}` masks a backdrop", node.name));
+            i = end;
+            continue;
+        }
+        let mut mask_scene = Scene::new(scene.width, scene.height);
+        walk(doc, children[i], view_xf, scale, clip, opacity, &mut mask_scene, depth + 1, true);
+        let mut content = Scene::new(scene.width, scene.height);
+        for &child in &children[start..end] {
+            walk(doc, child, view_xf, scale, clip, opacity, &mut content, depth + 1, false);
+        }
+        if mask_scene.is_supported() && content.is_supported() {
+            let kind = match node.mask_type {
+                figcraft_doc::MaskType::Luminance => crate::scene::MaskKind::Luminance,
+                _ => crate::scene::MaskKind::Alpha,
+            };
+            scene.push_mask(crate::scene::MaskNode { content: content.items, mask: mask_scene.items, kind });
+        } else {
+            scene.absorb_unsupported(mask_scene.unsupported_features());
+            scene.absorb_unsupported(content.unsupported_features());
+            scene.unsupported("mask", format!("`{}` masks content this build cannot layer", node.name));
+        }
+        i = end;
+    }
+}
+
 fn map_point(m: Affine, x: f64, y: f64) -> (f64, f64) {
     let p = m * Point::new(x, y);
     (p.x, p.y)
@@ -1008,6 +1073,10 @@ fn meshes(scene: &Scene) -> impl Iterator<Item = &MeshNode> {
             match item {
                 crate::scene::Item::Mesh(mesh) => out.push(mesh),
                 crate::scene::Item::Group(group) => collect(&group.items, out),
+                crate::scene::Item::Mask(mask) => {
+                    collect(&mask.content, out);
+                    collect(&mask.mask, out);
+                }
                 _ => {}
             }
         }
@@ -1524,6 +1593,120 @@ mod tests {
         assert_eq!(scene.texture_count(), 1);
         assert_eq!(scene.shapes().count(), 0, "the texture replaces the fill, so no plain fill is drawn");
         assert!(matches!(scene.items.first(), Some(crate::scene::Item::Texture(_))), "the texture is the only painter");
+    }
+
+    #[test]
+    fn a_mask_and_its_run_become_one_mask_item() {
+        let mut doc = Document::default();
+        let page = doc.pages[0];
+        let mask = doc.create(page, NodeKind::Rectangle, "Mask", 20.0, 20.0, 60.0, 40.0).expect("mask");
+        let content = doc.create(page, NodeKind::Rectangle, "Content", 0.0, 0.0, 150.0, 100.0).expect("content");
+        if let Ok(n) = doc.get_mut(mask) {
+            n.is_mask = true;
+            n.fills = vec![DocPaint::solid(Color::new(1.0, 1.0, 1.0, 1.0))];
+        }
+        if let Ok(n) = doc.get_mut(content) {
+            n.fills = vec![DocPaint::solid(Color::new(0.2, 0.5, 0.8, 1.0))];
+        }
+        let scene = build(&doc, page, &view());
+        assert!(scene.is_supported(), "{:?}", scene.unsupported_features());
+        assert_eq!(scene.mask_count(), 1, "the mask and the run after it are one item");
+        assert_eq!(scene.shapes().count(), 2, "the mask layer and the content layer each keep their shape");
+        let [crate::scene::Item::Mask(mask)] = &scene.items[..] else {
+            panic!("the whole run should be one masked item");
+        };
+        assert_eq!(mask.kind, crate::scene::MaskKind::Alpha);
+        assert_eq!(mask.mask.len(), 1);
+        assert_eq!(mask.content.len(), 1);
+    }
+
+    #[test]
+    fn a_luminance_mask_keeps_its_kind() {
+        let mut doc = Document::default();
+        let page = doc.pages[0];
+        let mask = doc.create(page, NodeKind::Rectangle, "Mask", 20.0, 20.0, 60.0, 40.0).expect("mask");
+        let content = doc.create(page, NodeKind::Rectangle, "Content", 0.0, 0.0, 150.0, 100.0).expect("content");
+        if let Ok(n) = doc.get_mut(mask) {
+            n.is_mask = true;
+            n.mask_type = figcraft_doc::MaskType::Luminance;
+            n.fills = vec![DocPaint::solid(Color::new(0.5, 0.5, 0.5, 1.0))];
+        }
+        if let Ok(n) = doc.get_mut(content) {
+            n.fills = vec![DocPaint::solid(Color::new(0.2, 0.5, 0.8, 1.0))];
+        }
+        let scene = build(&doc, page, &view());
+        assert!(scene.is_supported(), "{:?}", scene.unsupported_features());
+        let crate::scene::Item::Mask(mask) = scene.items.first().expect("one item") else {
+            panic!("the run is a masked item");
+        };
+        assert_eq!(mask.kind, crate::scene::MaskKind::Luminance);
+    }
+
+    #[test]
+    fn a_vector_mask_falls_back() {
+        let mut doc = Document::default();
+        let page = doc.pages[0];
+        let mask = doc.create(page, NodeKind::Rectangle, "Mask", 20.0, 20.0, 60.0, 40.0).expect("mask");
+        let _content = doc.create(page, NodeKind::Rectangle, "Content", 0.0, 0.0, 150.0, 100.0).expect("content");
+        if let Ok(n) = doc.get_mut(mask) {
+            n.is_mask = true;
+            n.mask_type = figcraft_doc::MaskType::Vector;
+            n.fills = vec![DocPaint::solid(Color::new(1.0, 1.0, 1.0, 1.0))];
+        }
+        let scene = build(&doc, page, &view());
+        assert!(!scene.is_supported(), "a vector mask paints its outline, not its content");
+        assert!(scene.unsupported_features().iter().any(|u| u.feature == "mask-vector"));
+    }
+
+    #[test]
+    fn a_mask_run_over_a_backdrop_falls_back() {
+        let mut doc = Document::default();
+        let page = doc.pages[0];
+        let mask = doc.create(page, NodeKind::Rectangle, "Mask", 20.0, 20.0, 60.0, 40.0).expect("mask");
+        let content = doc.create(page, NodeKind::Rectangle, "Frosted", 0.0, 0.0, 150.0, 100.0).expect("content");
+        if let Ok(n) = doc.get_mut(mask) {
+            n.is_mask = true;
+            n.fills = vec![DocPaint::solid(Color::new(1.0, 1.0, 1.0, 1.0))];
+        }
+        if let Ok(n) = doc.get_mut(content) {
+            n.fills = vec![DocPaint::solid(Color::new(1.0, 1.0, 1.0, 0.5))];
+            n.effects = vec![figcraft_doc::Effect { kind: EffectKind::BackgroundBlur(figcraft_doc::Blur::uniform(8.0)), visible: true }];
+        }
+        let scene = build(&doc, page, &view());
+        assert!(!scene.is_supported(), "the CPU clips the backdrop too; the isolated layer has no backdrop");
+        assert!(scene.unsupported_features().iter().any(|u| u.feature == "mask-backdrop"));
+    }
+
+    #[test]
+    fn a_hidden_mask_ends_the_run_without_clipping_what_follows() {
+        let mut doc = Document::default();
+        let page = doc.pages[0];
+        let mask = doc.create(page, NodeKind::Rectangle, "Mask", 20.0, 20.0, 60.0, 40.0).expect("mask");
+        let content = doc.create(page, NodeKind::Rectangle, "Content", 0.0, 0.0, 150.0, 100.0).expect("content");
+        let hidden = doc.create(page, NodeKind::Rectangle, "Hidden", 10.0, 10.0, 30.0, 30.0).expect("hidden");
+        let after = doc.create(page, NodeKind::Rectangle, "After", 120.0, 80.0, 60.0, 30.0).expect("after");
+        if let Ok(n) = doc.get_mut(mask) {
+            n.is_mask = true;
+            n.fills = vec![DocPaint::solid(Color::new(1.0, 1.0, 1.0, 1.0))];
+        }
+        if let Ok(n) = doc.get_mut(content) {
+            n.fills = vec![DocPaint::solid(Color::new(0.2, 0.5, 0.8, 1.0))];
+        }
+        if let Ok(n) = doc.get_mut(hidden) {
+            n.is_mask = true;
+            n.visible = false;
+        }
+        if let Ok(n) = doc.get_mut(after) {
+            n.fills = vec![DocPaint::solid(Color::new(0.9, 0.4, 0.2, 1.0))];
+        }
+        let scene = build(&doc, page, &view());
+        assert!(scene.is_supported(), "{:?}", scene.unsupported_features());
+        assert_eq!(scene.mask_count(), 1, "the hidden mask starts an empty run, not a second layer");
+        assert_eq!(scene.shapes().count(), 3, "mask, clipped content and the unmasked card after");
+        let crate::scene::Item::Mask(mask_run) = scene.items.first().expect("the mask run") else {
+            panic!("the run is a masked item");
+        };
+        assert_eq!(mask_run.content.len(), 1, "the hidden mask ends the clipped run");
     }
 
     #[test]

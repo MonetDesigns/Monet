@@ -7,7 +7,8 @@
 > SDF 图元（圆角矩形/椭圆/多边形/星形）、四类渐变、裁剪、路径填充与描边网格（4× MSAA）、文字字形
 > 网格、离屏剪影 + 六 pass 盒模糊的投影/内阴影/图层模糊、八级加权混合的分级模糊、按段 resolve 的背景
 > 模糊回读、逐 cell 64 位哈希的 Mono/Duo/Multi 颗粒、整像素散射的纹理粗糙边、单叶组透明度、动画导出
-> 切到 `figcraft-gpu`、圆角裁剪、离屏组层透明度、大图分块导出、CPU↔GPU 像素 diff（25 项对照测试），UI 画布已接线并整帧回退。**所有内置效果按产品计划弃用，后续效果转到外置 WGSL，
+> 切到 `figcraft-gpu`、圆角裁剪、离屏组层透明度、Alpha/Luminance 蒙版的离屏双层合成、大图分块导出、
+> CPU↔GPU 像素 diff（27 项对照测试），UI 画布已接线并整帧回退。**所有内置效果按产品计划弃用，后续效果转到外置 WGSL，
 > 本分支不再新增或扩展内置效果**；M5–M7 的非效果核心为设计与接口。
 > 日期：2026-11-27
 
@@ -114,7 +115,8 @@ match figcraft_gpu::render::Renderer::global().render(&scene) { Ok(rgba) => …,
 - 抗锯齿：局部空间 SDF + `fwidth` 屏幕空间覆盖，1px 边缘，任意缩放下线宽恒定。
 - **验收**：矩形/椭圆/多边形/星形 × 纯色/四种渐变 × 旋转 × 裁剪，CPU↔GPU 像素 diff 达标（第 6 节）。
 - 未做（登记为 Unsupported，走 CPU）：图片填充、图案填充、圆角 smoothing、弧形/环形椭圆、
-  文字、效果、非 Normal 混合、组透明度（仅单叶与无裁剪/无效果组的离屏层子集）、蒙版；圆角裁剪只支持单层、无效果、均匀缩放的
+  文字、效果、非 Normal 混合、组透明度（仅单叶与无裁剪/无效果组的离屏层子集）、蒙版（Alpha /
+  Luminance 子集见 M5）；圆角裁剪只支持单层、无效果、均匀缩放的
   SDF/网格子树。
 
 ### M2 路径与描边（本分支已落地）
@@ -271,11 +273,19 @@ match figcraft_gpu::render::Renderer::global().render(&scene) { Ok(rgba) => …,
   合成时子层已 resolve；重叠的多子节点因此先完成组内合成，再乘一次 alpha，与 CPU 的
   `save_layer` 语义一致。组内投影/内阴影/模糊/颗粒/纹理仍走既有 pass；组内 `BackgroundBlur`
   与组自身的裁剪/效果登记 `group-opacity` 整帧回退。
-- 非 Normal 混合模式 / 蒙版：**离屏层扩展**。组内容画进层纹理，再以 `opacity` + `blend` 合成；
-  蒙版用 stencil（Metal 的 `depthStencil` 等价）或 `mask_type` 对应的
-  alpha/outline/luminance 采样。
+- **已落地（过渡子集）**：Alpha / Luminance 蒙版。按 CPU `draw_masked` 的画家语义，把 mask 节点
+  与其后同层兄弟（直到下一个可见 mask）折成一个 `Item::Mask`：mask 节点画进一张全帧透明层，
+  content 画进另一张，再由 `shaders/mask.wgsl` 用 `textureLoad` 逐像素取覆盖——Alpha 取 mask 层
+  alpha；Luminance 复刻 tiny-skia 的 `ceil((0.2126R + 0.7152G + 0.0722B) * 255) / 255`（对预乘
+  RGB 做点积，等价于反预乘后乘 alpha），最后 `content * coverage` 预乘输出。嵌套 mask 按父先登记、
+  子后登记逆序准备层。`Vector` 蒙版（按轮廓而非内容）与 mask/content 含 `BackgroundBlur`（CPU 在
+  `Under{clip:mask}` 上下文里裁过底层，隔离层没有）登记 `mask-vector` / `mask-backdrop` 整帧回退；
+  非 Normal 混合、反向 z 序的 mask run 仍不在本子集。
+- 非 Normal 混合模式：**离屏层扩展**。组内容画进层纹理，再以 `opacity` + `blend` 合成；需为
+  Normal 以外的 15 种模式分别准备 pipeline 或 shader blend，不能只改固定 blend state。
 - **验收**：`blend` 16 种模式逐项 diff；组透明度与 CPU 的「先合成再乘 alpha」一致；蒙版边缘与
-  CPU `mask_bounds_tests` 一致；圆角裁剪的角部与 CPU 裁剪路径一致（已完成 SDF/网格两项对照）；
+  CPU `mask_bounds_tests` 一致（已完成 Alpha 半透明圆角 mask 与 Luminance 50% 灰 mask 两项
+  CPU↔GPU 整帧对照）；圆角裁剪的角部与 CPU 裁剪路径一致（已完成 SDF/网格两项对照）；
   离屏组层已完成重叠双叶与嵌套双组两项对照。
 
 ### M6 导出链路
@@ -296,11 +306,12 @@ match figcraft_gpu::render::Renderer::global().render(&scene) { Ok(rgba) => …,
 ### M7 一致性
 
 - **已落地（过渡）**：组合回归 `the_feature_zoo_matches_the_cpu_at_three_scales` 把渐变底、圆角裁剪、
-  离屏组层、投影、内阴影、描边星形、背景模糊、颗粒、纹理、图层模糊与分级模糊放进同一文档，
-  在 0.5× / 1× / 2× 三档缩放下与 CPU 整帧 diff（`per_channel = 24`、3% 像素）。单项仍用各自
-  更严的口径。
+  离屏组层、投影、内阴影、描边星形、背景模糊、颗粒、纹理、图层模糊、分级模糊与 Alpha 蒙版放进
+  同一文档，在 0.5× / 1× / 2× 三档缩放下与 CPU 整帧 diff（`per_channel = 24`、3% 像素）。单项仍用
+  各自更严的口径。
 - 每个特性一组「金样文档 + 三种缩放 + 两种背景」的 diff 用例（第 6 节），CI 无适配器时跳过并标记
-  `SKIP: no adapter`，不算通过也不算失败。混合模式与蒙版尚未进组合回归。
+  `SKIP: no adapter`，不算通过也不算失败。非 Normal 混合模式尚未进组合回归（Alpha 蒙版已并入
+  feature-zoo）。
 - 新增特性必须同时提交：`doc_scene` 支持判定、WGSL 实现、diff 用例、Unsupported 回退用例。
 - **验收**：`cargo test -p figcraft-gpu --features wgpu` 全绿；`--no-default-features` 下纯逻辑测试全绿。
 

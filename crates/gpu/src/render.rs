@@ -144,8 +144,10 @@ enum Cmd {
     Texture(usize),
     /// Progressive layer blur `n` (index into the frame's progressive plans).
     Progressive(usize),
-    /// Group `n` (index into the frame's group plans), composited from its resolved layer.
+    /// A group layer `n` (index into the frame's group plans).
     Group(usize),
+    /// A mask run `n` (index into the frame's mask plans): content sampled through mask coverage.
+    Mask(usize),
 }
 
 /// One shadow to draw: its silhouette (one instance), the blur radius in device pixels, the tint and
@@ -299,6 +301,14 @@ struct GroupPlan {
     opacity: f32,
 }
 
+/// One mask run: the content layer's commands, the mask layer's commands, and how the mask's
+/// pixels become coverage.
+struct MaskPlan {
+    content: Vec<Cmd>,
+    mask: Vec<Cmd>,
+    kind: crate::scene::MaskKind,
+}
+
 /// Everything the frame needs while walking the item tree: GPU instances, mesh geometry, effect
 /// plans and the command streams for the frame and each nested group.
 #[derive(Default)]
@@ -313,12 +323,15 @@ struct CommandList {
     verts: Vec<GpuMeshVertex>,
     indices: Vec<u32>,
     groups: Vec<GroupPlan>,
+    masks: Vec<MaskPlan>,
 }
 
 impl CommandList {
     fn build(&mut self, items: &[Item]) -> Vec<Cmd> {
         let mut cmds: Vec<Cmd> = Vec::new();
-        let mut batch = 0usize;
+        // A nested build (a group layer or a mask layer) starts after every instance its parent
+        // already queued. Starting at 0 would replay the parent's shapes inside the layer.
+        let mut batch = self.instances.len();
         for item in items {
             match item {
                 Item::Shape(shape) => self.instances.push(GpuInstance::of(shape)),
@@ -500,6 +513,20 @@ impl CommandList {
                         fill: texture.fill,
                     });
                 }
+                Item::Mask(mask) => {
+                    if self.instances.len() > batch {
+                        cmds.push(Cmd::Shapes { first: batch as u32, count: (self.instances.len() - batch) as u32 });
+                        batch = self.instances.len();
+                    }
+                    let index = self.masks.len();
+                    self.masks.push(MaskPlan { content: Vec::new(), mask: Vec::new(), kind: mask.kind });
+                    let content = self.build(&mask.content);
+                    let mask_cmds = self.build(&mask.mask);
+                    self.masks[index].content = content;
+                    self.masks[index].mask = mask_cmds;
+                    batch = self.instances.len();
+                    cmds.push(Cmd::Mask(index));
+                }
                 Item::Group(group) => {
                     if self.instances.len() > batch {
                         cmds.push(Cmd::Shapes { first: batch as u32, count: (self.instances.len() - batch) as u32 });
@@ -595,6 +622,14 @@ struct GroupResources {
     opacity: wgpu::Buffer,
 }
 
+/// A prepared mask run: the two resolved layers and the composite that multiplies content by
+/// mask coverage.
+struct MaskResources {
+    _content: GroupTarget,
+    _mask: GroupTarget,
+    bind: wgpu::BindGroup,
+}
+
 /// Offscreen GPU renderer. One per process (the canvas and the exporter share it through
 /// [`global`]), reused across frames.
 pub struct Renderer {
@@ -610,6 +645,7 @@ pub struct Renderer {
     texture_pipeline: wgpu::RenderPipeline,
     progressive_pipeline: wgpu::RenderPipeline,
     composite_pipeline: wgpu::RenderPipeline,
+    mask_pipeline: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
     globals: wgpu::Buffer,
     bind_globals: wgpu::BindGroup,
@@ -622,6 +658,7 @@ pub struct Renderer {
     texture_layout: wgpu::BindGroupLayout,
     progressive_layout: wgpu::BindGroupLayout,
     composite_layout: wgpu::BindGroupLayout,
+    mask_layout: wgpu::BindGroupLayout,
     instances: Option<(wgpu::Buffer, wgpu::BindGroup, u64)>,
     mesh_verts: Option<(wgpu::Buffer, u64)>,
     mesh_indices: Option<(wgpu::Buffer, u64)>,
@@ -711,6 +748,10 @@ impl Renderer {
         let composite_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("figcraft-gpu-composite"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/composite.wgsl").into()),
+        });
+        let mask_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("figcraft-gpu-mask"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/mask.wgsl").into()),
         });
 
         let globals_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -1004,6 +1045,42 @@ impl Renderer {
             bind_group_layouts: &[Some(&globals_layout), Some(&composite_layout)],
             immediate_size: 0,
         });
+        let mask_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("mask"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+                    count: None,
+                },
+            ],
+        });
+        let mask_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("mask"),
+            bind_group_layouts: &[Some(&globals_layout), Some(&mask_layout)],
+            immediate_size: 0,
+        });
         let single_state = |b: Option<wgpu::BlendState>| wgpu::ColorTargetState {
             format: wgpu::TextureFormat::Rgba8Unorm,
             blend: b,
@@ -1179,6 +1256,27 @@ impl Renderer {
             multiview_mask: None,
             cache: None,
         });
+        let mask_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("mask"),
+            layout: Some(&mask_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &mask_shader,
+                entry_point: Some("vs"),
+                buffers: &[],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &mask_shader,
+                entry_point: Some("fs"),
+                targets: &[Some(single_state(blend()))],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, ..Default::default() },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState { count: SAMPLES, mask: !0, alpha_to_coverage_enabled: false },
+            multiview_mask: None,
+            cache: None,
+        });
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("shadow"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -1215,6 +1313,7 @@ impl Renderer {
             texture_pipeline,
             progressive_pipeline,
             composite_pipeline,
+            mask_pipeline,
             sampler,
             globals,
             bind_globals,
@@ -1227,6 +1326,7 @@ impl Renderer {
             texture_layout,
             progressive_layout,
             composite_layout,
+            mask_layout,
             instances: None,
             mesh_verts: None,
             mesh_indices: None,
@@ -1642,6 +1742,27 @@ impl Renderer {
         Some((buffer, bind))
     }
 
+    /// The bind group that multiplies the content layer by the mask layer's coverage.
+    fn mask_bind(&self, content: &wgpu::TextureView, mask: &wgpu::TextureView, kind: crate::scene::MaskKind) -> Option<wgpu::BindGroup> {
+        let kind = if kind == crate::scene::MaskKind::Luminance { 1.0f32 } else { 0.0 };
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("mask-kind"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&buffer, 0, bytemuck::cast_slice(&[kind, 0.0, 0.0, 0.0]));
+        Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("mask-composite"),
+            layout: &self.mask_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(content) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(mask) },
+                wgpu::BindGroupEntry { binding: 2, resource: buffer.as_entire_binding() },
+            ],
+        }))
+    }
+
     /// Draw one group's commands into its offscreen layer. Backdrops never appear here (the scene
     /// builder rejects them inside a layer), so this is a straightforward painter's-order pass.
     #[allow(clippy::too_many_arguments)]
@@ -1659,6 +1780,7 @@ impl Renderer {
         noise_binds: &[(wgpu::Buffer, wgpu::BindGroup)],
         texture_binds: &[(wgpu::Buffer, wgpu::BindGroup)],
         groups: &[Option<GroupResources>],
+        masks: &[Option<MaskResources>],
         bind: &wgpu::BindGroup,
         shadow_bind: Option<&wgpu::BindGroup>,
     ) {
@@ -1783,6 +1905,17 @@ impl Renderer {
                     bound_shapes = false;
                     bound_mesh = false;
                 }
+                Cmd::Mask(index) => {
+                    let Some(res) = masks.get(index).and_then(Option::as_ref) else {
+                        continue;
+                    };
+                    pass.set_pipeline(&self.mask_pipeline);
+                    pass.set_bind_group(0, &self.bind_globals, &[]);
+                    pass.set_bind_group(1, &res.bind, &[]);
+                    pass.draw(0..3, 0..1);
+                    bound_shapes = false;
+                    bound_mesh = false;
+                }
             }
         }
     }
@@ -1881,6 +2014,7 @@ impl Renderer {
             verts,
             indices,
             groups,
+            masks,
         } = list;
 
         // The instance buffer (at least one record: an empty storage binding is not allowed everywhere).
@@ -2151,8 +2285,10 @@ impl Renderer {
 
         // Group layers are self-contained (no backdrop), so they can all be drawn before the
         // frame pass. Nested groups were appended after their parent, so reverse order prepares
-        // children first.
+        // children first. Groups never contain a mask (the scene builder refuses that), so the
+        // mask resource list stays empty while groups are drawn.
         let mut group_resources: Vec<Option<GroupResources>> = (0..groups.len()).map(|_| None).collect();
+        let mut mask_resources: Vec<Option<MaskResources>> = (0..masks.len()).map(|_| None).collect();
         for index in (0..groups.len()).rev() {
             let plan = &groups[index];
             let Some(target) = self.group_target(w, h) else {
@@ -2174,10 +2310,46 @@ impl Renderer {
                 &noise_binds,
                 &texture_binds,
                 &group_resources,
+                &mask_resources,
                 &bind,
                 shadow_bind.as_ref().map(|(_, bind)| bind),
             );
             group_resources[index] = Some(GroupResources { _target: target, bind: composite_bind, opacity });
+        }
+
+        // Mask runs need two layers. Nested masks were appended after their parent too, so build
+        // them in reverse; groups inside either layer were already prepared above.
+        for index in (0..masks.len()).rev() {
+            let plan = &masks[index];
+            let Some(content_target) = self.group_target(w, h) else {
+                return Err(RenderError::Device("the mask content layer could not be created".into()));
+            };
+            let Some(mask_target) = self.group_target(w, h) else {
+                return Err(RenderError::Device("the mask coverage layer could not be created".into()));
+            };
+            for (target, cmds) in [(&content_target, &plan.content), (&mask_target, &plan.mask)] {
+                self.draw_group(
+                    &mut encoder,
+                    target,
+                    cmds,
+                    &shadow_plans,
+                    &shadow_resources,
+                    &noise_plans,
+                    &progressive_plans,
+                    &progressive_resources,
+                    &texture_plans,
+                    &noise_binds,
+                    &texture_binds,
+                    &group_resources,
+                    &mask_resources,
+                    &bind,
+                    shadow_bind.as_ref().map(|(_, bind)| bind),
+                );
+            }
+            let Some(bind) = self.mask_bind(&content_target.view, &mask_target.view, plan.kind) else {
+                return Err(RenderError::Device("the mask bind group could not be created".into()));
+            };
+            mask_resources[index] = Some(MaskResources { _content: content_target, _mask: mask_target, bind });
         }
 
         {
@@ -2358,6 +2530,17 @@ impl Renderer {
                             continue;
                         };
                         pass.set_pipeline(&self.composite_pipeline);
+                        pass.set_bind_group(0, &self.bind_globals, &[]);
+                        pass.set_bind_group(1, &res.bind, &[]);
+                        pass.draw(0..3, 0..1);
+                        bound_shapes = false;
+                        bound_mesh = false;
+                    }
+                    Cmd::Mask(index) => {
+                        let Some(res) = mask_resources.get(index).and_then(Option::as_ref) else {
+                            continue;
+                        };
+                        pass.set_pipeline(&self.mask_pipeline);
                         pass.set_bind_group(0, &self.bind_globals, &[]);
                         pass.set_bind_group(1, &res.bind, &[]);
                         pass.draw(0..3, 0..1);

@@ -760,6 +760,13 @@ fn the_feature_zoo_matches_the_cpu_at_three_scales() {
         }];
     }
 
+    // A rounded alpha mask, last in z order so its run is only the card right after it.
+    let mask = rect(&mut doc, page, "Mask", 275.0, 150.0, 90.0, 45.0, 12.0, Paint::solid(Color::new(1.0, 1.0, 1.0, 0.7)));
+    if let Ok(n) = doc.get_mut(mask) {
+        n.is_mask = true;
+    }
+    rect(&mut doc, page, "Masked", 260.0, 142.0, 120.0, 62.0, 0.0, Paint::solid(Color::new(0.2, 0.8, 0.9, 0.8)));
+
     let mut renderer = figcraft_gpu::render::Renderer::new().expect("a test adapter");
     for scale in [0.5_f64, 1.0, 2.0] {
         let view = figcraft_render::View { origin: (0.0, 0.0), scale, width: (400.0 * scale) as u32, height: (300.0 * scale) as u32 };
@@ -1076,6 +1083,64 @@ fn duo_and_multi_noise_match_the_cpu() {
     assert!(changed(&gpu, 25) > 100, "the GPU drew too few duo grains");
     assert!(changed(&cpu, 115) > 100, "the CPU drew too few multi grains");
     assert!(changed(&gpu, 115) > 100, "the GPU drew too few multi grains");
+}
+
+#[test]
+fn an_alpha_mask_matches_the_cpu() {
+    let mut doc = Document::default();
+    let page = doc.pages[0];
+    transparent_page(&mut doc, page);
+    let mask = rect(&mut doc, page, "Mask", 30.0, 30.0, 100.0, 100.0, 18.0, Paint::solid(Color::new(1.0, 1.0, 1.0, 0.7)));
+    rect(&mut doc, page, "Content", 0.0, 0.0, 200.0, 200.0, 0.0, Paint::solid(Color::new(0.1, 0.5, 0.9, 0.8)));
+    if let Ok(n) = doc.get_mut(mask) {
+        n.is_mask = true;
+    }
+
+    let cpu = cpu_pixels(&doc, page);
+    let Some(gpu) = gpu_pixels(&doc, page) else {
+        eprintln!("SKIP: no adapter");
+        return;
+    };
+    let report = compare(&cpu, &gpu, Tolerance::EDGE).expect("comparable buffers");
+    assert!(report.passes(Tolerance::EDGE), "{}", report.summary());
+
+    // Inside the mask both sides show the content through 0.7 of the mask layer's alpha.
+    let (cpu_mid, gpu_mid) = (pixel(&cpu, SIZE as usize, 80, 80).expect("in bounds"), pixel(&gpu, SIZE as usize, 80, 80).expect("in bounds"));
+    for k in 0..4 {
+        assert!(cpu_mid[k].abs_diff(gpu_mid[k]) <= 2, "masked interior differs: {cpu_mid:?} vs {gpu_mid:?}");
+    }
+    // Outside the mask the content is clipped away on both sides.
+    let (cpu_out, gpu_out) = (pixel(&cpu, SIZE as usize, 10, 10).expect("in bounds"), pixel(&gpu, SIZE as usize, 10, 10).expect("in bounds"));
+    assert_eq!(cpu_out[3], 0, "the CPU clipped the content outside the mask");
+    assert_eq!(gpu_out[3], 0, "the GPU clipped the content outside the mask");
+}
+
+#[test]
+fn a_luminance_mask_matches_the_cpu() {
+    let mut doc = Document::default();
+    let page = doc.pages[0];
+    transparent_page(&mut doc, page);
+    let mask = rect(&mut doc, page, "Mask", 20.0, 20.0, 160.0, 160.0, 0.0, Paint::solid(Color::new(0.5, 0.5, 0.5, 1.0)));
+    rect(&mut doc, page, "Content", 0.0, 0.0, 200.0, 200.0, 0.0, Paint::solid(Color::new(0.9, 0.2, 0.1, 1.0)));
+    if let Ok(n) = doc.get_mut(mask) {
+        n.is_mask = true;
+        n.mask_type = figcraft_doc::MaskType::Luminance;
+    }
+
+    let cpu = cpu_pixels(&doc, page);
+    let Some(gpu) = gpu_pixels(&doc, page) else {
+        eprintln!("SKIP: no adapter");
+        return;
+    };
+    let report = compare(&cpu, &gpu, Tolerance::EDGE).expect("comparable buffers");
+    assert!(report.passes(Tolerance::EDGE), "{}", report.summary());
+
+    // A 0.5 grey mask keeps half the premultiplied content (tiny-skia ceils its mask byte).
+    let (cpu_mid, gpu_mid) = (pixel(&cpu, SIZE as usize, 100, 100).expect("in bounds"), pixel(&gpu, SIZE as usize, 100, 100).expect("in bounds"));
+    for k in 0..4 {
+        assert!(cpu_mid[k].abs_diff(gpu_mid[k]) <= 2, "luminance-masked interior differs: {cpu_mid:?} vs {gpu_mid:?}");
+    }
+    assert!(cpu_mid[3] < 140 && cpu_mid[3] > 120, "the CPU halved the content alpha: {cpu_mid:?}");
 }
 
 #[test]

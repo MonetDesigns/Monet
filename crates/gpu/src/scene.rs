@@ -341,6 +341,24 @@ pub enum Item {
     Noise(NoiseNode),
     Texture(TextureNode),
     Group(GroupNode),
+    Mask(MaskNode),
+}
+
+/// How a mask layer's pixels turn into coverage.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MaskKind {
+    Alpha,
+    Luminance,
+}
+
+/// A mask run: the siblings after a mask node, clipped through the mask layer's alpha or
+/// luminance. Both sides are already full scenes; the renderer draws each into its own layer and
+/// composites the content through the mask once.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MaskNode {
+    pub content: Vec<Item>,
+    pub mask: Vec<Item>,
+    pub kind: MaskKind,
 }
 
 /// A feature this milestone cannot draw. Its presence sends the **whole frame** to the CPU.
@@ -358,8 +376,13 @@ fn count_items(items: &[Item], pred: &dyn Fn(&Item) -> bool) -> usize {
         if pred(item) {
             count += 1;
         }
-        if let Item::Group(group) = item {
-            count += count_items(&group.items, pred);
+        match item {
+            Item::Group(group) => count += count_items(&group.items, pred),
+            Item::Mask(mask) => {
+                count += count_items(&mask.content, pred);
+                count += count_items(&mask.mask, pred);
+            }
+            _ => {}
         }
     }
     count
@@ -427,6 +450,10 @@ impl Scene {
         self.items.push(Item::Group(group));
     }
 
+    pub fn push_mask(&mut self, mask: MaskNode) {
+        self.items.push(Item::Mask(mask));
+    }
+
     /// Carry the reasons a nested group cannot draw into this frame's list.
     pub fn absorb_unsupported(&mut self, other: &[Unsupported]) {
         self.unsupported.extend_from_slice(other);
@@ -439,6 +466,10 @@ impl Scene {
                 match item {
                     Item::Shape(shape) => out.push(shape),
                     Item::Group(group) => collect(&group.items, out),
+                    Item::Mask(mask) => {
+                        collect(&mask.content, out);
+                        collect(&mask.mask, out);
+                    }
                     _ => {}
                 }
             }
@@ -481,6 +512,10 @@ impl Scene {
 
     pub fn group_count(&self) -> usize {
         count_items(&self.items, &|item| matches!(item, Item::Group(_)))
+    }
+
+    pub fn mask_count(&self) -> usize {
+        count_items(&self.items, &|item| matches!(item, Item::Mask(_)))
     }
 
     /// Whether the frame reads pixels outside its own bounds (blur, shadow, backdrop) or anchors
