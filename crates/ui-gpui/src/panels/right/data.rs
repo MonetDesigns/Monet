@@ -550,6 +550,8 @@ pub struct InspectData {
     pub sections: Vec<InspectSection>,
     /// 生成的代码（按当前语言）。
     pub code: String,
+    /// Motion 动画代码（`inspect.motionCode` 的纯入口）；无动画时为空，不画动画块。
+    pub motion_code: String,
     /// 语言 display 名。
     pub lang_label: &'static str,
     /// 当前语言 id（下拉选中用）。
@@ -668,9 +670,16 @@ pub fn read_inspect(
         .collect();
     let raw = figcraft_engine::codegen::code_for(doc, first, lang);
     let code = if rem && lang.is_web() { figcraft_engine::codegen::px_to_rem(&raw, 16.0) } else { raw };
+    let motion_lang = match lang {
+        CodeLang::SwiftUi => "swiftui",
+        CodeLang::Compose => "compose",
+        _ => "css",
+    };
+    let motion_code = figcraft_engine::codegen::motion_code_for(doc, first, motion_lang).unwrap_or_default();
     InspectData {
         sections,
         code,
+        motion_code,
         lang_label: lang.label(),
         lang: lang.id(),
         langs: CodeLang::ALL.iter().map(|l| (l.label(), l.id())).collect(),

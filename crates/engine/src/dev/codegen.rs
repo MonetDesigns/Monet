@@ -107,6 +107,13 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+/// Motion animation code for a layer and everything below it, in one of `css` / `swiftui` /
+/// `compose`. Empty when nothing animates. `inspect.motionCode` is the command path; this is the
+/// pure entry the UI panel reads (alongside [`code_for`] for the static styles).
+pub fn motion_code_for(doc: &Document, id: NodeId, language: &str) -> Option<String> {
+    anim::for_language(doc, id, language)
+}
+
 /// Languages the Inspect panel offers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum CodeLang {

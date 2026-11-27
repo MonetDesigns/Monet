@@ -207,6 +207,10 @@ pub(crate) fn panel(f: &RightFields, d: &PanelData, cx: &mut App, n: &mut usize)
     code_sec = code_sec.child(field_row_full(block));
     body = body.child(code_sec);
 
+    if !data.motion_code.is_empty() {
+        body = body.child(motion_section(data));
+    }
+
     // ── Plugins：Developer Mode 只列只读插件命令（egui 只读插件区）──
     if !d.plugins.is_empty() {
         body = body.child(plugin_section(f, &d.plugins));
@@ -298,6 +302,29 @@ fn playground_section(f: &RightFields, p: &PlaygroundData, cx: &mut App, n: &mut
     }
 
     sec.child(field_row_full(note(tr("What you try here changes this preview and the code below, not the file"))))
+}
+
+/// Motion 动画代码（`inspect.motionCode`）：只有确实有动画时才画，语言跟 Code 的移动端选择走。
+fn motion_section(data: &InspectData) -> PanelSection {
+    let t = tokens();
+    let code = data.motion_code.clone();
+    let copy = {
+        let code = code.clone();
+        IconButton::new(Icon::Code).size(24.0).on_click(move |_e, _w, cx: &mut App| {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(code.clone()));
+        })
+    };
+    let sec = PanelSection::new(tr("Animation")).header_trail(icon_row(vec![copy]));
+    let block = div()
+        .w_full()
+        .p(pt(10.0))
+        .rounded(pt(6.0))
+        .bg(rgba(t.field))
+        .font_family("JetBrains Mono")
+        .text_size(pt(10.5))
+        .text_color(rgba(t.text))
+        .child(SharedString::from(code));
+    sec.child(field_row_full(block))
 }
 
 fn label_element(label: &str) -> AnyElement {
