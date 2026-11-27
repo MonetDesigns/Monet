@@ -3718,14 +3718,22 @@ pub(crate) fn typography(f: &RightFields, d: &PanelData, cx: &mut App, n: &mut u
         sec = sec.child(text_style_chip(f, d, SharedString::from(name)));
     } else {
         // ── 字体族（整行）── 打开带预览的选择窗（每项用它自己的字体渲染名称）。
-        sec = sec.child(field_row_full(font_picker_button(
+        // Whole layers can bind fontFamily to a string variable; a selected range uses the picker.
+        let family = font_picker_button(
             f,
             t.font_family.clone().unwrap_or_else(|| tr("Mixed").into()),
             240.0,
             t.font_family.clone(),
             d.text_ids.clone(),
             d.selected_text_range,
-        )));
+        )
+        .into_any_element();
+        let family = if d.selected_text_range.is_none() {
+            bindable(f, "fontFamily", d.bound.get("fontFamily").map(String::as_str), &d.text_variables, family)
+        } else {
+            family
+        };
+        sec = sec.child(field_row_full(family));
 
         // ── 字重 / 样式 + 字号 ──
         // 样式列表取决于字体族（egui `family_styles(fam)`）；没选族时 egui 提示 "Pick one font
@@ -3745,13 +3753,37 @@ pub(crate) fn typography(f: &RightFields, d: &PanelData, cx: &mut App, n: &mut u
             None if styles.is_empty() => "Pick a font family".to_string(),
             None => tr("Mixed").to_string(),
         };
+        // egui `font_rows`: the size field keeps its chevron with the common sizes, and each
+        // pick goes through the same range-aware command as typed input.
+        const SIZES: [f64; 15] = [10.0, 11.0, 12.0, 13.0, 14.0, 16.0, 20.0, 24.0, 32.0, 36.0, 40.0, 48.0, 64.0, 96.0, 128.0];
+        let size_rows = SIZES
+            .iter()
+            .map(|v| {
+                let (cmd, params) = text_prop_command(d.selected_text_range, &d.text_ids, "fontSize", json!(v));
+                (format!("{}", v), cmd, params)
+            })
+            .collect();
+        let size_menu = menu_icon(f, Icon::ChevronDown, 20.0, size_rows, false);
+        // Whole layers can bind fontStyle as well; the dropdown becomes a bound chip.
+        let style_dd = pick_dropdown(f, style_label, 160.0, styles);
+        let style_dd = if d.selected_text_range.is_none() {
+            bindable(
+                f,
+                "fontStyle",
+                d.bound.get("fontStyle").map(String::as_str),
+                &d.text_variables,
+                style_dd.into_any_element(),
+            )
+        } else {
+            style_dd.into_any_element()
+        };
         sec = sec.child(field_row(
             vec![
-                pick_dropdown(f, style_label, 160.0, styles).into_any_element(),
+                style_dd,
                 // 字号可绑变量（`typography/fields.rs`：`variable_ui::number_field(..., "fontSize", ...)`）。
                 bindable(f, "fontSize", d.bound.get("fontSize").map(String::as_str), &d.number_variables, f.font_size.clone().into_any_element()),
             ],
-            Vec::<IconButton>::new(),
+            vec![size_menu],
         ));
 
         // ── 行高 + 字距（池化字段，值由 `set_text_values` 每帧灌入）──
@@ -3774,27 +3806,32 @@ pub(crate) fn typography(f: &RightFields, d: &PanelData, cx: &mut App, n: &mut u
 
     // Paragraph spacing stays in the type-settings popover; this section keeps LH / LS only.
 
-    // ── 水平 / 垂直对齐：两个通用 `Segmented`（egui `paragraph_rows` 的两个分段控件）──
+    // ── 水平 / 垂直对齐：左 / 中 / 右 / Justify + 上 / 中 / 下 ──
     //
-    // 图标集里没有 `TypeDialogJustify`，所以这里只放 3 格；`justified`（两端对齐）仍然是合法值，
-    // 这时两格都不抬起 —— 正好用上 Segmented 的「无选中」状态（设计文件 `State=Rest`），
-    // 而且 Justify 在 Type settings 的 Alignment 行里可选。
+    // Justify 用 `typ-dialog-justify`（与 Type settings 里的对齐同一套字形），不再因为冻结的
+    // `Icon` 集里没有 `TypeDialogJustify` 就少画一格。
     let h_cmds = f.cmds.clone();
     let h_ids = d.text_ids.clone();
-    let h = Segmented::icons(&[(Icon::AlignLeft, tr("Align left")), (Icon::AlignHCenter, tr("Align center")), (Icon::AlignRight, tr("Align right"))])
-        .active(match t.align_h {
-            Some("left") => Some(0),
-            Some("center") => Some(1),
-            Some("right") => Some(2),
-            _ => None,
-        })
-        .on_pick(move |i: usize, _w: &mut Window, _cx: &mut App| {
-            const V: [&str; 3] = ["left", "center", "right"];
-            h_cmds.push(Cmd {
-                id: "node.set",
-                params: Some(json!({ "ids": h_ids, "props": { "textAlign": V[i.min(2)] } })),
-            });
+    let h = Segmented::new(vec![
+        crate::widgets::segmented::SegItem::Icon(Icon::AlignLeft),
+        crate::widgets::segmented::SegItem::Icon(Icon::AlignHCenter),
+        crate::widgets::segmented::SegItem::Icon(Icon::AlignRight),
+        crate::widgets::segmented::SegItem::Svg(crate::widgets::typ_icons::TypIcon::Justify),
+    ])
+    .active(match t.align_h {
+        Some("left") => Some(0),
+        Some("center") => Some(1),
+        Some("right") => Some(2),
+        Some("justified") => Some(3),
+        _ => None,
+    })
+    .on_pick(move |i: usize, _w: &mut Window, _cx: &mut App| {
+        const V: [&str; 4] = ["left", "center", "right", "justified"];
+        h_cmds.push(Cmd {
+            id: "node.set",
+            params: Some(json!({ "ids": h_ids, "props": { "textAlign": V[i.min(3)] } })),
         });
+    });
     let v_cmds = f.cmds.clone();
     let v_ids = d.text_ids.clone();
     let v = Segmented::icons(&[(Icon::AlignTop, tr("Align top")), (Icon::AlignVCenter, tr("Align middle")), (Icon::AlignBottom, tr("Align bottom"))])

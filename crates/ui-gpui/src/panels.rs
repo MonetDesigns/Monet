@@ -3082,6 +3082,7 @@ pub(crate) fn auto_layout_section(
                 Some("widthAndHeight") => Some(0usize),
                 Some("height") => Some(1),
                 Some("none") => Some(2),
+                Some("truncate") => Some(3),
                 _ => None,
             };
             let cmds = f.cmds.clone();
@@ -3089,6 +3090,7 @@ pub(crate) fn auto_layout_section(
                 crate::widgets::segmented::SegItem::text(tr("Auto width")),
                 crate::widgets::segmented::SegItem::text(tr("Auto height")),
                 crate::widgets::segmented::SegItem::text(tr("Fixed")),
+                crate::widgets::segmented::SegItem::text(tr("Truncate")),
             ])
             .active(active)
             .on_pick(move |i: usize, _w: &mut Window, _cx: &mut App| {
@@ -3096,6 +3098,7 @@ pub(crate) fn auto_layout_section(
                     0 => "widthAndHeight",
                     1 => "height",
                     2 => "none",
+                    3 => "truncate",
                     _ => return,
                 };
                 cmds.push(Cmd { id: "node.set", params: Some(serde_json::json!({ "props": { "textAutoResize": v } })) });
