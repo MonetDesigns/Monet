@@ -207,6 +207,7 @@ use crate::widgets::menu::{
     MenuRow, menu_popup_fit_aligned, menu_popup_in_aligned, popup_backdrop,
 };
 
+use base64::Engine as _;
 use figcraft_doc::{CrossAlign, Document, MainAlign, Node, NodeId, NodeKind};
 
 use figcraft_engine::textedit;
@@ -825,6 +826,8 @@ pub struct PaneState {
 
     /// 原型演示（None = 未打开）。
     present: Option<present::PresentState>,
+    /// `proto.presentOptions` 的选择，保留给之后打开的演示（egui `app.ui.present_view`）。
+    present_view: present::PresentOptions,
     /// 演示标签栏（eGUI `app.ui.presents`）：每个演示一个 tab，切回设计保留播放器状态。
     present_tabs: Vec<present::PresentTab>,
     /// 当前在屏的演示 tab id。
@@ -1498,6 +1501,7 @@ impl CanvasView {
             font_checks: Vec::new(),
 
             present: None,
+            present_view: present::PresentOptions::default(),
             present_tabs: Vec::new(),
             present_active: None,
             present_next: 1,
@@ -2215,6 +2219,111 @@ impl CanvasView {
                     continue;
                 }
 
+                // `proto.presentOptions`：演示已打开时立即生效，没打开时留给下一次演示
+                // （egui `app.ui.present_view`；之前 GPUI 直接丢掉这条请求）。
+                "present.options" => {
+                    if self.present_view.update(&r.data) {
+                        let options = self.present_view.clone();
+                        if let Some(p) = self.present.as_mut().filter(|p| !p.preview) {
+                            options.apply_to(p);
+                        }
+                        cx.notify();
+                    }
+                    continue;
+                }
+
+                // `text.openLink`：引擎只把通过 `doc_urls::openable` 的 web / mail 链接发过来；
+                // 再核一次 allow-list，绝不把文档里的任意 scheme 交给系统 opener。
+                "open.url" => {
+                    if let Some(url) = r.data.get("url").and_then(serde_json::Value::as_str)
+                        && figcraft_engine::doc_urls::openable(url)
+                    {
+                        cx.open_url(url);
+                    }
+                    continue;
+                }
+
+                // `dialog.pluginSave`：插件交来的文件由用户选路径保存（egui
+                // `plugins_ui::save_file`）。浏览器版走下载；原生版和 SaveAs 一样必须异步调
+                // `rfd`，否则会重入正在借用的 view。
+                "dialog.pluginSave" => {
+                    let name = r.data.get("name").and_then(serde_json::Value::as_str).unwrap_or("file").to_string();
+                    let encoded = r.data.get("data").and_then(serde_json::Value::as_str).unwrap_or_default();
+                    let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(encoded) else {
+                        self.toast(tr("Couldn't save the file"), cx);
+                        continue;
+                    };
+                    let suggested = name.clone();
+                    let this = cx.entity().downgrade();
+                    cx.spawn(async move |this, cx| {
+                        let Some(file) = rfd::AsyncFileDialog::new().set_title(tr("Save file")).set_file_name(&suggested).save_file().await
+                        else {
+                            return;
+                        };
+                        let path = file.path().to_string_lossy().to_string();
+                        let shown = file.path().file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or(suggested);
+                        let wrote = figcraft_engine::file_access::write(&path, &bytes).is_ok();
+                        let _ = this.update(cx, |view, cx| {
+                            if wrote {
+                                view.toast(format!("Saved {shown}"), cx);
+                            } else {
+                                view.toast(tr("Couldn't save the file"), cx);
+                            }
+                        });
+                    })
+                    .detach();
+                    continue;
+                }
+
+                // Cursor chat is a live-collaboration input; the GPUI shell has no live session
+                // surface yet, so say that instead of the generic unknown-dialog message.
+                "dialog.cursorChat" => {
+                    let data = serde_json::json!({
+                        "title": tr("Cursor chat"),
+                        "message": tr("Live cursor chat is not available in this build yet."),
+                    });
+                    self.open_dialog(dialogs::Kind::Message, &data, cx);
+                    continue;
+                }
+
+                // `comment.open`：引擎已把线程所在页设为当前页并标为已读；右栏只有在 Comment
+                // 工具下才显示评论列表，所以这里切到该工具并高亮线程（egui `ui.comments.show`）。
+                "comment.open" => {
+                    if let Some(id) = r.data.get("id").and_then(serde_json::Value::as_u64) {
+                        if self.app.session.tool.tool != figcraft_engine::ToolId::Comment {
+                            let _ = self.app.session.execute("tool.set", &serde_json::json!({ "tool": "comment" }));
+                        }
+                        self.fields.comment_ui().borrow_mut().open = Some(id);
+                        cx.notify();
+                    }
+                    continue;
+                }
+
+                // `annotation.new`：Annotation 工具点中图层后，引擎只发这个请求；UI 负责切到
+                // Inspect 并把新建注记的输入框聚焦（egui `ui.dev.focus_new_note`）。
+                "annotation.new" => {
+                    let id = r.data.get("id").and_then(figcraft_engine::params::id_of);
+                    let shown = id.is_some_and(|id| {
+                        self.app
+                            .session
+                            .ds()
+                            .is_ok_and(|ds| ds.selection.contains(&id) && ds.doc.node(id).is_some_and(|n| !n.is_page()))
+                    });
+                    if let Some(id) = id.filter(|_| shown) {
+                        self.fields.set_right_tab(2);
+                        self.fields.request_new_note_focus(id);
+                        cx.notify();
+                    }
+                    continue;
+                }
+
+                // `comment.new`：Comment 工具在画布上点击后，用通用对话框输入正文；点的页坐标
+                // 留在按钮的固定参数里，提交时 `comment.add` 仍落在原位置。
+                "comment.new" => {
+                    self.open_dialog(dialogs::Kind::Comment, &r.data, cx);
+                    continue;
+                }
+
                 "canvas.renameLabel" => {
                     if let Some(id) = r.data.get("id").and_then(figcraft_engine::params::id_of) {
                         self.begin_inline_rename(vec![id], InlineRenameTarget::Label, cx);
@@ -2316,17 +2425,20 @@ impl CanvasView {
                     match tab {
                         "icons" => {
                             self.left_tab = 2;
+                            self.left_collapsed = false;
                             self.extra = None;
                         }
 
                         "assets" => {
                             self.left_tab = 1;
+                            self.left_collapsed = false;
                             self.extra = None;
                         }
 
                         // `file`（以及未知值）就是图层面板：收起浮层并回到 tab 0。
                         _ => {
                             self.left_tab = 0;
+                            self.left_collapsed = false;
 
                             // R.4: Assets / Icons are left-panel tabs now, not `ExtraKind`
 
@@ -2385,6 +2497,27 @@ impl CanvasView {
                 panels::extra::UiAction::LeftTab(tab) => {
                     self.left_tab = tab;
                     self.extra = None;
+                    // egui `panel.assets` opens the left panel; a collapsed GPUI panel must not
+                    // swallow the request.
+                    self.left_collapsed = false;
+                }
+
+                panels::extra::UiAction::ToggleLeftSidebar => {
+                    self.left_collapsed = !self.left_collapsed;
+                }
+
+                panels::extra::UiAction::Layers => {
+                    if self.variables_open {
+                        self.close_variables(cx);
+                    }
+                    self.left_tab = 0;
+                    self.left_collapsed = false;
+                    self.extra = None;
+                }
+
+                panels::extra::UiAction::Home(section) => {
+                    self.show_home();
+                    *self.extra_state.home_section.borrow_mut() = section.min(2);
                 }
 
                 panels::extra::UiAction::Compare { id, version } => {
@@ -2451,6 +2584,14 @@ impl CanvasView {
                         let snapshot = self.app.session.ds().ok().filter(|ds| ds.uid == uid).map(|ds| ds.doc.clone());
                         if let (Some(p), Some(d)) = (self.present.as_mut(), snapshot) {
                             p.doc = Some(d);
+                        }
+                        // Presenter options are kept for later presentations; a floating preview
+                        // keeps its own defaults (egui keeps them on `ui.present`, not preview).
+                        if !preview {
+                            let options = self.present_view.clone();
+                            if let Some(p) = self.present.as_mut().filter(|p| !p.preview) {
+                                options.apply_to(p);
+                            }
                         }
                     }
                 }
@@ -2694,6 +2835,10 @@ impl CanvasView {
         if let (Some(p), Some(d)) = (self.present.as_mut(), snapshot) {
             p.doc = Some(d);
         }
+        if let Some(p) = self.present.as_mut().filter(|p| !p.preview) {
+            let options = self.present_view.clone();
+            options.apply_to(p);
+        }
     }
 
     /// 标签条统一顺序重排（拖拽落位）：文档、演示、空白页共用一条顺序。
@@ -2776,6 +2921,10 @@ impl CanvasView {
                 let pres = self.present_tabs.last_mut().and_then(|t| t.pres.take());
                 self.present_active = Some(nid);
                 self.present = pres;
+                let options = self.present_view.clone();
+                if let Some(p) = self.present.as_mut().filter(|p| !p.preview) {
+                    options.apply_to(p);
+                }
             } else if hidden_owner {
                 // 设计标签已关：不能把隐藏文档切回来（那会画出没有标签的「幽灵设计页」）。
                 self.show_home();
@@ -8193,6 +8342,10 @@ impl Render for CanvasView {
                 .border_color(crate::widgets::rgba(if right_hot { t.accent } else { t.border }))
                 .w(px(self.right_w + panels::HANDLE_W))
         };
+
+        // `annotation.new` arrived before this frame's panel was built; the new-note field now
+        // exists, so hand it the keyboard (egui `ui.dev.focus_new_note`).
+        self.fields.focus_new_note(window, cx);
 
         // ── 系统级窗口标题区域（kit `TitleBar::new().child(TabBar)`）────────────────────
         // 标签条塞在标题栏里，不是画布里的一条；标题栏是 Root 的第一个 child，

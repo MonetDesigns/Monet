@@ -700,6 +700,12 @@ pub(crate) struct RightFields {
     local_style_focus: gpui::FocusHandle,
     /// A3: the Comments panel's local state (filter / sort / search / open thread).
     comment_ui: crate::comments::CommentState,
+    /// `annotation.new` asks the Inspect tab's new-note field to take the keyboard. The request
+    /// arrives before the panel renders, so the flag is consumed after `right_panel` has built the
+    /// field for this frame.
+    new_note_focus: std::rc::Rc<std::cell::RefCell<Option<figcraft_doc::NodeId>>>,
+    /// The new-note field built for the current frame: `(node, field)`, used by `focus_new_note`.
+    new_note_field: std::rc::Rc<std::cell::RefCell<Option<(figcraft_doc::NodeId, Entity<TextField>)>>>,
     /// Inspect 标签的三个选择：代码语言下标、颜色格式下标、Web 语言是否用 rem。
     inspect_lang: std::rc::Rc<std::cell::RefCell<usize>>,
     inspect_fmt: std::rc::Rc<std::cell::RefCell<usize>>,
@@ -1334,6 +1340,8 @@ impl RightFields {
             local_styles_ui: std::rc::Rc::new(std::cell::RefCell::new(crate::panels::right::sections::LocalStyleUi::default())),
             local_style_focus: cx.focus_handle(),
             comment_ui: std::rc::Rc::new(std::cell::RefCell::new(crate::comments::CommentUi::default())),
+            new_note_focus: std::rc::Rc::new(std::cell::RefCell::new(None)),
+            new_note_field: std::rc::Rc::new(std::cell::RefCell::new(None)),
             inspect_lang: std::rc::Rc::new(std::cell::RefCell::new(0usize)),
             inspect_fmt: std::rc::Rc::new(std::cell::RefCell::new(0usize)),
             inspect_rem: std::rc::Rc::new(std::cell::RefCell::new(false)),
@@ -1521,6 +1529,8 @@ impl RightFields {
         f.local_style_folded = Default::default();
         f.local_styles_ui = Default::default();
         f.comment_ui = Default::default();
+        f.new_note_focus = Default::default();
+        f.new_note_field = Default::default();
         f.inspect_lang = Default::default();
         f.inspect_fmt = Default::default();
         f.inspect_rem = Default::default();
@@ -1564,6 +1574,27 @@ impl RightFields {
     /// A3: the Comments panel's local state.
     pub(crate) fn comment_ui(&self) -> crate::comments::CommentState {
         self.comment_ui.clone()
+    }
+
+    /// `annotation.new`: the new-note row for `id` should take the keyboard once this frame's
+    /// right panel has built it.
+    pub(crate) fn request_new_note_focus(&self, id: figcraft_doc::NodeId) {
+        *self.new_note_focus.borrow_mut() = Some(id);
+    }
+
+    /// Consume that request after the panel has been laid out. Keeping the flag when the field is
+    /// not built (wrong tab / another panel covers annotations) means it fires when the row next
+    /// appears rather than silently dropping the engine's request.
+    pub(crate) fn focus_new_note(&self, window: &mut Window, cx: &mut App) {
+        let Some(want) = *self.new_note_focus.borrow() else { return };
+        let field = self.new_note_field.borrow().clone();
+        let Some((_, field)) = field.filter(|(id, _)| *id == want) else { return };
+        field.update(cx, |edit, _| edit.focus_editor(window));
+        *self.new_note_focus.borrow_mut() = None;
+    }
+
+    pub(crate) fn set_new_note_field(&self, id: figcraft_doc::NodeId, field: Entity<TextField>) {
+        *self.new_note_field.borrow_mut() = Some((id, field));
     }
 
     /// Export 节「Preview」是否展开（`panel_data` 据此决定要不要光栅化预览图）。
@@ -2354,6 +2385,9 @@ pub(crate) fn right_panel(
     motion: bool,
 ) -> Stateful<Div> {
     let t = tokens();
+    // `new_note_field` is a one-frame hand-off: only the row built by this render may receive
+    // `annotation.new`'s focus.
+    *f.new_note_field.borrow_mut() = None;
     // 把本帧的 AA 对比上下文（背景色 + 文字判定）灌进 fields，供 color swatch 打开取色器时用。
     f.set_contrast(data.contrast.clone());
     // 不再手算任何列宽：字段/下拉/颜色行一律 `w_full`，列宽完全由统一网格的 `flex_1` 决定。
