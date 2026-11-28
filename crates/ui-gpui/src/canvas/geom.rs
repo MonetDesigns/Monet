@@ -569,6 +569,26 @@ pub fn bold(size: f32) -> FontId {
     FontId::new(size, FontWeight::Bold)
 }
 
+/// Whether `p` lies inside the convex quad `q` (screen space, vertices in order). Used by the
+/// rotated frame-label slots and the rotated variant "+": they are quads, not `Rect`s.
+pub fn quad_contains(q: [Pos2; 4], p: Pos2) -> bool {
+    let mut sign = 0.0_f32;
+    for i in 0..4 {
+        let a = q[i];
+        let b = q[(i + 1) % 4];
+        let cross = (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+        if cross.abs() <= 1e-6 {
+            continue;
+        }
+        if sign == 0.0 {
+            sign = cross.signum();
+        } else if cross.signum() != sign {
+            return false;
+        }
+    }
+    true
+}
+
 // -------------------------------------------------------------------- Shape
 
 /// egui `Shape` 中画布用到的子集（照搬代码直接可用）。

@@ -69,6 +69,17 @@ fn resizing_a_page_aligned_multi_selection_keeps_the_box_square() {
     let ids = [rect(&mut s, 0.0, 0.0, 30.0), rect(&mut s, 40.0, 120.0, 30.0)];
     s.execute("select.set", &json!({"ids": ids})).unwrap();
     let (frame, w, h) = selection_frame(s.doc().unwrap(), &ids).unwrap();
+    // The layers' centres in the box's axes before the drag: the multi-resize maps them by the
+    // box factors exactly, even though each turned layer scales along its own axes.
+    let centers0: Vec<Point> = {
+        let doc = s.doc().unwrap();
+        ids.iter()
+            .map(|id| {
+                let n = doc.node(*id).unwrap();
+                frame.inverse() * (doc.world_transform(*id) * Point::new(n.width / 2.0, n.height / 2.0))
+            })
+            .collect()
+    };
     // Drag the bottom-right handle to make the box 1.5× wider and 2× taller.
     let (from, to) = (frame * Point::new(w, h), frame * Point::new(w * 1.5, h * 2.0));
     s.pointer(&PointerEvent::at(PointerKind::Down, from.x, from.y, 1.0)).unwrap();
@@ -80,6 +91,19 @@ fn resizing_a_page_aligned_multi_selection_keeps_the_box_square() {
     let c = f2.as_coeffs();
     assert!(near(c[0], 1.0) && near(c[1], 0.0) && near(c[2], 0.0) && near(c[3], 1.0), "{c:?}");
     assert!(w2 > w + 20.0 && h2 > h + 20.0, "{w2} {h2}");
+    // The requested corner is the one that moved: bottom-right reaches the drag point, and the
+    // opposite (top-left) anchor stays where it was before the drag.
+    // The handle box reaches the pointer, but the selection box is rebuilt from the union of the
+    // layers: a turned layer scales along its own axes (`axis_factors`), so the union's corners
+    // are not the pointer. What the model guarantees is that each layer's centre follows the box
+    // factors; the pixel snap rounds the pointer to a whole pixel, so allow half a pixel.
+    for (id, c0) in ids.iter().zip(&centers0) {
+        let n = doc.node(*id).unwrap();
+        let c = frame.inverse() * (doc.world_transform(*id) * Point::new(n.width / 2.0, n.height / 2.0));
+        let want = Point::new(c0.x * 1.5, c0.y * 2.0);
+        assert!((c.x - want.x).abs() < 0.5 && (c.y - want.y).abs() < 0.5, "{c:?} != {want:?}");
+    }
+    assert!(w2 > w * 1.4 && h2 > h * 1.8, "{w2} {h2}");
     // The layers keep their rotation and grow with the box.
     for i in ids {
         let n = doc.node(i).unwrap();
@@ -89,4 +113,23 @@ fn resizing_a_page_aligned_multi_selection_keeps_the_box_square() {
     // One undo step restores both.
     s.execute("edit.undo", &json!({})).unwrap();
     assert!(near(s.doc().unwrap().node(ids[0]).unwrap().width, 100.0));
+}
+
+/// 未旋转的多选：并集框与拖拽框同轴，所以右下角严格落在指针上（旋转多选做不到这一点，
+/// 见上一条测试的注释）。
+#[test]
+fn resizing_an_upright_multi_selection_puts_the_corner_on_the_pointer() {
+    let mut s = Session::new();
+    let ids = [rect(&mut s, 0.0, 0.0, 0.0), rect(&mut s, 40.0, 120.0, 0.0)];
+    s.execute("select.set", &json!({"ids": ids})).unwrap();
+    let (frame, w, h) = selection_frame(s.doc().unwrap(), &ids).unwrap();
+    let (from, to) = (frame * Point::new(w, h), frame * Point::new(w * 1.5, h * 2.0));
+    s.pointer(&PointerEvent::at(PointerKind::Down, from.x, from.y, 1.0)).unwrap();
+    s.pointer(&PointerEvent::at(PointerKind::Move, to.x, to.y, 1.0)).unwrap();
+    s.pointer(&PointerEvent::at(PointerKind::Up, to.x, to.y, 1.0)).unwrap();
+    let (f2, w2, h2) = selection_frame(s.doc().unwrap(), &ids).unwrap();
+    let br = f2 * Point::new(w2, h2);
+    let origin = f2 * Point::ZERO;
+    assert!(near(br.x, to.x) && near(br.y, to.y), "{br:?} != {to:?}");
+    assert!(near(origin.x, (frame * Point::ZERO).x) && near(origin.y, (frame * Point::ZERO).y));
 }

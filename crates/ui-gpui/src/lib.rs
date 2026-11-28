@@ -5905,9 +5905,8 @@ impl CanvasView {
                 && let Some(b) = figcraft_engine::tools::selection_box(&ds.doc, &ds.selection)
             {
                 let screen: Vec<_> = b.iter().map(|p| self.app.to_screen(p.x, p.y)).collect();
-                let mid_x = screen.iter().map(|p| p.x).sum::<f32>() / 4.0;
-                let y1 = screen.iter().map(|p| p.y).fold(f32::MIN, f32::max);
-                if canvas::overlays::add_variant_rect(mid_x, y1).contains(pos) {
+                let q = [screen[0], screen[1], screen[2], screen[3]];
+                if canvas::overlays::add_variant_hit(q, pos) {
                     self.run_command("component.addVariant", serde_json::json!({ "id": ds.selection[0].0 }), cx);
                     return true;
                 }

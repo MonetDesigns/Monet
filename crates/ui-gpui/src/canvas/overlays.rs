@@ -693,6 +693,43 @@ pub fn add_variant_rect(cx: f32, y1: f32) -> Rect {
     super::frame_labels::add_variant_slot(cx, top - super::frame_labels::ADD_VARIANT_TOP)
 }
 
+/// 变体组「+」的锚：轴对齐框取包围盒底边中点下方 36（尺寸框 7+17+4，再加半个按钮 8）；
+/// 旋转框取最低边中点沿外法线同样外移 36，`d`/`n` 跟着这条边转（2026-11-28）。
+fn add_variant_anchor(q: [Pos2; 4]) -> (Pos2, Vec2, Vec2) {
+    if let Some(r) = super::outline::axis_aligned(q) {
+        return (pos2(r.center().x, r.max.y + 36.0), vec2(1.0, 0.0), vec2(0.0, 1.0));
+    }
+    let mut bottom = bottom_edge(q);
+    if bottom.0.x > bottom.1.x {
+        bottom = (bottom.1, bottom.0);
+    }
+    let d = unit_edge(bottom.0, bottom.1);
+    let n = vec2(-d.y, d.x);
+    let mid = pos2((bottom.0.x + bottom.1.x) * 0.5, (bottom.0.y + bottom.1.y) * 0.5);
+    (mid + n * 36.0, d, n)
+}
+
+/// 「+」按钮的四角（绘制与命中共用）：轴对齐框与 [`add_variant_rect`] 逐点一致，
+/// 旋转框与底边一起转。
+pub fn add_variant_quad(q: [Pos2; 4]) -> [Pos2; 4] {
+    let (c, d, n) = add_variant_anchor(q);
+    let h = super::frame_labels::SLOT_SIZE * 0.5;
+    [c - d * h - n * h, c + d * h - n * h, c + d * h + n * h, c - d * h + n * h]
+}
+
+/// 点击是否落在「+」按钮上（含旋转框）。
+pub fn add_variant_hit(q: [Pos2; 4], pos: Pos2) -> bool {
+    quad_contains(add_variant_quad(q), pos)
+}
+
+fn add_variant_button_rotated(painter: &mut Painter, center: Pos2, d: Vec2, n: Vec2) {
+    let side = super::frame_labels::SLOT_SIZE;
+    painter.rounded_quad_filled(center, d, n, vec2(side, side), 3.0, COMPONENT);
+    let st = stroke(Color32::WHITE, 1.0);
+    painter.line_segment([center - d * 5.0, center + d * 5.0], st);
+    painter.line_segment([center - n * 5.0, center + n * 5.0], st);
+}
+
 /// 变换框（屏幕四角 tl、tr、br、bl）：`outline` 时画轮廓，前 `handles` 个角手柄，
 /// 显示尺寸时在下方画尺寸 `label`（返回尺寸 pill 的矩形）。
 /// 单位方向；零长度退化为 x 轴，避免旋转框手柄出现 NaN。
@@ -758,11 +795,16 @@ fn transform_box(
         };
         // 组件变体 / 组件变体集的「+」：紧贴在尺寸框下方（同一居中 x）。画在选中框这条路径上，
         // 因为变体在 ComponentSet 内部、不会走顶层帧标签 frame_labels::draw 那条路径。
-        // 旋转的框不挂「+」：它的命中区仍是轴对齐矩形，转过去会错位。
-        if add_variant && axis_aligned_box {
-            let bottom = q.iter().map(|p| p.y).fold(f32::MIN, f32::max);
-            let cx = q.iter().map(|p| p.x).sum::<f32>() / 4.0;
-            super::frame_labels::add_variant_button(painter, add_variant_rect(cx, bottom));
+        // 旋转框的「+」随底边一起转，命中区用同一组四角（见 add_variant_quad）。
+        if add_variant {
+            if axis_aligned_box {
+                let bottom = q.iter().map(|p| p.y).fold(f32::MIN, f32::max);
+                let cx = q.iter().map(|p| p.x).sum::<f32>() / 4.0;
+                super::frame_labels::add_variant_button(painter, add_variant_rect(cx, bottom));
+            } else {
+                let (center, d, n) = add_variant_anchor(q);
+                add_variant_button_rotated(painter, center, d, n);
+            }
         }
         return Some(pill);
     }
@@ -1107,5 +1149,41 @@ mod add_variant_rect_tests {
     fn add_variant_rect_sits_below_the_size_pill() {
         let r = add_variant_rect(200.0, 403.0);
         assert_eq!((r.min.x, r.min.y, r.width(), r.height()), (192.0, 431.0, 16.0, 16.0));
+    }
+}
+
+#[cfg(test)]
+mod add_variant_quad_tests {
+    use super::{add_variant_hit, add_variant_quad, add_variant_rect};
+    use crate::canvas::geom::{pos2, vec2};
+
+    /// 轴对齐框：四角与 `add_variant_rect` 完全一致，命中区也是同一块。
+    #[test]
+    fn axis_aligned_quad_matches_the_rect() {
+        let q = [pos2(100.0, 100.0), pos2(300.0, 100.0), pos2(300.0, 400.0), pos2(100.0, 400.0)];
+        let quad = add_variant_quad(q);
+        let r = add_variant_rect(200.0, 400.0);
+        assert!((quad[0] - r.min).length() < 1e-3 && (quad[2] - r.max).length() < 1e-3, "{quad:?} vs {r:?}");
+        assert!(add_variant_hit(q, r.center()));
+    }
+
+    /// 30° 旋转框：按钮中点在底边外法线方向 36，仍是一个 16×16 的旋转正方形。
+    #[test]
+    fn rotated_quad_follows_the_bottom_edge() {
+        let a = 30.0_f32.to_radians();
+        let d = vec2(a.cos(), a.sin());
+        let n = vec2(-a.sin(), a.cos());
+        let c = pos2(200.0, 200.0);
+        let h = 50.0;
+        let q = [c - d * h - n * h, c + d * h - n * h, c + d * h + n * h, c - d * h + n * h];
+        let button = add_variant_quad(q);
+        let center = pos2(button.iter().map(|p| p.x).sum::<f32>() / 4.0, button.iter().map(|p| p.y).sum::<f32>() / 4.0);
+        let want = c + n * (h + 36.0);
+        assert!((center - want).length() < 1e-3, "{center:?} != {want:?}");
+        for i in 0..4 {
+            assert!(((button[(i + 1) % 4] - button[i]).length() - 16.0).abs() < 1e-3, "button must stay square");
+        }
+        assert!(add_variant_hit(q, want));
+        assert!(!add_variant_hit(q, c));
     }
 }
