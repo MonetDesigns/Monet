@@ -199,7 +199,7 @@ fn grain_hash(ix: i32, iy: i32, seed: u32) -> vec2<u32> {
 fn fs(in: VsOut) -> @location(0) vec4<f32> {
   let inst = insts[in.idx];
 
-  if (inst.clip.z > 0.0) {
+  if (inst.clip.z >= 0.0) {
     if (in.pos.x < inst.clip.x || in.pos.y < inst.clip.y ||
       in.pos.x >= inst.clip.x + inst.clip.z || in.pos.y >= inst.clip.y + inst.clip.w) {
       discard;

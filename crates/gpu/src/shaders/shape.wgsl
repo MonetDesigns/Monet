@@ -216,8 +216,13 @@ fn paint_color(inst: Inst, local: vec2<f32>) -> vec4<f32> {
 // Coverage of the ancestor clip at `pos`: 1 inside, 0 outside, an antialiased edge on a rounded
 // corner. A plain rectangle keeps the hard test the shader always had.
 fn clip_mask(pos: vec2<f32>, clip: vec4<f32>, radii: vec4<f32>) -> f32 {
-  if (clip.z <= 0.0) {
+  // `Clip::NONE` is a negative-width sentinel; a zero-width clip is a real empty clip and must
+  // suppress every fragment of the subtree.
+  if (clip.z < 0.0) {
     return 1.0;
+  }
+  if (clip.z == 0.0 || clip.w == 0.0) {
+    return 0.0;
   }
   let rounded = radii.x > 0.0 || radii.y > 0.0 || radii.z > 0.0 || radii.w > 0.0;
   if (!rounded) {
@@ -246,9 +251,6 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
 
   // Ancestor clip rectangles/rounded rects (device pixels).
   let clip_a = clip_mask(in.pos.xy, inst.clip, inst.clip_radii);
-  if (clip_a <= 0.0) {
-    discard;
-  }
 
   let half = inst.size.xy * 0.5;
   let p = in.local - half;
@@ -265,10 +267,12 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
     d = sd_regular(p / hn, 1.0, inst.params.x, inst.params.y, kind == 3);
   }
 
-  // One-pixel screen-space coverage, independent of zoom and rotation.
+  // One-pixel screen-space coverage, independent of zoom and rotation. This runs before any
+  // conditional discard: a fragment-position-dependent discard would make Naga reject `fwidth`
+  // (it is not uniform control flow) at pipeline creation.
   let w = max(fwidth(d), 1e-5);
   let coverage = clamp(0.5 - d / w, 0.0, 1.0);
-  if (coverage <= 0.0) {
+  if (clip_a <= 0.0 || coverage <= 0.0) {
     discard;
   }
 

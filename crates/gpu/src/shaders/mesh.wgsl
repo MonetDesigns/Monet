@@ -38,8 +38,11 @@ fn vs(
 
 // Coverage of the ancestor clip at `pos`; see the shape shader for the rounded-corner SDF.
 fn clip_mask(pos: vec2<f32>, clip: vec4<f32>, radii: vec4<f32>) -> f32 {
-  if (clip.z <= 0.0) {
+  if (clip.z < 0.0) {
     return 1.0;
+  }
+  if (clip.z == 0.0 || clip.w == 0.0) {
+    return 0.0;
   }
   let rounded = radii.x > 0.0 || radii.y > 0.0 || radii.z > 0.0 || radii.w > 0.0;
   if (!rounded) {

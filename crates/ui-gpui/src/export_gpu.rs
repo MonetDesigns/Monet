@@ -24,6 +24,13 @@ use figcraft_render::shade::ShadeBoard;
 use crate::shade_gpu;
 use crate::wgsl_runner::WgslRunner;
 
+#[cfg(test)]
+thread_local! {
+    /// How many frames actually reached this GPU callback on this test thread. Structural hooks
+    /// can be installed while the raster still falls back to the CPU; this proves the dispatch.
+    static GPU_FRAME_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Install the export hooks once, from [`crate::app::CanvasApp::new`].
 pub fn install() {
     figcraft_render::set_export_material_hook(Arc::new(render_export));
@@ -44,8 +51,12 @@ fn gpu_frame_supported(doc: &Document, ids: &[NodeId], view: &figcraft_render::V
 /// One animated-export frame on the GPU. `None` means "not expressible", "the user chose the CPU"
 /// or "no adapter", and the caller falls back to the CPU raster.
 fn render_frame_gpu(doc: &Document, ids: &[NodeId], view: &figcraft_render::View) -> Option<Pixmap> {
-    let id = *ids.first()?;
-    let data = figcraft_gpu::render::render_document_if_gpu(doc, id, &Viewport::from_view(view))?;
+    // A multi-selection frame is not one subtree: return `None` so the CPU path renders every id
+    // in the selection. Rendering just the first would silently drop the rest.
+    let [id] = ids else { return None };
+    let data = figcraft_gpu::render::render_document_if_gpu(doc, *id, &Viewport::from_view(view))?;
+    #[cfg(test)]
+    GPU_FRAME_CALLS.with(|calls| calls.set(calls.get() + 1));
     figcraft_render::pixmap_from_premultiplied_rgba(data, view.width, view.height)
 }
 
@@ -116,11 +127,6 @@ mod tests {
     /// the new scene marks unsupported.
     #[test]
     fn an_ellipse_export_frame_goes_through_figcraft_gpu() {
-        if !figcraft_gpu::prefs::effective().is_gpu() {
-            eprintln!("skip: no GPU adapter");
-            return;
-        }
-        install();
         let mut doc = Document::default();
         let page = doc.pages[0];
         let frame = doc.create(page, figcraft_doc::NodeKind::Frame, "Frame", 10.0, 10.0, 100.0, 100.0).expect("a frame");
@@ -142,11 +148,23 @@ mod tests {
             n.fills = vec![figcraft_color::Paint::solid(figcraft_color::Color::new(0.2, 0.4, 0.8, 1.0))];
         }
         let view = figcraft_render::View { origin: (0.0, 0.0), scale: 1.0, width: 200, height: 200 };
+        // Structural work must run without an adapter: the skip only covers the real draw.
         let scene = doc_scene::build_subtree(&doc, frame, &Viewport::from_view(&view));
         assert_eq!(scene.shapes().count(), 1, "the ellipse is one SDF instance");
+        assert!(scene.is_supported(), "the scene accepts an ellipse: {:?}", scene.unsupported_features());
+        if !figcraft_gpu::prefs::effective().is_gpu() {
+            eprintln!("skip: no GPU adapter");
+            return;
+        }
+        install();
+        assert!(figcraft_render::export_frame_gpu_supported(&doc, &[frame], &view), "the export support hook accepts an ellipse");
         assert!(figcraft_gpu::render::render_if_gpu(&scene).is_some(), "the new pipeline renders it");
-        assert!(figcraft_render::export_frame_gpu_supported(&doc, &[frame], &view), "the new scene accepts an ellipse");
+        // Prove the callback ran, not just that the hook said yes: a CPU fallback must not let
+        // this test pass.
+        let before = GPU_FRAME_CALLS.with(std::cell::Cell::get);
         let pix = figcraft_render::render_frame_for_export(&doc, &[frame], &view).expect("a rendered frame");
+        let after = GPU_FRAME_CALLS.with(std::cell::Cell::get);
+        assert_eq!(after, before + 1, "the export frame went through the GPU callback, not the CPU");
         let alpha = |x: usize, y: usize| pix.data()[(y * 200 + x) * 4 + 3];
         assert!(alpha(50, 50) > 0, "inside the ellipse paints");
         assert_eq!(alpha(20, 20), 0, "outside the ellipse stays transparent");

@@ -18,6 +18,7 @@ use figcraft_color::{BlendMode, Color, Gradient, GradientKind, Paint};
 use figcraft_doc::{Document, NodeId, NodeKind, StrokeJoin};
 use figcraft_gpu::Viewport;
 use figcraft_gpu::diff::{Tolerance, compare, compare_interiors, pixel};
+use figcraft_gpu::scene::Scene;
 use figcraft_gpu::doc_scene;
 use figcraft_gpu::render::{ExportControl, RenderError};
 use figcraft_render::{Options, View};
@@ -512,7 +513,10 @@ fn an_inner_shadow_matches_the_cpu_blur() {
     // A point just inside the box near its top edge is darkened by the inner shadow; the middle is not.
     let edge = pixel(&cpu, SIZE as usize, 90, 44).expect("in bounds");
     let middle = pixel(&cpu, SIZE as usize, 90, 75).expect("in bounds");
-    assert!(u32::from(edge[0]) < u32::from(middle[0]) || u32::from(edge[3]) > 0, "the CPU drew no inner shadow: {edge:?} vs {middle:?}");
+    assert!(
+        u32::from(edge[0]) < u32::from(middle[0]) && u32::from(edge[1]) < u32::from(middle[1]),
+        "the CPU drew no inner shadow (an opaque fill without one would also pass an alpha check): {edge:?} vs {middle:?}"
+    );
     let gpu_edge = pixel(&gpu, SIZE as usize, 90, 44).expect("in bounds");
     assert!(gpu_edge[0].abs_diff(edge[0]) <= 3, "the GPU's inner shadow differs at the edge: {gpu_edge:?} vs {edge:?}");
 }
@@ -522,9 +526,9 @@ fn two_drop_shadows_on_a_rotated_card_match_the_cpu() {
     let mut doc = Document::default();
     let page = doc.pages[0];
     transparent_page(&mut doc, page);
-    let card = rect(&mut doc, page, "Card", 60.0, 50.0, 60.0, 40.0, 10.0, Paint::solid(Color::new(0.95, 0.95, 0.95, 1.0)));
+    let card = rect(&mut doc, page, "Card", 100.0, 50.0, 60.0, 40.0, 10.0, Paint::solid(Color::new(0.95, 0.95, 0.95, 1.0)));
     if let Ok(n) = doc.get_mut(card) {
-        n.transform = figcraft_geom::Affine::rotate(0.25);
+        n.transform = figcraft_geom::Affine::translate((80.0, 50.0)) * figcraft_geom::Affine::rotate(0.25);
         n.effects = vec![
             figcraft_doc::Effect {
                 kind: figcraft_doc::EffectKind::DropShadow(figcraft_doc::Shadow {
@@ -698,7 +702,10 @@ fn a_tiled_document_matches_the_untiled_pixels() {
     let scene = doc_scene::build(&doc, page, &viewport());
     assert!(scene.is_supported(), "{:?}", scene.unsupported_features());
     assert!(!scene.has_tile_unsafe_effects());
-    let mut renderer = figcraft_gpu::render::Renderer::new().expect("a test adapter");
+    let Some(mut renderer) = figcraft_gpu::render::Renderer::new() else {
+        eprintln!("SKIP: no adapter");
+        return;
+    };
     let whole = renderer.render(&scene).expect("the untiled frame");
     let tiled = renderer.render_document_tiled(&doc, page, &viewport(), 64).expect("the tiled frame");
     let tol = Tolerance { per_channel: 2, max_bad_ratio: 0.0 };
@@ -728,7 +735,10 @@ fn a_large_blurred_frame_is_not_tiled() {
     let scene = doc_scene::build(&doc, page, &viewport());
     assert!(scene.is_supported(), "{:?}", scene.unsupported_features());
     assert!(scene.has_tile_unsafe_effects(), "a shadow reads outside its tile");
-    let mut renderer = figcraft_gpu::render::Renderer::new().expect("a test adapter");
+    let Some(mut renderer) = figcraft_gpu::render::Renderer::new() else {
+        eprintln!("SKIP: no adapter");
+        return;
+    };
     let err = renderer.render_document_tiled(&doc, page, &viewport(), 64).expect_err("tiling must be refused");
     assert!(matches!(err, figcraft_gpu::render::RenderError::Unsupported(ref list) if list.iter().any(|u| u.feature == "tiled-effect")), "{err:?}");
 }
@@ -866,11 +876,21 @@ fn the_feature_zoo_matches_the_cpu_at_three_scales() {
     }
     rect(&mut doc, page, "Masked", 260.0, 142.0, 120.0, 62.0, 0.0, Paint::solid(Color::new(0.2, 0.8, 0.9, 0.8)));
 
-    let mut renderer = figcraft_gpu::render::Renderer::new().expect("a test adapter");
-    for scale in [0.5_f64, 1.0, 2.0] {
+    let scenes: Vec<(f64, Scene)> = [0.5_f64, 1.0, 2.0]
+        .into_iter()
+        .map(|scale| {
+            let view = figcraft_render::View { origin: (0.0, 0.0), scale, width: (400.0 * scale) as u32, height: (300.0 * scale) as u32 };
+            let scene = doc_scene::build(&doc, page, &Viewport::from_view(&view));
+            assert!(scene.is_supported(), "scale {scale}: {:?}", scene.unsupported_features());
+            (scale, scene)
+        })
+        .collect();
+    let Some(mut renderer) = figcraft_gpu::render::Renderer::new() else {
+        eprintln!("SKIP: no adapter");
+        return;
+    };
+    for (scale, scene) in scenes {
         let view = figcraft_render::View { origin: (0.0, 0.0), scale, width: (400.0 * scale) as u32, height: (300.0 * scale) as u32 };
-        let scene = doc_scene::build(&doc, page, &Viewport::from_view(&view));
-        assert!(scene.is_supported(), "scale {scale}: {:?}", scene.unsupported_features());
         let cpu = figcraft_render::render_view(&doc, page, &view, &Options { background: None, ..Default::default() })
             .expect("the CPU renders the zoo")
             .data()
@@ -992,10 +1012,20 @@ fn a_background_blur_matches_the_cpu_blur() {
     let tol = Tolerance { per_channel: 3, max_bad_ratio: 0.03 };
     let report = compare_interiors(&cpu, &gpu, SIZE as usize, SIZE as usize, tol).expect("comparable");
     assert!(report.passes(tol), "{}", report.summary());
-    // The seam is gone under the card, on both sides.
+    // The seam is gone under the card, on both sides. Compare with the same card without the blur:
+    // a blurless render can also produce a muted pixel, so require the red to fall and the blue
+    // to rise across the seam.
+    let mut plain = doc.clone();
+    if let Ok(n) = plain.get_mut(card) {
+        n.effects.clear();
+    }
+    let baseline = cpu_pixels(&plain, page);
+    let base = pixel(&baseline, SIZE as usize, 105, 100).expect("in bounds");
     let (cpu_seam, gpu_seam) = (pixel(&cpu, SIZE as usize, 105, 100).expect("in bounds"), pixel(&gpu, SIZE as usize, 105, 100).expect("in bounds"));
-    assert!(cpu_seam[0] < 250 && cpu_seam[2] > 20, "the CPU kept the seam sharp: {cpu_seam:?}");
-    assert!(gpu_seam[0] < 250 && gpu_seam[2] > 20, "the GPU kept the seam sharp: {gpu_seam:?}");
+    for (name, px) in [("CPU", cpu_seam), ("GPU", gpu_seam)] {
+        assert!(px[0] > base[0], "{name} did not blend red into the seam: {px:?} vs blurless {base:?}");
+        assert!(px[2] < base[2], "{name} did not pull blue in: {px:?} vs blurless {base:?}");
+    }
 }
 
 #[test]
@@ -1033,14 +1063,21 @@ fn mono_noise_matches_the_cpu() {
     let report = compare_interiors(&cpu, &gpu, SIZE as usize, SIZE as usize, tol).expect("comparable");
     assert!(report.passes(tol), "{}", report.summary());
 
-    // Both sides actually drew grains: count interior pixels that moved away from the solid fill.
-    let fill = [38, 166, 89];
+    // Both sides actually drew grains: count interior pixels that moved away from the same card
+    // rendered without the noise effect. A straight RGB fill is not the baseline — the pixels are
+    // premultiplied and the fill opacity is folded into them.
+    let mut plain = doc.clone();
+    if let Ok(n) = plain.get_mut(card) {
+        n.effects.clear();
+    }
+    let baseline = cpu_pixels(&plain, page);
     let grain_pixels = |bytes: &[u8]| {
         let mut count = 0usize;
         for y in 40..140 {
             for x in 40..160 {
                 let p = pixel(bytes, SIZE as usize, x, y).expect("in bounds");
-                if p[0].abs_diff(fill[0]) > 6 || p[1].abs_diff(fill[1]) > 6 || p[2].abs_diff(fill[2]) > 6 {
+                let b = pixel(&baseline, SIZE as usize, x, y).expect("in bounds");
+                if p.iter().zip(b).any(|(a, b)| (*a).abs_diff(b) > 6) {
                     count += 1;
                 }
             }
@@ -1208,6 +1245,11 @@ fn an_alpha_mask_matches_the_cpu() {
     for k in 0..4 {
         assert!(cpu_mid[k].abs_diff(gpu_mid[k]) <= 2, "masked interior differs: {cpu_mid:?} vs {gpu_mid:?}");
     }
+    // The mask is translucent: content alpha 0.8 times mask alpha 0.7, not a binary clip.
+    let expected = (255.0 * 0.8 * 0.7) as u8;
+    for (name, px) in [("CPU", cpu_mid), ("GPU", gpu_mid)] {
+        assert!(px[3].abs_diff(expected) <= 3, "{name} binarised the mask: {px:?}, expected alpha near {expected}");
+    }
     // Outside the mask the content is clipped away on both sides.
     let (cpu_out, gpu_out) = (pixel(&cpu, SIZE as usize, 10, 10).expect("in bounds"), pixel(&gpu, SIZE as usize, 10, 10).expect("in bounds"));
     assert_eq!(cpu_out[3], 0, "the CPU clipped the content outside the mask");
@@ -1264,9 +1306,7 @@ fn a_tiled_export_reports_progress_and_stops_between_tiles() {
     let control = ExportControl { cancel: Some(&cancel), progress: Some(&mut progress) };
     let err = renderer.render_document_tiled_with(&doc, page, &viewport(), 64, control).expect_err("the second tile must not start after the cancel");
     assert_eq!(err, RenderError::Cancelled);
-    assert_eq!(seen.first(), Some(&(0, 16)), "the bar starts at zero");
-    assert!(seen.iter().all(|&(_, total)| total == 16), "{seen:?}");
-    assert_eq!(seen.last(), Some(&(1, 16)), "exactly the finished tile is reported");
+    assert_eq!(seen, [(0, 16), (1, 16)], "exactly the zero and the finished tile, with no duplicate initial report");
 
     // A token already set stops before the first tile, with only the zero report.
     let cancel = AtomicBool::new(true);

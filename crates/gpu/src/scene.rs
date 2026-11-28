@@ -209,6 +209,9 @@ pub struct ShadowNode {
     pub clip: Clip,
     /// Inside the shape (`InnerShadow`) rather than behind it (`DropShadow`).
     pub inner: bool,
+    /// Mask the shadow's tint by the caster's coverage: true for an inner shadow (keep it), and
+    /// for a drop shadow that does not show behind the caster (mask it out with `1 - cover`).
+    pub cover: bool,
 }
 
 /// A layer blur of an SDF box: the box's coverage blurred by the CPU's box approximation and repainted
@@ -423,11 +426,22 @@ impl Scene {
     /// order.
     pub fn merge_adjacent_plain_rectangles(&mut self) {
         const EPS: f32 = 1e-3;
+        /// A compressed union grid is `cols * rows` cells. A staircase of thin rectangles can
+        /// otherwise allocate hundreds of millions of cells; past this cap the run stays unmerged
+        /// (the seam is preferable to an OOM).
+        const MAX_UNION_CELLS: usize = 1 << 20;
 
         fn plain(shape: &ShapeNode) -> Option<([f32; 4], Rgba)> {
             let ShapeKind::RoundedRect { radii } = shape.shape else { return None };
             let Paint::Solid(color) = &shape.paint else { return None };
-            if radii.iter().any(|r| *r > 0.0) || shape.mat[1].abs() > EPS || shape.mat[2].abs() > EPS {
+            if radii.iter().any(|r| *r > 0.0) || shape.opacity < 0.999 || color.a < 0.999 {
+                return None;
+            }
+            // A shear is dropped when the union is rebuilt as an axis-aligned box. An absolute
+            // epsilon is meaningless for tall boxes: 0.0008 on a 20,000px rectangle moves its
+            // bottom edge by 16px. Bound the actual displacement over the whole box instead.
+            let shear = shape.mat[1].abs() * shape.size[0] + shape.mat[2].abs() * shape.size[1];
+            if shear > 0.5 {
                 return None;
             }
             let (sx, sy) = (shape.mat[0], shape.mat[3]);
@@ -473,22 +487,28 @@ impl Scene {
         }
 
         impl Union {
-            fn new(rects: &[[f32; 4]]) -> Self {
+            fn new(rects: &[[f32; 4]]) -> Option<Self> {
                 let xs = edges(rects.iter().flat_map(|r| [r[0], r[0] + r[2]]).collect());
                 let ys = edges(rects.iter().flat_map(|r| [r[1], r[1] + r[3]]).collect());
-                let cols = xs.len() - 1;
-                let mut covered = vec![false; cols * (ys.len() - 1)];
+                let cols = xs.len().checked_sub(1)?;
+                let rows = ys.len().checked_sub(1)?;
+                // Both axes are compressed edge lists, so this is the exact allocation size; reject
+                // before `vec![false; ...]` can overflow or exhaust memory.
+                if cols.checked_mul(rows)? > MAX_UNION_CELLS {
+                    return None;
+                }
+                let mut covered = vec![false; cols * rows];
                 for r in rects {
                     // Every rect edge is in `xs`/`ys`; the cell range inside it is a contiguous slab.
                     let x0 = xs.partition_point(|v| *v < r[0] - EPS);
                     let x1 = (xs.partition_point(|v| *v <= r[0] + r[2] + EPS) - 1).min(cols);
                     let y0 = ys.partition_point(|v| *v < r[1] - EPS);
-                    let y1 = (ys.partition_point(|v| *v <= r[1] + r[3] + EPS) - 1).min(ys.len() - 1);
+                    let y1 = (ys.partition_point(|v| *v <= r[1] + r[3] + EPS) - 1).min(rows);
                     for row in y0..y1 {
                         covered[row * cols + x0..row * cols + x1].fill(true);
                     }
                 }
-                Self { xs, ys, covered }
+                Some(Self { xs, ys, covered })
             }
 
             fn is_rectangle(&self) -> bool {
@@ -559,7 +579,12 @@ impl Scene {
             if rects.len() == 1 {
                 out.push(old[i].clone());
             } else {
-                let union = Union::new(&rects);
+                let Some(union) = Union::new(&rects) else {
+                    // Too many cells for one union: keep the individual rectangles, seams and all.
+                    out.extend(old[i..j].iter().cloned());
+                    i = j;
+                    continue;
+                };
                 let (x, y) = (union.xs[0], union.ys[0]);
                 let w = union.xs[union.xs.len() - 1] - x;
                 let h = union.ys[union.ys.len() - 1] - y;
@@ -600,6 +625,10 @@ impl Scene {
 
     /// A progressive blurred layer in the box's place.
     pub fn push_progressive_blur(&mut self, blur: ProgressiveBlurNode) {
+        if blur.levels.is_empty() || blur.levels.len() > 8 {
+            self.unsupported("progressive-levels", format!("{} blur levels (the renderer holds 1..=8)", blur.levels.len()));
+            return;
+        }
         self.items.push(Item::ProgressiveBlur(blur));
     }
 
@@ -689,6 +718,27 @@ impl Scene {
 
     pub fn mask_count(&self) -> usize {
         count_items(&self.items, &|item| matches!(item, Item::Mask(_)))
+    }
+
+    /// Whether a mask run is nested inside a group layer. The renderer prepares group layers
+    /// before mask layers, so such a mask would be skipped; callers must reject the frame (or
+    /// prepare masks in dependency order) instead of drawing a silently empty group.
+    pub fn has_mask_in_group(&self) -> bool {
+        fn any(items: &[Item]) -> bool {
+            items.iter().any(|item| match item {
+                Item::Group(group) => any(&group.items),
+                Item::Mask(_) => true,
+                _ => false,
+            })
+        }
+        fn nested(items: &[Item]) -> bool {
+            items.iter().any(|item| match item {
+                Item::Group(group) => any(&group.items) || nested(&group.items),
+                Item::Mask(mask) => nested(&mask.content) || nested(&mask.mask),
+                _ => false,
+            })
+        }
+        nested(&self.items)
     }
 
     /// Whether the frame reads pixels outside its own bounds (blur, shadow, backdrop) or anchors
@@ -832,10 +882,7 @@ mod tests {
         s.push(plain(40.0, 20.0, 20.0, 40.0, green));
         s.merge_adjacent_plain_rectangles();
         assert_eq!(s.items.len(), 1);
-        let [Item::Shape(merged)] = s.items.as_slice() else {
-            assert_eq!(s.items.len(), 1, "one shape");
-            return;
-        };
+        let Item::Shape(merged) = &s.items[0] else { panic!("one shape, got {:?}", s.items[0]) };
         assert_eq!((merged.mat[4], merged.mat[5]), (10.0, 20.0));
         assert_eq!(merged.size, [50.0, 40.0]);
     }
@@ -848,10 +895,7 @@ mod tests {
         s.push(plain(40.0, 20.0, 20.0, 30.0, green));
         s.merge_adjacent_plain_rectangles();
         assert_eq!(s.items.len(), 1);
-        let [Item::Mesh(mesh)] = s.items.as_slice() else {
-            assert_eq!(s.items.len(), 1, "one mesh");
-            return;
-        };
+        let Item::Mesh(mesh) = &s.items[0] else { panic!("one mesh, got {:?}", s.items[0]) };
         assert!(mesh.indices.len() >= 12, "the L is at least two quads");
     }
 
@@ -908,10 +952,60 @@ mod tests {
         s.push(plain(10.0, 60.0, 30.0, 20.0, green));
         s.merge_adjacent_plain_rectangles();
         assert_eq!(s.items.len(), 1);
-        let [Item::Shape(merged)] = s.items.as_slice() else {
-            assert_eq!(s.items.len(), 1, "one shape");
-            return;
-        };
+        let Item::Shape(merged) = &s.items[0] else { panic!("one shape, got {:?}", s.items[0]) };
         assert_eq!(merged.size, [30.0, 60.0]);
+    }
+
+    #[test]
+    fn too_many_progressive_levels_are_rejected_before_the_index_loop() {
+        let mut s = Scene::new(100, 100);
+        s.push_progressive_blur(ProgressiveBlurNode {
+            mat: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            size: [10.0, 10.0],
+            shape: ShapeKind::RoundedRect { radii: [0.0; 4] },
+            s0: 1.0,
+            s1: 2.0,
+            start: [0.0, 0.0],
+            end: [0.0, 1.0],
+            levels: vec![1.0; 9],
+            color: Rgba::new(1.0, 1.0, 1.0, 1.0),
+            clip: Clip::NONE,
+        });
+        assert!(!s.is_supported());
+        assert!(s.unsupported_features().iter().any(|u| u.feature == "progressive-levels"));
+    }
+
+    #[test]
+    fn a_tall_sheared_rectangle_does_not_merge() {
+        let green = Paint::Solid(Rgba::new(0.2, 0.6, 0.4, 1.0));
+        let mut s = Scene::new(100, 20000);
+        let mut a = plain(10.0, 0.0, 30.0, 20000.0, green.clone());
+        // 0.0008 * 20,000 px is a 16px displacement: the union would silently drop it.
+        a.mat[2] = 0.0008;
+        let mut b = plain(40.0, 0.0, 20.0, 20000.0, green);
+        b.mat[2] = 0.0008;
+        s.push(a);
+        s.push(b);
+        s.merge_adjacent_plain_rectangles();
+        assert_eq!(s.items.len(), 2, "a visible shear must not become an axis-aligned union");
+    }
+
+    #[test]
+    fn translucent_paint_does_not_merge() {
+        let translucent = Paint::Solid(Rgba::new(0.2, 0.6, 0.4, 0.5));
+        let mut s = Scene::new(100, 100);
+        s.push(plain(10.0, 20.0, 30.0, 40.0, translucent.clone()));
+        s.push(plain(40.0, 20.0, 20.0, 40.0, translucent));
+        s.merge_adjacent_plain_rectangles();
+        assert_eq!(s.items.len(), 2, "the CPU only merges opaque adjacent fills");
+    }
+
+    #[test]
+    fn a_mask_inside_a_group_is_reported() {
+        let mut mask_scene = Scene::new(20, 20);
+        mask_scene.push_mask(MaskNode { content: Vec::new(), mask: Vec::new(), kind: MaskKind::Alpha });
+        let mut s = Scene::new(20, 20);
+        s.push_group(GroupNode { items: mask_scene.items, opacity: 1.0, blend: BlendMode::Normal });
+        assert!(s.has_mask_in_group(), "the renderer must reject a mask it would prepare too late");
     }
 }

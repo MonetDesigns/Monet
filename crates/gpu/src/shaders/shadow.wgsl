@@ -12,8 +12,10 @@ struct Globals {
 
 struct Tint {
   color: vec4<f32>,
-  // Device-pixel clip [x, y, w, h]; w <= 0 means no clip.
+  // Device-pixel clip [x, y, w, h]; w < 0 means no clip, w == 0 clips everything.
   clip: vec4<f32>,
+  // Unused here (the cover variant uses the inner shader); kept so the two tint buffers agree.
+  mode: vec4<f32>,
 };
 @group(1) @binding(0) var tex: texture_2d<f32>;
 @group(1) @binding(1) var samp: sampler;
@@ -37,7 +39,7 @@ fn vs(@builtin(vertex_index) vi: u32) -> VsOut {
 @fragment
 fn fs(in: VsOut) -> @location(0) vec4<f32> {
   let c = tint.clip;
-  if (c.z > 0.0) {
+  if (c.z >= 0.0) {
     if (in.pos.x < c.x || in.pos.y < c.y || in.pos.x >= c.x + c.z || in.pos.y >= c.y + c.w) {
       discard;
     }

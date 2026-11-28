@@ -111,14 +111,17 @@ fn separable(mode: i32, s: f32, d: f32, sa: f32, da: f32) -> f32 {
       let cs = select(0.0, s / sa, sa > 0.0);
       let cd = select(0.0, d / da, da > 0.0);
       var b = 0.0;
-      if (cd <= 0.5) {
+      if (cs <= 0.5) {
         b = cd - (1.0 - 2.0 * cs) * cd * (1.0 - cd);
       } else {
         var dd = sqrt(cd);
         if (cd <= 0.25) { dd = ((16.0 * cd - 12.0) * cd + 4.0) * cd; }
         b = cd + (2.0 * cs - 1.0) * (dd - cd);
       }
-      return sa * b + d * inv(sa);
+      // Premultiplied source-over contribution: the source's own colour survives where the
+      // destination is transparent, the blend applies where both cover, and the destination
+      // survives where the source does not.
+      return s * inv(da) + b * sa * da + d * inv(sa);
     }
     case 13: { // HardLight
       var b = s * inv(da) + d * inv(sa);
@@ -176,6 +179,12 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
   let d = textureLoad(under, p, 0);
   let sa = s.a;
   let da = d.a;
+  // The MSAA target's uncovered samples must keep their own colour. A transparent layer pixel
+  // has no contribution; writing the resolved under colour to every sample there would flatten
+  // the frame's edge AA outside the group.
+  if (sa <= 0.0) {
+    discard;
+  }
   let mode = i32(params.params.y);
   if (mode == 5) { // PlusLighter clamps the sum, alpha included.
     return clamp(vec4<f32>(min(s.rgb + d.rgb, vec3<f32>(1.0)), min(sa + da, 1.0)), vec4<f32>(0.0), vec4<f32>(1.0));

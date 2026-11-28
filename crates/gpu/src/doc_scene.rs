@@ -35,6 +35,11 @@ use crate::scene::{
 /// The deepest subtree walked; a document that nests deeper is a broken file and a fallback.
 const MAX_DEPTH: usize = 256;
 
+/// The largest blur sigma (device pixels) this GPU pipeline accepts. The box pass loops over a
+/// `2 * radius + 1` window, so an unbounded radius is hundreds of billions of texture reads at 4K;
+/// larger blurs stay on the CPU.
+const MAX_BLUR_SIGMA: f64 = 128.0;
+
 /// Build the frame of `page` as `view` shows it.
 pub fn build(doc: &Document, page: NodeId, view: &Viewport) -> Scene {
     let mut scene = Scene::new(view.width, view.height);
@@ -50,7 +55,8 @@ pub fn build(doc: &Document, page: NodeId, view: &Viewport) -> Scene {
         let c = view_xf.as_coeffs();
         (c[0] * c[0] + c[1] * c[1]).sqrt()
     };
-    walk_list(doc, &page_node.children, view_xf, scale, Clip::NONE, 1.0, &mut scene, 0);
+    let runs = doc.paint_runs(page_node);
+    walk_list(doc, &page_node.children, &runs, view_xf, scale, Clip::NONE, 1.0, &mut scene, 0);
     scene.merge_adjacent_plain_rectangles();
     scene
 }
@@ -218,8 +224,12 @@ fn collect_effects(n: &Node) -> NodeEffects<'_> {
 /// Narrow `clip` by this node's clip, or record why that clip cannot be expressed. A rotated or
 /// rounded-against-another clip is left unapplied and reported, so the frame falls back to the CPU.
 fn resolve_clip(doc: &Document, n: &Node, m: Affine, w: f64, h: f64, clip: Clip, scene: &mut Scene) -> Clip {
-    if !n.clip || !(w > 0.0 && h > 0.0) {
+    if !n.clip {
         return clip;
+    }
+    if !(w > 0.0 && h > 0.0) {
+        // A zero-sized clipping box hides everything below it; it is an empty clip, not "no clip".
+        return Clip([0.0, 0.0, 0.0, 0.0], [0.0; 4]);
     }
     let (b, c) = (m.as_coeffs()[1], m.as_coeffs()[2]);
     if b.abs() > 1e-6 || c.abs() > 1e-6 {
@@ -247,14 +257,41 @@ fn resolve_clip(doc: &Document, n: &Node, m: Affine, w: f64, h: f64, clip: Clip,
         scene.unsupported("rounded-clip-effect", format!("`{}` clips rounded content with a visible effect", n.name));
         return clip;
     }
-    let sx = (m.as_coeffs()[0] * m.as_coeffs()[0] + m.as_coeffs()[1] * m.as_coeffs()[1]).sqrt();
-    let sy = (m.as_coeffs()[2] * m.as_coeffs()[2] + m.as_coeffs()[3] * m.as_coeffs()[3]).sqrt();
+    let (m00, m11) = (m.as_coeffs()[0], m.as_coeffs()[3]);
+    let sx = (m00 * m00 + m.as_coeffs()[1] * m.as_coeffs()[1]).sqrt();
+    let sy = (m.as_coeffs()[2] * m.as_coeffs()[2] + m11 * m11).sqrt();
     if (sx - sy).abs() > 1e-6 * sx.max(sy).max(1.0) {
         scene.unsupported("rounded-clip-scale", format!("`{}` clips with rounded corners under a non-uniform scale", n.name));
         return clip;
     }
+    // A reflected axis swaps the corners: a negative x scale mirrors left and right, a negative y
+    // scale mirrors top and bottom. `Clip::rounded` always speaks device-space TL, TR, BR, BL.
+    let mut order = [0, 1, 2, 3];
+    if m00 < 0.0 {
+        order = [order[1], order[0], order[3], order[2]];
+    }
+    if m11 < 0.0 {
+        order = [order[3], order[2], order[1], order[0]];
+    }
+    let radii = [
+        radii[order[0]],
+        radii[order[1]],
+        radii[order[2]],
+        radii[order[3]],
+    ];
     let limit = 0.5 * rect[2].min(rect[3]);
     Clip::rounded(rect, radii.map(|r| (r as f32 * sx as f32).clamp(0.0, limit)))
+}
+
+/// Whether any mask run sits inside these items (including nested groups). The renderer prepares
+/// group layers before mask layers, so a mask inside a group would be skipped and silently paint
+/// nothing; the front end rejects that shape instead.
+fn items_contain_mask(items: &[crate::scene::Item]) -> bool {
+    items.iter().any(|item| match item {
+        crate::scene::Item::Mask(_) => true,
+        crate::scene::Item::Group(group) => items_contain_mask(&group.items),
+        _ => false,
+    })
 }
 
 /// Draw a group with opacity or a non-normal blend as one isolated layer. Also records why the
@@ -263,10 +300,17 @@ fn resolve_clip(doc: &Document, n: &Node, m: Affine, w: f64, h: f64, clip: Clip,
 fn emit_group_layer(doc: &Document, n: &Node, view_xf: Affine, scale: f64, inner: Clip, depth: usize, layerable: bool, scene: &mut Scene) {
     if layerable {
         let mut group = Scene::new(scene.width, scene.height);
-        walk_list(doc, &n.children, view_xf, scale, inner, 1.0, &mut group, depth + 1);
+        if !n.hides_contents() {
+            let runs = doc.paint_runs(n);
+            walk_list(doc, &n.children, &runs, view_xf, scale, inner, 1.0, &mut group, depth + 1);
+        }
         group.merge_adjacent_plain_rectangles();
-        if group.is_supported() {
+        if group.is_supported() && !items_contain_mask(&group.items) {
             scene.push_group(GroupNode { items: group.items, opacity: n.opacity.clamp(0.0, 1.0), blend: n.blend });
+            return;
+        }
+        if group.is_supported() {
+            scene.unsupported("group-mask", format!("`{}` is a group layer that contains a mask", n.name));
             return;
         }
         scene.absorb_unsupported(group.unsupported_features());
@@ -289,6 +333,8 @@ fn emit_shadow_layer(
     scale: f64,
     clip: Clip,
     inner: bool,
+    frame_width: u32,
+    frame_height: u32,
     scene: &mut Scene,
 ) {
     if shadows.is_empty() {
@@ -304,9 +350,60 @@ fn emit_shadow_layer(
         scene.unsupported("effect", message);
         return;
     };
+    // The silhouette target is frame-sized, so a caster crossing the frame edge would lose its
+    // outside half before the blur: the shadow reaching back into the frame would be too light.
+    // The CPU layer can extend past the view; this build falls back for those boxes. A caster
+    // fully inside needs no padding — the blur's outside samples are outside the final image,
+    // and the CPU's frame-sized layer has no pixels there either.
+    let fits = shadows.iter().all(|shadow| shadow_geometry_fits(m, w, h, scale, shadow, inner, frame_width, frame_height));
+    if !fits {
+        scene.unsupported("effect", format!("`{}` casts a shadow whose caster crosses the frame", n.name));
+        return;
+    }
     for shadow in shadows {
         emit_shadow(shape, m, w, h, scale, clip, shadow, inner, scene);
     }
+}
+
+/// Whether a shadow's caster box, offset and blur reach all stay inside the frame. The blur is
+/// three box passes of radius `r / 2`, so it reads at most `1.5 * radius` device pixels outward.
+fn shadow_geometry_fits(
+    m: Affine,
+    w: f64,
+    h: f64,
+    scale: f64,
+    shadow: &figcraft_doc::Shadow,
+    inner: bool,
+    frame_width: u32,
+    frame_height: u32,
+) -> bool {
+    let sigma = shadow.radius / 2.0 * scale;
+    if !sigma.is_finite() || sigma > MAX_BLUR_SIGMA {
+        return false;
+    }
+    if inner {
+        return true;
+    }
+    // Only the caster has to fit: if every silhouette pixel is inside the frame, the blur reads
+    // zero outside it exactly where the CPU's frame-sized layer also has nothing. A caster that
+    // crosses the edge would lose its outside half before the blur, so that one falls back.
+    let reach: f64 = 0.5;
+    if !reach.is_finite() {
+        return false;
+    }
+    let corners = [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)];
+    let mut min_x = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+    for (x, y) in corners {
+        let (px, py) = map_point(m, x, y);
+        min_x = min_x.min(px);
+        max_x = max_x.max(px);
+        min_y = min_y.min(py);
+        max_y = max_y.max(py);
+    }
+    min_x - reach >= 0.0 && min_y - reach >= 0.0 && max_x + reach <= f64::from(frame_width) && max_y + reach <= f64::from(frame_height)
 }
 
 fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, opacity: f32, scene: &mut Scene, depth: usize, allow_mask: bool) {
@@ -338,8 +435,11 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, opa
     let textures = effects.textures;
     let non_normal_blend = !matches!(n.blend, BlendMode::Normal | BlendMode::PassThrough);
     // A group layer is considered once: the capability check is a subtree scan, and asking it
-    // again inside `emit_group_layer` would walk the same children twice.
-    let needs_layer = container && (n.opacity < 0.999 || non_normal_blend) && !can_group_opacity(doc, n);
+    // again inside `emit_group_layer` would walk the same children twice. A Normal container with
+    // children isolates them: a child's blend must see the group's transparent base, not the
+    // document behind the group, so it needs the same layer even at alpha one.
+    let hidden = n.hides_contents();
+    let needs_layer = container && !hidden && (n.opacity < 0.999 || non_normal_blend || n.isolates_children()) && !can_group_opacity(doc, n);
     let layerable = needs_layer && can_layer_group(doc, n);
     if non_normal_blend && !layerable {
         scene.unsupported("blend", format!("`{}` blends with {:?}", n.name, n.blend));
@@ -375,11 +475,13 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, opa
     }
 
     // Drop shadows sit under the node's own content, so they are emitted before its fills and
-    // children. Only a node whose silhouette is exactly its SDF box can cast one in GPU.
+    // children. They must also precede a backdrop blur: the blur reads the frame under the node,
+    // and the shadow is part of that frame. Only a node whose silhouette is exactly its SDF box
+    // can cast one in GPU.
     let shape = if sized { sdf_shape(n, &m, w, h) } else { None };
+    emit_shadow_layer(n, &drop_shadows, shape, m, w, h, scale, clip, false, scene.width, scene.height, scene);
     backdrop(n, &backdrops, &layer_blurs, shape, clip, m, w, h, scale, scene);
     let blurred = layer_blur(n, &layer_blurs, shape, clip, m, w, h, scale, scene.width, scene.height, scene);
-    emit_shadow_layer(n, &drop_shadows, shape, m, w, h, scale, clip, false, scene);
 
     // A texture replaces the layer's pixels with whole-pixel-scattered copies of the fill. Only a
     // one-fill SDF box is accepted, so its layer content is exactly that fill; the normal fill is
@@ -422,11 +524,13 @@ fn walk(doc: &Document, id: NodeId, view_xf: Affine, scale: f64, clip: Clip, opa
     }
 
     // Inner shadows paint over the fills, under the children and the stroke, like the CPU.
-    emit_shadow_layer(n, &inner_shadows, shape, m, w, h, scale, clip, true, scene);
+    emit_shadow_layer(n, &inner_shadows, shape, m, w, h, scale, clip, true, scene.width, scene.height, scene);
 
     // Boolean children are operands, not layers: the CPU draws the folded result and skips them.
-    if !matches!(n.kind, NodeKind::BooleanOp { .. }) {
-        walk_list(doc, &n.children, view_xf, scale, inner, node_opacity, scene, depth + 1);
+    // A section whose contents are hidden paints its own box only; its children are not walked.
+    if !hidden && !matches!(n.kind, NodeKind::BooleanOp { .. }) {
+        let runs = doc.paint_runs(n);
+        walk_list(doc, &n.children, &runs, view_xf, scale, inner, node_opacity, scene, depth + 1);
     }
 
     // Strokes paint over the node's children, like the CPU. Text strokes follow its glyphs and are
@@ -523,14 +627,23 @@ fn can_cast_shadow(n: &Node, shadows: &[&figcraft_doc::Shadow]) -> bool {
 /// an inner shadow from the node's outline, not its pixels, so fills, children and strokes do not get
 /// in the way; only the node's own opacity would need a layer, and the shape must be the SDF box.
 fn can_cast_inner_shadow(n: &Node, shadows: &[&figcraft_doc::Shadow]) -> bool {
-    n.opacity >= 0.999 && shadows.iter().all(|s| shadow_is_plain(s))
+    // The CPU casts an inner shadow from the node's outline. A Group's box is just the union of
+    // its children's bounds, so its outline would draw a shadow across the empty holes between
+    // them; only leaf-like boxes have an outline that is their coverage.
+    !matches!(n.kind, NodeKind::Group) && n.opacity >= 0.999 && shadows.iter().all(|s| shadow_is_plain(s))
 }
 
 /// One shadow: the node's box offset by the shadow's device-pixel offset, a sigma the CPU's blur
 /// uses (`radius / 2 * scale`) and the tint. An inner shadow is masked to the box's own coverage.
 #[allow(clippy::too_many_arguments)]
 fn emit_shadow(shape: ShapeKind, m: Affine, w: f64, h: f64, scale: f64, clip: Clip, shadow: &figcraft_doc::Shadow, inner: bool, scene: &mut Scene) {
-    let offset = [(shadow.offset.0 * scale).round() as f32, (shadow.offset.1 * scale).round() as f32];
+    // A drop shadow's device offset is snapped like the CPU's pixmap blit; an inner shadow is
+    // evaluated from the outline, so its sub-pixel offset (0.4px, say) must survive.
+    let offset = if inner {
+        [(shadow.offset.0 * scale) as f32, (shadow.offset.1 * scale) as f32]
+    } else {
+        [(shadow.offset.0 * scale).round() as f32, (shadow.offset.1 * scale).round() as f32]
+    };
     scene.push_shadow(ShadowNode {
         mat: crate::scene::matrix(m),
         size: [w as f32, h as f32],
@@ -540,6 +653,9 @@ fn emit_shadow(shape: ShapeKind, m: Affine, w: f64, h: f64, scale: f64, clip: Cl
         color: Rgba::from_color(shadow.color),
         clip,
         inner,
+        // A drop shadow that does not show behind the caster is masked by the caster's coverage
+        // (the inverse of an inner shadow's mask).
+        cover: inner || !shadow.show_behind,
     });
 }
 
@@ -606,15 +722,24 @@ fn can_blur_layer(
         return false;
     }
     // The CPU blurs a layer that may extend past the frame; this pipeline only has the frame, so a
-    // box whose blur reaches outside it would read different pixels at the border.
+    // box whose blur reaches outside it would read different pixels at the border. All four
+    // transformed corners matter: a rotated box can cross the edge with only its unseen corner.
     let reach = blurs[0].max_radius() * 1.5 * scale;
-    if !reach.is_finite() {
+    if !reach.is_finite() || blurs[0].max_radius() / 2.0 * scale > MAX_BLUR_SIGMA {
         return false;
     }
-    let (x0, y0) = map_point(m, 0.0, 0.0);
-    let (x1, y1) = map_point(m, w, h);
-    let (min_x, max_x) = (x0.min(x1), x0.max(x1));
-    let (min_y, max_y) = (y0.min(y1), y0.max(y1));
+    let corners = [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)];
+    let mut min_x = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+    for (x, y) in corners {
+        let (px, py) = map_point(m, x, y);
+        min_x = min_x.min(px);
+        max_x = max_x.max(px);
+        min_y = min_y.min(py);
+        max_y = max_y.max(py);
+    }
     min_x - reach >= 0.0 && min_y - reach >= 0.0 && max_x + reach <= f64::from(frame_width) && max_y + reach <= f64::from(frame_height)
 }
 
@@ -701,7 +826,9 @@ fn backdrop(
     if backdrops.is_empty() {
         return;
     }
-    let Some(shape) = shape.filter(|_| can_backdrop(n, backdrops, layer_blurs, clip)) else {
+    let Some(shape) = shape.filter(|_| {
+        can_backdrop(n, backdrops, layer_blurs, clip) && backdrops[0].max_radius() / 2.0 * scale <= MAX_BLUR_SIGMA
+    }) else {
         scene.unsupported("effect", format!("`{}` carries a background blur this build cannot draw", n.name));
         return;
     };
@@ -1069,45 +1196,55 @@ fn paint_of(fill: &DocPaint, scene: &mut Scene, name: &str, index: usize) -> Opt
     }
 }
 
-/// Walk a sibling list, folding `is_mask` nodes and the run that follows them into mask layers.
-/// The CPU draws the mask node itself into a transparent layer, then clips every sibling after it
-/// (until the next mask) through that layer's alpha or luminance.
-fn walk_list(doc: &Document, children: &[NodeId], view_xf: Affine, scale: f64, clip: Clip, opacity: f32, scene: &mut Scene, depth: usize) {
-    let mut i = 0;
-    while i < children.len() {
-        let Some(node) = doc.node(children[i]) else {
-            walk(doc, children[i], view_xf, scale, clip, opacity, scene, depth + 1, false);
-            i += 1;
+/// Walk a sibling list in the document's paint order, folding `is_mask` nodes and the run that
+/// follows them into mask layers. `runs` comes from [`Document::paint_runs`], so a reverse-z
+/// auto-layout frame paints its first child last, exactly like the CPU.
+fn walk_list(
+    doc: &Document,
+    children: &[NodeId],
+    runs: &[std::ops::Range<usize>],
+    view_xf: Affine,
+    scale: f64,
+    clip: Clip,
+    opacity: f32,
+    scene: &mut Scene,
+    depth: usize,
+) {
+    for run in runs {
+        let Some(&first_id) = children.get(run.start) else { continue };
+        let Some(node) = doc.node(first_id) else {
+            walk(doc, first_id, view_xf, scale, clip, opacity, scene, depth + 1, false);
             continue;
         };
         if !node.is_mask || !node.visible {
-            walk(doc, children[i], view_xf, scale, clip, opacity, scene, depth + 1, false);
-            i += 1;
+            // A normal run is one child; walking its whole range keeps any unexpected grouping
+            // from dropping a sibling.
+            for &id in &children[run.clone()] {
+                walk(doc, id, view_xf, scale, clip, opacity, scene, depth + 1, false);
+            }
             continue;
         }
         if node.mask_type == figcraft_doc::MaskType::Vector {
             // A vector mask paints the subtree outline white; this build draws the mask's own
             // content instead, which is not the same for strokes and open paths.
             scene.unsupported("mask-vector", format!("`{}` is a vector mask", node.name));
-            return;
+            continue;
         }
-        let start = i + 1;
-        let mut end = start;
-        while end < children.len() {
-            // The CPU's `paint_runs_of` ends a run at the next mask even when that mask is hidden:
-            // a hidden mask starts its own (empty) run, and the content after it is not clipped.
-            if doc.node(children[end]).is_some_and(|c| c.is_mask) {
-                break;
-            }
-            end += 1;
+        // The mask node's own visible effects belong to its rendered coverage. The CPU's
+        // `draw_content` does not run the mask node through `effects`; drawing a blur or shadow
+        // here would change the coverage the content is multiplied by.
+        if node.effects.iter().any(|e| e.visible) {
+            scene.unsupported("mask-effect", format!("`{}` is a mask with a visible effect", node.name));
+            continue;
         }
+        let start = run.start + 1;
+        let end = run.end;
         if start == end {
             // Nothing is clipped; the CPU also paints no mask layer.
-            i = end;
             continue;
         }
         let mut run_traits = SubtreeTraits::default();
-        for id in std::iter::once(children[i]).chain(children[start..end].iter().copied()) {
+        for id in std::iter::once(first_id).chain(children[start..end].iter().copied()) {
             run_traits.merge(subtree_traits(doc, id, true));
         }
         // The CPU draws the run in an `Under { clip: mask }` context, so a backdrop inside the
@@ -1115,18 +1252,16 @@ fn walk_list(doc: &Document, children: &[NodeId], view_xf: Affine, scale: f64, c
         // no such under-layer, so those runs stay on the CPU.
         if run_traits.backdrop {
             scene.unsupported("mask-backdrop", format!("`{}` masks a backdrop", node.name));
-            i = end;
             continue;
         }
         // Mask layers draw their groups with plain source-over; a non-normal blend inside would
         // need the mask layer's own under-frame, which does not exist.
         if run_traits.non_normal_blend {
             scene.unsupported("mask-blend", format!("`{}` masks a blended layer", node.name));
-            i = end;
             continue;
         }
         let mut mask_scene = Scene::new(scene.width, scene.height);
-        walk(doc, children[i], view_xf, scale, clip, opacity, &mut mask_scene, depth + 1, true);
+        walk(doc, first_id, view_xf, scale, clip, opacity, &mut mask_scene, depth + 1, true);
         let mut content = Scene::new(scene.width, scene.height);
         for &child in &children[start..end] {
             walk(doc, child, view_xf, scale, clip, opacity, &mut content, depth + 1, false);
@@ -1144,7 +1279,6 @@ fn walk_list(doc: &Document, children: &[NodeId], view_xf: Affine, scale: f64, c
             scene.absorb_unsupported(content.unsupported_features());
             scene.unsupported("mask", format!("`{}` masks content this build cannot layer", node.name));
         }
-        i = end;
     }
 }
 
@@ -1794,6 +1928,151 @@ mod tests {
             panic!("the run is a masked item");
         };
         assert_eq!(mask_run.content.len(), 1, "the hidden mask ends the clipped run");
+    }
+
+    #[test]
+    fn a_reflected_rounded_clip_reorders_its_corners() {
+        let mut doc = Document::default();
+        let page = doc.pages[0];
+        let frame = doc.create(page, NodeKind::Frame, "Mirror", 0.0, 0.0, 60.0, 40.0).expect("frame");
+        let child = doc.create(frame, NodeKind::Rectangle, "Wide", 0.0, 0.0, 100.0, 50.0).expect("child");
+        if let Ok(n) = doc.get_mut(frame) {
+            n.clip = true;
+            n.corners.radii = [1.0, 2.0, 3.0, 4.0];
+            n.fills.clear();
+            n.transform = Affine::scale_non_uniform(-1.0, 1.0);
+        }
+        if let Ok(n) = doc.get_mut(child) {
+            n.fills = vec![DocPaint::solid(Color::new(0.2, 0.5, 0.8, 1.0))];
+        }
+        let scene = build(&doc, page, &view());
+        assert!(scene.is_supported(), "{:?}", scene.unsupported_features());
+        let shape = scene.shapes().next().expect("the child shape");
+        assert_eq!(shape.clip.1, [2.0, 1.0, 4.0, 3.0], "a mirrored clip swaps left/right radii");
+    }
+
+    #[test]
+    fn a_hidden_section_does_not_paint_its_contents() {
+        let mut doc = Document::default();
+        let page = doc.pages[0];
+        let section = doc.create(page, NodeKind::Section { contents_hidden: true }, "Hidden", 0.0, 0.0, 120.0, 80.0).expect("section");
+        let child = doc.create(section, NodeKind::Rectangle, "Child", 10.0, 10.0, 40.0, 40.0).expect("child");
+        if let Ok(n) = doc.get_mut(child) {
+            n.fills = vec![DocPaint::solid(Color::new(1.0, 0.0, 0.0, 1.0))];
+        }
+        if let Ok(n) = doc.get_mut(section) {
+            n.fills.clear();
+        }
+        let scene = build(&doc, page, &view());
+        assert!(scene.is_supported(), "{:?}", scene.unsupported_features());
+        assert_eq!(scene.shapes().count(), 0, "the hidden section's box and child paint nothing");
+    }
+
+    #[test]
+    fn a_reverse_z_frame_paints_its_first_child_last() {
+        let mut doc = Document::default();
+        let page = doc.pages[0];
+        let frame = doc.create(page, NodeKind::Frame, "Stack", 0.0, 0.0, 120.0, 120.0).expect("frame");
+        let first = doc.create(frame, NodeKind::Rectangle, "First", 0.0, 10.0, 50.0, 30.0).expect("first");
+        let second = doc.create(frame, NodeKind::Rectangle, "Second", 0.0, 60.0, 50.0, 30.0).expect("second");
+        if let Ok(n) = doc.get_mut(first) {
+            n.fills = vec![DocPaint::solid(Color::new(1.0, 0.0, 0.0, 1.0))];
+        }
+        if let Ok(n) = doc.get_mut(second) {
+            n.fills = vec![DocPaint::solid(Color::new(0.0, 0.0, 1.0, 1.0))];
+        }
+        if let Ok(n) = doc.get_mut(frame) {
+            n.fills.clear();
+            let layout = n.layout.get_or_insert_with(Default::default);
+            layout.reverse_z = true;
+        }
+        let scene = build(&doc, page, &view());
+        assert!(scene.is_supported(), "{:?}", scene.unsupported_features());
+        let mut shapes = scene.shapes();
+        let bottom = shapes.next().expect("the bottom shape");
+        assert!((bottom.mat[5] - 60.0).abs() < 0.01, "the second child paints first: {:?}", bottom.mat);
+    }
+
+    #[test]
+    fn a_normal_group_isolates_its_children_even_at_opacity_one() {
+        let mut doc = Document::default();
+        let page = doc.pages[0];
+        let group = doc.create(page, NodeKind::Group, "Isolated", 0.0, 0.0, 120.0, 120.0).expect("group");
+        for x in [10.0, 50.0] {
+            let id = doc.create(group, NodeKind::Rectangle, "Child", x, 10.0, 40.0, 40.0).expect("child");
+            if let Ok(n) = doc.get_mut(id) {
+                n.fills = vec![DocPaint::solid(Color::new(0.2, 0.5, 0.8, 1.0))];
+            }
+        }
+        if let Ok(n) = doc.get_mut(group) {
+            n.blend = BlendMode::Normal;
+        }
+        let scene = build(&doc, page, &view());
+        assert!(scene.is_supported(), "{:?}", scene.unsupported_features());
+        assert!(matches!(scene.items.first(), Some(crate::scene::Item::Group(_))), "a Normal group keeps an isolated layer");
+    }
+
+    #[test]
+    fn a_mask_with_its_own_effect_falls_back() {
+        let mut doc = Document::default();
+        let page = doc.pages[0];
+        let mask = doc.create(page, NodeKind::Rectangle, "Mask", 20.0, 20.0, 80.0, 80.0).expect("mask");
+        if let Ok(n) = doc.get_mut(mask) {
+            n.is_mask = true;
+            n.effects = vec![figcraft_doc::Effect { kind: EffectKind::LayerBlur(figcraft_doc::Blur::uniform(4.0)), visible: true }];
+        }
+        doc.create(page, NodeKind::Rectangle, "Content", 0.0, 0.0, 160.0, 160.0).expect("content");
+        let scene = build(&doc, page, &view());
+        assert!(!scene.is_supported(), "the mask's own blur must not go into its coverage");
+        assert!(scene.unsupported_features().iter().any(|u| u.feature == "mask-effect"));
+    }
+
+    #[test]
+    fn a_group_inner_shadow_falls_back() {
+        let mut doc = Document::default();
+        let page = doc.pages[0];
+        let group = doc.create(page, NodeKind::Group, "Hole", 10.0, 10.0, 80.0, 60.0).expect("group");
+        doc.create(group, NodeKind::Rectangle, "Child", 10.0, 10.0, 20.0, 20.0).expect("child");
+        if let Ok(n) = doc.get_mut(group) {
+            n.effects = vec![figcraft_doc::Effect {
+                kind: EffectKind::InnerShadow(figcraft_doc::Shadow {
+                    color: Color::new(0.0, 0.0, 0.0, 0.5),
+                    offset: (2.0, 2.0),
+                    radius: 4.0,
+                    spread: 0.0,
+                    blend: BlendMode::Normal,
+                    show_behind: false,
+                }),
+                visible: true,
+            }];
+        }
+        let scene = build(&doc, page, &view());
+        assert!(!scene.is_supported(), "the group box is not the shape's coverage");
+        assert!(scene.unsupported_features().iter().any(|u| u.feature == "effect"));
+    }
+
+    #[test]
+    fn a_shadow_whose_caster_crosses_the_frame_falls_back() {
+        let mut doc = Document::default();
+        let page = doc.pages[0];
+        let card = doc.create(page, NodeKind::Rectangle, "Edge", -10.0, 10.0, 60.0, 40.0).expect("card");
+        if let Ok(n) = doc.get_mut(card) {
+            n.fills = vec![DocPaint::solid(Color::new(0.9, 0.9, 0.9, 1.0))];
+            n.effects = vec![figcraft_doc::Effect {
+                kind: EffectKind::DropShadow(figcraft_doc::Shadow {
+                    color: Color::new(0.0, 0.0, 0.0, 0.5),
+                    offset: (4.0, 4.0),
+                    radius: 6.0,
+                    spread: 0.0,
+                    blend: BlendMode::Normal,
+                    show_behind: false,
+                }),
+                visible: true,
+            }];
+        }
+        let scene = build(&doc, page, &view());
+        assert!(!scene.is_supported(), "the frame-sized silhouette lost the caster's outside half");
+        assert!(scene.unsupported_features().iter().any(|u| u.feature == "effect"));
     }
 
     #[test]

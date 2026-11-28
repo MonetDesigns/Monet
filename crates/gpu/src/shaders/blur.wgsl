@@ -58,7 +58,9 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
     let v = textureLoad(src, q, 0);
     sum = sum + vec4<u32>(byte_of(v.r, invert), byte_of(v.g, invert), byte_of(v.b, invert), byte_of(v.a, invert));
   }
-  let div = f32(2 * r + 1);
-  let out = vec4<f32>(f32(sum.x), f32(sum.y), f32(sum.z), f32(sum.w)) / div / 255.0;
-  return out;
+  let window = 2u * u32(max(r, 0)) + 1u;
+  // The CPU sums bytes and divides with integer truncation, then writes the byte. Dividing in
+  // floating point first rounds `[0,0,2]` / 3 up to one byte where the CPU writes zero.
+  let avg = sum / window;
+  return vec4<f32>(f32(avg.x), f32(avg.y), f32(avg.z), f32(avg.w)) / 255.0;
 }

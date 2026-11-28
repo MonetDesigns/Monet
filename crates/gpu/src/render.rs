@@ -28,6 +28,15 @@ use crate::scene::{Clip, Item, Paint, Rgba, Scene, ShapeKind, ShapeNode, Unsuppo
 /// Samples per pixel the target uses. Tessellated geometry gets its coverage from these.
 const SAMPLES: u32 = 4;
 
+/// Offscreen layer memory cap for one frame. Group, mask, shadow and progressive buffers are
+/// full-frame MSAA/resolve/ping-pong textures; twenty 4K shadow cards would otherwise ask the
+/// device for several GiB before the first draw. Past this total the frame falls back to the CPU.
+const MAX_OFFSCREEN_BYTES: u64 = 512 * 1024 * 1024;
+
+/// A box-blur radius is a loop bound (`2r + 1` taps per axis), so this cap keeps a stray radius
+/// from turning into tens of billions of texture reads. Larger blurs stay on the CPU.
+const MAX_BLUR_SIGMA: f32 = 128.0;
+
 /// Why a frame did not render on the GPU.
 #[derive(Clone, Debug, PartialEq)]
 pub enum RenderError {
@@ -185,13 +194,16 @@ enum Cmd {
 struct ShadowPlan {
     first: u32,
     count: u32,
-    /// The same shape at zero offset, for an inner shadow's mask (empty for a drop shadow).
+    /// The same shape at zero offset, for an inner shadow's mask or a drop shadow that hides
+    /// behind its caster (empty otherwise).
     cover_first: u32,
     cover_count: u32,
     sigma: f32,
     color: Rgba,
     clip: Clip,
     inner: bool,
+    /// The cover texture masks the tint: keep it (inner) or subtract it (drop, `show_behind` false).
+    cover: bool,
 }
 
 /// The textures and bind groups one shadow needs for a frame.
@@ -383,12 +395,14 @@ impl CommandList {
                         cmds.push(Cmd::Shapes { first: batch as u32, count: (self.instances.len() - batch) as u32 });
                         batch = self.instances.len();
                     }
+                    // The silhouette is the child's own outline, before any ancestor clip crops
+                    // the composited layer. The clip stays on the final draw only.
                     let caster = ShapeNode {
                         mat: shadow.mat,
                         size: shadow.size,
                         shape: shadow.shape,
                         paint: Paint::Solid(Rgba::new(1.0, 1.0, 1.0, 1.0)),
-                        clip: shadow.clip,
+                        clip: Clip::NONE,
                         opacity: 1.0,
                     };
                     let mut offset_caster = caster.clone();
@@ -396,7 +410,7 @@ impl CommandList {
                     offset_caster.mat[5] += shadow.offset[1];
                     let first = self.shadow_instances.len() as u32;
                     self.shadow_instances.push(GpuInstance::of(&offset_caster));
-                    let (cover_first, cover_count) = if shadow.inner {
+                    let (cover_first, cover_count) = if shadow.cover {
                         let first = self.cover_instances.len() as u32;
                         self.cover_instances.push(GpuInstance::of(&caster));
                         (first, 1)
@@ -413,6 +427,7 @@ impl CommandList {
                         color: shadow.color,
                         clip: shadow.clip,
                         inner: shadow.inner,
+                        cover: shadow.cover,
                     });
                 }
                 Item::Blur(blur) => {
@@ -440,6 +455,7 @@ impl CommandList {
                         color: blur.color,
                         clip: blur.clip,
                         inner: false,
+                        cover: false,
                     });
                 }
                 Item::ProgressiveBlur(blur) => {
@@ -1499,8 +1515,9 @@ impl Renderer {
         let pong = texture("shadow-pong", 1, U::RENDER_ATTACHMENT | U::TEXTURE_BINDING);
         let pong_view = pong.create_view(&wgpu::TextureViewDescriptor::default());
 
-        // An inner shadow also needs the shape at zero offset: its blur is masked by that coverage.
-        let (cover_msaa, cover) = if plan.inner {
+        // An inner shadow masks by the shape's coverage; a drop shadow that hides behind its
+        // caster masks by the inverse. Both need the shape at zero offset.
+        let (cover_msaa, cover) = if plan.cover {
             let msaa = texture("inner-cover-msaa", SAMPLES, U::RENDER_ATTACHMENT);
             let resolve = texture("inner-cover", 1, U::RENDER_ATTACHMENT | U::TEXTURE_BINDING);
             (Some(msaa), Some(resolve))
@@ -1538,11 +1555,26 @@ impl Renderer {
 
         let tint = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("shadow tint"),
-            size: 32,
+            size: 48,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let tint_values = [plan.color.r, plan.color.g, plan.color.b, plan.color.a, plan.clip.0[0], plan.clip.0[1], plan.clip.0[2], plan.clip.0[3]];
+        // mode: 0 = multiply by cover (inner), 1 = multiply by 1 - cover (drop behind the caster).
+        let mode = if plan.inner { 0.0f32 } else { 1.0 };
+        let tint_values = [
+            plan.color.r,
+            plan.color.g,
+            plan.color.b,
+            plan.color.a,
+            plan.clip.0[0],
+            plan.clip.0[1],
+            plan.clip.0[2],
+            plan.clip.0[3],
+            mode,
+            0.0,
+            0.0,
+            0.0,
+        ];
         self.queue.write_buffer(&tint, 0, bytemuck::cast_slice(&tint_values));
         let draw_bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("shadow draw"),
@@ -1646,6 +1678,9 @@ impl Renderer {
     /// A progressive blur's silhouette, shared ping and per-level blur targets. Each level gets
     /// six box passes; even passes write the shared ping, odd passes its own layer of `levels`.
     fn progressive_resources(&self, width: u32, height: u32, plan: &ProgressivePlan) -> Option<ProgressiveResources> {
+        if plan.levels.is_empty() || plan.levels.len() > 8 {
+            return None;
+        }
         use wgpu::TextureUsages as U;
         let size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
         let texture = |label: &str, samples: u32, usage: U| {
@@ -2059,7 +2094,7 @@ impl Renderer {
                     let Some(plan) = shadow_plans.get(index) else {
                         continue;
                     };
-                    if plan.inner {
+                    if plan.cover {
                         let Some(inner_bind) = res.inner_bind.as_ref() else {
                             continue;
                         };
@@ -2290,6 +2325,49 @@ impl Renderer {
             groups,
             masks,
         } = list;
+
+        let unsupported = |feature: &'static str, detail: String| {
+            RenderError::Unsupported(vec![crate::scene::Unsupported { feature, detail }])
+        };
+
+        // A mask inside a group layer would be prepared after the group is already drawn: the
+        // group's mask bind is missing, `draw_group` skips it, and the frame silently loses that
+        // content. The scene builder rejects this shape, but `Scene` is public IR, so the
+        // renderer refuses it too instead of returning a wrong frame.
+        if scene.has_mask_in_group() {
+            return Err(unsupported("group-mask", "a mask is nested inside a group layer".into()));
+        }
+
+        // Level count indexes the eight progressive textures; one past the end would panic (or
+        // silently drop) in the draw loop. The builder rejects it, and this is the last boundary.
+        if progressive_plans.iter().any(|plan| plan.levels.is_empty() || plan.levels.len() > 8) {
+            return Err(unsupported("progressive-levels", "a progressive blur has more than eight levels".into()));
+        }
+
+        // Blur sigma is a shader loop bound. Validate at the renderer boundary too, because a
+        // hand-built `Scene` does not go through the document front end.
+        let bad_blur = shadow_plans.iter().any(|plan| !plan.sigma.is_finite() || plan.sigma > MAX_BLUR_SIGMA)
+            || progressive_plans.iter().any(|plan| !plan.s0.is_finite() || !plan.s1.is_finite() || plan.s0.max(plan.s1) > MAX_BLUR_SIGMA)
+            || cmds.iter().any(|cmd| matches!(cmd, Cmd::Backdrop { sigma, .. } if !sigma.is_finite() || *sigma > MAX_BLUR_SIGMA));
+        if bad_blur {
+            return Err(unsupported("blur-radius", "a blur radius is past the GPU work limit".into()));
+        }
+
+        // Estimate all full-frame offscreen layers before the first texture is allocated. A single
+        // 4K mask is two RGBA8 MSAA+resolve layers (~330 MiB); twenty shadows are multiple GiB.
+        // Failing here lets the caller fall back to the CPU instead of hitting a device OOM.
+        let layer_bytes = u64::from(w) * u64::from(h) * 4;
+        let layers = (groups.len() as u64) * 5
+            + (masks.len() as u64) * 10
+            + (shadow_plans.len() as u64) * 9
+            + (progressive_plans.len() as u64) * 13;
+        let offscreen = layer_bytes.saturating_mul(layers);
+        if offscreen > MAX_OFFSCREEN_BYTES {
+            return Err(unsupported(
+                "offscreen-memory",
+                format!("{offscreen} bytes of offscreen layers for {w}×{h} exceeds the {MAX_OFFSCREEN_BYTES}-byte cap"),
+            ));
+        }
 
         // Size the frame targets before the instance buffer borrows `self` for the rest of the run.
         let needs_under = groups.iter().any(|group| needs_blend(group.blend));
@@ -2725,7 +2803,7 @@ impl Renderer {
                         let Some(plan) = shadow_plans.get(index) else {
                             continue;
                         };
-                        if plan.inner {
+                        if plan.cover {
                             let Some(inner_bind) = res.inner_bind.as_ref() else {
                                 continue;
                             };

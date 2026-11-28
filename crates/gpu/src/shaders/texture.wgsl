@@ -197,7 +197,7 @@ fn grain_hash(ix: i32, iy: i32, seed: u32) -> vec2<u32> {
 fn fs(in: VsOut) -> @location(0) vec4<f32> {
   let inst = insts[in.idx];
 
-  if (inst.clip.z > 0.0) {
+  if (inst.clip.z >= 0.0) {
     if (in.pos.x < inst.clip.x || in.pos.y < inst.clip.y ||
       in.pos.x >= inst.clip.x + inst.clip.z || in.pos.y >= inst.clip.y + inst.clip.w) {
       discard;
@@ -212,6 +212,12 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
   let dx = in.pos.x - inst.off.x;
   let dy = in.pos.y - inst.off.y;
   let local = vec2<f32>((inst.m.w * dx - inst.m.z * dy) / det, (-inst.m.y * dx + inst.m.x * dy) / det);
+  // One device pixel in the layer's local units. Different fragments scatter by different
+  // whole-pixel offsets, so `fwidth(sd)` would measure those jumps instead of the shape edge;
+  // a fixed one-pixel footprint keeps the edge coverage correct at the displaced source pixel.
+  let scale_x = length(vec2<f32>(inst.m.x, inst.m.y));
+  let scale_y = length(vec2<f32>(inst.m.z, inst.m.w));
+  let aa_local = 1.0 / max(max(scale_x, scale_y), 1e-6);
 
   // The CPU's cell from the destination pixel, rounded to 2^-20 before floor.
   let cx = local.x / max(params.cell.x, 1e-6);
@@ -248,7 +254,7 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
     let hn = max(half, vec2<f32>(1e-6));
     sd = sd_regular(sp / hn, 1.0, inst.params.x, inst.params.y, kind == 3);
   }
-  let sw = max(fwidth(sd), 1e-5);
+  let sw = max(aa_local, 1e-5);
   let scov = clamp(0.5 - sd / sw, 0.0, 1.0);
   var src = vec4<f32>(params.color.rgb * (params.color.a * scov), params.color.a * scov);
 
@@ -265,7 +271,7 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
       let hn = max(half, vec2<f32>(1e-6));
       dd = sd_regular(p / hn, 1.0, inst.params.x, inst.params.y, kind == 3);
     }
-    let dw = max(fwidth(dd), 1e-5);
+    let dw = max(aa_local, 1e-5);
     let dcov = clamp(0.5 - dd / dw, 0.0, 1.0);
     let keep = params.color.a * dcov;
     src = src * keep;

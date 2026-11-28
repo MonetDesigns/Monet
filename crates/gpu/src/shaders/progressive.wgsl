@@ -121,21 +121,24 @@ fn level_at(i: u32) -> f32 {
   return params.levels[i / 4u][i % 4u];
 }
 
-fn level_weight(i: u32, k: u32, f: f32) -> f32 {
-  if (i == k) {
-    return 1.0 - f;
+fn level_alpha(i: u32, coord: vec2<i32>) -> f32 {
+  switch i {
+    case 0u: { return textureLoad(t0, coord, 0).a; }
+    case 1u: { return textureLoad(t1, coord, 0).a; }
+    case 2u: { return textureLoad(t2, coord, 0).a; }
+    case 3u: { return textureLoad(t3, coord, 0).a; }
+    case 4u: { return textureLoad(t4, coord, 0).a; }
+    case 5u: { return textureLoad(t5, coord, 0).a; }
+    case 6u: { return textureLoad(t6, coord, 0).a; }
+    default: { return textureLoad(t7, coord, 0).a; }
   }
-  if (i == k + 1u) {
-    return f;
-  }
-  return 0.0;
 }
 
 @fragment
 fn fs(in: VsOut) -> @location(0) vec4<f32> {
   let inst = insts[in.idx];
 
-  if (inst.clip.z > 0.0) {
+  if (inst.clip.z >= 0.0) {
     if (in.pos.x < inst.clip.x || in.pos.y < inst.clip.y ||
         in.pos.x >= inst.clip.x + inst.clip.z || in.pos.y >= inst.clip.y + inst.clip.w) {
       discard;
@@ -187,15 +190,16 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
   f = round(f * 255.0) / 255.0;
 
   let coord = clamp(vec2<i32>(in.pos.xy), vec2<i32>(0, 0), vec2<i32>(textureDimensions(t0)) - 1);
-  let acc =
-    level_weight(0u, k, f) * textureLoad(t0, coord, 0).a +
-    level_weight(1u, k, f) * textureLoad(t1, coord, 0).a +
-    level_weight(2u, k, f) * textureLoad(t2, coord, 0).a +
-    level_weight(3u, k, f) * textureLoad(t3, coord, 0).a +
-    level_weight(4u, k, f) * textureLoad(t4, coord, 0).a +
-    level_weight(5u, k, f) * textureLoad(t5, coord, 0).a +
-    level_weight(6u, k, f) * textureLoad(t6, coord, 0).a +
-    level_weight(7u, k, f) * textureLoad(t7, coord, 0).a;
+  // Only two levels have nonzero weights: `k` and `k+1`. A quantised weight of zero must not read
+  // the other texture at all, and the eight-binding array stays a fixed binding layout.
+  var acc = 0.0;
+  if (f <= 0.0) {
+    acc = level_alpha(k, coord);
+  } else if (f >= 1.0 || k + 1u >= n) {
+    acc = level_alpha(min(k + 1u, n - 1u), coord);
+  } else {
+    acc = (1.0 - f) * level_alpha(k, coord) + f * level_alpha(k + 1u, coord);
+  }
   let a = params.color.a * acc;
   if (!(a > 0.0)) {
     discard;

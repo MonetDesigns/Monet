@@ -307,12 +307,20 @@ fn check_size(ctx: &Ctx<'_>, limits: &Limits, text: &str) -> rquickjs::Result<()
 
 fn bridge_get(ctx: &Ctx<'_>, state: Shared, id_text: &str, prop: &str) -> rquickjs::Result<String> {
     let id = node_id(id_text).map_err(|error| throw(ctx, error.to_string()))?;
-    let key = props::engine_key(prop).ok_or_else(|| throw(ctx, format!("`{prop}` isn't supported yet")))?;
+    // `engine_key` rejects reads of read-only fields by design; `read_key` knows the few
+    // read-only fields that still live under an engine key (`type`), while writes stay guarded.
+    let key = props::read_key(prop).ok_or_else(|| throw(ctx, format!("`{prop}` isn't supported yet")))?;
+    let def = props::by_figma(prop);
     let mut session = session(ctx, &state)?;
     session.flush(id).map_err(|error| throw(ctx, error))?;
     let call = ops::get(id, Some(&[key])).map_err(|error| throw(ctx, error.to_string()))?;
     let value = session.call_host(call.command, &call.params).map_err(|error| throw(ctx, error))?;
-    let value = value.get(key).cloned().unwrap_or(Value::Null);
+    let mut value = value.get(key).cloned().unwrap_or(Value::Null);
+    if def.is_some_and(|def| def.kind == Kind::Enum)
+        && let Some(figma) = props::enum_to_figma(prop, &value)
+    {
+        value = figma;
+    }
     let text = serde_json::to_string(&value).unwrap_or_else(|_| "null".into());
     check_size(ctx, &session.limits, &text)?;
     Ok(text)
@@ -699,6 +707,19 @@ mod tests {
         assert_eq!(state.notified, vec!["hello Card".to_string()]);
         assert_eq!(state.calls.iter().filter(|call| call.starts_with("node.set")).count(), 1);
         assert_eq!(state.nodes[&5]["x"], json!(40));
+    }
+
+    #[test]
+    fn read_only_type_and_enum_reads_come_back_in_figma_spelling() {
+        let source = r#"
+            const node = figma.currentPage.selection[0];
+            const type = node.type;
+            node.layoutMode = 'HORIZONTAL';
+            console.log(type + ' ' + node.layoutMode);
+            figma.closePlugin('ok');
+        "#;
+        let (_plugin, _state, result) = run(source, MapHost::new());
+        assert_eq!(result.unwrap().logs[0], "FRAME HORIZONTAL");
     }
 
     #[test]

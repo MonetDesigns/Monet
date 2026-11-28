@@ -99,7 +99,7 @@ fn sd_regular(p: vec2<f32>, r: f32, count: f32, inner: f32, star: bool) -> f32 {
 fn fs(in: VsOut) -> @location(0) vec4<f32> {
   let inst = insts[in.idx];
 
-  if (inst.clip.z > 0.0) {
+  if (inst.clip.z >= 0.0) {
     if (in.pos.x < inst.clip.x || in.pos.y < inst.clip.y ||
       in.pos.x >= inst.clip.x + inst.clip.z || in.pos.y >= inst.clip.y + inst.clip.w) {
       discard;
