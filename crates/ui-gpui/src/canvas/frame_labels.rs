@@ -3,8 +3,9 @@
 //! 帧名贴在上边缘之上，section 名是左上角内部的 pill；组件/图标用各自的身份色。
 //! `label_edge` 的几何计算与原实现**逐行一致**（含镜像帧保持正向）。
 //!
-//! 差异（GPUI 侧适配）：文字用 GPUI 文本元素渲染，不能像 egui 那样把已画出的图元整体旋转，
-//! 因此旋转帧的标签仍放在几何算出的角点，但保持水平（记为已知限制）。
+//! 差异（GPUI 侧适配）：文字用 GPUI 文本元素渲染；旋转帧的名称、命中区与 section pill
+//! **跟着上边缘一起转**（文字走内联 SVG 旋转，pill 底走圆角多边形），不再保持水平
+//! （2026-11-27）。
 //!
 //! 名称的颜色与位置按 2026-11-22 设计稿（Groups 231 / 232 / 234 / 235）：
 //! 普通帧未选中 / 常态 / 悬停用同一个灰，选中才换成更深一档的强调色；组件 / 组件集一直是
@@ -16,8 +17,8 @@ use figcraft_geom::Point;
 use figcraft_i18n::tr;
 
 use super::geom::*;
-use super::painter::{Painter, text_size};
-use super::rulers::status_badge;
+use super::painter::{Label, Painter, text_size};
+use super::rulers::{status_badge, status_badge_rotated};
 use crate::app::CanvasApp;
 use crate::bidi::{ELLIPSIS, fit_with};
 use crate::theme::{COMPONENT, COMPONENT_TEXT, DEV_CHANGED, DEV_COMPLETED, SLOT, Tokens, stroke};
@@ -67,6 +68,26 @@ pub fn name_slots(x1: f32, y0: f32) -> [Rect; 2] {
     let first = Rect::from_min_size(pos2(right, y), vec2(SLOT_SIZE, SLOT_SIZE));
     let second = Rect::from_min_size(pos2(right - SLOT_GAP - SLOT_SIZE, y), vec2(SLOT_SIZE, SLOT_SIZE));
     [first, second]
+}
+
+/// 旋转帧名称行右侧状态槽的四角：槽坐在上边缘外侧，沿读取方向 `d` 排在标签末端。
+/// 水平帧（`d=(1,0)`、`up=(0,-1)`）与 [`name_slots`] 的矩形逐点一致。
+fn status_slot_quad(tl: Pos2, d: Vec2, up: Vec2, len: f32) -> [Pos2; 4] {
+    let br = tl + d * (len + SLOT_OUTSET) + up * SLOT_ABOVE;
+    let bl = br - d * SLOT_SIZE;
+    let top_left = bl + up * SLOT_SIZE;
+    let top_right = br + up * SLOT_SIZE;
+    [top_left, top_right, br, bl]
+}
+
+fn quad_center(q: [Pos2; 4]) -> Pos2 {
+    pos2(q.iter().map(|p| p.x).sum::<f32>() / 4.0, q.iter().map(|p| p.y).sum::<f32>() / 4.0)
+}
+
+fn unit(a: Pos2, b: Pos2) -> Vec2 {
+    let d = b - a;
+    let len = d.length();
+    if len.is_finite() && len > 1e-4 { d / len } else { vec2(1.0, 0.0) }
 }
 
 /// 变体组「+」按钮的矩形：16×16，水平居中在对象上，顶边 = 对象下边缘 + [`ADD_VARIANT_TOP`]。
@@ -121,6 +142,17 @@ pub fn status_slot_owner(app: &CanvasApp, doc: &Document, page: NodeId, pos: Pos
         if !n.kind.is_frame_like() || n.is_board_atom() {
             continue;
         }
+        // 旋转帧的名称行随边转：槽的四角也随边转，不能再按屏幕轴对齐矩形命中。
+        if is_turned(doc, id) {
+            let Some((edge, d, up)) = turned_edge(app, doc, id) else { continue };
+            if turned_name_collides(doc, id, edge.len) {
+                continue;
+            }
+            if quad_contains(status_slot_quad(edge.corner, d, up, edge.len), pos) {
+                return Some(id);
+            }
+            continue;
+        }
         let (x0, y0, x1, _) = screen_bounds(app, doc, id)?;
         let slot = name_slots(x1, y0)[0];
         // 原始名称撞上图标 → 图标已省略，不接 hover 轮廓。
@@ -146,22 +178,33 @@ pub fn slot_at(app: &CanvasApp, doc: &Document, page: NodeId, sel: &[NodeId], po
         if !n.kind.is_frame_like() || n.is_board_atom() {
             continue;
         }
-        let Some((x0, y0, x1, y1)) = screen_bounds(app, doc, id) else { continue };
-        let status = name_slots(x1, y0)[0];
-        // 原始名称撞上图标 → 图标已省略，不接点击。
-        if name_hits_status(doc, id, x0, x1, y0) {
-            continue;
-        }
-        if status.contains(pos) {
-            let has = !n.dev_status.is_none();
-            return Some(if sel.contains(&id) {
-                (SlotHit::Status(id, has), status)
-            } else if has {
-                (SlotHit::Menu(id), status)
-            } else {
-                (SlotHit::Ready(id), status)
-            });
-        }
+        let slot = if is_turned(doc, id) {
+            let Some((edge, d, up)) = turned_edge(app, doc, id) else { continue };
+            if turned_name_collides(doc, id, edge.len) {
+                continue;
+            }
+            let q = status_slot_quad(edge.corner, d, up, edge.len);
+            if !quad_contains(q, pos) {
+                continue;
+            }
+            Rect::from_points(&q)
+        } else {
+            let Some((x0, y0, x1, _)) = screen_bounds(app, doc, id) else { continue };
+            let slot = name_slots(x1, y0)[0];
+            // 原始名称撞上图标 → 图标已省略，不接点击。
+            if name_hits_status(doc, id, x0, x1, y0) || !slot.contains(pos) {
+                continue;
+            }
+            slot
+        };
+        let has = !n.dev_status.is_none();
+        return Some(if sel.contains(&id) {
+            (SlotHit::Status(id, has), slot)
+        } else if has {
+            (SlotHit::Menu(id), slot)
+        } else {
+            (SlotHit::Ready(id), slot)
+        });
     }
     None
 }
@@ -189,24 +232,20 @@ pub fn label_ink(app: &CanvasApp, t: &Tokens, doc: &Document, id: NodeId, select
 ///   悬停只让下面的框显示 hover 轮廓（和悬停名称文字一样），按钮本身不起变化。
 /// - **已置待开发**：常态 `STATUS_GREEN` #14AE5C + 代码图标；悬停 `STATUS_GREEN_HOVER`
 ///   #009951 + 三个白点，点一下弹菜单。其它状态仍用 `DEV_CHANGED` / `DEV_COMPLETED`。
-fn status_slot(painter: &mut Painter, n: &figcraft_doc::Node, r: Rect, hovered: bool) {
-    if n.dev_status.is_none() {
-        // 未添加标签：透明、无图标、无悬停视觉（hover 轮廓由 overlays 画在对象上）。
-        return;
-    }
+fn status_fill(n: &figcraft_doc::Node, hovered: bool) -> Option<Color32> {
     let base = match n.dev_status {
         DevStatus::ReadyForDev if n.dev_changed => Some(DEV_CHANGED),
         DevStatus::ReadyForDev => Some(STATUS_GREEN),
         DevStatus::Completed => Some(DEV_COMPLETED),
-        DevStatus::None => unreachable!(),
-    };
+        DevStatus::None => None,
+    }?;
     // 悬停「待开发」绿按钮：整块换成深一档的 #009951，图标换成三个白点。
-    let fill = if hovered && n.dev_status == DevStatus::ReadyForDev && !n.dev_changed {
-        Some(STATUS_GREEN_HOVER)
-    } else {
-        base
-    };
-    painter.rect_filled(r, CornerRadius::same(3), fill.unwrap());
+    Some(if hovered && n.dev_status == DevStatus::ReadyForDev && !n.dev_changed { STATUS_GREEN_HOVER } else { base })
+}
+
+fn status_slot(painter: &mut Painter, n: &figcraft_doc::Node, r: Rect, hovered: bool) {
+    let Some(fill) = status_fill(n, hovered) else { return };
+    painter.rect_filled(r, CornerRadius::same(3), fill);
     let ink = Color32::WHITE;
     if hovered && n.dev_status == DevStatus::ReadyForDev && !n.dev_changed {
         more_dots(painter, r, ink);
@@ -216,6 +255,33 @@ fn status_slot(painter: &mut Painter, n: &figcraft_doc::Node, r: Rect, hovered: 
         painter.add_shape(vec![pos2(x + 6.0, y + 4.5), pos2(x + 2.5, y + 8.0), pos2(x + 6.0, y + 11.5)], false, Color32::TRANSPARENT, stroke(ink, 1.0));
         painter.add_shape(vec![pos2(x + 10.0, y + 4.5), pos2(x + 13.5, y + 8.0), pos2(x + 10.0, y + 11.5)], false, Color32::TRANSPARENT, stroke(ink, 1.0));
     }
+}
+
+/// 旋转帧的状态槽：槽的四角随名称行转，底色、代码图标与悬停省略号都按 `d`/`down`
+/// 两个轴摆放（2026-11-28，CodeRabbit：旋转帧不能丢状态按钮）。
+fn status_slot_rotated(painter: &mut Painter, n: &figcraft_doc::Node, q: [Pos2; 4], hovered: bool, angle: f32) {
+    let Some(fill) = status_fill(n, hovered) else { return };
+    let center = quad_center(q);
+    let d = unit(q[0], q[1]);
+    let down = unit(q[0], q[3]);
+    painter.rounded_quad_filled(center, d, down, vec2(SLOT_SIZE, SLOT_SIZE), 3.0, fill);
+    let ink = Color32::WHITE;
+    if hovered && n.dev_status == DevStatus::ReadyForDev && !n.dev_changed {
+        painter.labels.push(Label {
+            rect: Rect::from_center_size(center, text_size(ELLIPSIS, regular(13.0))),
+            text: ELLIPSIS.to_string(),
+            font: regular(13.0),
+            color: ink,
+            align: Align2::CENTER_CENTER,
+            angle: Some(angle),
+            pill: None,
+        });
+        return;
+    }
+    // 槽内本地坐标：x 沿 `d`、y 沿 `down`（左上角为 (0,0)）。
+    let at = |x: f32, y: f32| center + d * (x - SLOT_SIZE * 0.5) + down * (y - SLOT_SIZE * 0.5);
+    painter.add_shape(vec![at(6.0, 4.5), at(2.5, 8.0), at(6.0, 11.5)], false, Color32::TRANSPARENT, stroke(ink, 1.0));
+    painter.add_shape(vec![at(10.0, 4.5), at(13.5, 8.0), at(10.0, 11.5)], false, Color32::TRANSPARENT, stroke(ink, 1.0));
 }
 
 /// 悬停已置标签的状态按钮时显示的「…」——直接用省略号字形（和名称截断同一个字符），
@@ -258,6 +324,37 @@ pub fn label_edge(p00: Pos2, p10: Pos2, p01: Pos2) -> LabelEdge {
     LabelEdge { corner, angle: d.y.atan2(d.x), len }
 }
 
+/// The label of a rotated frame turns with its top edge (2026-11-27): the name, its hit box and
+/// the section pill all follow the edge's angle instead of staying horizontal.
+fn is_turned(doc: &Document, id: NodeId) -> bool {
+    figcraft_geom::rotation_degrees(doc.world_transform(id)).abs() > 1e-3
+}
+
+/// 旋转帧的标签边上：起点角、读取方向 `d`、朝外法线 `up`（屏幕坐标）。
+fn turned_edge(app: &CanvasApp, doc: &Document, id: NodeId) -> Option<(LabelEdge, Vec2, Vec2)> {
+    let n = doc.node(id)?;
+    let w = doc.world_transform(id);
+    let at = |x: f64, y: f64| {
+        let p = w * Point::new(x, y);
+        app.to_screen(p.x, p.y)
+    };
+    let edge = label_edge(at(0.0, 0.0), at(n.width, 0.0), at(0.0, n.height));
+    let d = vec2(edge.angle.cos(), edge.angle.sin());
+    let up = vec2(edge.angle.sin(), -edge.angle.cos());
+    Some((edge, d, up))
+}
+
+/// 旋转帧：原始名称沿上边缘量，撞上右侧状态槽就省略图标（与水平帧同一规则）。
+fn turned_name_collides(doc: &Document, id: NodeId, len: f32) -> bool {
+    let Some(n) = doc.node(id) else { return false };
+    let label = if matches!(n.kind, NodeKind::Component { .. } | NodeKind::ComponentSet { .. }) {
+        format!("{COMPONENT_MARK}{}", n.name)
+    } else {
+        n.name.clone()
+    };
+    text_size(&label, regular(11.0)).x >= len - (SLOT_OUTSET + SLOT_SIZE) - NAME_GAP
+}
+
 /// 画 `id`（顶层帧或 section）的标签；返回它在屏幕上的四角（用于命中测试）。
 pub fn draw(app: &CanvasApp, painter: &mut Painter, t: &Tokens, doc: &Document, id: NodeId, selected: bool, renaming: bool) -> Option<[Pos2; 4]> {
     let n = doc.node(id)?;
@@ -270,26 +367,52 @@ pub fn draw(app: &CanvasApp, painter: &mut Painter, t: &Tokens, doc: &Document, 
     let edge = label_edge(p00, at(n.width, 0.0), p01);
     let tl = edge.corner;
     let col = label_ink(app, t, doc, id, selected);
+    // 文字沿边的读取方向 d 与朝外的法线 up（屏幕上边的外侧）。
+    let d = vec2(edge.angle.cos(), edge.angle.sin());
+    let up = vec2(edge.angle.sin(), -edge.angle.cos());
+    let turned = edge.angle.abs() > 1e-3;
 
     let area = if matches!(n.kind, NodeKind::Section { .. }) {
         // section 标题是左上角内部的 pill。
-        let hidden = n.hides_contents();
         let fg = if selected { Color32::WHITE } else { t.text };
         let font = semibold(11.0);
         let shown = fit_with(&n.name, (edge.len - 16.0).clamp(40.0, 480.0), |s| text_size(s, font).x);
-        let galley = painter.layout_no_wrap(shown, font, fg);
-        let r = Rect::from_min_size(tl, galley.size() + vec2(16.0, 8.0));
-        painter.rect_filled(r, CornerRadius::same(4), if selected { t.accent } else { t.hover });
-        // 改名期间不画旧名字（内联输入框是透明的），pill 与矩形照旧。
-        if !renaming {
-            painter.galley(r.min + vec2(8.0, 4.0), galley, fg);
+        let galley = painter.layout_no_wrap(shown.clone(), font, fg);
+        let size = galley.size() + vec2(16.0, 8.0);
+        let center = tl + d * (size.x * 0.5) - up * (size.y * 0.5);
+        if turned {
+            painter.rounded_quad_filled(center, d, -up, size, 4.0, if selected { t.accent } else { t.hover });
+            if !renaming {
+                painter.labels.push(Label {
+                    rect: Rect::from_center_size(center, galley.size()),
+                    text: shown,
+                    font,
+                    color: fg,
+                    align: Align2::CENTER_CENTER,
+                    angle: Some(edge.angle),
+                    pill: None,
+                });
+            }
+            // 旋转 section 的交付状态徽标贴在同一行右侧，并随 pill 一起转。
+            status_badge_rotated(painter, n, center + d * (size.x * 0.5 + 6.0), d, up, edge.angle);
+            let corners = [
+                center + d * (size.x * 0.5) + up * (size.y * 0.5),
+                center - d * (size.x * 0.5) + up * (size.y * 0.5),
+                center - d * (size.x * 0.5) - up * (size.y * 0.5),
+                center + d * (size.x * 0.5) - up * (size.y * 0.5),
+            ];
+            [corners[3], corners[2], corners[1], corners[0]]
+        } else {
+            let r = Rect::from_min_size(tl, size);
+            painter.rect_filled(r, CornerRadius::same(4), if selected { t.accent } else { t.hover });
+            // 改名期间不画旧名字（内联输入框是透明的），pill 与矩形照旧。
+            if !renaming {
+                painter.galley(r.min + vec2(8.0, 4.0), galley, fg);
+            }
+            status_badge(painter, n, pos2(r.max.x + 6.0, r.center().y));
+            quad_of(r)
         }
-        status_badge(painter, n, pos2(r.max.x + 6.0, r.center().y));
-        let _ = hidden;
-        r
     } else {
-        let x = tl.x;
-        // 名字画在帧上边缘之上：文字框底边距上边缘 `LABEL_GAP`。
         let font = regular(11.0);
         // 组件 / 组件集的名字前面带「❖ 」（设计稿）；改名时只显示原名（内联输入框自己不带前缀）。
         let label = if matches!(n.kind, NodeKind::Component { .. } | NodeKind::ComponentSet { .. }) {
@@ -298,25 +421,48 @@ pub fn draw(app: &CanvasApp, painter: &mut Painter, t: &Tokens, doc: &Document, 
             n.name.clone()
         };
         // 宽度不设下限（`fit_with` 内部只夹到 1pt），长名字可以一路缩到只剩省略号。
-        let max_w = (edge.len - (x - tl.x)).max(1.0);
+        let max_w = edge.len.max(1.0);
         let shown = fit_with(&label, max_w, |s| text_size(s, font).x);
-        // 用**原始文字**判断：撞上图标就省略图标（名称照常画）。
-        let name_collides = screen_bounds(app, doc, id).is_some_and(|(_, y0, x1, _)| name_hits_status(doc, id, x, x1, y0));
-        let galley = painter.layout_no_wrap(shown, font, col);
+        // 用**原始文字**判断：撞上图标就省略图标（名称照常画）。旋转帧沿边量长度。
+        let name_collides = if turned {
+            text_size(&label, font).x >= edge.len - (SLOT_OUTSET + SLOT_SIZE) - NAME_GAP
+        } else {
+            screen_bounds(app, doc, id).is_some_and(|(_, y0, x1, _)| name_hits_status(doc, id, tl.x, x1, y0))
+        };
+        let galley = painter.layout_no_wrap(shown.clone(), font, col);
         let size = galley.size();
-        let end = x + size.x;
-        let top = tl.y - LABEL_GAP - size.y;
-        // 命中区 = 文字框本身（顶边 = 文字顶，底边 = 上边缘上方 `LABEL_GAP`），
-        // 重命名框直接用这个顶边，所以两态永远重合。
-        let label_rect = Rect::from_min_max(pos2(tl.x, top), pos2(end, tl.y - LABEL_GAP));
+        let bottom = tl + up * LABEL_GAP;
+        let top = bottom + up * size.y;
+        let end = top + d * size.x;
+        // 命中区 = 文字框本身（顶边 = 文字顶，底边 = 上边缘上方 `LABEL_GAP`）。
+        let corners = [top, end, end - up * size.y, bottom];
         // 同上：几何（`area`）仍按 galley 量出来的宽度算，只是不落笔。
-        if !renaming {
-            painter.galley(pos2(x, top), galley, col);
+        if turned {
+            // 改名期间旧名字不落笔（内联输入框透明），但状态槽仍按同一行画。
+            if !renaming {
+                painter.labels.push(Label {
+                    rect: Rect::from_center_size(bottom + d * (size.x * 0.5) + up * (size.y * 0.5), size),
+                    text: shown,
+                    font,
+                    color: col,
+                    align: Align2::CENTER_CENTER,
+                    angle: Some(edge.angle),
+                    pill: None,
+                });
+            }
+        } else if !renaming {
+            painter.galley(pos2(tl.x, tl.y - LABEL_GAP - size.y), galley, col);
         }
         // 名称行右侧的状态按钮：**原始名称文字撞上它就整个省略**（不画、不接点击、
-        // 不参与 hover 轮廓）；短名称则照常显示。判断用的是未截断的文字宽度。
-        if let Some((x0, y0, x1, y1)) = screen_bounds(app, doc, id) {
-            if !name_collides {
+        // 不参与 hover 轮廓）；短名称则照常显示。旋转帧的槽与命中区跟着上边缘转。
+        if !name_collides {
+            if turned {
+                let slot = status_slot_quad(tl, d, up, edge.len);
+                if !n.dev_status.is_none() {
+                    let hover_slot = app.pointer.is_some_and(|p| quad_contains(slot, p));
+                    status_slot_rotated(painter, n, slot, hover_slot, edge.angle);
+                }
+            } else if let Some((_, y0, x1, _)) = screen_bounds(app, doc, id) {
                 let slot = name_slots(x1, y0)[0];
                 if !n.dev_status.is_none() {
                     let hover_slot = app.pointer.is_some_and(|p| slot.contains(p));
@@ -324,7 +470,7 @@ pub fn draw(app: &CanvasApp, painter: &mut Painter, t: &Tokens, doc: &Document, 
                 }
             }
         }
-        label_rect
+        corners
     };
     if n.hides_contents() {
         let height = (p01 - p00).length();
@@ -333,7 +479,11 @@ pub fn draw(app: &CanvasApp, painter: &mut Painter, t: &Tokens, doc: &Document, 
             painter.text(center, Align2::CENTER_CENTER, tr("Contents hidden"), regular(11.0), t.text_tertiary);
         }
     }
-    Some([area.min, pos2(area.max.x, area.min.y), area.max, pos2(area.min.x, area.max.y)])
+    Some(area)
+}
+
+fn quad_of(r: Rect) -> [Pos2; 4] {
+    [r.min, pos2(r.max.x, r.min.y), r.max, pos2(r.min.x, r.max.y)]
 }
 
 #[cfg(test)]
@@ -390,5 +540,23 @@ mod tests {
         let r = add_variant_slot(200.0, 403.0);
         assert_eq!((r.min.x, r.min.y, r.width(), r.height()), (192.0, 433.0, 16.0, 16.0));
         assert_eq!(r.center().x, 200.0);
+    }
+
+    /// 0° 时旋转槽与轴对齐槽逐点一致；90° 时仍是贴在读取方向末端的 16×16 正方形。
+    #[test]
+    fn turned_name_row_slot_matches_the_axis_aligned_slot_and_turns_square() {
+        let flat = status_slot_quad(pos2(289.0, 200.0), vec2(1.0, 0.0), vec2(0.0, -1.0), 16.0);
+        let slot = name_slots(305.0, 200.0)[0];
+        assert!(close(flat[0], slot.min));
+        assert!(close(flat[1], pos2(slot.max.x, slot.min.y)));
+        assert!(close(flat[2], slot.max));
+        assert!(close(flat[3], pos2(slot.min.x, slot.max.y)));
+
+        let turned = status_slot_quad(pos2(100.0, 10.0), vec2(0.0, 1.0), vec2(1.0, 0.0), 80.0);
+        for i in 0..4 {
+            assert!(((turned[(i + 1) % 4] - turned[i]).length() - 16.0).abs() < 1e-3, "slot must stay square");
+        }
+        assert!(quad_contains(turned, quad_center(turned)));
+        assert!(!quad_contains(turned, pos2(80.0, 50.0)), "a point left of the edge is outside the slot");
     }
 }

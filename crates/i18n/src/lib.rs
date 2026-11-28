@@ -130,8 +130,10 @@ fn lookup(lang: usize, key: &str) -> Option<&'static Text> {
 
 /// The UI string for `key` (its English text) in the current language. One English text that needs
 /// two translations gets a context after `|` ("Fill|sizing"); the English catalog maps it back.
+/// A key missing from every catalog falls back to its English text **without the context** — a
+/// raw "Fill|sizing" would leak the disambiguation into the UI (2026-11-27).
 pub fn tr(key: &str) -> &str {
-    try_tr(key).unwrap_or(key)
+    try_tr(key).unwrap_or_else(|| key.split_once('|').map_or(key, |(text, _context)| text))
 }
 
 /// [`tr`] for text that comes from data and may have no catalog entry (an importer's notes, say):

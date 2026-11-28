@@ -1,7 +1,8 @@
 //! 图层轮廓（照搬 `ui-egui/src/canvas/outline.rs`）。
 //!
-//! hover / 选中 / 蒙版 / 布尔操作数的轮廓：椭圆、矢量、多边形、星形走**真实几何轮廓**
-//! （`figcraft_render::node_outline` 展平后逐段画），其余走包围盒四边形。
+//! hover / 选中 / 蒙版 / 布尔操作数的轮廓：**一律走包围盒的四条直边**。
+//! 不再沿椭圆、矢量、多边形、星形或圆角矩形的真实几何包边 —— 选中框本来就是一个
+//! 四边平直的矩形（2026-11-27，用户要求去掉所有包边描边的框）。
 
 use std::sync::Arc;
 
@@ -115,55 +116,15 @@ pub(super) fn outline_colour(doc: &Document, id: NodeId, green: Color32) -> Colo
     if set || owning_component(doc, id).is_some() || owning_instance(doc, id).is_some() { COMPONENT } else { green }
 }
 
-/// 形状类节点（椭圆/矢量/多边形/星形/布尔组）的轮廓路径，屏幕坐标。
-fn outline_shape(app: &CanvasApp, doc: &Document, id: NodeId) -> Option<Vec<Vec<Pos2>>> {
-    let n = doc.node(id)?;
-    if !matches!(
-        n.kind,
-        NodeKind::Ellipse { .. } | NodeKind::Vector { .. } | NodeKind::Polygon { .. } | NodeKind::Star { .. } | NodeKind::BooleanOp { .. }
-    ) {
-        return None;
-    }
-    let (path, _) = figcraft_render::node_outline(doc, n)?;
-    let w = doc.world_transform(id);
-    let mut out = Vec::new();
-    let mut cur: Vec<Pos2> = Vec::new();
-    // 展平容差按屏幕像素给（0.5px），缩放越大越精细。
-    let zoom = app.session.ds().map(|d| d.view.zoom).unwrap_or(1.0);
-    figcraft_geom::kurbo::flatten(path.iter(), 0.5 / zoom, |el| {
-        use figcraft_geom::kurbo::PathEl::*;
-        match el {
-            MoveTo(p) => {
-                if cur.len() > 1 {
-                    out.push(std::mem::take(&mut cur));
-                }
-                cur.clear();
-                let q = w * p;
-                cur.push(app.to_screen(q.x, q.y));
-            }
-            LineTo(p) => {
-                let q = w * p;
-                cur.push(app.to_screen(q.x, q.y));
-            }
-            ClosePath => {
-                if let Some(f) = cur.first().copied() {
-                    cur.push(f);
-                }
-            }
-            _ => {}
-        }
-    });
-    if cur.len() > 1 {
-        out.push(cur);
-    }
-    Some(out)
-}
-
+/// 轮廓的调试打印开关。重构 `outline_shape` / `debug_outline` 一起被删掉时，两处调用留了下
+/// 来（编译不过），这里补回同一个纯环境变量判断，行为不变：只有设了 `FIGCRAFT_DEBUG_OUTLINE`
+/// 才会打印。
 fn debug_outline() -> bool {
     std::env::var_os("FIGCRAFT_DEBUG_OUTLINE").is_some()
 }
 
-/// 图层在画布上的轮廓：形状类走真实几何，其余走包围盒。
+/// 图层在画布上的轮廓：**永远是包围盒的四条直边**（含旋转时跟随物体旋转的四边，
+/// 但仍是一圈平直的闭合矩形，不沿圆角或形状几何包边）。
 pub(super) fn draw_outline(app: &CanvasApp, painter: &mut Painter, doc: &Document, id: NodeId, s: Stroke) {
     if debug_outline() {
         let n = doc.node(id);
@@ -180,24 +141,15 @@ pub(super) fn draw_outline(app: &CanvasApp, painter: &mut Painter, doc: &Documen
             app.ppp
         );
     }
-    match outline_shape(app, doc, id) {
-        Some(lines) => {
-            for l in lines {
-                painter.add(Shape::line(l, s));
-            }
+    if let Some(q) = node_quad(app, doc, id) {
+        // 轴对齐的矩形：用一条闭合路径画直角边框，线宽原样使用调用方的值。
+        // 四边和四角由同一次描边生成，不会左右分别取整。
+        if let Some(r) = axis_aligned(q)
+            && outline_ring(painter, r, s.width, app.ppp, Vec2::ZERO, s.color)
+        {
+            return;
         }
-        None => {
-            if let Some(q) = node_quad(app, doc, id) {
-                // 轴对齐的矩形：用一条闭合路径画直角边框，线宽原样使用调用方的值。
-                // 四边和四角由同一次描边生成，不会左右分别取整。
-                if let Some(r) = axis_aligned(q)
-                    && outline_ring(painter, r, s.width, app.ppp, Vec2::ZERO, s.color)
-                {
-                    return;
-                }
-                quad(painter, q, s);
-            }
-        }
+        quad(painter, q, s);
     }
 }
 

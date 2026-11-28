@@ -149,25 +149,11 @@ pub(super) fn outline_colour(doc: &Document, id: NodeId, green: Color32) -> Colo
     if set || owning_component(doc, id).is_some() || owning_instance(doc, id).is_some() { COMPONENT } else { green }
 }
 
-/// The path a layer's hover and selection outline follows, in its own space, when that isn't just
-/// its box: the shape of ellipses, vectors, polygons, stars and boolean groups, and of rectangles
-/// and frames with rounded corners (each corner's radius and the smoothing, as the fill draws them,
-/// whatever the stroke's alignment).
-pub(super) fn outline_path(doc: &Document, n: &figcraft_doc::Node) -> Option<figcraft_geom::kurbo::BezPath> {
-    let shaped = match n.kind {
-        NodeKind::Ellipse { .. } | NodeKind::Vector { .. } | NodeKind::Polygon { .. } | NodeKind::Star { .. } | NodeKind::BooleanOp { .. } => true,
-        NodeKind::Rectangle
-        | NodeKind::Frame
-        | NodeKind::Component { .. }
-        | NodeKind::ComponentSet { .. }
-        | NodeKind::Instance { .. }
-        | NodeKind::Section { .. } => n.corners.radii.iter().any(|r| *r > 0.0),
-        _ => false,
-    };
-    if !shaped {
-        return None;
-    }
-    figcraft_render::node_outline(doc, n).map(|(p, _)| p)
+/// Hover and selection outlines are always the layer's box (2026-11-27): no outline traces a
+/// rounded corner or a shape's geometry any more, so this never returns a path. Kept for callers
+/// and tests that still ask.
+pub(super) fn outline_path(_doc: &Document, _n: &figcraft_doc::Node) -> Option<figcraft_geom::kurbo::BezPath> {
+    None
 }
 
 /// [`outline_path`] on screen, flattened into polylines.

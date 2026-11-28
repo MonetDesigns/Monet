@@ -5962,9 +5962,8 @@ impl CanvasView {
                 && let Some(b) = figcraft_engine::tools::selection_box(&ds.doc, &ds.selection)
             {
                 let screen: Vec<_> = b.iter().map(|p| self.app.to_screen(p.x, p.y)).collect();
-                let mid_x = screen.iter().map(|p| p.x).sum::<f32>() / 4.0;
-                let y1 = screen.iter().map(|p| p.y).fold(f32::MIN, f32::max);
-                if canvas::overlays::add_variant_rect(mid_x, y1).contains(pos) {
+                let q = [screen[0], screen[1], screen[2], screen[3]];
+                if canvas::overlays::add_variant_hit(q, pos) {
                     self.run_command("component.addVariant", serde_json::json!({ "id": ds.selection[0].0 }), cx);
                     return true;
                 }
@@ -7898,7 +7897,11 @@ impl Render for CanvasView {
             // 把整段文字做成内联 SVG 后绕自身中心转 -90°，等价于 egui 的
             // `TextShape::with_angle_and_anchor(-π/2, CENTER_CENTER)`。
             if let Some(angle) = l.angle {
-                let key = canvas::svg_text::text_key(&l.text, l.font.size, l.rect.width(), l.rect.height());
+                let weight = match l.font.weight {
+                    canvas::geom::FontWeight::Normal => 305,
+                    canvas::geom::FontWeight::SemiBold | canvas::geom::FontWeight::Bold => 330,
+                };
+                let key = canvas::svg_text::text_key_weighted(&l.text, l.font.size, l.rect.width(), l.rect.height(), weight);
                 let rotated = gpui::svg()
                     .absolute()
                     .left(px(l.rect.min.x))

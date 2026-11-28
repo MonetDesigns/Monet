@@ -55,6 +55,26 @@ pub(crate) fn status_badge(painter: &mut Painter, n: &Node, at: Pos2) -> Option<
     Some(r)
 }
 
+/// The same badge on a turned frame/section: `at` is the left-center anchor, `d` the label's
+/// reading direction and `up` the outward normal. The pill and its text turn with the label
+/// (2026-11-28), so a rotated section keeps the development status beside its name.
+pub(crate) fn status_badge_rotated(painter: &mut Painter, n: &Node, at: Pos2, d: Vec2, up: Vec2, angle: f32) {
+    let Some((label, fill)) = status_label(n) else { return };
+    let galley = painter.layout_no_wrap(label, semibold(10.0), Color32::WHITE);
+    let size = galley.size() + vec2(10.0, 4.0);
+    let center = at + d * (size.x * 0.5);
+    painter.rounded_quad_filled(center, d, -up, size, 4.0, fill);
+    painter.labels.push(Label {
+        rect: Rect::from_center_size(center, size),
+        text: label.to_string(),
+        font: semibold(10.0),
+        color: Color32::WHITE,
+        align: Align2::CENTER_CENTER,
+        angle: Some(angle),
+        pill: None,
+    });
+}
+
 /// 侧标尺上的一个数字（参考实现 `vertical_ruler_label`）。
 ///
 /// 参考实现 用 `TextShape::with_angle_and_anchor(-π/2, CENTER_CENTER)`：先把**整段**文字按水平
