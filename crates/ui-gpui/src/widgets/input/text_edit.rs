@@ -8,6 +8,8 @@
 //   - 统一网格（segmented、sublabels2 空列、field 行）一律 w_full + flex_1，禁止手算列宽。
 // 2026-11-05 补充：用户随后明确指令「重构 color_field / template 插槽隐藏 / number_field 范围 /
 // 失焦提交」，本文件按该指令解冻；以上 INVARIANT 仍保持不变。
+// 2026-11-27 补充：用户明确要求本控件支持多行（评论 composer 的 Shift+Enter 换行），按该指令
+// 解冻；以上 INVARIANT 仍保持不变。
 // ============================================================================
 //! `TextEdit` — `ui-egui`'s **`text_field_edit` / `field_editor`**: the editing lifecycle only.
 //!
@@ -109,6 +111,8 @@ pub struct TextEdit {
     right_pad: f32,
     /// Right-align the value: the opacity's number sits right-aligned in its 44 pt cell.
     align: TextAlign,
+    /// Explicit newlines are enabled: stack paragraphs, Shift+Enter inserts a break.
+    multiline: bool,
     /// A read-only field never enters edit mode (a display-only combo).
     readonly: bool,
     /// Escape clears this field (a search box).
@@ -137,6 +141,7 @@ impl TextEdit {
             inset_left: 0.0,
             right_pad: 0.0,
             align: TextAlign::Left,
+            multiline: false,
             readonly: false,
             search_clear: false,
         }
@@ -172,6 +177,20 @@ impl TextEdit {
         }
         self.input.buffer.set_text(self.value.clone());
     }
+
+    /// Replace the visible draft too (mention insertion is a programmatic edit while the field
+    /// is active). `set_value` deliberately keeps a live draft; this does not change that rule
+    /// for document pushes.
+    pub(crate) fn set_draft_text(&mut self, v: impl Into<String>) {
+        let v = v.into();
+        self.value = v.clone();
+        self.kept = v.clone();
+        self.input.buffer.set_text(v);
+    }
+    /// The live caret position as a character index (the mention query ends here, not at EOF).
+    pub(crate) fn draft_caret(&self) -> usize {
+        self.input.buffer.range().end
+    }
     pub fn set_placeholder(&mut self, p: impl Into<SharedString>) {
         self.input.set_placeholder(p);
     }
@@ -197,6 +216,15 @@ impl TextEdit {
     pub fn set_align(&mut self, a: TextAlign) {
         self.align = a;
         self.input.set_align(a);
+    }
+    /// Explicit newlines: the editor stacks paragraphs and Shift+Enter inserts a line break.
+    /// Plain Enter still follows the existing commit path (comment composers intercept it first).
+    pub fn set_multiline(&mut self, multiline: bool) {
+        self.multiline = multiline;
+        self.input.set_multiline(multiline);
+    }
+    pub fn is_multiline(&self) -> bool {
+        self.multiline
     }
     pub fn set_readonly(&mut self, b: bool) {
         self.readonly = b;
@@ -253,6 +281,7 @@ impl TextEdit {
 
     /// 把当前内容交给 `on_change`。
     fn notify_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.input.clear_vertical_target();
         let Some(cb) = self.on_change.clone() else { return };
         let text = self.input.buffer.text().to_string();
         cb(&text, window, cx);
@@ -293,6 +322,7 @@ impl TextEdit {
 
     // ── edit lifecycle (egui's `text_field_edit`) ───────────────────────────────────────────
     fn begin_edit(&mut self, window: &mut Window, select_all: bool) {
+        self.input.clear_vertical_target();
         let was = self.editing;
         self.editing = true;
         if !was {
@@ -459,7 +489,8 @@ impl Render for TextEdit {
             .w_full()
             .h_full()
             .flex()
-            .items_center()
+            .when(self.multiline, |d| d.items_start())
+            .when(!self.multiline, |d| d.items_center())
             .pl(pt(self.inset_left))
             .pr(pt(self.right_pad))
             .child(self.input.element(entity, focus, focused, cursor));
@@ -637,6 +668,12 @@ impl Render for TextEdit {
                     "down" => "arrowdown",
                     k => k,
                 };
+                // A run of Up/Down keeps the column it started from. Every other key ends that
+                // run, so the next vertical move records a fresh x; Home/End read the current
+                // wrap-boundary affinity themselves.
+                if key != "arrowup" && key != "arrowdown" && key != "home" && key != "end" {
+                    this.input.clear_vertical_target();
+                }
                 if ctrl {
                     match key {
                         "a" => this.input.buffer.select_all(),
@@ -653,12 +690,14 @@ impl Render for TextEdit {
                             if !s.is_empty() {
                                 cx.write_to_clipboard(ClipboardItem::new_string(s));
                                 this.input.buffer.insert("");
+                                this.notify_change(window, cx);
                             }
                         }
                         "v" => {
                             let text = cx.read_from_clipboard().and_then(|i| i.text().map(|s| s.to_string()));
                             if let Some(s) = text {
                                 this.input.buffer.insert(&s);
+                                this.notify_change(window, cx);
                             }
                         }
                         _ => return,
@@ -693,6 +732,46 @@ impl Render for TextEdit {
                     }
                     cx.notify();
                     return;
+                }
+                // Multiline editing: Shift+Enter inserts a paragraph break, arrows/home/end follow
+                // the visual paragraphs rather than the whole buffer.
+                if this.multiline {
+                    match key {
+                        "enter" if m.shift => {
+                            this.input.buffer.insert("\n");
+                            this.select_all_pending = false;
+                            this.notify_change(window, cx);
+                            cx.notify();
+                            return;
+                        }
+                        "arrowup" | "arrowdown" => {
+                            let dir = if key == "arrowup" { -1 } else { 1 };
+                            if let Some(target) = this.input.vertical_target(this.input.buffer.caret(), dir) {
+                                if m.shift {
+                                    this.input.buffer.select_to(target);
+                                } else {
+                                    this.input.buffer.move_to(target);
+                                }
+                                this.select_all_pending = false;
+                                cx.notify();
+                            }
+                            return;
+                        }
+                        "home" | "end" => {
+                            if let Some((start, end)) = this.input.line_bounds(this.input.buffer.caret()) {
+                                let target = if key == "home" { start } else { end };
+                                if m.shift {
+                                    this.input.buffer.select_to(target);
+                                } else {
+                                    this.input.buffer.move_to(target);
+                                }
+                                this.select_all_pending = false;
+                                cx.notify();
+                            }
+                            return;
+                        }
+                        _ => {}
+                    }
                 }
                 // Printable characters belong to the platform input handler.
                 if let Some(ch) = e.keystroke.key_char.as_ref().and_then(|s| s.chars().next()).filter(|c| *c >= ' ') {
@@ -867,6 +946,144 @@ mod tests {
             field.commit(window, cx);
             assert_eq!(field.value(), "80", "the old number must survive");
             assert_eq!(field.input.buffer.text(), "80", "the text must disappear from the field");
+        });
+    }
+
+    /// 评论 composer：多行模式下 Shift+Enter 必须真的在缓冲区里插入段落，而不是提交或忽略。
+    #[gpui::test]
+    async fn shift_enter_inserts_a_paragraph_break(cx: &mut gpui::TestAppContext) {
+        let (view, window) = cx.add_window_view(|_window, cx| {
+            let mut field = TextEdit::new(cx);
+            field.set_value("first");
+            field.set_multiline(true);
+            field
+        });
+
+        view.update_in(window, |field, window, _cx| {
+            field.begin_edit(window, false);
+            window.focus(&field.focus);
+        });
+        window.simulate_keystrokes("shift-enter");
+
+        view.update(window, |field, _| {
+            assert_eq!(field.input.buffer.text(), "first\n", "Shift+Enter must insert a newline");
+            assert!(field.is_multiline());
+        });
+    }
+
+    /// 上下键按视觉段落走：从第二行末尾上行到第一行末尾，而不是整段文本的首尾。
+    #[gpui::test]
+    async fn up_moves_to_the_previous_visual_paragraph(cx: &mut gpui::TestAppContext) {
+        let (view, window) = cx.add_window_view(|_window, cx| {
+            let mut field = TextEdit::new(cx);
+            field.set_value("ab\ncdef");
+            field.set_multiline(true);
+            field
+        });
+        window.simulate_resize(gpui::Size::new(px(300.0), px(90.0)));
+        view.update_in(window, |field, window, _cx| {
+            field.begin_edit(window, false);
+            window.focus(&field.focus);
+        });
+        window.simulate_keystrokes("up");
+
+        view.update(window, |field, _| {
+            assert_eq!(field.input.buffer.range().end, 2, "the caret should land at the end of 'ab'");
+        });
+    }
+
+    /// Shift+Up twice must keep extending from the active caret, not jump back to the selection
+    /// end that the first step left behind.
+    #[gpui::test]
+    async fn repeated_shift_up_extends_the_selection(cx: &mut gpui::TestAppContext) {
+        let (view, window) = cx.add_window_view(|_window, cx| {
+            let mut field = TextEdit::new(cx);
+            field.set_value("aa\naa\naa");
+            field.set_multiline(true);
+            field.input.buffer.move_to(8);
+            field
+        });
+        window.simulate_resize(gpui::Size::new(px(300.0), px(90.0)));
+        view.update_in(window, |field, window, _cx| {
+            field.begin_edit(window, false);
+            window.focus(&field.focus);
+        });
+        window.simulate_keystrokes("shift-up");
+        view.update(window, |field, _| {
+            assert_eq!(field.input.buffer.range(), 5..8, "the first Shift+Up reaches the previous paragraph");
+            assert_eq!(field.input.buffer.caret(), 5, "the active caret moves even though the anchor stays at 8");
+        });
+        window.simulate_keystrokes("shift-up");
+        view.update(window, |field, _| {
+            assert_eq!(field.input.buffer.range(), 2..8, "the second Shift+Up must keep extending upward");
+        });
+    }
+
+    /// Consecutive Up/Down presses keep the column they started from even when an intermediate
+    /// paragraph is shorter.
+    #[gpui::test]
+    async fn consecutive_vertical_moves_keep_the_preferred_column(cx: &mut gpui::TestAppContext) {
+        let (view, window) = cx.add_window_view(|_window, cx| {
+            let mut field = TextEdit::new(cx);
+            field.set_value("mmmmmm\nm\nmmmmmm");
+            field.set_multiline(true);
+            field.input.buffer.move_to(15);
+            field
+        });
+        window.simulate_resize(gpui::Size::new(px(300.0), px(90.0)));
+        view.update_in(window, |field, window, _cx| {
+            field.begin_edit(window, false);
+            window.focus(&field.focus);
+        });
+        window.simulate_keystrokes("up");
+        view.update(window, |field, _| assert_eq!(field.input.buffer.caret(), 8, "the first Up clamps to the short row"));
+        window.simulate_keystrokes("up");
+        view.update(window, |field, _| assert_eq!(field.input.buffer.caret(), 6, "the second Up must return to the original column"));
+    }
+
+    /// At the outer rows, Up/Down still move to the document's start/end instead of doing nothing.
+    #[gpui::test]
+    async fn vertical_moves_reach_the_document_boundaries(cx: &mut gpui::TestAppContext) {
+        let (view, window) = cx.add_window_view(|_window, cx| {
+            let mut field = TextEdit::new(cx);
+            field.set_value("a\nb");
+            field.set_multiline(true);
+            field
+        });
+        window.simulate_resize(gpui::Size::new(px(300.0), px(90.0)));
+        view.update_in(window, |field, window, _cx| {
+            field.begin_edit(window, false);
+            field.input.buffer.move_to(1);
+            window.focus(&field.focus);
+        });
+        window.simulate_keystrokes("up");
+        view.update(window, |field, _| assert_eq!(field.input.buffer.caret(), 0, "Up on the first row reaches the document start"));
+        window.simulate_keystrokes("down");
+        window.simulate_keystrokes("down");
+        view.update(window, |field, _| assert_eq!(field.input.buffer.caret(), 3, "Down on the last row reaches the document end"));
+    }
+
+    /// 固定高度的 composer 也要真的能看全内容：长行软换行，行数超过可视高度时跟随光标滚动。
+    #[gpui::test]
+    async fn long_lines_wrap_and_the_caret_scrolls_inside_the_box(cx: &mut gpui::TestAppContext) {
+        let (view, window) = cx.add_window_view(|_window, cx| {
+            let mut field = TextEdit::new(cx);
+            field.set_value("one two three four five six seven eight nine ten\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine");
+            field.set_multiline(true);
+            field
+        });
+        window.simulate_resize(gpui::Size::new(px(140.0), px(72.0)));
+        view.update_in(window, |field, window, _cx| {
+            field.begin_edit(window, false);
+            window.focus(&field.focus);
+        });
+        // Force a paint so the cache reflects this window's narrow, short composer.
+        window.simulate_keystrokes("end");
+
+        view.update(window, |field, _| {
+            let (rows, scroll_y) = field.input.visual_rows_for_test();
+            assert!(scroll_y > px(0.0), "the caret row must stay inside the 72 px composer");
+            assert!(rows > 9, "the long paragraph must wrap into extra visual rows");
         });
     }
 }

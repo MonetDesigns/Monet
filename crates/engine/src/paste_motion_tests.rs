@@ -32,7 +32,7 @@ fn key(s: &mut Session, node: NodeId, time: u32, x: f64, y: f64) {
 }
 
 fn settings(duration_ms: u32, fps: u32, looping: bool) -> TimelineSettings {
-    TimelineSettings { duration_ms, fps, looping }
+    TimelineSettings { duration_ms, fps, looping, reverse: false }
 }
 
 fn copy(s: &mut Session, node: NodeId) {

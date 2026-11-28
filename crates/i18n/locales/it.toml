@@ -1887,7 +1887,7 @@ status = "draft — needs native review"
 "Curved" = "Curvo"
 "Dart constants for Flutter…" = "Costanti Dart per Flutter…"
 "Database" = "Database"
-"Delete {n} variables" = "Elimina {n} variabili"
+"Delete {n} variables" = { other = "Elimina {n} variabili" }
 "Design panel" = "Pannello Design"
 "Detach calculation" = "Scollega calcolo"
 "Dev Mode only inspects: switch to Design (Shift+D) to edit" = "La modalità sviluppatore consente solo di ispezionare: passa a Design (Shift+D) per modificare"
@@ -1907,8 +1907,8 @@ status = "draft — needs native review"
 "Everyone who reaches this server can open these files while they are shared." = "Chiunque raggiunga questo server può aprire questi file finché sono condivisi."
 "Exact only" = "Solo esatto"
 "Expand the interface" = "Espandi l'interfaccia"
-"Exported {name}; {n} kinds of content were changed or left out" = "{name} esportato; {n} tipi di contenuto sono stati modificati o omessi"
-"Exported {n} files; some content was changed or left out" = "{n} file esportati; parte del contenuto è stata modificata o omessa"
+"Exported {name}; {n} kinds of content were changed or left out" = { other = "{name} esportato; {n} tipi di contenuto sono stati modificati o omessi" }
+"Exported {n} files; some content was changed or left out" = { other = "{n} file esportati; parte del contenuto è stata modificata o omessa" }
 "Monet stopped because of an internal error." = "Monet si è fermato per un errore interno."
 "Flow chart" = "Diagramma di flusso"
 "Format" = "Formato"
@@ -2065,11 +2065,11 @@ status = "draft — needs native review"
 "{count} in it now · Changed {date}" = "{count} dentro ora · Modificato il {date}"
 "{insertions} · {detachments}" = "{insertions} · {detachments}"
 "{name}, disconnected from its live session" = "{name}, disconnesso dalla sua sessione live"
-"{n} detached" = "{n} scollegati"
-"{n} inserted" = "{n} inseriti"
+"{n} detached" = { other = "{n} scollegati" }
+"{n} inserted" = { other = "{n} inseriti" }
 "{n} min" = "{n} min"
-"{n} votes" = "{n} voti"
-"{n} votes left" = "{n} voti rimasti"
+"{n} votes" = { other = "{n} voti" }
+"{n} votes left" = { other = "{n} voti rimasti" }
 "{period}: {counts}" = "{period}: {counts}"
 "{used} · {detached}" = "{used} · {detached}"
 "{used} · {inserted}" = "{used} · {inserted}"

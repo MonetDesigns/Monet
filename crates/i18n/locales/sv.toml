@@ -2033,7 +2033,7 @@ name = "Svenska"
 "Balance" = "Balansera"
 "Balance: every line close to the same length" = "Balansera: varje rad ungefär lika lång"
 "Ctrl+click a padding field" = "Ctrl+klicka på ett utfyllnadsfält"
-"Delete {n} variables" = "Ta bort {n} variabler"
+"Delete {n} variables" = { other = "Ta bort {n} variabler" }
 "Disconnected. Reconnecting…" = "Frånkopplad. Ansluter igen…"
 "Disconnected. Your edits stay here and sync when the connection returns. Reconnecting…" = "Frånkopplad. Dina ändringar stannar här och synkas när anslutningen är tillbaka. Ansluter igen…"
 "Dismiss" = "Avfärda"

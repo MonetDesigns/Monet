@@ -26,6 +26,7 @@ use figcraft_doc::{Document, NodeId};
 use figcraft_geom::Rect;
 use figcraft_i18n::tr;
 use gpui::{Div, ImageSource, MouseButton, SharedString, Stateful, div, img, prelude::*, px};
+use serde_json::Value;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Instant;
@@ -41,6 +42,17 @@ pub enum ScaleMode {
 }
 
 impl ScaleMode {
+    /// The `proto.presentOptions` spelling (`fit|fitWidth|fill|actual`).
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "fit" => ScaleMode::Fit,
+            "fitWidth" => ScaleMode::FitWidth,
+            "fill" => ScaleMode::Fill,
+            "actual" => ScaleMode::Actual,
+            _ => return None,
+        })
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             ScaleMode::Fit => tr("Fit"),
@@ -86,6 +98,81 @@ impl ScaleMode {
             3 => ScaleMode::Actual,
             _ => ScaleMode::Fit,
         }
+    }
+}
+
+/// The presenter options `proto.presentOptions` sets, kept for later presentations
+/// (egui `app.ui.present_view`). The engine only sends the keys that changed; absent keys keep
+/// their current values.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PresentOptions {
+    pub scale: ScaleMode,
+    pub device_frame: bool,
+    pub hotspot_hints: bool,
+    pub inspect: bool,
+    pub hide_ui: bool,
+}
+
+impl Default for PresentOptions {
+    fn default() -> Self {
+        Self { scale: ScaleMode::Fit, device_frame: true, hotspot_hints: true, inspect: false, hide_ui: false }
+    }
+}
+
+impl PresentOptions {
+    /// Apply a `present.options` payload. Returns whether any key was recognised.
+    pub fn update(&mut self, data: &Value) -> bool {
+        let mut changed = false;
+        if let Some(s) = data.get("scale").and_then(Value::as_str).and_then(ScaleMode::parse) {
+            self.scale = s;
+            changed = true;
+        }
+        if let Some(v) = data.get("deviceFrame").and_then(Value::as_bool) {
+            self.device_frame = v;
+            changed = true;
+        }
+        if let Some(v) = data.get("hotspotHints").and_then(Value::as_bool) {
+            self.hotspot_hints = v;
+            changed = true;
+        }
+        if let Some(v) = data.get("inspect").and_then(Value::as_bool) {
+            self.inspect = v;
+            changed = true;
+        }
+        if let Some(v) = data.get("hideUi").and_then(Value::as_bool) {
+            self.hide_ui = v;
+            changed = true;
+        }
+        changed
+    }
+
+    /// Copy only the keys present in a `present.options` payload into a running presentation.
+    /// A partial request must not overwrite settings the user changed in the player (Z / menu).
+    pub fn apply_request(&self, data: &Value, state: &mut PresentState) {
+        if data.get("scale").and_then(Value::as_str).and_then(ScaleMode::parse).is_some() {
+            state.scale = self.scale;
+        }
+        if data.get("deviceFrame").and_then(Value::as_bool).is_some() {
+            state.device_frame = self.device_frame;
+        }
+        if data.get("hotspotHints").and_then(Value::as_bool).is_some() {
+            state.hints = self.hotspot_hints;
+        }
+        if data.get("inspect").and_then(Value::as_bool).is_some() {
+            state.inspect = self.inspect;
+        }
+        if data.get("hideUi").and_then(Value::as_bool).is_some() {
+            state.hide_ui = self.hide_ui;
+        }
+    }
+
+    /// Copy the stored options into a running presentation.
+    pub fn apply_to(&self, state: &mut PresentState) {
+        state.scale = self.scale;
+        state.device_frame = self.device_frame;
+        state.hints = self.hotspot_hints;
+        state.inspect = self.inspect;
+        state.hide_ui = self.hide_ui;
     }
 }
 
@@ -2314,6 +2401,47 @@ pub fn set_scale(id: u8) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn present_options_apply_to_a_presentation_and_ignore_unknown_keys() {
+        let mut options = PresentOptions::default();
+        assert!(options.update(&serde_json::json!({"scale": "fill", "hideUi": true, "inspect": true, "unknown": 1})));
+        assert_eq!(options.scale, ScaleMode::Fill);
+        assert!(options.hide_ui && options.inspect);
+        assert!(options.device_frame, "an absent key keeps its old value");
+        assert!(!options.update(&serde_json::json!({})));
+
+        let mut state = PresentState::new(figcraft_doc::NodeId(1), false);
+        options.apply_to(&mut state);
+        assert_eq!(state.scale, ScaleMode::Fill);
+        assert!(state.hide_ui && state.inspect);
+        assert!(state.hints, "hotspot hints were not changed");
+    }
+
+    #[test]
+    fn present_options_partial_request_keeps_the_player_scale() {
+        let mut options = PresentOptions::default();
+        assert!(options.update(&serde_json::json!({"inspect": true})));
+        let mut state = PresentState::new(figcraft_doc::NodeId(1), false);
+        state.scale = ScaleMode::Fill;
+        options.apply_request(&serde_json::json!({"inspect": true}), &mut state);
+        assert!(state.inspect, "the requested key is applied");
+        assert_eq!(state.scale, ScaleMode::Fill, "an absent key does not reset the player");
+
+        assert!(options.update(&serde_json::json!({"scale": "actual"})));
+        options.apply_request(&serde_json::json!({"scale": "actual"}), &mut state);
+        assert_eq!(state.scale, ScaleMode::Actual);
+    }
+
+    #[test]
+    fn present_options_parse_every_engine_scale_name() {
+        for (name, scale) in
+            [("fit", ScaleMode::Fit), ("fitWidth", ScaleMode::FitWidth), ("fill", ScaleMode::Fill), ("actual", ScaleMode::Actual)]
+        {
+            assert_eq!(ScaleMode::parse(name), Some(scale));
+        }
+        assert_eq!(ScaleMode::parse("Fit"), None);
+    }
+
     fn doc() -> Document {
         Document::new("present-test")
     }
@@ -2326,7 +2454,7 @@ mod tests {
         let mut d = doc();
         let page = d.first_page().unwrap();
         let _ = d.create(page, NodeKind::Rectangle, "R", 0.0, 0.0, 5.0, 5.0).unwrap();
-        d.timelines.insert(page, TimelineSettings { duration_ms: 2000, fps: 30, looping: true });
+        d.timelines.insert(page, TimelineSettings { duration_ms: 2000, fps: 30, looping: true, reverse: false });
         let mut p = PresentState::new(page, false);
         p.playing = true;
         p.last = Instant::now() - std::time::Duration::from_millis(120);
@@ -2348,7 +2476,7 @@ mod tests {
         let mut d = Document::new("present-one-shot");
         let page = d.first_page().unwrap();
         let frame = d.create(page, NodeKind::Frame, "Card", 0.0, 0.0, 100.0, 100.0).unwrap();
-        d.timelines.insert(frame, TimelineSettings { duration_ms: 500, fps: 60, looping: false });
+        d.timelines.insert(frame, TimelineSettings { duration_ms: 500, fps: 60, looping: false, reverse: false });
         let mut p = PresentState::new(frame, false);
         p.playing = true;
         // 第一步：小步进，离末帧还远 → 仍要续帧。
@@ -2374,8 +2502,8 @@ mod tests {
         let mut d = Document::new("present-frame");
         let page = d.first_page().unwrap();
         let frame = d.create(page, NodeKind::Frame, "Card", 0.0, 0.0, 100.0, 100.0).unwrap();
-        d.timelines.insert(page, TimelineSettings { duration_ms: 2000, fps: 30, looping: false });
-        d.timelines.insert(frame, TimelineSettings { duration_ms: 500, fps: 60, looping: true });
+        d.timelines.insert(page, TimelineSettings { duration_ms: 2000, fps: 30, looping: false, reverse: false });
+        d.timelines.insert(frame, TimelineSettings { duration_ms: 500, fps: 60, looping: true, reverse: false });
         let mut p = PresentState::new(frame, false);
         p.playing = true;
         p.time_ms = 480.0;
@@ -2491,7 +2619,7 @@ mod tests {
             easing: Easing::EaseOut,
             delay_ms: 0,
         });
-        d.timelines.insert(frame, figcraft_doc::anim::motion::TimelineSettings { duration_ms: 1000, fps: 60, looping: false });
+        d.timelines.insert(frame, figcraft_doc::anim::motion::TimelineSettings { duration_ms: 1000, fps: 60, looping: false, reverse: false });
         (d, frame)
     }
 
@@ -2528,7 +2656,7 @@ mod tests {
         let a = d.create(page, NodeKind::Frame, "A", 0.0, 0.0, 100.0, 100.0).unwrap();
         let b = d.create(page, NodeKind::Frame, "B", 200.0, 0.0, 100.0, 100.0).unwrap();
         for f in [a, b] {
-            d.timelines.insert(f, figcraft_doc::anim::motion::TimelineSettings { duration_ms: 1000, fps: 60, looping: false });
+            d.timelines.insert(f, figcraft_doc::anim::motion::TimelineSettings { duration_ms: 1000, fps: 60, looping: false, reverse: false });
         }
         d.get_mut(a).unwrap().interactions.push(Interaction {
             trigger: Trigger::OnClick,
@@ -2559,7 +2687,7 @@ mod tests {
         let a = d.create(page, NodeKind::Frame, "A", 0.0, 0.0, 100.0, 100.0).unwrap();
         let b = d.create(page, NodeKind::Frame, "B", 200.0, 0.0, 100.0, 100.0).unwrap();
         for f in [a, b] {
-            d.timelines.insert(f, figcraft_doc::anim::motion::TimelineSettings { duration_ms: 1000, fps: 60, looping: false });
+            d.timelines.insert(f, figcraft_doc::anim::motion::TimelineSettings { duration_ms: 1000, fps: 60, looping: false, reverse: false });
         }
         // B 的动画被预先起播、此刻挂起在 600ms。
         let mut p = PresentState::new(a, false);

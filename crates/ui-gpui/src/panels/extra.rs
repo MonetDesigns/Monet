@@ -3,12 +3,11 @@
 //!
 //! 数据一律来自引擎：`figcraft_engine::keymap::{KEYS,GESTURES,Group,Platform,display}`、
 //! `DocState::versions`、`devcompare::compare`、`library::local_components`。
-//! 所有写操作都推引擎命令（`version.*` / `dev.*` / `instance.create` / `style.apply`），
+//! 所有写操作都推引擎命令（`version.*` / `dev.*` / `instance.place` / `style.apply`），
 //! 面板本身不改文档。控件全部复用冻结的 `widgets/`。
 //!
-//! ⚠️ TODO（规划错配，见 parity plan R.1 / R.7 / R.8 / R.9）：egui 把 Versions 放独立面板、
-//! Dev compare 做占满工作区的双图对比、Shortcuts 放窗口底部常驻条；GPUI 目前仍把它们塞进
-//! 同一个可关闭的居中浮层外壳，**这是已知偏差，不是既定设计**。
+//! ✅ R.7 / R.8 / R.9 已对齐（2026-11-27）：Shortcuts 停靠窗口底部、Versions 停靠左缘的独立
+//! 面板、Dev compare 占满标题栏以下的工作区；三者不再走 760×520 的居中浮层外壳。
 //! ✅ Assets / Icons 已按 R.4 搬进左栏 `left_tab`（`layer_tree.rs` 直接调 `assets_body` /
 //! `icons_panel::body`），不再经过本文件的 `ExtraKind`；Home 走占满窗口的 `CentralPanel` 分支。
 //!
@@ -19,7 +18,7 @@
 //!   预览、Eye（预览）/Rotate（恢复）/Pencil（重命名）/Trash（删除确认）/Dup 操作、`time_ago`
 //!   相对时间、删除二次确认行。
 //! - Assets：Components / Styles 切换 tab + 搜索；Components 为本地组件/组件集缩略图网格
-//!   （2 列，GPUI 无 flex_wrap），整卡点击 `instance.create`，组件集取默认变体渲染；Styles
+//!   （2 列，GPUI 无 flex_wrap），整卡点击 `instance.place` 到视口中心，组件集取默认变体渲染；Styles
 //!   列表按类型给徽标（Paint 色板 / Text 图标 / Grid 图标 / Effect 用「fx」文字），点一行把
 //!   样式 `style.apply` 到当前选区。
 //! - Shortcuts：分组下拉 + 搜索，键位全部来自引擎 `KEYS`/`GESTURES`，一个不手抄。
@@ -89,6 +88,12 @@ pub(crate) enum UiAction {
     /// 切到左面板的某个 tab：1 = Assets，2 = Icons（R1/R2）。不再弹居中浮层，
     /// 左面板按 `left_tab` 渲染对应面板（与 egui `LeftTab` 一致）。
     LeftTab(u8),
+    /// `view.leftSidebar`：收起 / 展开左栏（egui `ui.left_collapsed`）。
+    ToggleLeftSidebar,
+    /// `view.layers`：切回左栏的 Layers 页并确保它可见（egui `LeftTab::File`）。
+    Layers,
+    /// 打开 Home 并切到指定段落：0 Recents / 1 Online / 2 Templates。
+    Home(usize),
 }
 
 /// egui `handle_ui_requests` 里 GPUI 能落地的那部分（多窗口 / 评论 / 演示 / 对话框
@@ -103,13 +108,17 @@ pub(crate) fn ui_action(kind: &str, data: &Value, tab: u8) -> Option<UiAction> {
         "panel.shortcuts" => UiAction::Toggle(ExtraKind::Shortcuts),
         "panel.versionHistory" => UiAction::Toggle(ExtraKind::Versions),
         "panel.assets" | "panel.libraries" => UiAction::LeftTab(1),
+        "panel.leftSidebar" => UiAction::ToggleLeftSidebar,
+        "panel.layers" => UiAction::Layers,
         "view.devCompare" => UiAction::Compare {
             id: data.get("id").and_then(figcraft_engine::params::id_of),
             version: data.get("version").and_then(Value::as_str).map(str::to_string),
         },
         "panel.widths" => UiAction::Widths { left: width("left"), right: width("right") },
         "palette.actions" => UiAction::Palette,
-        "home" => UiAction::Toggle(ExtraKind::Home),
+        "home" => UiAction::Home(0),
+        "home.templates" => UiAction::Home(2),
+        "home.gettingStarted" => UiAction::Home(0),
         "present" => UiAction::Present(data.get("start").and_then(figcraft_engine::params::id_of), false),
         "preview" => UiAction::Present(data.get("start").and_then(figcraft_engine::params::id_of), true),
         "preview.close" => UiAction::PreviewClose,
@@ -294,6 +303,98 @@ pub(crate) fn render(
             // （离开靠点标签栏的首页按钮或某个标签）。之前右上角浮着的那个 ✕ 是浮层外壳的残留。
             .child(body);
     }
+    if matches!(kind, ExtraKind::Versions) {
+        // R8: egui's `panels/versions.rs` replaces the left sidebar instead of floating a
+        // 760x520 card. Dock the history to the left edge so it reads as that panel; the body
+        // already owns the Version history header, so only a close strip is added here.
+        let close_versions = close.clone();
+        return div()
+            .id("versions-panel")
+            .absolute()
+            .top(px(crate::title_bar::TITLE_H))
+            .left(px(0.0))
+            .bottom(px(0.0))
+            .w(px(crate::panels::DEFAULT_LEFT_PANEL))
+            .flex()
+            .flex_col()
+            .bg(rgba(t.panel))
+            .border_r_1()
+            .border_color(rgba(t.border))
+            .child(
+                div()
+                    .flex_none()
+                    .h(px(36.0))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .px(pt(10.0))
+                    .border_b_1()
+                    .border_color(rgba(t.border))
+                    .child(div())
+                    .child(
+                        IconButton::new(Icon::Close)
+                            .size(24.0)
+                            .on_click(move |_e, _w, _cx| close_versions()),
+                    ),
+            )
+            .child(div().id("versions-body").flex_1().min_h(px(0.0)).overflow_y_scroll().child(body));
+    }
+    if matches!(kind, ExtraKind::Shortcuts) {
+        // R7: egui shows shortcuts in a window pinned to the bottom edge, not in the centred
+        // card. A docked bar keeps the canvas visible above it and always has a close control.
+        let close_shortcuts = close.clone();
+        return div()
+            .id("shortcuts-bar")
+            .absolute()
+            .left(px(0.0))
+            .right(px(0.0))
+            .bottom(px(0.0))
+            .h(px(340.0))
+            .flex()
+            .flex_col()
+            .bg(rgba(t.panel))
+            .border_t_1()
+            .border_color(rgba(t.border))
+            .child(
+                div()
+                    .flex_none()
+                    .h(px(40.0))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .px(pt(16.0))
+                    .border_b_1()
+                    .border_color(rgba(t.border))
+                    .child(
+                        div()
+                            .text_size(pt(13.0))
+                            .font_weight(crate::panels::UI_FONT_REGULAR)
+                            .text_color(rgba(t.text))
+                            .child(SharedString::from(kind.title())),
+                    )
+                    .child(
+                        IconButton::new(Icon::Close)
+                            .size(24.0)
+                            .on_click(move |_e, _w, _cx| close_shortcuts()),
+                    ),
+            )
+            .child(div().id("shortcuts-body").flex_1().min_h(px(0.0)).overflow_y_scroll().child(body));
+    }
+    if matches!(kind, ExtraKind::DevCompare { .. }) {
+        // R9: egui's `dev_compare.rs` draws the two canvases in the main workspace, not a
+        // 760x520 popover. Keep the title bar visible; the body owns its own Close/Resolve row.
+        return div()
+            .id("dev-compare-screen")
+            .absolute()
+            .top(px(crate::title_bar::TITLE_H))
+            .left(px(0.0))
+            .right(px(0.0))
+            .bottom(px(0.0))
+            .bg(rgba(t.panel))
+            .child(body);
+    }
     let close_btn = {
         let close = close.clone();
         IconButton::new(Icon::Close).size(24.0).on_click(move |_e, _w, _cx| close())
@@ -461,6 +562,9 @@ fn time_ago(unix_secs: u64) -> String {
     } else {
         (diff / 31_556_952, "year")
     };
+    if unit == "second" {
+        return tr("Just now").to_string();
+    }
     let key = match unit {
         "minute" => "{n} minutes ago",
         "hour" => "{n} hours ago",
@@ -1115,20 +1219,61 @@ pub(crate) fn assets_body(
         .child(state.assets_search.clone());
 
     let body = if on_components {
-        assets_components(doc, cmds, &q, root)
+        assets_components(doc, cmds, &q, root, (ds.view.cx, ds.view.cy))
     } else {
         assets_styles(doc, cmds, &q)
     };
-    wrap_header(body, header)
+    let updates = pending_library_updates(&app.session, doc);
+    let banner = (updates > 0).then(|| updates_banner(cmds));
+    wrap_header(body, header, banner)
+}
+
+/// Enabled libraries whose cached copy is newer than the document's copies (egui
+/// `build_listing` -> `updates`). Unread libraries simply contribute nothing until loaded.
+fn pending_library_updates(session: &figcraft_engine::Session, doc: &figcraft_doc::Document) -> usize {
+    doc.libraries
+        .enabled
+        .iter()
+        .filter_map(|l| session.libraries.cached(&l.path))
+        .filter_map(std::result::Result::ok)
+        .map(|lib| figcraft_engine::library::pending(doc, lib).count())
+        .sum()
+}
+
+/// “Library updates available” with the `library.acceptUpdates` button (egui `updates_banner`).
+fn updates_banner(cmds: &Cmds) -> Div {
+    let t = tokens();
+    let c = cmds.clone();
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(pt(8.0))
+        .w_full()
+        .h(px(40.0))
+        .pl(pt(10.0))
+        .pr(pt(6.0))
+        .rounded(pt(6.0))
+        .bg(rgba(t.selected_row))
+        .child(div().flex_1().min_w(px(0.0)).text_size(pt(11.0)).text_color(rgba(t.text)).child(tr("Library updates available")))
+        .child(pill(tr("Update"), true, move |_e, _w, _cx| {
+            c.push(Cmd { id: "library.acceptUpdates", params: Some(json!({})) });
+        }))
 }
 
 /// 把标题栏 + 搜索接到 body 前面（避免每个分支重复）。
-fn wrap_header(body: Div, header: Div) -> Div {
-    div().flex().flex_col().w_full().gap(pt(12.0)).p(pt(16.0)).child(header).child(body)
+fn wrap_header(body: Div, header: Div, banner: Option<Div>) -> Div {
+    div().flex().flex_col().w_full().gap(pt(12.0)).p(pt(16.0)).child(header).children(banner).child(body)
 }
 
 /// Components tab：本地组件/组件集缩略图网格（2 列，GPUI 无 flex_wrap），点一下创建实例。
-fn assets_components(doc: &figcraft_doc::Document, cmds: &Cmds, q: &str, root: Option<Entity<crate::CanvasView>>) -> Div {
+fn assets_components(
+    doc: &figcraft_doc::Document,
+    cmds: &Cmds,
+    q: &str,
+    root: Option<Entity<crate::CanvasView>>,
+    center: (f64, f64),
+) -> Div {
     let comps: Vec<figcraft_doc::NodeId> = figcraft_engine::library::local_components(doc)
         .into_iter()
         .filter(|id| doc.node(*id).is_some_and(|n| n.name.to_lowercase().contains(q)))
@@ -1144,7 +1289,7 @@ fn assets_components(doc: &figcraft_doc::Document, cmds: &Cmds, q: &str, root: O
     for chunk in comps.chunks(2) {
         let mut row = div().flex().flex_row().w_full().gap(pt(10.0));
         for id in chunk {
-            row = row.child(component_tile(doc, cmds, *id, root.clone()));
+            row = row.child(component_tile(doc, cmds, *id, root.clone(), center));
         }
         // 末行若只有一列，补一个占位保持两列等高对齐。
         if chunk.len() == 1 {
@@ -1155,12 +1300,13 @@ fn assets_components(doc: &figcraft_doc::Document, cmds: &Cmds, q: &str, root: O
     grid
 }
 
-/// 单个组件缩略图卡片：渲染缩略图 + 名称，整卡点击创建实例。
+/// 单个组件缩略图卡片：渲染缩略图 + 名称，整卡点击把实例放到视口中心。
 fn component_tile(
     doc: &figcraft_doc::Document,
     cmds: &Cmds,
     id: figcraft_doc::NodeId,
     root: Option<Entity<crate::CanvasView>>,
+    center: (f64, f64),
 ) -> Div {
     let t = tokens();
     let Some(n) = doc.node(id) else { return div() };
@@ -1182,7 +1328,10 @@ fn component_tile(
 
     let c = cmds.clone();
     let create = move |_e: &MouseDownEvent, _w: &mut Window, _cx: &mut App| {
-        c.push(Cmd { id: "instance.create", params: Some(json!({ "component": id })) });
+        c.push(Cmd {
+            id: "instance.place",
+            params: Some(json!({ "component": id, "x": center.0, "y": center.1 })),
+        });
     };
     let hidden = figcraft_engine::library::hidden_name(&name);
     let mut tile = div()
@@ -1423,7 +1572,7 @@ mod tests {
     fn shortcuts_come_from_the_engine_keymap() {
         let all = shortcut_rows(None, "");
         assert!(all.len() > 50, "引擎 KEYS + GESTURES 应给出完整清单");
-        assert!(all.iter().any(|r| r.label.to_lowercase().contains("dev mode")), "Shift+D 在表里");
+        assert!(all.iter().any(|r| r.label.to_lowercase().contains("developer mode")), "Shift+D 在表里");
         assert!(all.iter().any(|r| !r.keys.is_empty()), "至少有一行带 keycap");
         let essential = shortcut_rows(Some(Group::Essential), "");
         assert!(!essential.is_empty() && essential.len() < all.len());
@@ -1445,10 +1594,14 @@ mod tests {
         assert_eq!(ui_action("view.assets", &empty, 0), None, "Assets 请求是 panel.assets，不是命令名");
         assert_eq!(ui_action("panel.assets", &empty, 0), Some(UiAction::LeftTab(1)), "Assets 切到左面板 tab，不弹浮层（R1）");
         assert_eq!(ui_action("panel.libraries", &empty, 0), Some(UiAction::LeftTab(1)));
+        assert_eq!(ui_action("panel.leftSidebar", &empty, 0), Some(UiAction::ToggleLeftSidebar));
+        assert_eq!(ui_action("panel.layers", &empty, 0), Some(UiAction::Layers), "Alt+1 / Ctrl+1 回 Layers 页");
         assert_eq!(ui_action("view.devCompare", &json!({"version": "v1"}), 0), Some(UiAction::Compare { id: None, version: Some("v1".into()) }));
         assert_eq!(ui_action("panel.widths", &json!({"left": 320.0}), 0), Some(UiAction::Widths { left: Some(320.0), right: None }));
         assert_eq!(ui_action("palette.actions", &empty, 0), Some(UiAction::Palette));
-        assert_eq!(ui_action("home", &empty, 0), Some(UiAction::Toggle(ExtraKind::Home)));
+        assert_eq!(ui_action("home", &empty, 0), Some(UiAction::Home(0)), "doc.home 是打开，不是 toggle");
+        assert_eq!(ui_action("home.templates", &empty, 0), Some(UiAction::Home(2)));
+        assert_eq!(ui_action("home.gettingStarted", &empty, 0), Some(UiAction::Home(0)));
         assert_eq!(
             ui_action("present", &json!({"start": 7}), 0),
             Some(UiAction::Present(Some(figcraft_doc::NodeId(7)), false)),
@@ -1458,7 +1611,33 @@ mod tests {
         assert_eq!(ui_action("preview.close", &empty, 0), Some(UiAction::PreviewClose));
     }
 
-    /// 四块面板的标题 / 变体都能构造（防止 ui_requests 分派时漏分支）。
+    /// The Assets banner counts cached libraries, not the document's stale copies.
+    #[test]
+    fn pending_library_updates_counts_a_republished_component() {
+        let dir = std::env::temp_dir().join(format!("figcraft-asset-updates-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ui.figcraft").to_string_lossy().into_owned();
+        let id = |v: Value| figcraft_engine::params::id_of(&v["id"]).unwrap();
+
+        let mut lib = figcraft_engine::Session::new();
+        let frame = id(lib.execute("frame.create", &json!({"x": 0, "y": 0, "width": 100, "height": 40})).unwrap());
+        let comp = id(lib.execute("component.create", &json!({"ids": [frame]})).unwrap());
+        lib.execute("library.publish", &json!({"include": [comp]})).unwrap();
+        lib.execute("file.saveAs", &json!({"path": path})).unwrap();
+
+        let mut host = figcraft_engine::Session::new();
+        host.execute("library.add", &json!({"path": path})).unwrap();
+        host.execute("library.import", &json!({"library": path, "component": comp})).unwrap();
+        assert_eq!(pending_library_updates(&host, host.doc().unwrap()), 0, "the imported copy is current");
+
+        lib.execute("node.set", &json!({"id": frame, "props": {"width": 140}})).unwrap();
+        lib.execute("library.publish", &json!({"include": [comp]})).unwrap();
+        lib.execute("file.save", &json!({})).unwrap();
+        host.execute("library.updates", &json!({})).unwrap();
+        assert_eq!(pending_library_updates(&host, host.doc().unwrap()), 1, "one component has a newer version");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
     #[test]
     fn every_extra_kind_has_a_title() {
         for k in [ExtraKind::Shortcuts, ExtraKind::Versions, ExtraKind::DevCompare { id: None, version: Some("v1".into()) }, ExtraKind::Home] {

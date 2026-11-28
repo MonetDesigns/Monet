@@ -55,6 +55,9 @@ pub(crate) enum Kind {
     /// A menu-input command: `text.link` needs the URL before it can run
     /// (`参考实现 menus.rs::invoke` → `MenuInput::Link`).
     Link,
+    /// The Comment tool's canvas click (`comment.new`): a note is typed before `comment.add`
+    /// runs at the page point the request carries.
+    Comment,
     /// A17 — `vector.offset` needs the distance before it can run
     /// (`MenuInput::Offset`).
     OffsetPath,
@@ -84,7 +87,7 @@ pub(crate) enum Kind {
 impl Kind {
     /// The one list of dialogs. `parity_contract`'s capability audit and this module's own
     /// shape test both read it, so a new dialog cannot be added without being audited.
-    pub(crate) const ALL: [Kind; 18] = [
+    pub(crate) const ALL: [Kind; 19] = [
         Kind::Export,
         Kind::Preferences,
         Kind::About,
@@ -92,6 +95,7 @@ impl Kind {
         Kind::Unsaved,
         Kind::Rename,
         Kind::Link,
+        Kind::Comment,
         Kind::OffsetPath,
         Kind::MoveToPage,
         Kind::ColorProfile,
@@ -820,6 +824,22 @@ pub(crate) fn spec(kind: Kind, data: &Value) -> Spec {
             .field(Field::Text { key: "url", label: tr("URL"), value: str_field("url", data, "https://") })
             .button(Button::primary(tr("Create link"), "text.link", json!({})))
             .with_cancel(),
+        // `comment.new` carries the page point the pin belongs to; `comment.add` needs both the
+        // point and the text, so the point stays in the button's fixed params and `text` is the
+        // one field.
+        Kind::Comment => {
+            let x = data.get("x").and_then(Value::as_f64).unwrap_or(0.0);
+            let y = data.get("y").and_then(Value::as_f64).unwrap_or(0.0);
+            let mut base = json!({ "x": x, "y": y, "anchor": true });
+            if let Some(page) = data.get("page") {
+                base["page"] = page.clone();
+            }
+            Spec::new(tr("New comment"))
+                .width(360.0)
+                .field(Field::Text { key: "text", label: tr("Comment"), value: String::new() })
+                .button(Button::primary(tr("Post"), "comment.add", base))
+                .with_cancel()
+        }
         // A17：1:1 照 `ui-egui/src/dialogs/menu_input.rs::MenuInput::Offset` —— 一个数字框，
         // 提交时把字段值并进 `vector.offset`（`{ids?, offset}`，ids 缺省走选区）。
         Kind::OffsetPath => Spec::new(tr("Offset path"))
@@ -1778,6 +1798,22 @@ mod tests {
     }
 
     #[test]
+    fn comment_dialog_posts_at_the_requested_page_point() {
+        let s = spec(Kind::Comment, &json!({"x": 12.5, "y": 22.0, "page": 7}));
+        assert_eq!(s.title, figcraft_i18n::tr("New comment").to_string());
+        assert!(s.fields.iter().any(|f| matches!(f, Field::Text { key: "text", .. })));
+        assert!(s.buttons.iter().any(|b| matches!(
+            &b.action,
+            Action::Submit { id: "comment.add", base }
+                if base["x"].as_f64() == Some(12.5)
+                    && base["y"].as_f64() == Some(22.0)
+                    && base["page"].as_u64() == Some(7)
+                    && base["anchor"].as_bool() == Some(true)
+        )));
+        assert!(s.buttons.iter().any(|b| b.action == Action::Close));
+    }
+
+    #[test]
     fn specs_share_one_shape_and_one_way_out() {
         let empty = json!({});
         for kind in [
@@ -1788,6 +1824,7 @@ mod tests {
             Kind::Unsaved,
             Kind::Rename,
             Kind::Link,
+            Kind::Comment,
             Kind::OffsetPath,
             Kind::MoveToPage,
             Kind::ColorProfile,

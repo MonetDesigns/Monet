@@ -755,9 +755,8 @@ fn area_at(
 /// layout. Out-of-range sizes or a wrong byte count give `None`. Exposed for the GPU export hook.
 pub fn pixmap_from_premultiplied_rgba(data: Vec<u8>, width: u32, height: u32) -> Option<Pixmap> {
     let size = tiny_skia::IntSize::from_wh(width, height)?;
-    if data.len() != width as usize * height as usize * 4 {
-        return None;
-    }
+    // `Pixmap::from_vec` validates the buffer against the size; multiplying first can overflow
+    // on 32-bit debug builds before the check.
     Pixmap::from_vec(data, size)
 }
 

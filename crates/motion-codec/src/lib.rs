@@ -1,5 +1,5 @@
 //! Animation frame encoders for Monet. Byte-in/byte-out codecs only: no document, no renderer,
-//! no engine dependency. Frames are premultiplied RGBA8 with an explicit size; the caller owns
+//! no engine dependency. Frames are straight RGBA8 with an explicit size; the caller owns
 //! timeline evaluation and drawing.
 //!
 //! Ported from the engine's `motion_export.rs` / `motion_webm.rs` so the export formats live in
@@ -140,7 +140,7 @@ pub struct WebmOptions {
     pub speed: u8,
     /// Colour transparent parts are flattened onto (AV1-in-WebM here has no alpha).
     pub background: [u8; 3],
-    /// Encoder threads (0 = one per core, at most 8).
+    /// Encoder threads (0 = one per core, capped at 32; an explicit count is used as-is).
     pub threads: usize,
     /// Tiles to split the picture into for parallel encoding (0 = auto).
     pub tiles: usize,
@@ -314,17 +314,19 @@ fn mux(w: u32, h: u32, fps: u32, av1c: &[u8], blocks: &[Block]) -> Vec<u8> {
 
 // ------------------------------------------------------------------------------ colour
 
-/// Composite premultiplied RGBA8 pixels onto `bg` and convert straight to BT.709 limited-range
-/// 4:2:0 planes, filling the caller's reusable buffers.
+/// Composite **straight** RGBA8 pixels onto `bg` and convert to BT.709 limited-range 4:2:0
+/// planes, filling the caller's reusable buffers.
 ///
 /// Integer fixed-point maths instead of the previous per-pixel `f32` loop: a 1080p frame is ~2M
 /// pixels and video exports do this for every frame. The buffers are reused across frames so a
 /// long export allocates them once, not three times per frame.
 #[allow(clippy::too_many_arguments)]
-fn rgba_to_yuv420_into(rgba: &[u8], w: usize, h: usize, bg: [u8; 3], y: &mut [u8], u: &mut [u8], v: &mut [u8]) {
+pub fn rgba_to_yuv420_into(rgba: &[u8], w: usize, h: usize, bg: [u8; 3], y: &mut [u8], u: &mut [u8], v: &mut [u8]) {
     #[inline]
     fn over(c: u8, a: u8, bg: u8) -> u32 {
-        c as u32 + (bg as u32 * (255 - a as u32) + 127) / 255
+        // Straight alpha: multiply the source by its coverage. Treating `c` as already
+        // premultiplied lightens semi-transparent colours (255 red at 50% became 382).
+        (c as u32 * a as u32 + bg as u32 * (255 - a as u32) + 127) / 255
     }
     for (i, px) in rgba.chunks_exact(4).enumerate() {
         let a = px[3];
@@ -348,20 +350,20 @@ fn rgba_to_yuv420_into(rgba: &[u8], w: usize, h: usize, bg: [u8; 3], y: &mut [u8
                     n += 1;
                 }
             }
-            // BT.709 U/V on the 2x2 average, using the standard 8-bit fixed-point coefficients
-            // (the `+128) >> 8` rounds; neutral grey lands exactly on 128.
+            // BT.709 U/V on the 2x2 average. Each triplet sums to zero, so neutral grey
+            // (including white) lands exactly on 128 rather than one code below it.
             let ar = (sr + n / 2) / n;
             let ag = (sg + n / 2) / n;
             let ab = (sb + n / 2) / n;
             let i = cy * cw + cx;
-            u[i] = (((-26 * ar as i32 - 87 * ag as i32 + 112 * ab as i32 + 128) >> 8) + 128).clamp(16, 240) as u8;
+            u[i] = (((-26 * ar as i32 - 87 * ag as i32 + 113 * ab as i32 + 128) >> 8) + 128).clamp(16, 240) as u8;
             v[i] = (((112 * ar as i32 - 102 * ag as i32 - 10 * ab as i32 + 128) >> 8) + 128).clamp(16, 240) as u8;
         }
     }
 }
 
 /// Size of the three reusable plane buffers of a `w`×`h` picture.
-fn yuv_sizes(w: usize, h: usize) -> (usize, usize) {
+pub fn yuv_sizes(w: usize, h: usize) -> (usize, usize) {
     (w * h, w.div_ceil(2) * h.div_ceil(2))
 }
 
@@ -641,6 +643,47 @@ mod tests {
         let mut v = vec![0; 1];
         rgba_to_yuv420_into(&[0, 0, 0, 0].repeat(4), 2, 2, [255, 255, 255], &mut y, &mut u, &mut v);
         assert!(y.iter().all(|&c| c == 235), "transparent over white is white (luma 235): {y:?}");
-        assert!(u[0].abs_diff(128) <= 1 && v[0].abs_diff(128) <= 1, "white has neutral chroma: {} {}", u[0], v[0]);
+        assert_eq!(u[0], 128, "white has exactly neutral U");
+        assert_eq!(v[0], 128, "white has exactly neutral V");
+    }
+
+    #[test]
+    fn semi_transparent_colours_composite_with_straight_alpha() {
+        let mut y = vec![0; 4];
+        let mut u = vec![0; 1];
+        let mut v = vec![0; 1];
+        // 50% red over white must become (255, 127, 127), not the "premultiplied" (382, 127, 127)
+        // which clips to pure white in luma.
+        rgba_to_yuv420_into(&[255, 0, 0, 128].repeat(4), 2, 2, [255, 255, 255], &mut y, &mut u, &mut v);
+        assert!(y.iter().all(|&c| (i32::from(c) - 149).abs() <= 1), "50% red over white luma ≈149: {y:?}");
+        assert!(u[0] < 120 && v[0] > 170, "red chroma must survive alpha compositing: u={} v={}", u[0], v[0]);
+    }
+
+    /// Local baseline for the hardware backend probes; ignored in normal CI because it encodes
+    /// 150 full-HD frames.
+    #[test]
+    #[ignore = "local throughput probe for the MP4 encoder"]
+    fn cpu_h264_1080p_probe() {
+        use std::time::Instant;
+
+        let o = Mp4Options { fps: 30, crf: 23.0 };
+        let mut enc = Mp4Encoder::new(1920, 1080, &o, [255, 255, 255]).unwrap();
+        let mut rgba = vec![0u8; 1920 * 1080 * 4];
+        for y in 0..1080usize {
+            for x in 0..1920usize {
+                let p = (y * 1920 + x) * 4;
+                rgba[p] = (x % 256) as u8;
+                rgba[p + 1] = (y % 256) as u8;
+                rgba[p + 2] = 128;
+                rgba[p + 3] = 255;
+            }
+        }
+        let frame = FrameRgba::new(1920, 1080, rgba).unwrap();
+        let start = Instant::now();
+        for _ in 0..150 {
+            enc.push(frame.clone()).unwrap();
+        }
+        let bytes = enc.finish().unwrap();
+        eprintln!("[motion] CPU H.264 1080p150: {} ms, {} bytes", start.elapsed().as_millis(), bytes.len());
     }
 }

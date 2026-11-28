@@ -300,10 +300,8 @@ pub(super) fn overlays(
         let slot_sel = sel.iter().any(|i| outline_colour(&doc, *i, accent) == SLOT);
         let comp_sel = sel.iter().any(|i| outline_colour(&doc, *i, accent) == COMPONENT);
         let col = if slot_sel { SLOT } else if comp_sel { COMPONENT } else { accent };
-        for id in &sel {
-            // 选中描边统一走 draw_outline（源码选中色、1px）。
-            draw_outline(app, painter, &doc, *id, stroke(col, 1.0));
-        }
+        // 选中：只画一圈四边平直的变换框（尺寸框 + 手柄），不再沿每个物体的真实几何包边。
+        // 多选和单选一样有这条框：它就是选中框，四条边永远平直（2026-11-27，用户要求）。
         if app.session.tool.tool != ToolId::ShapeBuilder
             && let Some(b) = selection_box(&doc, &sel)
             && let Some((_, w, h)) = selection_frame(&doc, &sel)
@@ -367,7 +365,7 @@ pub(super) fn overlays(
                 painter,
                 b.map(|p| app.to_presented(p.x, p.y)),
                 col,
-                sel.len() > 1,
+                true,
                 handles,
                 (!measuring && connector.is_none()).then_some(label),
                 add_variant,
@@ -695,8 +693,52 @@ pub fn add_variant_rect(cx: f32, y1: f32) -> Rect {
     super::frame_labels::add_variant_slot(cx, top - super::frame_labels::ADD_VARIANT_TOP)
 }
 
+/// 变体组「+」的锚：轴对齐框取包围盒底边中点下方 36（尺寸框 7+17+4，再加半个按钮 8）；
+/// 旋转框取最低边中点沿外法线同样外移 36，`d`/`n` 跟着这条边转（2026-11-28）。
+fn add_variant_anchor(q: [Pos2; 4]) -> (Pos2, Vec2, Vec2) {
+    if let Some(r) = super::outline::axis_aligned(q) {
+        return (pos2(r.center().x, r.max.y + 36.0), vec2(1.0, 0.0), vec2(0.0, 1.0));
+    }
+    let mut bottom = bottom_edge(q);
+    if bottom.0.x > bottom.1.x {
+        bottom = (bottom.1, bottom.0);
+    }
+    let d = unit_edge(bottom.0, bottom.1);
+    let n = vec2(-d.y, d.x);
+    let mid = pos2((bottom.0.x + bottom.1.x) * 0.5, (bottom.0.y + bottom.1.y) * 0.5);
+    (mid + n * 36.0, d, n)
+}
+
+/// 「+」按钮的四角（绘制与命中共用）：轴对齐框与 [`add_variant_rect`] 逐点一致，
+/// 旋转框与底边一起转。
+pub fn add_variant_quad(q: [Pos2; 4]) -> [Pos2; 4] {
+    let (c, d, n) = add_variant_anchor(q);
+    let h = super::frame_labels::SLOT_SIZE * 0.5;
+    [c - d * h - n * h, c + d * h - n * h, c + d * h + n * h, c - d * h + n * h]
+}
+
+/// 点击是否落在「+」按钮上（含旋转框）。
+pub fn add_variant_hit(q: [Pos2; 4], pos: Pos2) -> bool {
+    quad_contains(add_variant_quad(q), pos)
+}
+
+fn add_variant_button_rotated(painter: &mut Painter, center: Pos2, d: Vec2, n: Vec2) {
+    let side = super::frame_labels::SLOT_SIZE;
+    painter.rounded_quad_filled(center, d, n, vec2(side, side), 3.0, COMPONENT);
+    let st = stroke(Color32::WHITE, 1.0);
+    painter.line_segment([center - d * 5.0, center + d * 5.0], st);
+    painter.line_segment([center - n * 5.0, center + n * 5.0], st);
+}
+
 /// 变换框（屏幕四角 tl、tr、br、bl）：`outline` 时画轮廓，前 `handles` 个角手柄，
 /// 显示尺寸时在下方画尺寸 `label`（返回尺寸 pill 的矩形）。
+/// 单位方向；零长度退化为 x 轴，避免旋转框手柄出现 NaN。
+fn unit_edge(a: Pos2, b: Pos2) -> Vec2 {
+    let d = b - a;
+    let len = d.length();
+    if len.is_finite() && len > 1e-4 { d / len } else { vec2(1.0, 0.0) }
+}
+
 fn transform_box(
     app: &CanvasApp,
     painter: &mut Painter,
@@ -717,24 +759,52 @@ fn transform_box(
             quad(painter, q, stroke(col, 1.0));
         }
     }
+    let turned_box = super::outline::axis_aligned(q).is_none();
     for c in q.iter().take(handles) {
-        let r = Rect::from_center_size(*c, vec2(8.0, 8.0));
-        painter.rect_filled(r, CornerRadius::same(1), Color32::WHITE);
-        painter.rect_stroke(r, CornerRadius::same(1), stroke(col, 1.0), StrokeKind::Inside);
+        if turned_box && handles == 4 {
+            // 旋转框的手柄也沿框的两条边转，不能还是一枚屏幕轴对齐的小方块。
+            let ex = unit_edge(q[0], q[1]);
+            let ey = unit_edge(q[0], q[3]);
+            let hc = [
+                *c - ex * 4.0 - ey * 4.0,
+                *c + ex * 4.0 - ey * 4.0,
+                *c + ex * 4.0 + ey * 4.0,
+                *c - ex * 4.0 + ey * 4.0,
+            ];
+            painter.add_shape(hc.to_vec(), true, Color32::WHITE, stroke(col, 1.0));
+        } else {
+            let r = Rect::from_center_size(*c, vec2(8.0, 8.0));
+            painter.rect_filled(r, CornerRadius::same(1), Color32::WHITE);
+            painter.rect_stroke(r, CornerRadius::same(1), stroke(col, 1.0), StrokeKind::Inside);
+        }
     }
     if let Some(label) = label.filter(|_| app.session.prefs.show_dimensions) {
-        let bottom = q.iter().map(|p| p.y).fold(f32::MIN, f32::max);
-        let cx = q.iter().map(|p| p.x).sum::<f32>() / 4.0;
         // Keep the requested layer-colour background, but choose a legible foreground: a light
         // Yellow (#FFCC00) with white text was ~1.5:1. Dark ink on light fills, white on dark.
         let fg = contrasting_ink(col);
-        // 尺寸框铁律：文字框顶边距对象下边缘 9；背景块距文字上下各 2、左右各 6，圆角 3。
-        // （`pill_with_bg` 的 `+ vec2(pad_x*2, 4)` 与 `galley` 的 `+2` 纵向内缩即上下 2。）
-        let pill = pill_with_bg(painter, pos2(cx, bottom + 7.0), Align2::CENTER_TOP, label, col, fg, col, 6.0);
+        let axis_aligned_box = super::outline::axis_aligned(q).is_some();
+        let pill = if axis_aligned_box {
+            let bottom = q.iter().map(|p| p.y).fold(f32::MIN, f32::max);
+            let cx = q.iter().map(|p| p.x).sum::<f32>() / 4.0;
+            // 尺寸框铁律：文字框顶边距对象下边缘 9；背景块距文字上下各 2、左右各 6，圆角 3。
+            // （`pill_with_bg` 的 `+ vec2(pad_x*2, 4)` 与 `galley` 的 `+2` 纵向内缩即上下 2。）
+            pill_with_bg(painter, pos2(cx, bottom + 7.0), Align2::CENTER_TOP, label, col, fg, col, 6.0)
+        } else {
+            // 旋转的框：尺寸框锚在下边中点外侧 7，并绕该点随下边一起转（文字与底色同转）。
+            rotated_size_pill(painter, q, label, col, fg)
+        };
         // 组件变体 / 组件变体集的「+」：紧贴在尺寸框下方（同一居中 x）。画在选中框这条路径上，
         // 因为变体在 ComponentSet 内部、不会走顶层帧标签 frame_labels::draw 那条路径。
+        // 旋转框的「+」随底边一起转，命中区用同一组四角（见 add_variant_quad）。
         if add_variant {
-            super::frame_labels::add_variant_button(painter, add_variant_rect(cx, bottom));
+            if axis_aligned_box {
+                let bottom = q.iter().map(|p| p.y).fold(f32::MIN, f32::max);
+                let cx = q.iter().map(|p| p.x).sum::<f32>() / 4.0;
+                super::frame_labels::add_variant_button(painter, add_variant_rect(cx, bottom));
+            } else {
+                let (center, d, n) = add_variant_anchor(q);
+                add_variant_button_rotated(painter, center, d, n);
+            }
         }
         return Some(pill);
     }
@@ -775,6 +845,76 @@ fn pill_with_bg(painter: &mut Painter, at: Pos2, align: Align2, text: String, _c
     });
     let _ = glyph;
     r
+}
+
+/// 旋转框最靠下的边：按**外法线朝下**判断，不能用中点 y（旋转 30° 时竖边中点可能比下边中点更低）。
+fn bottom_edge(q: [Pos2; 4]) -> (Pos2, Pos2) {
+    let center = pos2(q.iter().map(|p| p.x).sum::<f32>() / 4.0, q.iter().map(|p| p.y).sum::<f32>() / 4.0);
+    let mut best = (q[3], q[2], f32::MIN);
+    for (a, b) in [(q[0], q[1]), (q[1], q[2]), (q[2], q[3]), (q[3], q[0])] {
+        let d = b - a;
+        let len = d.length();
+        if !(len.is_finite() && len > 1e-4) {
+            continue;
+        }
+        let d = d / len;
+        let mid = pos2((a.x + b.x) * 0.5, (a.y + b.y) * 0.5);
+        let mut n = vec2(-d.y, d.x);
+        if (mid - center).dot(n) < 0.0 {
+            n = -n;
+        }
+        if n.y > best.2 {
+            best = (a, b, n.y);
+        }
+    }
+    (best.0, best.1)
+}
+
+/// 旋转后的尺寸框：锚在框的下边中点向外 7，文字和底色都随下边角度一起转。
+/// 返回它的轴对齐外接矩形（测量标签避让用）。
+fn rotated_size_pill(painter: &mut Painter, q: [Pos2; 4], text: String, bg: Color32, fg: Color32) -> Rect {
+    let mut bottom = bottom_edge(q);
+    // 读数从左到右，文字才正着写；换算出的角度永远在 (-90°, 90°]。
+    if bottom.0.x > bottom.1.x {
+        bottom = (bottom.1, bottom.0);
+    }
+    let (bl, br) = bottom;
+    let delta = br - bl;
+    let len = delta.length();
+    let d = if len.is_finite() && len > 1e-4 {
+        delta / len
+    } else {
+        vec2(1.0, 0.0)
+    };
+    // 朝框外（屏幕下方）的法线；本地 +y 向下。
+    let n = vec2(-d.y, d.x);
+    let angle = d.y.atan2(d.x);
+    let mid = pos2((bl.x + br.x) * 0.5, (bl.y + br.y) * 0.5);
+    // 尺寸框铁律同水平版：文字顶边距对象下边缘 7，左右各 6、上下各 2，圆角 3。
+    let glyph = text_size(&text, semibold(11.0));
+    let size = glyph + vec2(12.0, 4.0);
+    // 尺寸框**以底边中点为中心**，左右沿边各伸一半；只把顶边压到中点外 7，
+    // 不能再沿 `d` 平移半个宽度，否则整个框会跑到右下角（用户 2026-11-27）。
+    let center = mid + n * (7.0 + size.y * 0.5);
+    painter.rounded_quad_filled(center, d, n, size, 3.0, bg);
+    painter.labels.push(Label {
+        rect: Rect::from_center_size(center, size),
+        text,
+        font: semibold(11.0),
+        color: fg,
+        align: Align2::CENTER_CENTER,
+        angle: Some(angle),
+        pill: None,
+    });
+    let corners = [
+        center - d * (size.x * 0.5) - n * (size.y * 0.5),
+        center + d * (size.x * 0.5) - n * (size.y * 0.5),
+        center + d * (size.x * 0.5) + n * (size.y * 0.5),
+        center - d * (size.x * 0.5) + n * (size.y * 0.5),
+    ];
+    let (x0, y0) = (corners.iter().map(|p| p.x).fold(f32::MAX, f32::min), corners.iter().map(|p| p.y).fold(f32::MAX, f32::min));
+    let (x1, y1) = (corners.iter().map(|p| p.x).fold(f32::MIN, f32::max), corners.iter().map(|p| p.y).fold(f32::MIN, f32::max));
+    Rect::from_min_max(pos2(x0, y0), pos2(x1, y1))
 }
 
 /// WCAG relative-luminance split: near-black ink on light fills, white on dark fills.
@@ -875,6 +1015,132 @@ mod text_edit_colour_tests {
 }
 
 #[cfg(test)]
+mod selection_shape_tests {
+    use super::*;
+    use crate::app::CanvasApp;
+    use crate::canvas::painter::Op;
+    use figcraft_doc::{Corners, Document, NodeKind, Sizing};
+    use serde_json::json;
+
+    fn app_with(kind: NodeKind, rotation: f64) -> (CanvasApp, NodeId) {
+        let mut doc = Document::new("selection-shape");
+        let page = doc.first_page().expect("page");
+        let id = doc.create(page, kind, "Layer", 100.0, 100.0, 200.0, 100.0).expect("layer");
+        let mut app = CanvasApp::new(doc);
+        app.canvas.rect = Rect::from_min_max(pos2(0.0, 0.0), pos2(900.0, 700.0));
+        if rotation != 0.0 {
+            app.session.execute("node.set", &json!({"id": id, "props": {"rotation": rotation}})).expect("rotate");
+        }
+        let _ = app.session.set_selection(vec![id]);
+        (app, id)
+    }
+
+    fn paint(app: &CanvasApp) -> Painter {
+        let t = Tokens::dark();
+        let doc = app.session.ds().expect("session").doc.clone();
+        let mut painter = Painter::new(app.canvas.rect);
+        let _ = overlays(app, &mut painter, &t, doc, None);
+        painter
+    }
+
+    /// A rounded layer gets **one** straight box: no outline traces its corners or geometry.
+    #[test]
+    fn a_rounded_layer_gets_one_straight_box() {
+        let (mut app, id) = app_with(NodeKind::Rectangle, 0.0);
+        app.session.ds_mut().expect("session").doc_mut().node_mut(id).expect("layer").corners =
+            Corners { radii: [30.0; 4], ..Default::default() };
+        let painter = paint(&app);
+        let rings: Vec<_> = painter.ops.iter().filter_map(|op| match op {
+            Op::Ring { width, .. } if (*width - 1.0).abs() < 1e-6 => Some(()),
+            _ => None,
+        }).collect();
+        assert_eq!(rings.len(), 1, "the selection box is one straight ring");
+        assert!(!painter.ops.iter().any(|op| matches!(op, Op::Poly { .. })), "no shape-hugging outline");
+    }
+
+    /// The size label's Fill term is the short word, never the raw disambiguated key.
+    #[test]
+    fn the_size_label_names_fill_short() {
+        let (mut app, id) = app_with(NodeKind::Rectangle, 0.0);
+        app.session.ds_mut().expect("session").doc_mut().node_mut(id).expect("layer").child_layout.sizing_h = Sizing::Fill;
+        let painter = paint(&app);
+        let size = painter.labels.iter().find(|l| l.pill.is_some()).expect("size label");
+        assert!(size.text.contains("Fill") || size.text.contains("填充"), "{}", size.text);
+        assert!(!size.text.contains('|'), "the raw key leaked: {}", size.text);
+    }
+
+    /// Two layers that share a rotation still get a page-square multi box.
+    #[test]
+    fn a_multi_selection_never_turns() {
+        let (mut app, first) = app_with(NodeKind::Rectangle, 30.0);
+        let page = app.session.ds().expect("session").doc.first_page().expect("page");
+        let second = app.session.ds_mut().expect("session").doc_mut().create(page, NodeKind::Rectangle, "Second", 260.0, 260.0, 120.0, 80.0).expect("layer");
+        app.session.execute("node.set", &json!({"id": second, "props": {"rotation": 30}})).expect("rotate");
+        let _ = app.session.set_selection(vec![first, second]);
+        let painter = paint(&app);
+        let rings: Vec<_> = painter.ops.iter().filter_map(|op| match op {
+            Op::Ring { width, .. } if (*width - 1.0).abs() < 1e-6 => Some(()),
+            _ => None,
+        }).collect();
+        assert_eq!(rings.len(), 1, "one page-square multi box");
+        assert!(!painter.ops.iter().any(|op| matches!(op, Op::Poly { .. })), "a turned box would be a quad");
+    }
+
+    /// A rotated layer turns its size label with the bottom edge: anchored below, rotated by 30°.
+    #[test]
+    fn a_rotated_layer_turns_its_size_label() {
+        let (app, id) = app_with(NodeKind::Rectangle, 30.0);
+        let painter = paint(&app);
+        let label = painter.labels.iter().find(|l| l.angle.is_some()).expect("rotated size label");
+        let angle = label.angle.expect("angle");
+        // The label must stay upright: ±30°, never a 180°-flipped 150°.
+        assert!((angle.to_degrees().abs() - 30.0).abs() < 0.01, "{}", angle.to_degrees());
+        // And it must sit on the **lowest edge midpoint**, not float inside the box.
+        let doc = app.session.ds().expect("session").doc.clone();
+        let q = figcraft_engine::tools::selection_box(&doc, &[id]).expect("box").map(|p| app.to_presented(p.x, p.y));
+        let mut edge = bottom_edge(q);
+        if edge.0.x > edge.1.x {
+            edge = (edge.1, edge.0);
+        }
+        let (bl, br) = edge;
+        let d = (br - bl) / (br - bl).length();
+        let n = vec2(-d.y, d.x);
+        let mid = pos2((bl.x + br.x) * 0.5, (bl.y + br.y) * 0.5);
+        let expected = mid + n * (7.0 + label.rect.height() * 0.5);
+        assert!((label.rect.center() - expected).length() < 0.01, "{:?} vs {expected:?}", label.rect.center());
+        assert!((label.rect.center().x - (mid.x + n.x * (7.0 + label.rect.height() * 0.5))).abs() < 0.01);
+    }
+
+    /// The four corner handles of a rotated box are themselves turned with its edges.
+    #[test]
+    fn a_rotated_layer_turns_its_handles() {
+        let (app, id) = app_with(NodeKind::Rectangle, 30.0);
+        let painter = paint(&app);
+        let white_quads: Vec<_> = painter.ops.iter().filter_map(|op| match op {
+            Op::Poly { points, fill, .. } if points.len() == 4 && *fill == Color32::WHITE => Some(points),
+            _ => None,
+        }).collect();
+        assert_eq!(white_quads.len(), 4, "four turned handles");
+        let doc = app.session.ds().expect("session").doc.clone();
+        let q = figcraft_engine::tools::selection_box(&doc, &[id]).expect("box").map(|p| app.to_presented(p.x, p.y));
+        for quad in white_quads {
+            let center = pos2(quad.iter().map(|p| p.x).sum::<f32>() / 4.0, quad.iter().map(|p| p.y).sum::<f32>() / 4.0);
+            assert!(q.iter().any(|corner| (center - *corner).length() < 0.01), "{center:?} not on {q:?}");
+        }
+    }
+
+    /// A rotated frame turns its name with the top edge as well.
+    #[test]
+    fn a_rotated_frame_turns_its_name() {
+        let (app, _) = app_with(NodeKind::Frame, 30.0);
+        let painter = paint(&app);
+        let name = painter.labels.iter().find(|l| l.text == "Layer").expect("frame name");
+        assert!(name.angle.is_some(), "the frame name stays horizontal");
+        assert!((name.angle.expect("angle").to_degrees().abs() - 30.0).abs() < 0.01);
+    }
+}
+
+#[cfg(test)]
 mod add_variant_rect_tests {
     use super::add_variant_rect;
 
@@ -883,5 +1149,41 @@ mod add_variant_rect_tests {
     fn add_variant_rect_sits_below_the_size_pill() {
         let r = add_variant_rect(200.0, 403.0);
         assert_eq!((r.min.x, r.min.y, r.width(), r.height()), (192.0, 431.0, 16.0, 16.0));
+    }
+}
+
+#[cfg(test)]
+mod add_variant_quad_tests {
+    use super::{add_variant_hit, add_variant_quad, add_variant_rect};
+    use crate::canvas::geom::{pos2, vec2};
+
+    /// 轴对齐框：四角与 `add_variant_rect` 完全一致，命中区也是同一块。
+    #[test]
+    fn axis_aligned_quad_matches_the_rect() {
+        let q = [pos2(100.0, 100.0), pos2(300.0, 100.0), pos2(300.0, 400.0), pos2(100.0, 400.0)];
+        let quad = add_variant_quad(q);
+        let r = add_variant_rect(200.0, 400.0);
+        assert!((quad[0] - r.min).length() < 1e-3 && (quad[2] - r.max).length() < 1e-3, "{quad:?} vs {r:?}");
+        assert!(add_variant_hit(q, r.center()));
+    }
+
+    /// 30° 旋转框：按钮中点在底边外法线方向 36，仍是一个 16×16 的旋转正方形。
+    #[test]
+    fn rotated_quad_follows_the_bottom_edge() {
+        let a = 30.0_f32.to_radians();
+        let d = vec2(a.cos(), a.sin());
+        let n = vec2(-a.sin(), a.cos());
+        let c = pos2(200.0, 200.0);
+        let h = 50.0;
+        let q = [c - d * h - n * h, c + d * h - n * h, c + d * h + n * h, c - d * h + n * h];
+        let button = add_variant_quad(q);
+        let center = pos2(button.iter().map(|p| p.x).sum::<f32>() / 4.0, button.iter().map(|p| p.y).sum::<f32>() / 4.0);
+        let want = c + n * (h + 36.0);
+        assert!((center - want).length() < 1e-3, "{center:?} != {want:?}");
+        for i in 0..4 {
+            assert!(((button[(i + 1) % 4] - button[i]).length() - 16.0).abs() < 1e-3, "button must stay square");
+        }
+        assert!(add_variant_hit(q, want));
+        assert!(!add_variant_hit(q, c));
     }
 }

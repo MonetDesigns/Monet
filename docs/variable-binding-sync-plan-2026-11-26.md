@@ -255,9 +255,10 @@ feat(engine): Scale 工具在实例上保留变量绑定的长度，其它层烘
    - 已有 4 条（Ctrl/Shift 选择、批量菜单）；
    - 待补：Escape 清选、选中行颜色、批量删除/改分组/改 scope、40 组菜单滚动、分组复制/重命名/嵌套、Edit variables 的描边与隐藏发布、scope 页签的开关与布尔特例。
    - 先逐条对照 GPUI 是否「有实现无测试」，再决定补测试还是补行为。
-   - 进展（2026-11-27）：测试从 4 条补到 9 条并全部通过，新增 `plain_click_replaces_the_selection`、`shift_click_without_a_valid_anchor_toggles`、`escape_clears_the_selection`、`bulk_menu_omits_a_move_that_changes_nothing`、`bulk_menu_scopes_only_what_every_type_supports`。最后一条暴露出一处行为差异：批量改 scope 菜单原先把各类型的 scope 取**并集**，会把只适用于 Color 的 `Frame fill` 之类条目也给到含 Boolean 的混合选择；已改为取**交集**（与 egui 行为一致）。其余对照项（选中行颜色、40 组菜单滚动、分组复制/重命名/嵌套、scope 页签开关与布尔特例）仍为待补。
+   - 进展（2026-11-27）：测试从 4 条补到 17 条并全部通过，新增普通点击、失效锚点的 Shift、Escape 清选、批量删除/移动/改 scope、混合类型 scope、分组复制（含子组唯一命名与继承成员跳过）、分组重命名/嵌套、40 组批量菜单、scope 逐项勾选等用例。其中四条补齐/修正了行为：批量改 scope 菜单原先把各类型的 scope 取**并集**（已改为交集）；分组右键菜单原先缺 **Duplicate group**（已补，按 egui `duplicate_group` 生成 `variable.duplicate` + `$ref` 改名的一步撤销批次）；分组重命名原先把 `/` 替换成 `-`、无法嵌套（已按 egui `group_renames` 支持斜杠嵌套并保留父路径）；详情面板原先只读展示已选 scope（已补逐项 checkbox，勾选/取消写 `variable.update`，全部取消即空数组=隐藏于取色器）。其余对照项（选中行颜色、Edit variables 的批量描边）仍为待补。
    - 注：右栏的 `visible` 绑定行、Layout grid 逐字段绑定、Page 级 Variable modes / Local variables 入口，已在 `docs/right-panel-visibility-parity-plan.md`（D25 / D14 / D10 / D11）单独立项，本计划不重复排期。
-4. GPUI 样式绑定入口（独立项，可另行排期）：`style.bind` 目前零引用；至少补 Text 样式的 `fontSize/lineHeight/letterSpacing/fontWeight/fontFamily/fontStyle`，Paint/Effect/Grid 次之。
+   - 2026-11-27 续：选中行颜色与「Edit variables」批量详情已补齐——Details 页签的 `Hide from publishing` 三态、Scope 页签只列所有选中类型共有的范围、每次点击对全部选中变量发 `variable.update` 并包成一步 `command.batch`；新增 2 条批量批次测试与 1 条选中行颜色集成测试，面板测试现为 **20/20 通过**。
+4. GPUI 样式绑定入口（Text / Paint / Effect / Grid 均已接入）：`style.bind` 原先零引用；**2026-11-27 已补** Text 样式的 `fontFamily` / `fontStyle` / `fontWeight` / `fontSize` / `lineHeight` / `letterSpacing`——样式编辑器每个字段未绑定时是原控件 + 变量按钮，绑定后换成 chip（点击换变量、detach 解绑），选择只列对应类型的变量，命令统一走 `style.bind {style, field, variable}`（`null` 解绑）。节点级 `fontFamily` / `fontStyle` chip 已由右栏 `1901f2792` 补齐；节点级 `fontWeight` 仍按上游 Type settings 的现有形态不单独设字段。**同日续补** Paint / Effect / Grid 的样式级绑定，范围与 egui `binding_cell` / `effect_binding` 一致：纯色填充只绑 `fills/{i}/color`；阴影只绑 `effects/{i}/color`，Layer / Background Blur 只绑 `effects/{i}/radius`；网格只绑 `layoutGrids/{i}/size`。未绑定时属性控件右侧是变量按钮，绑定时整格换成变量 chip（detach 解绑），变量菜单只列 Color / Number 对应类型；玻璃、噪点、纹理与渐变填充按上游不提供入口。`popovers::tests` 现为 **18/18 通过**（新增字段契约测试）。
 
 ### 批次 5 · P3 上游化（可选）
 
@@ -400,8 +401,10 @@ cargo xtask ci   # fmt + clippy -D warnings + tests + layers + assets + wasm
 留待拍板 / 后续：
 
 1. **C1**：`.fig` 仍未读写 `scale_factor`（跟随上游现状：导入不烘焙因子，导出不带）。JSON 存档的因子往返已有测试覆盖；若产品要求 `.fig` 往返，另开一项。
-2. **C4**：GPUI 仍无 `style.bind` 入口，文本样式字重绑定面板未做；egui 侧入口已在。因 GPUI 右栏正在并发改动，本期不动，避免冲突。
-3. **A9**：上游 `variables_io_tests` 的 slot 测试（P3）未移植。
+2. **C4（Text 部分已完成）**：`ui-gpui` 的样式编辑器已接 `style.bind`，覆盖 Text 样式的 `fontFamily` / `fontStyle` / `fontWeight` / `fontSize` / `lineHeight` / `letterSpacing`；节点级 `fontFamily` / `fontStyle` 绑定 chip 已由右栏 `1901f2792` 补齐，`lineHeight` / `letterSpacing` 更早已补。节点级 `fontWeight` 仍按上游 Type settings 的现有形态不单独设字段；Paint / Effect / Grid 的样式级绑定留待后续。
+3. **A9**：已完成。从 `upstream/main:crates/engine/src/slot_tests.rs` 原样移植 6 条 slot 文本/布尔属性用例，本地引擎行为已支持，未需同步上游 `a6d9b74df` 的 `sync.rs` 改动；`cargo test -q -p figcraft-engine --lib slot` = **36/36 通过**。
+4. **批次 4 第 3 项（GPUI 变量面板测试）已完成**：补 `selected_rows_are_painted_with_the_selected_row_colour` 与「Edit variables」批量详情（Details/Scope 两页签、批量隐藏发布、批量 scope、单步 `command.batch` 撤销）；`cargo test -j 2 -p figcraft-ui-gpui --lib --features test-support variables::tests` = **20/20 通过**。
+5. **C4 Text 验证**：`style_bind_commands_bind_and_unbind_text_fields` 通过，确认 `style.bind {style, field, variable}` 与 `variable: null` 解绑契约；`cargo check -p figcraft-ui-gpui` 通过。
 
 ## 9. PR 与合并（2026-11-27）
 
@@ -409,6 +412,7 @@ cargo xtask ci   # fmt + clippy -D warnings + tests + layers + assets + wasm
 - 合并 `origin/main`（`599f89187`），解决 6 处冲突：`library.rs`（bake 与时间线复制并存）、`clipboard.rs`/`overlays.rs`/`paste_motion_tests.rs`（取 origin 新版）、`app.rs`（`opacity_digit` 与 `key_box_doc`/`pick` 并存）、`ui-gpui/lib.rs`（`annotation.new` 与 `selectArea`、`layers.collapseAll`/`contextMenu`、Developer Mode 拒绝与取色归属并存）。
 - 合并后发现并修复重复的 `key_box_key` 与 `selectArea` 分支（`c0b2d42dd`）；`cargo check -p figcraft-engine`、`cargo check -p figcraft-ui-gpui` 均通过。
 - 批次 5 上游化草稿：`docs/upstream-variable-binding-proposal.md`。
-- 2026-11-27 续：合并远端 `a369c2853`（Dev Mode 缓存/审计、text-wrap、导出格式等 14 文件）无冲突；`cargo check -p figcraft-ui-gpui` 通过。GPUI 变量面板测试 9/9 通过，并修复批量改 scope 菜单把各类型 scope 取并集的 bug（改为交集）。推送后最新 head `0e2c633b`，PR Ready、`mergeable=clean`，38 commits；CI 已触发，等待结果。
+- 2026-11-27 续：合并远端 `a369c2853` 及后续 TextEdit multiline / presentation 等提交均无冲突；`cargo check -p figcraft-ui-gpui` 通过。GPUI 变量面板测试从 4 条补到 **20/20 通过**，并修复批量改 scope 取并集、分组右键缺 Duplicate group、分组改名不支持斜杠嵌套、详情 scope 只读四处行为；选中行颜色与「Edit variables」批量详情已补。PR 保持 Ready、`mergeable=true`，head 以远端为准。
+- CI：`gate / gate (ubuntu-24.04)` 为 failure，原因不是本 PR 的编译/测试，而是全仓 `cargo fmt --all --check`（本 PR 62 个文件、299 处格式差异）；最新 `main`（`6eb303982`）同一 gate 也失败（204 处）。gate 在 fmt 阶段中止，尚未跑到 clippy/tests。是否单独做全仓 rustfmt 清理由用户/团队决定。
 
 

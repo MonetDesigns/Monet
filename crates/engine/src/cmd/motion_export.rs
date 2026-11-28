@@ -10,9 +10,11 @@
 //!
 //! WebM/AV1 export is intentionally not included here — it needs the `rav1e` encoder and is a
 //! separate, larger step.
+//!
+//! MP4 first tries the Windows Media Foundation hardware H.264 encoder and re-renders on the
+//! portable CPU encoder if none is available or a hardware encode fails mid-stream.
 
-
-use std::sync::mpsc;
+use std::sync::{Arc, Condvar, Mutex, mpsc};
 
 use base64::Engine as _;
 use figcraft_doc::Document;
@@ -34,6 +36,41 @@ const GIF_MAX_FPS: u32 = 50;
 /// Ceiling on export render threads; one more than the machine's cores rarely helps and each
 /// worker holds its own scratch document.
 const MAX_RENDER_THREADS: usize = 32;
+/// Shared cap on raw RGBA frames queued across all export workers. A 8192² frame is 256 MiB,
+/// so this admits one such frame while allowing dozens of ordinary 1080p frames.
+const MAX_IN_FLIGHT_FRAME_BYTES: usize = 256 * 1024 * 1024;
+
+/// Sliding window shared by export workers and the ordered receiver: `issued` is the next index
+/// a worker may start, `done` is the first index not yet written, and `aborted` wakes every
+/// worker when the sink fails so the thread scope can join instead of deadlocking.
+struct FrameWindow {
+    issued: usize,
+    done: usize,
+    aborted: bool,
+}
+
+fn abort_window(state: &Arc<(Mutex<FrameWindow>, Condvar)>) {
+    let (lock, cvar) = &**state;
+    let mut s = lock.lock().unwrap_or_else(|e| e.into_inner());
+    s.aborted = true;
+    cvar.notify_all();
+}
+
+/// Aborts the window when the ordered receiver unwinds (a `sink` panic), not only on an
+/// explicit `Err`; otherwise a worker waiting on the window keeps the thread scope from
+/// finishing.
+struct AbortOnDrop {
+    state: Arc<(Mutex<FrameWindow>, Condvar)>,
+    armed: bool,
+}
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        if self.armed {
+            abort_window(&self.state);
+        }
+    }
+}
 
 /// How many worker threads a frame-parallel export uses.
 fn render_threads() -> usize {
@@ -241,42 +278,96 @@ impl Animation {
         F: FnMut(usize, figcraft_motion_codec::FrameRgba) -> std::result::Result<(), String>,
     {
         std::thread::scope(|scope| -> std::result::Result<(), String> {
-            // One channel per worker, read in the same round-robin order the workers produce in,
-            // so frames reach `sink` in timeline order and each worker's queue stays small.
-            let mut senders = Vec::with_capacity(threads);
-            let mut receivers = Vec::with_capacity(threads);
-            for _ in 0..threads {
-                let (tx, rx) = mpsc::sync_channel::<std::result::Result<figcraft_motion_codec::FrameRgba, String>>(2);
-                senders.push(tx);
-                receivers.push(rx);
+            // A shared sliding window bounds both queued and reordered frames. Counting slots
+            // per worker is not enough at 8192²: one RGBA frame is 256 MiB. The window is also
+            // what bounds `pending` when frame 0 is slow and later frames arrive first.
+            let frame_bytes = (self.size.0 as usize).saturating_mul(self.size.1 as usize).saturating_mul(4).max(1);
+            let budget_frames = (MAX_IN_FLIGHT_FRAME_BYTES / frame_bytes).max(1);
+            // Keep at most half the byte budget in flight; the other half covers the frame each
+            // worker is currently drawing. At 8192² this degrades to one worker and one frame,
+            // instead of buffering a 24 GiB backlog.
+            let window = (budget_frames / 2).max(1);
+            let workers = threads.min(window).max(1);
+            let state = Arc::new((Mutex::new(FrameWindow { issued: 0, done: 0, aborted: false }), Condvar::new()));
+            let mut abort_guard = AbortOnDrop { state: state.clone(), armed: true };
+            // A bounded channel preallocates `capacity` slots; never allocate more slots than
+            // frames, or a 1×1 export would reserve the whole byte budget in empty slots.
+            let channel = window.min(times.len()).max(1);
+            let (tx, rx) = mpsc::sync_channel::<(usize, std::result::Result<figcraft_motion_codec::FrameRgba, String>)>(channel);
+            for _ in 0..workers {
+                let tx = tx.clone();
+                let state = state.clone();
+                scope.spawn(move || self.render_worker(times, tx, state, window));
             }
-            for (w, tx) in senders.drain(..).enumerate() {
-                scope.spawn(move || self.render_worker(times, threads, w, tx));
-            }
-            // Returning early drops `receivers`, which unblocks any worker still waiting on a full
-            // channel so the scope can join instead of deadlocking.
-            for i in 0..times.len() {
-                match receivers[i % threads].recv() {
-                    Ok(Ok(frame)) => sink(i, frame)?,
-                    Ok(Err(e)) => return Err(e),
-                    Err(_) => return Err("a frame failed to render".to_string()),
+            // The main thread must drop its sender or `recv` never observes all workers finishing.
+            drop(tx);
+            let mut pending: std::collections::BTreeMap<usize, figcraft_motion_codec::FrameRgba> = std::collections::BTreeMap::new();
+            let mut next = 0;
+            while next < times.len() {
+                let (i, frame) = match rx.recv() {
+                    Ok(v) => v,
+                    Err(_) => {
+                        abort_window(&state);
+                        return Err("a frame failed to render".to_string());
+                    }
+                };
+                let frame = match frame {
+                    Ok(f) => f,
+                    Err(e) => {
+                        abort_window(&state);
+                        return Err(e);
+                    }
+                };
+                pending.insert(i, frame);
+                while let Some(frame) = pending.remove(&next) {
+                    if let Err(e) = sink(next, frame) {
+                        abort_window(&state);
+                        return Err(e);
+                    }
+                    next += 1;
+                }
+                // Ordered delivery releases window space for workers still waiting to start.
+                {
+                    let (lock, cvar) = &*state;
+                    let mut s = lock.lock().unwrap_or_else(|e| e.into_inner());
+                    s.done = next;
+                    cvar.notify_all();
                 }
             }
+            abort_guard.armed = false;
             Ok(())
         })
     }
 
-    /// Renders this worker's share of the frames (`start`, `start + threads`, ...) in order.
-    fn render_worker(&self, times: &[f64], threads: usize, start: usize, tx: mpsc::SyncSender<std::result::Result<figcraft_motion_codec::FrameRgba, String>>) {
+    /// Draws one frame at a time from the shared window, so a worker cannot run ahead of the
+    /// ordered receiver by more than `window` frame indices.
+    fn render_worker(
+        &self,
+        times: &[f64],
+        tx: mpsc::SyncSender<(usize, std::result::Result<figcraft_motion_codec::FrameRgba, String>)>,
+        state: Arc<(Mutex<FrameWindow>, Condvar)>,
+        window: usize,
+    ) {
         let mut player = MotionPlayer::new(&self.base, self.page);
-        let mut i = start;
-        while i < times.len() {
+        loop {
+            let i = {
+                let (lock, cvar) = &*state;
+                let mut s = lock.lock().unwrap_or_else(|e| e.into_inner());
+                while !s.aborted && s.issued < times.len() && s.issued >= s.done.saturating_add(window) {
+                    s = cvar.wait(s).unwrap_or_else(|e| e.into_inner());
+                }
+                if s.aborted || s.issued >= times.len() {
+                    return;
+                }
+                let i = s.issued;
+                s.issued += 1;
+                i
+            };
             let frame = self.frame_rgba(&mut player, times[i]);
             let failed = frame.is_err();
-            if tx.send(frame).is_err() || failed {
-                break;
+            if tx.send((i, frame)).is_err() || failed {
+                return;
             }
-            i += threads;
         }
     }
 }
@@ -353,15 +444,14 @@ pub fn encode_animation(
     // Frames are drawn in parallel and streamed straight into the encoder, so a long export both
     // finishes much sooner and never buffers the whole animation as raw RGBA.
     let threads = render_threads();
-    let render = |sink: &mut dyn FnMut(figcraft_motion_codec::FrameRgba) -> std::result::Result<(), String>| {
+    let mut render = |sink: &mut dyn FnMut(figcraft_motion_codec::FrameRgba) -> std::result::Result<(), String>| {
         anim.render_frames(&times, threads, |_, frame| sink(frame)).map_err(|e| bad(cmd, e))
     };
     let (bytes, ext) = match format {
         AnimFormat::Mp4 => {
             let o = figcraft_motion_codec::Mp4Options { fps, crf: mp4_crf(quality) };
-            let mut enc = figcraft_motion_codec::Mp4Encoder::new(size.0, size.1, &o, [255, 255, 255]).map_err(|e| bad(cmd, e))?;
-            render(&mut |f| enc.push(f))?;
-            (enc.finish().map_err(|e| bad(cmd, e))?, "mp4")
+            let bytes = encode_mp4_stream(&mut render, size, &o, quality)?;
+            (bytes, "mp4")
         }
         AnimFormat::Webm => {
             let o = figcraft_motion_codec::WebmOptions { fps, quality, speed, ..Default::default() };
@@ -395,6 +485,56 @@ pub fn encode_animation(
 fn mp4_crf(quality: u8) -> f32 {
     let q = quality.clamp(1, 100) as f32;
     51.0 - (q - 1.0) * 33.0 / 99.0
+}
+
+/// Encode MP4 frames through Media Foundation when available, and re-render on the CPU path if
+/// the hardware encoder fails part-way through. The retry is deliberate: streaming export has
+/// already released earlier frames, so a mid-stream hardware failure cannot be repaired without
+/// drawing the animation again.
+fn encode_mp4_stream<F>(render: &mut F, size: (u32, u32), o: &figcraft_motion_codec::Mp4Options, quality: u8) -> Result<Vec<u8>>
+where
+    F: FnMut(&mut dyn FnMut(figcraft_motion_codec::FrameRgba) -> std::result::Result<(), String>) -> Result<()>,
+{
+    #[cfg(test)]
+    MP4_EXPORT_BACKEND.with(|b| b.set(0));
+    #[cfg(not(windows))]
+    let _ = quality;
+    #[cfg(windows)]
+    let force_cpu = std::env::var_os("MONET_MOTION_CPU").is_some();
+    #[cfg(windows)]
+    if !force_cpu {
+        match figcraft_motion_mediafoundation::MfMp4Encoder::new(size.0, size.1, o, [255, 255, 255], quality) {
+            Ok(mut enc) => {
+                let attempt = match render(&mut |f| enc.push(f)) {
+                    Ok(()) => enc.finish().map_err(|e| bad("motion.export", e)),
+                    Err(e) => Err(e),
+                };
+                match attempt {
+                    Ok(bytes) => {
+                        #[cfg(test)]
+                        MP4_EXPORT_BACKEND.with(|b| b.set(1));
+                        return Ok(bytes);
+                    }
+                    Err(e) => eprintln!("[motion] Media Foundation encode failed, retrying on CPU: {e}"),
+                }
+            }
+            Err(e) => eprintln!("[motion] Media Foundation encoder unavailable, using CPU: {e}"),
+        }
+    }
+    let mut enc = figcraft_motion_codec::Mp4Encoder::new(size.0, size.1, o, [255, 255, 255]).map_err(|e| bad("motion.export", e))?;
+    render(&mut |f| enc.push(f))?;
+    let bytes = enc.finish().map_err(|e| bad("motion.export", e))?;
+    #[cfg(test)]
+    MP4_EXPORT_BACKEND.with(|b| b.set(2));
+    Ok(bytes)
+}
+
+/// Test-only observation of which MP4 backend the last export in this thread used:
+/// 0 = none, 1 = Media Foundation hardware, 2 = portable CPU. It lets the hardware smoke test
+/// prove the hardware path ran instead of silently accepting the CPU fallback.
+#[cfg(test)]
+std::thread_local! {
+    static MP4_EXPORT_BACKEND: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
 }
 
 /// The `motion.export` command: no document write, no undo — it only reads and encodes.
@@ -446,8 +586,44 @@ mod tests {
             pos.set_key(0, AnimValue::Vec2(Vec2::new(2.0, 2.0)), None);
             pos.set_key(500, AnimValue::Vec2(Vec2::new(14.0, 2.0)), None);
         }
-        d.timelines.insert(frame, TimelineSettings { duration_ms: 500, fps: 10, looping: true });
+        d.timelines.insert(frame, TimelineSettings { duration_ms: 500, fps: 10, looping: true, reverse: false });
         (d, frame, id)
+    }
+
+    /// End-to-end MP4 export at the minimum size accepted by the hardware encoder. Ignored because
+    /// GitHub's Windows runners have no GPU encoder; run locally with
+    /// `cargo test -p figcraft-engine hardware_mp4_export -- --ignored --nocapture`.
+    #[test]
+    #[cfg(windows)]
+    #[ignore = "requires a Windows GPU with a hardware H.264 encoder"]
+    fn hardware_mp4_export() {
+        use serde_json::json;
+        use std::time::Instant;
+
+        let (mut d, _, _) = animated_doc();
+        let page = d.first_page().unwrap();
+        let frame = d.create(page, NodeKind::Frame, "Stage", 0.0, 0.0, 256.0, 256.0).unwrap();
+        let dot = d.create(frame, NodeKind::Rectangle, "Dot", 8.0, 8.0, 32.0, 32.0).unwrap();
+        {
+            let n = d.node_mut(dot).unwrap();
+            let pos = n.motion.ensure_track(AnimProperty::Position);
+            pos.set_key(0, AnimValue::Vec2(Vec2::new(8.0, 8.0)), None);
+            pos.set_key(500, AnimValue::Vec2(Vec2::new(216.0, 8.0)), Some(Ease::Linear));
+        }
+        d.timelines.insert(frame, TimelineSettings { duration_ms: 500, fps: 10, looping: true, reverse: false });
+
+        let mut s = Session::with_document(d);
+        let t = Instant::now();
+        let out = s.execute("motion.export", &json!({"id": frame.0, "format": "mp4", "fps": 10, "scale": 1.0})).unwrap();
+        assert_eq!(
+            MP4_EXPORT_BACKEND.with(|b| b.get()),
+            1,
+            "this test is only evidence when Media Foundation actually encoded it; 2 means the CPU fallback ran"
+        );
+        let data = base64::engine::general_purpose::STANDARD.decode(out["data"].as_str().unwrap()).unwrap();
+        assert_eq!(&data[4..8], b"ftyp", "an ISO BMFF file");
+        assert!(data.windows(4).any(|w| w == b"avc1"), "H.264 sample entry");
+        println!("[motion] hardware MP4 export: {} ms, {} bytes, {} frames", t.elapsed().as_millis(), data.len(), out["frames"]);
     }
 
     #[test]
@@ -458,11 +634,11 @@ mod tests {
     }
 
     #[test]
-    fn frame_times_loop_vs_one_shot() {        let tl = TimelineSettings { duration_ms: 1000, fps: 10, looping: true };
+    fn frame_times_loop_vs_one_shot() {        let tl = TimelineSettings { duration_ms: 1000, fps: 10, looping: true, reverse: false };
         let t = frame_times(&tl, 10);
         assert_eq!(t.len(), 10, "looping: 0..duration excludes the wrap-around frame");
         assert!((t[0] - 0.0).abs() < 1e-6 && (t[9] - 900.0).abs() < 1e-6);
-        let tl = TimelineSettings { duration_ms: 1000, fps: 10, looping: false };
+        let tl = TimelineSettings { duration_ms: 1000, fps: 10, looping: false, reverse: false };
         let t = frame_times(&tl, 10);
         assert_eq!(t.len(), 11, "one-shot adds a final frame at duration");
         assert!((t[10] - 1000.0).abs() < 1e-6);

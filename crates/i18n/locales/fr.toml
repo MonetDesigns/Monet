@@ -1947,7 +1947,7 @@ status = "draft — needs native review"
 "Ctrl+Alt+← ↑ → ↓" = "Ctrl+Alt+← ↑ → ↓"
 "Ctrl+click a padding field" = "Ctrl+clic sur un champ de marge"
 "Dart constants for Flutter…" = "Constantes Dart pour Flutter…"
-"Delete {n} variables" = "Supprimer {n} variables"
+"Delete {n} variables" = { other = "Supprimer {n} variables" }
 "Detach calculation" = "Détacher le calcul"
 "Disconnected. Reconnecting…" = "Déconnecté. Reconnexion…"
 "Disconnected. Your edits stay here and sync when the connection returns. Reconnecting…" = "Déconnecté. Vos modifications restent ici et se synchroniseront au retour de la connexion. Reconnexion…"
@@ -1962,8 +1962,8 @@ status = "draft — needs native review"
 "Everyone who reaches this server can open these files while they are shared." = "Toute personne pouvant joindre ce serveur peut ouvrir ces fichiers tant qu'ils sont partagés."
 "Exact only" = "Exact uniquement"
 "Expand the interface" = "Développer l'interface"
-"Exported {name}; {n} kinds of content were changed or left out" = "{name} exporté ; {n} types de contenu ont été modifiés ou omis"
-"Exported {n} files; some content was changed or left out" = "{n} fichiers exportés ; certains contenus ont été modifiés ou omis"
+"Exported {name}; {n} kinds of content were changed or left out" = { other = "{name} exporté ; {n} types de contenu ont été modifiés ou omis" }
+"Exported {n} files; some content was changed or left out" = { other = "{n} fichiers exportés ; certains contenus ont été modifiés ou omis" }
 "Monet stopped because of an internal error." = "Monet s'est arrêté à cause d'une erreur interne."
 "Format" = "Format"
 "Free fonts come from Google Fonts and Noto, through jsDelivr and GitHub. Each file is checked against the font index before it is installed into the font folder the Craft apps share. Nothing is downloaded until you allow it." = "Les polices gratuites viennent de Google Fonts et Noto, via jsDelivr et GitHub. Chaque fichier est vérifié par rapport à l'index des polices avant d'être installé dans le dossier partagé par les applications Craft. Rien n'est téléchargé tant que vous ne l'autorisez pas."
@@ -2068,9 +2068,9 @@ status = "draft — needs native review"
 "{count} in it now · Changed {date}" = "{count} dedans maintenant · Modifié le {date}"
 "{insertions} · {detachments}" = "{insertions} · {detachments}"
 "{name}, disconnected from its live session" = "{name}, déconnecté de sa session en direct"
-"{n} detached" = "{n} détachés"
-"{n} inserted" = "{n} insérés"
-"{n} text layers" = "{n} calques de texte"
+"{n} detached" = { other = "{n} détachés" }
+"{n} inserted" = { other = "{n} insérés" }
+"{n} text layers" = { other = "{n} calques de texte" }
 "{period}: {counts}" = "{period} : {counts}"
 "{used} · {detached}" = "{used} · {detached}"
 "{used} · {inserted}" = "{used} · {inserted}"

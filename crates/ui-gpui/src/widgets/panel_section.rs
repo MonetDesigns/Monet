@@ -88,6 +88,9 @@ pub struct FieldRow {
     /// Override the row height (`None` = the standard 32 pt `ROW_H`). 用于跨两行的 auto-layout
     /// picker：仍走同一套列（`1fr | 1fr | 24 | 24`），只把行高调成 `FIELD_H*2 + GUTTER`。
     height: Option<f32>,
+    /// Hover text for the whole row, used where a control is disabled but the reason is not
+    /// visible (实例内 Position / Auto layout 方向)。
+    tip: Option<SharedString>,
 }
 
 /// Width of the shared trailing column for `n` icon buttons: one 24 pt slot each, plus the
@@ -95,6 +98,15 @@ pub struct FieldRow {
 /// one slot so every row's right edge stays on the same track.
 pub(crate) fn trailing_width(n: usize) -> f32 {
     SLOT * n.max(1) as f32 + GRID_GAP * n.saturating_sub(1) as f32
+}
+
+impl FieldRow {
+    /// Attach hover text to the whole row. Used for disabled controls whose reason is not
+    /// visible from the control itself (egui's `on_disabled_hover_text`).
+    pub fn tip(mut self, tip: impl Into<SharedString>) -> Self {
+        self.tip = Some(tip.into());
+        self
+    }
 }
 
 /// Build a body row. `fields` become the `1fr` columns of the unified grid; `trailing` go into the
@@ -106,6 +118,7 @@ pub fn field_row(fields: Vec<impl IntoElement>, trailing: Vec<impl IntoElement>)
         span: 1,
         free: None,
         height: None,
+        tip: None,
     }
 }
 
@@ -113,14 +126,14 @@ pub fn field_row(fields: Vec<impl IntoElement>, trailing: Vec<impl IntoElement>)
 /// a dropdown and a `Field-color`. It is still a grid row: the 24 pt blank and trailing columns
 /// stay on its right, so it lines up with every other row.
 pub fn field_row_full(el: impl IntoElement) -> FieldRow {
-    FieldRow { fields: vec![el.into_any_element()], trailing: Vec::new(), span: 2, free: None, height: None }
+    FieldRow { fields: vec![el.into_any_element()], trailing: Vec::new(), span: 2, free: None, height: None, tip: None }
 }
 
 /// A section-level block that owns its own vertical rhythm and insets: no grid columns, no
 /// fixed 32 pt row height, no trailing 24 pt cell. Needed by lists whose rows were tuned to
 /// their own pitch (egui `style_picker::local_styles` uses 24 pt rows and 8/16 pt gaps).
 pub fn block_row(el: impl IntoElement) -> FieldRow {
-    FieldRow { fields: Vec::new(), trailing: Vec::new(), span: 0, free: Some(el.into_any_element()), height: None }
+    FieldRow { fields: Vec::new(), trailing: Vec::new(), span: 0, free: Some(el.into_any_element()), height: None, tip: None }
 }
 
 /// A row whose element spans **both** field columns **and** keeps trailing 24 pt icon cells.
@@ -136,6 +149,7 @@ pub fn field_row_full_trailing(el: impl IntoElement, trailing: Vec<impl IntoElem
         span: 2,
         free: None,
         height: None,
+        tip: None,
     }
 }
 
@@ -149,12 +163,13 @@ pub fn field_row_h(fields: Vec<impl IntoElement>, trailing: Vec<impl IntoElement
         span: 1,
         free: None,
         height: Some(height),
+        tip: None,
     }
 }
 
 /// A caption row — `ui-egui`'s `widgets::sublabels(ui, "Alignment", None)`: 12 pt tall, no columns.
 pub fn sublabel_row(text: impl Into<SharedString>) -> FieldRow {
-    FieldRow { fields: Vec::new(), trailing: Vec::new(), span: 0, free: Some(sublabels(text).into_any_element()), height: None }
+    FieldRow { fields: Vec::new(), trailing: Vec::new(), span: 0, free: Some(sublabels(text).into_any_element()), height: None, tip: None }
 }
 
 /// A panel section: the reserved header plus a body of rows laid out as one unified grid.
@@ -213,8 +228,8 @@ pub fn panel_section(title: impl Into<SharedString>) -> PanelSection {
 /// 免得调用方为了塞进 `Div::child` 又手抄一遍列宽。
 fn render_rows(rows: Vec<FieldRow>) -> Div {
     let mut body = div().flex().flex_col().w_full().gap(pt(0.0));
-    for row in rows {
-        let FieldRow { fields, trailing, span, free, height } = row;
+    for (row_ix, row) in rows.into_iter().enumerate() {
+        let FieldRow { fields, trailing, span, free, height, tip } = row;
         if let Some(el) = free {
             body = body.child(el);
             continue;
@@ -243,7 +258,17 @@ fn render_rows(rows: Vec<FieldRow>) -> Div {
             cell = cell.child(dbg_frame(div().w(pt(SLOT)).h_full().flex().items_center().justify_center().child(t), 0xBF5AF2));
         }
         line = line.child(cell);
-        body = body.child(line);
+        if let Some(tip) = tip {
+            body = body.child(
+                div()
+                    .id(("field-row-tip", row_ix as u64))
+                    .w_full()
+                    .tooltip(move |_window, cx| cx.new(|_| crate::toolbar::Tip { text: tip.clone() }).into())
+                    .child(line),
+            );
+        } else {
+            body = body.child(line);
+        }
     }
     body
 }
@@ -370,7 +395,7 @@ pub fn sublabels2(left: impl Into<SharedString>, right: impl Into<SharedString>)
 
 /// A two-column caption row, wrapped as a [`FieldRow`] free row.
 pub fn sublabel_row2(left: impl Into<SharedString>, right: impl Into<SharedString>) -> FieldRow {
-    FieldRow { fields: Vec::new(), trailing: Vec::new(), span: 0, free: Some(sublabels2(left, right).into_any_element()), height: None }
+    FieldRow { fields: Vec::new(), trailing: Vec::new(), span: 0, free: Some(sublabels2(left, right).into_any_element()), height: None, tip: None }
 }
 
 /// A segmented control (`widgets::segmented`): `items.len()` equal cells on a `t.field` bar that

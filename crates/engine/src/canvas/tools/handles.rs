@@ -111,43 +111,17 @@ pub fn selection_box(doc: &Document, sel: &[NodeId]) -> Option<[Point; 4]> {
 }
 
 /// The selection's handle box: the page transform of its top-left corner (axes along the box) and
-/// its size. One layer: its own box; several sharing a rotation: a box turned with them;
-/// otherwise the page-aligned bounds.
+/// its size. One layer: its own box. Several layers: the page-aligned bounds — even when they
+/// share a rotation, a multi-selection's box is never turned with the layers (its four edges stay
+/// square to the page, 2026-11-27).
 pub fn selection_frame(doc: &Document, sel: &[NodeId]) -> Option<(Affine, f64, f64)> {
     let ids = roots(doc, sel);
     if let [id] = ids.as_slice() {
         let n = doc.node(*id)?;
         return Some((doc.world_transform(*id), n.width, n.height));
     }
-    let Some(angle) = shared_rotation(doc, &ids) else {
-        let b = doc.bounds_of(&ids)?;
-        return Some((Affine::translate((b.x0, b.y0)), b.width(), b.height()));
-    };
-    let rot = Affine::rotate(angle);
-    let inv = rot.inverse();
-    let b = ids
-        .iter()
-        .filter_map(|i| Some(figcraft_geom::transform_rect_bbox(inv * doc.world_transform(*i), doc.node(*i)?.local_rect())))
-        .reduce(|a, b| a.union(b))?;
-    Some((rot * Affine::translate((b.x0, b.y0)), b.width(), b.height()))
-}
-
-/// The rotation (radians) every layer in `ids` shares, unless it's a multiple of 90 degrees (the
-/// page-aligned box is then the same box). Flipped layers count by their axis, not its direction.
-fn shared_rotation(doc: &Document, ids: &[NodeId]) -> Option<f64> {
-    use std::f64::consts::{FRAC_PI_2, PI};
-    const EPS: f64 = 1e-4;
-    let mut angles = ids.iter().map(|i| {
-        let c = doc.world_transform(*i).as_coeffs();
-        c[1].atan2(c[0])
-    });
-    let a = angles.next()?;
-    let same = |b: f64| {
-        let d = (b - a).rem_euclid(PI);
-        d.min(PI - d) < EPS
-    };
-    let axis_aligned = (a - (a / FRAC_PI_2).round() * FRAC_PI_2).abs() < EPS;
-    (a.is_finite() && !axis_aligned && angles.all(same)).then_some(a)
+    let b = doc.bounds_of(&ids)?;
+    Some((Affine::translate((b.x0, b.y0)), b.width(), b.height()))
 }
 
 /// Whether layer `id` is locked or inside a locked layer: it can be selected in the layers panel

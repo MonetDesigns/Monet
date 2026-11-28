@@ -1935,7 +1935,7 @@ status = "draft — needs native review"
 "Ctrl+click a padding field" = "Ctrl+คลิกที่ช่องระยะขอบ"
 "Curved" = "โค้ง"
 "Dart constants for Flutter…" = "ค่าคงที่ Dart สำหรับ Flutter…"
-"Delete {n} variables" = "ลบตัวแปร {n} ตัว"
+"Delete {n} variables" = { other = "ลบตัวแปร {n} ตัว" }
 "Detach calculation" = "แยกการคำนวณ"
 "Disconnected. Reconnecting…" = "ขาดการเชื่อมต่อ กำลังเชื่อมต่อใหม่…"
 "Disconnected. Your edits stay here and sync when the connection returns. Reconnecting…" = "ขาดการเชื่อมต่อ การแก้ไขของคุณอยู่ที่นี่และจะซิงก์เมื่อเชื่อมต่อกลับมา กำลังเชื่อมต่อใหม่…"
@@ -1951,8 +1951,8 @@ status = "draft — needs native review"
 "Everyone who reaches this server can open these files while they are shared." = "ใครก็ตามที่เข้าถึงเซิร์ฟเวอร์นี้เปิดไฟล์เหล่านี้ได้ขณะที่ยังแชร์อยู่"
 "Exact only" = "ตรงกันเท่านั้น"
 "Expand the interface" = "ขยายอินเทอร์เฟซ"
-"Exported {name}; {n} kinds of content were changed or left out" = "ส่งออก {name} แล้ว มีเนื้อหา {n} ประเภทที่ถูกเปลี่ยนหรือข้ามไป"
-"Exported {n} files; some content was changed or left out" = "ส่งออก {n} ไฟล์แล้ว เนื้อหาบางส่วนถูกเปลี่ยนหรือข้ามไป"
+"Exported {name}; {n} kinds of content were changed or left out" = { other = "ส่งออก {name} แล้ว มีเนื้อหา {n} ประเภทที่ถูกเปลี่ยนหรือข้ามไป" }
+"Exported {n} files; some content was changed or left out" = { other = "ส่งออก {n} ไฟล์แล้ว เนื้อหาบางส่วนถูกเปลี่ยนหรือข้ามไป" }
 "Monet stopped because of an internal error." = "Monet หยุดทำงานเพราะเกิดข้อผิดพลาดภายใน"
 "Flow chart" = "ผังงาน"
 "Format" = "รูปแบบ"
@@ -2070,11 +2070,11 @@ status = "draft — needs native review"
 "{count} in it now · Changed {date}" = "ตอนนี้มี {count} รายการ · แก้ไขเมื่อ {date}"
 "{insertions} · {detachments}" = "{insertions} · {detachments}"
 "{name}, disconnected from its live session" = "{name} ถูกตัดจากเซสชันสด"
-"{n} detached" = "แยกออก {n}"
-"{n} inserted" = "แทรก {n}"
+"{n} detached" = { other = "แยกออก {n}" }
+"{n} inserted" = { other = "แทรก {n}" }
 "{n} min" = "{n} นาที"
-"{n} votes" = "{n} คะแนน"
-"{n} votes left" = "เหลือ {n} คะแนน"
+"{n} votes" = { other = "{n} คะแนน" }
+"{n} votes left" = { other = "เหลือ {n} คะแนน" }
 "{period}: {counts}" = "{period}: {counts}"
 "{used} · {detached}" = "{used} · {detached}"
 "{used} · {inserted}" = "{used} · {inserted}"

@@ -9,7 +9,7 @@
 //   · 值 = 3 层梯度噪声（改进 Perlin，双线性 + smoothstep 权重），每层 seed 由
 //     fract(sin(seed*91.3458 + octave*57.123 + 12.345)*43758.5453) 给出；
 //   · density 是一个**窗口**而不是阈值：
-//       lo = 10*(0.25 - d/4)（duo 的第二色用 0.75），hi = lo + 10*(d/2)，b = v*10
+//       lo = 10*(0.25 - d/4)（duo 的第二色用 0.75），hi = lo + 10*d（duo 用 5），b = v*10
 //       keep = step(lo,b) * (1 - step(hi,b))
 //     d=0 只留最亮的峰，d=100 全留 —— 所以 density 的量程是 0..100，不是 0..1；
 //   · type 0 = multi（RGB 三通道各自一份噪声 + 第四份做 alpha），
@@ -148,14 +148,18 @@ fn fbm(s : i32, q : vec2<f32>) -> f32 {
 }
 
 /// Figma 的 `d()`：density 窗口。
-fn density_window(v : f32, density : f32, inverted : bool) -> f32 {
+fn density_window(v : f32, density : f32, inverted : bool, duo : bool) -> f32 {
+    // `u.density` is the user-facing 0..100 percent; the window formulas below use 0..1.
+    let d = clamp(density, 0.0, 100.0) / 100.0;
     var lo : f32;
     if (inverted) {
-        lo = 10.0 * (0.75 - density / 4.0);
+        lo = 10.0 * (0.75 - d / 4.0);
     } else {
-        lo = 10.0 * (0.25 - density / 4.0);
+        lo = 10.0 * (0.25 - d / 4.0);
     }
-    let hi = lo + 10.0 * (density / 2.0);
+    // Multi and mono keep the whole 0..1 range at full density. Duo is two complementary
+    // halves, so each window stays 5 wide and the pair covers 0..1 without overlap.
+    let hi = lo + 10.0 * select(d, d / 2.0, duo);
     let b = v * 10.0;
     return step(lo, b) * (1.0 - step(hi, b));
 }
@@ -190,22 +194,22 @@ fn fs(in : VSOut) -> @location(0) vec4<f32> {
     if (kind == 0) {
         // multi：三个通道各自的噪声（2t-0.5，和图里一样，负值最终会被目标格式裁掉）。
         noise_rgb = clamp(vec3<f32>(2.0 * n0 - 0.5, 2.0 * n1 - 0.5, 2.0 * n2 - 0.5), vec3<f32>(0.0), vec3<f32>(1.0));
-        amount = density_window(n3, u.density, false) * u.color_a;
+        amount = density_window(n3, u.density, false, false) * u.color_a;
     } else if (kind == 1) {
         // mono：亮度。
         let l = 0.213 * n0 + 0.715 * n1 + 0.072 * n2;
         noise_rgb = col;
-        amount = density_window(l, u.density, false) * u.color_a;
+        amount = density_window(l, u.density, false, false) * u.color_a;
     } else {
         // duo：互补的两个窗口，第二色优先。
         let l = 0.213 * n0 + 0.715 * n1 + 0.072 * n2;
-        let a1 = density_window(l, u.density, false);
+        let a1 = density_window(l, u.density, false, true);
         if (a1 >= 1.0) {
             noise_rgb = sec;
             amount = u.sec_a;
         } else {
             noise_rgb = col;
-            amount = density_window(l, u.density, true) * u.color_a;
+            amount = density_window(l, u.density, true, true) * u.color_a;
         }
     }
 
