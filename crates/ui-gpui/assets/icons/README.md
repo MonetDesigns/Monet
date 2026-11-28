@@ -22,15 +22,31 @@
 规则：
 
 - **名字里不重复域词**。例如形状工具合并器是 `tool-shape-builder`，不是 `shape-shape-builder`。
-- 同一图形只保留**一份物理文件**。多个逻辑图标共用时，在代码的资源表里让它们指向同一文件（如 `ui-panel`/`ui-settings`/`ui-trash` 共用 `ui-dot.svg`）。
+- 同一图形只保留**一份物理文件**。多个逻辑图标共用时，在代码的资源表里让它们指向同一文件；**`include_bytes!` 必须指向自己这一个文件**，不允许「文件名是 A、字节却读 B」的旧写法。
+- 共用的组合必须登记在 `widgets/icon.rs` 测试里的 `SHARED_ASSETS`，否则单测会按「漏删的重复文件」拒绝。
 - 新增图标先归域，再命名；域内重名时改用更具体的名字，不要加数字后缀。
+
+### 当前共用表
+
+| 物理文件 | 共用的逻辑图标 |
+|---|---|
+| `tool-shape-builder.svg` | `Icon::ShapeBuilder`、`Icon::Intersect` |
+| `ui-sliders.svg` | `Icon::Settings`、`TypIcon::Settings` |
+| `ui-minus.svg` | `Icon::Minus`、`TypIcon::None` |
+| `layout-grid.svg` | `Icon::LayoutGrid`、`LayerIcon::LayoutGrid` |
+| `shape-text.svg` | `Icon::Text`、`LayerIcon::Text` |
+| `ui-chevron-down.svg` | `Icon::ChevronDown` |
+| `ui-dot.svg` | `Icon::Dot` |
+| `ui-trash.svg` | `Icon::Trash` |
+
+`Icon` 枚举内部的共用只有 `tool-shape-builder` 一处，其余共用都发生在不同资源表之间（`icon` / `layer_icons` / `typ_icons` / `picker_icons`）。
 
 ## 绘制
 
-- `viewBox` 取 16（图层树/小控件）或 24（工具栏/大图标），保持原生网格，不要缩放改写。
-- 所有 `stroke-width` 写 `1`（`ICON_STROKE`）。渲染时 `rescale_strokes` 会按目标尺寸补偿。
+- `viewBox` 只取 16（图层树/小控件）或 24（工具栏/大图标），保持原生网格，不要缩放改写。**不允许 12、8.99 这类中间网格**（历史遗留的 `property-stroke-sides` / `stroke-side-check` 已改回 24）。
+- 所有 `stroke-width` 写 `1`（`ICON_STROKE`）。渲染时 `rescale_strokes` 会按目标尺寸补偿。漏写 `stroke-width` 的描边不会被补偿，缩小时线会变细。
 - 颜色一律 `#000`（`black` 亦可）。**预览是黑色，实际颜色由使用处的 `text_color` 注入**；默认墨色取 `tokens().icon`（浅色主题 `#1E1E1E`，约 90% 黑）。
-- 不要使用 `#fff`/`white`：浅色主题下会不可见，也无法被统一着色。
+- 不要使用 `#fff`/`white`（mask 内的白底除外）：浅色主题下会不可见，也无法被统一着色。历史遗留的 `property-stroke-sides` / `stroke-side-check` 曾用白描边，预览和浅色主题下都是空白。
 
 ## 加载
 

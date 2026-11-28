@@ -33,7 +33,6 @@ pub enum Icon {
     LinkOn,
     LinkOff,
     Section,
-    Panel,
     Menu,
     Settings,
     /// 四圆点：Fill / Stroke / 样式 / 网格行的「打开样式编辑器」按钮（24 网格）。
@@ -201,8 +200,6 @@ pub enum Icon {
     StrokeSideBottom,
     StrokeSideLeft,
     StrokeSideCheck,
-    ConstraintHorizontal,
-    ConstraintVertical,
     /// 对比度行左侧图标的背景圆（填真实背景色）。
     ContrastBackground,
     /// 对比度行左侧图标的前景弧（填当前选中色）。
@@ -228,7 +225,6 @@ impl Icon {
         Icon::LinkOn,
         Icon::LinkOff,
         Icon::Section,
-        Icon::Panel,
         Icon::Menu,
         Icon::Settings,
         // 四圆点：Fill / Stroke / 样式 / 网格行的「打开样式编辑器」按钮（24 网格）。
@@ -325,8 +321,6 @@ impl Icon {
         Icon::StrokeSideBottom,
         Icon::StrokeSideLeft,
         Icon::StrokeSideCheck,
-        Icon::ConstraintHorizontal,
-        Icon::ConstraintVertical,
         Icon::ContrastBackground,
         Icon::ContrastForeground,
     ];
@@ -353,9 +347,8 @@ impl Icon {
             Icon::LinkOn => "ui-link-on",
             Icon::LinkOff => "ui-link-off",
             Icon::Section => "ui-section",
-            Icon::Panel => "ui-panel",
             Icon::Menu => "ui-menu",
-            Icon::Settings => "ui-settings",
+            Icon::Settings => "ui-sliders",
             Icon::StyleSettings => "ui-style-settings",
             Icon::Trash => "ui-trash",
             Icon::Rectangle => "shape-rectangle",
@@ -416,7 +409,7 @@ impl Icon {
             Icon::EyeOff => "ui-eye-off",
             Icon::Union => "shape-union",
             Icon::Subtract => "shape-subtract",
-            Icon::Intersect => "shape-intersect",
+            Icon::Intersect => "tool-shape-builder",
             Icon::Exclude => "shape-exclude",
             Icon::Home => "ui-home",
             Icon::Sun => "ui-sun",
@@ -446,8 +439,6 @@ impl Icon {
             Icon::StrokeSideBottom => "stroke-side-bottom",
             Icon::StrokeSideLeft => "stroke-side-left",
             Icon::StrokeSideCheck => "stroke-side-check",
-            Icon::ConstraintHorizontal => "constraint-horizontal",
-            Icon::ConstraintVertical => "constraint-vertical",
             Icon::ContrastBackground => "ui-contrast-bg",
             Icon::ContrastForeground => "ui-contrast-fg",
         }
@@ -475,9 +466,8 @@ impl Icon {
             Icon::LinkOn => "ui-link-on",
             Icon::LinkOff => "ui-link-off",
             Icon::Section => "ui-section",
-            Icon::Panel => "ui-panel",
             Icon::Menu => "ui-menu",
-            Icon::Settings => "ui-settings",
+            Icon::Settings => "ui-sliders",
             Icon::StyleSettings => "ui-style-settings",
             Icon::Trash => "ui-trash",
             Icon::Rectangle => "shape-rectangle",
@@ -538,7 +528,7 @@ impl Icon {
             Icon::EyeOff => "ui-eye-off",
             Icon::Union => "shape-union",
             Icon::Subtract => "shape-subtract",
-            Icon::Intersect => "shape-intersect",
+            Icon::Intersect => "tool-shape-builder",
             Icon::Exclude => "shape-exclude",
             Icon::Home => "ui-home",
             Icon::Sun => "ui-sun",
@@ -568,8 +558,6 @@ impl Icon {
             Icon::StrokeSideBottom => "stroke-side-bottom",
             Icon::StrokeSideLeft => "stroke-side-left",
             Icon::StrokeSideCheck => "stroke-side-check",
-            Icon::ConstraintHorizontal => "constraint-horizontal",
-            Icon::ConstraintVertical => "constraint-vertical",
             Icon::ContrastBackground => "ui-contrast-bg",
             Icon::ContrastForeground => "ui-contrast-fg",
         }
@@ -618,7 +606,6 @@ static ICON_FILES: &[(&str, &[u8])] = &[
     ("shape-icon-kind", include_bytes!("../../assets/icons/shape-icon-kind.svg")),
     ("shape-image", include_bytes!("../../assets/icons/shape-image.svg")),
     ("shape-instance", include_bytes!("../../assets/icons/shape-instance.svg")),
-    ("shape-intersect", include_bytes!("../../assets/icons/shape-intersect.svg")),
     ("shape-line", include_bytes!("../../assets/icons/shape-line.svg")),
     ("shape-page", include_bytes!("../../assets/icons/shape-page.svg")),
     ("shape-polygon", include_bytes!("../../assets/icons/shape-polygon.svg")),
@@ -648,7 +635,7 @@ static ICON_FILES: &[(&str, &[u8])] = &[
     ("tool-pen", include_bytes!("../../assets/icons/tool-pen.svg")),
     ("tool-pencil", include_bytes!("../../assets/icons/tool-pencil.svg")),
     ("tool-scale", include_bytes!("../../assets/icons/tool-scale.svg")),
-    ("tool-shape-builder", include_bytes!("../../assets/icons/shape-intersect.svg")),
+    ("tool-shape-builder", include_bytes!("../../assets/icons/tool-shape-builder.svg")),
     ("tool-text-on-path", include_bytes!("../../assets/icons/tool-text-on-path.svg")),
     ("tool-text", include_bytes!("../../assets/icons/tool-text.svg")),
     ("ui-actions", include_bytes!("../../assets/icons/ui-actions.svg")),
@@ -673,17 +660,16 @@ static ICON_FILES: &[(&str, &[u8])] = &[
     ("ui-menu", include_bytes!("../../assets/icons/ui-menu.svg")),
     ("ui-minus", include_bytes!("../../assets/icons/ui-minus.svg")),
     ("ui-moon", include_bytes!("../../assets/icons/ui-moon.svg")),
-    ("ui-panel", include_bytes!("../../assets/icons/ui-dot.svg")),
     ("ui-panels", include_bytes!("../../assets/icons/ui-panels.svg")),
     ("ui-play", include_bytes!("../../assets/icons/ui-play.svg")),
     ("ui-plus", include_bytes!("../../assets/icons/ui-plus.svg")),
     ("ui-search", include_bytes!("../../assets/icons/ui-search.svg")),
     ("ui-section", include_bytes!("../../assets/icons/ui-section.svg")),
-    ("ui-settings", include_bytes!("../../assets/icons/ui-dot.svg")),
+    ("ui-sliders", include_bytes!("../../assets/icons/ui-sliders.svg")),
     ("ui-style-settings", include_bytes!("../../assets/icons/ui-style-settings.svg")),
     ("ui-sun", include_bytes!("../../assets/icons/ui-sun.svg")),
     ("ui-templates", include_bytes!("../../assets/icons/ui-templates.svg")),
-    ("ui-trash", include_bytes!("../../assets/icons/ui-dot.svg")),
+    ("ui-trash", include_bytes!("../../assets/icons/ui-trash.svg")),
     ("ui-unlock", include_bytes!("../../assets/icons/ui-unlock.svg")),
     ("ui-view-grid", include_bytes!("../../assets/icons/ui-view-grid.svg")),
     ("ui-win-minimize", include_bytes!("../../assets/icons/ui-win-minimize.svg")),
@@ -700,8 +686,6 @@ static ICON_FILES: &[(&str, &[u8])] = &[
     ("layout-padding-left", include_bytes!("../../assets/icons/layout-padding-left.svg")),
     ("layout-padding-right", include_bytes!("../../assets/icons/layout-padding-right.svg")),
     ("layout-padding-top", include_bytes!("../../assets/icons/layout-padding-top.svg")),
-    ("constraint-horizontal", include_bytes!("../../assets/icons/constraint-horizontal.svg")),
-    ("constraint-vertical", include_bytes!("../../assets/icons/constraint-vertical.svg")),
     ("ui-contrast-bg", include_bytes!("../../assets/icons/ui-contrast-bg.svg")),
     ("ui-contrast-fg", include_bytes!("../../assets/icons/ui-contrast-fg.svg")),
 ];
@@ -876,11 +860,17 @@ mod tests {
 
     #[test]
     fn every_icon_has_an_external_svg_with_the_shared_stroke() {
-        assert_eq!(Icon::ALL.len(), 116, "Icon 变体数变了：请同步 ALL / asset_name / asset_rel / 本断言");
+        assert_eq!(Icon::ALL.len(), 113, "Icon 变体数变了：请同步 ALL / asset_name / asset_rel / 本断言");
+        // 同一图形可由两个逻辑图标共用一个物理文件（见 assets/icons/README.md）。
+        // 只允许明确登记的共用，避免把「漏删的重复文件」混进来。
+        const SHARED_ASSETS: &[&str] = &["tool-shape-builder"];
         let mut names = HashSet::new();
         for &icon in Icon::ALL {
             let rel = icon.asset_rel();
-            assert!(names.insert(rel), "duplicate asset {rel}");
+            assert!(
+                names.insert(rel) || SHARED_ASSETS.contains(&rel),
+                "duplicate asset {rel}"
+            );
             let bytes = file_bytes(rel).unwrap_or_else(|| panic!("missing {rel}.svg"));
             let text = std::str::from_utf8(bytes).expect("svg is utf8");
             assert!(text.starts_with("<svg "), "{rel}: {text}");
@@ -937,9 +927,9 @@ mod tests {
             "layout-corner-individual",
             "layout-padding-top",
             "layout-padding-individual",
+            "property-stroke-sides",
+            "stroke-side-check",
             "ui-code",
-            "constraint-horizontal",
-            "constraint-vertical",
         ] {
             let bytes = file_bytes(rel).unwrap_or_else(|| panic!("missing {rel}.svg"));
             assert_eq!(view_box_size(bytes), 24.0, "{rel} must be drawn at its 24 pt slot size");
