@@ -1354,7 +1354,24 @@ impl Renders {
                 guard.runner = crate::wgsl_runner::WgslRunner::new();
             }
             let runner = guard.runner.as_mut()?;
-            crate::shade_gpu::shade_one(req, runner, doc, &mut crate::shade_gpu::ShadeTiming::default()).map(Arc::new)
+            let mut timing = crate::shade_gpu::ShadeTiming::default();
+            let t0 = std::time::Instant::now();
+            let out = crate::shade_gpu::shade_one(req, runner, doc, &mut timing).map(Arc::new);
+            if render_log() {
+                eprintln!(
+                    "[shade] sync node={:?} {}x{} {:.1}ms (pass {:.1} + swap {:.1} + gpu {:.1} + extract {:.1}) ok={}",
+                    req.node,
+                    req.size.0,
+                    req.size.1,
+                    t0.elapsed().as_secs_f64() * 1000.0,
+                    timing.pass,
+                    timing.swap,
+                    timing.gpu,
+                    timing.extract,
+                    out.is_some()
+                );
+            }
+            out
         }));
         board
     }

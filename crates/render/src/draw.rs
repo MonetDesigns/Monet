@@ -792,14 +792,35 @@ fn draw_layer(ctx: &Ctx, pix: &mut Pixmap, n: &Node, parent_xf: Affine, depth: u
     // overlap 又按材质透镜 reach 给了模糊足够上下文，拼接处连续。绝不能只让「一条带」认领——
     // 那样比视口高的窗格在其余带里整块不画玻璃，放大到 235% 时整块消失。
     let shader = ctx.shade.and_then(|b| b.spec_for(id));
+    let lxf = Affine::translate((-f64::from(lx), -f64::from(ly))) * xf;
+    let layer_stage = shader.as_ref().is_some_and(|s| s.stage == crate::wgsl_effect::Stage::Layer);
+    // 不透明、normal 混合、没有任何效果时，backdrop 材质只是「一层漆」：着色结果可以直接落在
+    // 画布上，子树照常叠在它上面。走整层 pixmap 要多分配一张 lw×lh 的图，再把材质贴进去、把
+    // 整层贴回画布——满窗窗格上这是三趟整层搬运，比 GPU 本身还贵。opacity=1 / normal 时两条
+    // 做法逐像素相同（alpha 合成可结合），所以容器（`isolates_children`）也走这条。
+    let plain = n.opacity >= 0.999
+        && matches!(n.blend, BlendMode::Normal | BlendMode::PassThrough)
+        && !n.effects.iter().any(|e| e.visible);
+    if shader.is_some() && !layer_stage && plain {
+        let t = std::time::Instant::now();
+        match shader.as_ref().and_then(|spec| shader_layer(ctx, pix, n, spec, (lx, ly), (lw, lh), lxf)) {
+            Some(s) => {
+                composite(pix, (lx, ly), &s, n.opacity.clamp(0.0, 1.0), n.blend);
+                // 材质取代了这个节点自己的漆；只剩子树要画（与层内那条分支同一语义）。
+                draw_children_only(ctx, pix, n, xf, depth);
+            }
+            // 本帧还没有像素（第一次请求、或几何刚变）：照常画内容，下一帧再换成材质。
+            None => draw_content(ctx, pix, n, xf, depth, None),
+        }
+        prof::COMPOSITE.add(t);
+        return;
+    }
     let t_layer = std::time::Instant::now();
     let Some(mut layer) = Pixmap::new(lw, lh) else { return };
     if shader.is_some() {
         prof::LAYER.add(t_layer);
     }
-    let lxf = Affine::translate((-f64::from(lx), -f64::from(ly))) * xf;
     let shape = node_outline(ctx.doc, n);
-    let layer_stage = shader.as_ref().is_some_and(|s| s.stage == crate::wgsl_effect::Stage::Layer);
     let shaded = if layer_stage { None } else { shader.as_ref().and_then(|spec| shader_layer(ctx, pix, n, spec, (lx, ly), (lw, lh), lxf)) };
     // Background blur and glass: the whole backdrop under the layer (every surface below this
     // one, composited), through the shape, under the content.
