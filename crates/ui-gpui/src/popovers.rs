@@ -658,6 +658,17 @@ struct PropertyCreateState {
     preferred_open: Rc<Cell<bool>>,
 }
 
+/// 样式编辑器变量菜单的挂起状态：点击属性行里的变量按钮时只记录锚点与目标，
+/// 由 `settings_element` 在**下一次渲染**里重建菜单（mouse-down 闭包里直接塞 overlay
+/// 会被下一帧开头的 `overlays.clear()` 清掉）。
+#[derive(Clone)]
+struct StyleBindMenu {
+    at: Point<Pixels>,
+    style_id: String,
+    current: Option<String>,
+    targets: Vec<(String, String, String)>,
+}
+
 /// 样式编辑器正文（egui `style_picker::editor`）：Name / Description 两个输入框 + 属性行 +
 /// 是否有选区（决定要不要画 "Update from selection"）。全部照源码字段来。
 #[derive(Clone)]
@@ -674,6 +685,8 @@ pub(crate) struct StyleEditState {
     pub number_variables: Vec<String>,
     pub string_variables: Vec<String>,
     pub color_variables: Vec<String>,
+    /// 变量菜单的挂起锚点：点击按钮写入，正文渲染时据此重建菜单。
+    pub bind_menu: Rc<RefCell<Option<StyleBindMenu>>>,
     /// 效果样式的完整 effects 数组（每行带原始 JSON，供写回 `style.update {value}`）。
     pub effects: Option<Vec<EffectRow>>,
     /// 网格样式的完整 grids 数组（每行带原始 JSON，供写回 `style.update {value}`）。
@@ -2597,6 +2610,7 @@ impl WindowState {
         // 表面色不指定：`Setting` 行 / `TextField` 的墨色与字段底色都按默认 `Surface::Panel`
         // 调好，调用方指定 surface 会把整套配色打乱。
 
+        let bind_menu = Rc::new(RefCell::new(None));
         let settings = Self::style_editor_settings(
             cx,
             ty,
@@ -2622,6 +2636,7 @@ impl WindowState {
             number_variables,
             string_variables,
             color_variables,
+            bind_menu,
             effects,
             grids,
             popups,
@@ -2983,6 +2998,9 @@ impl WindowState {
     pub(crate) fn apply_style_snapshot(&mut self, cx: &mut App, snap: StyleSnap) {
         let StyleSnap { ty, name, description, paints, text, bound, number_variables, string_variables, color_variables, effects, grids } = snap;
         let id = self.style_edit.as_ref().map(|e| e.id.clone()).unwrap_or_default();
+        // 绑定集变化（绑定 / 解绑）时不能复用旧编辑器：旧 hex / opacity 回调捕获的是绑定前的
+        // paints，解绑后拖透明度会把颜色写回旧值。拖动「%」期间 bound 不变，仍按原逻辑复用。
+        let bound_changed = self.style_edit.as_ref().map(|e| e.bound != bound).unwrap_or(false);
         let mut settings = Self::style_editor_settings(
             cx,
             ty,
@@ -3002,7 +3020,7 @@ impl WindowState {
         // 拖动「%」时每一步都会写回文档并触发本刷新。若整份 settings 连同编辑器一起重建，
         // 正在 scrub 的 Entity 会被换掉，拖动就断了（用户 2026-11-15）。按 (tab, index)
         // 复用 PaintRow 的 hex / opacity 编辑器，只让 paint 数据跟上文档。
-        {
+        if !bound_changed {
             let prev = self.settings.borrow();
             for row in settings.iter_mut() {
                 let Setting::PaintRow { tab, index, hex_ed, op_ed, .. } = row else { continue };
@@ -3213,6 +3231,47 @@ impl WindowState {
     fn push_overlay(&self, el: AnyElement, dismiss: Rc<dyn Fn(&mut Window, &mut App)>) {
         self.overlays.borrow_mut().push(el);
         self.overlay_dismiss.borrow_mut().push(dismiss);
+    }
+
+    /// 样式字段的变量菜单：mouse-down 只写 `bind_menu`，菜单在这里按当前帧重建。
+    fn push_style_bind_menu(&self) {
+        let Some(edit) = self.style_edit.as_ref() else { return };
+        let Some(menu) = edit.bind_menu.borrow().clone() else { return };
+        let rows: Vec<MenuRow> = menu
+            .targets
+            .iter()
+            .map(|(label, ..)| MenuRow::row(label.clone()).checked(Some(menu.current.as_deref() == Some(label.as_str()))))
+            .collect();
+        let slot = edit.bind_menu.clone();
+        let overlays = self.overlays.clone();
+        let dismissers = self.overlay_dismiss.clone();
+        let dismiss: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(move |_, _| {
+            *slot.borrow_mut() = None;
+            overlays.borrow_mut().clear();
+            dismissers.borrow_mut().clear();
+        });
+        let pick = {
+            let style_id = menu.style_id.clone();
+            let targets = menu.targets.clone();
+            let cmds = self.cmds.clone();
+            let dismiss = dismiss.clone();
+            Rc::new(move |picked: &str, window: &mut Window, cx: &mut App| {
+                if let Some((_, field, variable)) = targets.iter().find(|(label, ..)| label == picked) {
+                    cmds.push(style_bind_cmd(&style_id, field, json!(variable)));
+                }
+                dismiss(window, cx);
+            })
+        };
+        let el = menu_popup_in(
+            Bounds { origin: menu.at, size: size(px(1.0), px(0.0)) },
+            Some(220.0),
+            rows,
+            pick,
+            dismiss.clone(),
+            f32::from(self.viewport.width),
+            f32::from(self.viewport.height),
+        );
+        self.push_overlay(el, dismiss);
     }
 
     /// 标题栏下拉的菜单：与正文 `Setting::Dropdown` 同一套 `menu_popup_in`，但选中后
@@ -6020,6 +6079,7 @@ impl WindowState {
                 col = col.child(el);
             }
         }
+        self.push_style_bind_menu();
         let _ = cx;
         // Details 正文很长（六个分组 + 十几条开关），限高滚动；Basics 短，不触发滚动条。
         // `overflow_y_scroll` 属于 `StatefulInteractiveElement`，需要一个元素 id，且调用后类型
@@ -6164,6 +6224,7 @@ impl WindowState {
                 let idx = *index;
                 let hex = paint.solid_color().map(|c| c.to_hex()).unwrap_or_default();
                 let cmds = self.cmds.clone();
+                let bind_menu = self.style_edit.as_ref().map(|e| e.bind_menu.clone()).unwrap_or_default();
                 let visible = paint.visible;
                 let eye = {
                     let cmds = cmds.clone();
@@ -6247,9 +6308,7 @@ impl WindowState {
                             &edit.color_variables,
                             sid.clone(),
                             cmds.clone(),
-                            self.overlays.clone(),
-                            self.overlay_dismiss.clone(),
-                            self.viewport,
+                            bind_menu.clone(),
                         )
                     } else {
                         cf.into_any_element()
@@ -6267,9 +6326,7 @@ impl WindowState {
                         &vars,
                         sid.clone(),
                         cmds.clone(),
-                        self.overlays.clone(),
-                        self.overlay_dismiss.clone(),
-                        self.viewport,
+                        bind_menu.clone(),
                     )
                 } else {
                     cf.into_any_element()
@@ -7214,7 +7271,7 @@ impl WindowState {
                 if *st != tab {
                     return None;
                 }
-                // lizard `text_style_editor` 的 `ui.scope(item_spacing = (8,8))`：每行先
+                let bind_menu = self.style_edit.as_ref().map(|e| e.bind_menu.clone()).unwrap_or_default();
                 // add_space(16)，行距 8；三行分别是 248 / 120+120 / 120+120+Dots。
                 // 「>」/Dots 打开的 Type settings 面板 Monet 还没搬，这里只留 24 宽的占位。
                 let make_select = |key: &str,
@@ -7290,9 +7347,7 @@ impl WindowState {
                     family_targets,
                     style_id.clone(),
                     self.cmds.clone(),
-                    self.overlays.clone(),
-                    self.overlay_dismiss.clone(),
-                    self.viewport,
+                    bind_menu.clone(),
                 );
                 let mut weight_targets = style_targets("fontStyle", string_variables);
                 weight_targets.extend(style_targets("fontWeight", number_variables));
@@ -7309,9 +7364,7 @@ impl WindowState {
                     weight_targets,
                     style_id.clone(),
                     self.cmds.clone(),
-                    self.overlays.clone(),
-                    self.overlay_dismiss.clone(),
-                    self.viewport,
+                    bind_menu.clone(),
                 );
                 let size_field = style_bind_control(
                     120.0,
@@ -7321,9 +7374,7 @@ impl WindowState {
                     style_targets("fontSize", number_variables),
                     style_id.clone(),
                     self.cmds.clone(),
-                    self.overlays.clone(),
-                    self.overlay_dismiss.clone(),
-                    self.viewport,
+                    bind_menu.clone(),
                 );
                 let line_field = style_bind_control(
                     120.0,
@@ -7333,9 +7384,7 @@ impl WindowState {
                     style_targets("lineHeight", number_variables),
                     style_id.clone(),
                     self.cmds.clone(),
-                    self.overlays.clone(),
-                    self.overlay_dismiss.clone(),
-                    self.viewport,
+                    bind_menu.clone(),
                 );
                 let spacing_field = style_bind_control(
                     120.0,
@@ -7345,9 +7394,7 @@ impl WindowState {
                     style_targets("letterSpacing", number_variables),
                     style_id.clone(),
                     self.cmds.clone(),
-                    self.overlays.clone(),
-                    self.overlay_dismiss.clone(),
-                    self.viewport,
+                    bind_menu.clone(),
                 );
                 let row = |el: AnyElement| {
                     div().w_full().h(pt(24.0)).flex().flex_row().items_center().pl(pt(16.0)).gap(pt(8.0)).child(el).into_any_element()
@@ -7417,6 +7464,7 @@ impl WindowState {
                 let vis = *visible;
                 let arr = array.clone();
                 let cmds = self.cmds.clone();
+                let bind_menu = self.style_edit.as_ref().map(|e| e.bind_menu.clone()).unwrap_or_default();
                 // 与 egui `effect_binding` 一致：阴影绑颜色，两层模糊绑半径，其余效果不提供绑定。
                 let binding = style_effect_bind_field(*ty, idx);
                 let dd_w = if binding.is_some() { STYLE_ROW_FIELD_W - 20.0 } else { STYLE_ROW_FIELD_W };
@@ -7505,9 +7553,7 @@ impl WindowState {
                         &vars,
                         sid.clone(),
                         cmds.clone(),
-                        self.overlays.clone(),
-                        self.overlay_dismiss.clone(),
-                        self.viewport,
+                        bind_menu.clone(),
                     )
                 } else {
                     dd.into_any_element()
@@ -7524,6 +7570,7 @@ impl WindowState {
                 let vis = *visible;
                 let arr = grids.clone();
                 let cmds = self.cmds.clone();
+                let bind_menu = self.style_edit.as_ref().map(|e| e.bind_menu.clone()).unwrap_or_default();
                 let eye = {
                     let arr = arr.clone();
                     let cmds = cmds.clone();
@@ -7617,9 +7664,7 @@ impl WindowState {
                         &vars,
                         sid.clone(),
                         cmds.clone(),
-                        self.overlays.clone(),
-                        self.overlay_dismiss.clone(),
-                        self.viewport,
+                        bind_menu.clone(),
                     )
                 };
                 Some(crate::widgets::panel_section::field_row_full_trailing(control, vec![eye, minus]).into_any_element())
@@ -7975,23 +8020,10 @@ fn style_bind_field(
     variables: &[String],
     style_id: String,
     cmds: Cmds,
-    overlays: Rc<RefCell<Vec<AnyElement>>>,
-    dismissers: Rc<RefCell<Vec<Rc<dyn Fn(&mut Window, &mut App)>>>>,
-    viewport: Size<Pixels>,
+    bind_menu: Rc<RefCell<Option<StyleBindMenu>>>,
 ) -> AnyElement {
     let targets: Vec<(String, String, String)> = variables.iter().map(|v| (v.clone(), field.clone(), v.clone())).collect();
-    style_bind_control(
-        STYLE_ROW_FIELD_W,
-        control,
-        field,
-        bound,
-        targets,
-        style_id,
-        cmds,
-        overlays,
-        dismissers,
-        viewport,
-    )
+    style_bind_control(STYLE_ROW_FIELD_W, control, field, bound, targets, style_id, cmds, bind_menu)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -8003,54 +8035,22 @@ fn style_bind_control(
     targets: Vec<(String, String, String)>,
     style_id: String,
     cmds: Cmds,
-    overlays: Rc<RefCell<Vec<AnyElement>>>,
-    dismissers: Rc<RefCell<Vec<Rc<dyn Fn(&mut Window, &mut App)>>>>,
-    viewport: Size<Pixels>,
+    bind_menu: Rc<RefCell<Option<StyleBindMenu>>>,
 ) -> AnyElement {
     let t = tokens();
     let open = {
         let style_id = style_id.clone();
-        let cmds = cmds.clone();
-        let overlays = overlays.clone();
-        let dismissers = dismissers.clone();
         let targets = targets.clone();
         let current = bound.clone();
+        let cmds = cmds.clone();
         Rc::new(move |at: Point<Pixels>| {
-            let rows: Vec<MenuRow> = targets
-                .iter()
-                .map(|(label, ..)| MenuRow::row(label.clone()).checked(Some(current.as_deref() == Some(label.as_str()))))
-                .collect();
-            let dismiss: Rc<dyn Fn(&mut Window, &mut App)> = {
-                let overlays = overlays.clone();
-                let dismissers = dismissers.clone();
-                Rc::new(move |_, _| {
-                    overlays.borrow_mut().clear();
-                    dismissers.borrow_mut().clear();
-                })
-            };
-            let pick = {
-                let style_id = style_id.clone();
-                let cmds = cmds.clone();
-                let targets = targets.clone();
-                let dismiss = dismiss.clone();
-                Rc::new(move |picked: &str, window: &mut Window, cx: &mut App| {
-                    if let Some((_, field, variable)) = targets.iter().find(|(label, ..)| label == picked) {
-                        cmds.push(style_bind_cmd(&style_id, field, json!(variable)));
-                    }
-                    dismiss(window, cx);
-                })
-            };
-            let el = menu_popup_in(
-                Bounds { origin: at, size: size(px(1.0), px(0.0)) },
-                Some(220.0),
-                rows,
-                pick,
-                dismiss.clone(),
-                f32::from(viewport.width),
-                f32::from(viewport.height),
-            );
-            overlays.borrow_mut().push(el);
-            dismissers.borrow_mut().push(dismiss);
+            *bind_menu.borrow_mut() = Some(StyleBindMenu {
+                at,
+                style_id: style_id.clone(),
+                current: current.clone(),
+                targets: targets.clone(),
+            });
+            cmds.wake();
         })
     };
     let Some(name) = bound else {
@@ -8969,6 +8969,24 @@ mod tests {
         assert_eq!(style_effect_bind_field("glass", 0), None);
         assert_eq!(style_effect_bind_field("noise", 0), None);
         assert_eq!(style_grid_bind_field(5), "layoutGrids/5/size");
+    }
+
+    /// CodeRabbit #42：菜单不能在 mouse-down 闭包直接塞 `overlays`（下一帧开头会被清空），
+    /// 必须写挂起状态，由 `settings_element` 在渲染期重建。
+    #[test]
+    fn style_bind_menu_is_rebuilt_during_render() {
+        let src = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/popovers.rs"));
+        let start = src.find("fn style_bind_control").expect("style_bind_control");
+        let end = src[start..].find("struct EffectBindCtx").map(|d| start + d).expect("end of style_bind_control");
+        let control = &src[start..end];
+        assert!(control.contains("*bind_menu.borrow_mut() = Some(StyleBindMenu {"), "mouse-down must record the pending menu");
+        assert!(!control.contains("overlays.borrow_mut().push"), "style_bind_control must not push overlays from a mouse-down closure");
+        // Bound the search to `settings_element`'s body: `&src[settings..]` runs to EOF and could
+        // match this test's own assertion string instead of the production call.
+        let settings = src.find("fn settings_element").expect("settings_element");
+        let settings_end = src[settings..].find("fn render_setting").map(|d| settings + d).expect("end of settings_element");
+        let block = &src[settings..settings_end];
+        assert!(block.contains("self.push_style_bind_menu();"), "settings_element must rebuild the pending menu");
     }
 
     /// 浮层内菜单的定位/关闭不变量（用户 2026-11-19 逐条指定）：
