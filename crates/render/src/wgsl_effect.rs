@@ -47,6 +47,9 @@ pub const GENERIC_EXPORTS: &[&str] = &[
     "tileOffset",
     "tileExpansionScale",
     "nodeSpaceCenterPoint",
+    "nodeCenterPx",
+    "nodeRotation",
+    "isRectangle",
     "maskTextureSize",
     "nodeToTileSpace",
     "tileToNodeSpace",
@@ -197,6 +200,13 @@ pub enum Stage {
     Layer,
 }
 
+/// Which texture a shader wants box-blurred by the host before it samples it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BlurInput {
+    Backdrop,
+    Content,
+}
+
 /// Optional declarations found in `// @fx ...` comments.
 #[derive(Clone, Debug, Default)]
 pub struct Meta {
@@ -212,6 +222,10 @@ pub struct Meta {
     pub stage: Stage,
     /// `@fx reach <field>`: the uniform field (in document px) the host grows the pass rect by.
     pub reach: Option<String>,
+    /// `@fx blur <backdrop|content> <field>`: the host box-blurs that input by `<field>` document
+    /// pixels before binding it. The shader sees the already-blurred texture, which keeps the
+    /// blur contract in one place instead of each WGSL file growing its own tap loop.
+    pub blur: Option<(BlurInput, String)>,
 }
 
 /// The result of scanning one WGSL source.
@@ -381,6 +395,21 @@ fn parse_meta(code: &str) -> Meta {
                 }
             }
             "reach" => meta.reach = Some(tail.trim().to_string()),
+            "blur" => {
+                let mut it = tail.split_whitespace();
+                if let (Some(source), Some(field)) = (it.next(), it.next()) {
+                    let source = if source.eq_ignore_ascii_case("content") {
+                        Some(BlurInput::Content)
+                    } else if source.eq_ignore_ascii_case("backdrop") {
+                        Some(BlurInput::Backdrop)
+                    } else {
+                        None
+                    };
+                    if let Some(source) = source {
+                        meta.blur = Some((source, field.to_string()));
+                    }
+                }
+            }
             "hide" => meta.hides.extend(tail.split_whitespace().map(String::from)),
             "group" => {
                 let mut it = tail.split_whitespace();
@@ -795,6 +824,12 @@ impl WgslEffects {
     /// (in document px, before `dpr`). `None` for an effect that only paints inside its own bounds.
     pub fn reach(&self, id: &str) -> Option<&str> {
         self.effects.get(id).and_then(|l| l.scan.meta.reach.as_deref())
+    }
+
+    /// `@fx blur <backdrop|content> <field>`: which input the host box-blurs and by which document
+    /// pixel field. The shader then receives that texture already blurred.
+    pub fn blur(&self, id: &str) -> Option<(BlurInput, String)> {
+        self.effects.get(id).and_then(|l| l.scan.meta.blur.clone())
     }
 
     /// True when the effect needs the node's content texture (`content` binding + `Stage::Layer`).

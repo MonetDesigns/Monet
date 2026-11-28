@@ -64,7 +64,7 @@ pub struct BoardGrid {
 
 impl Default for BoardGrid {
     fn default() -> Self {
-        Self { style: GridStyle::Dots, spacing: 24.0, major: 5, size: 1.0, contrast: 1.0 }
+        Self { style: GridStyle::Dots, spacing: 16.0, major: 5, size: 1.0, contrast: 1.0 }
     }
 }
 
@@ -135,4 +135,57 @@ pub fn specs() -> Vec<CommandSpec> {
         false,
         grid_cmd
     )]
+}
+
+/// The dot grid's spacing on the page at `zoom` (page units): `base` × {32,16,8,4,2,1}, chosen by
+/// the zoom so the marks stay 8–16 screen pixels apart below 100 %, and at `base` above it.
+pub fn dot_step(zoom: f64, base: f64) -> f64 {
+    let k = if zoom < 0.03125 {
+        32.0
+    } else if zoom < 0.0625 {
+        16.0
+    } else if zoom < 0.125 {
+        8.0
+    } else if zoom < 0.25 {
+        4.0
+    } else if zoom < 0.5 {
+        2.0
+    } else {
+        1.0
+    };
+    if base.is_finite() && base > 0.0 { base * k } else { 16.0 * k }
+}
+
+/// How strongly the dot grid shows at `zoom`: nothing below 50 %, all of it from 100 % (smoothstep
+/// in between), so the dots read as one grid whichever wheel step they come from.
+pub fn dot_fade(zoom: f64) -> f32 {
+    if !zoom.is_finite() {
+        return 0.0;
+    }
+    let t = ((zoom - 0.5) / 0.5).clamp(0.0, 1.0) as f32;
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// The line grid's spacing at `zoom`: `base` × `major`ⁿ until the lines are `min_gap` screen
+/// pixels apart, and how strongly the marks the next step drops still show (0 to 1). `None` when
+/// no finite spacing gets there.
+pub fn line_spacing(zoom: f64, base: f64, major: u32, min_gap: f64) -> Option<(f64, f32)> {
+    let ok = |v: f64| v.is_finite() && v > 0.0;
+    if !(ok(zoom) && ok(base) && ok(min_gap)) {
+        return None;
+    }
+    let factor = f64::from(major.max(2));
+    let mut step = base;
+    // Bounded: past about a thousand doublings the step is no longer finite, and there is no grid.
+    for _ in 0..1100 {
+        let gap = step * zoom;
+        if !gap.is_finite() {
+            return None;
+        }
+        if gap >= min_gap {
+            return Some((step, ((gap - min_gap) / min_gap).clamp(0.0, 1.0) as f32));
+        }
+        step *= factor;
+    }
+    None
 }

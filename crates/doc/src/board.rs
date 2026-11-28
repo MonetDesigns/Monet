@@ -160,8 +160,8 @@ pub fn board_color(s: &str) -> Option<Color> {
     BOARD_COLORS.iter().find(|(n, _)| n.eq_ignore_ascii_case(s)).map(|(_, c)| *c).or_else(|| Color::from_hex(s))
 }
 
-/// The page colour boards start with: a warm light grey the colours stand out on.
-pub const BOARD_PAGE: Color = Color::from_rgb8_const(0xF4, 0xF3, 0xF0);
+/// The page colour boards start with: the neutral light grey of a FigJam board.
+pub const BOARD_PAGE: Color = Color::from_rgb8_const(0xF5, 0xF5, 0xF5);
 
 /// The outlines shapes with text come in: the basic ones, then arrows and flowchart symbols.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]

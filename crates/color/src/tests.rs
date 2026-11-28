@@ -294,3 +294,73 @@ fn css_hue_wraps_a_whole_turn_and_calc_is_not_a_number() {
         assert_eq!(Color::parse_css(s), None, "{s}");
     }
 }
+
+#[test]
+fn marks_follow_the_page_colour() {
+    // Brightness is read on the 8-bit values, squared first: red is a bright page (0.55), not a
+    // 30% grey, and white is 1.
+    assert_eq!((Color::WHITE.brightness() * 1000.0).round(), 1000.0);
+    assert_eq!((Color::from_hex("FF0000").unwrap().brightness() * 1000.0).round(), 547.0);
+    assert_eq!((Color::DARK_PAGE.brightness() * 1000.0).round(), 118.0);
+    // A light page: the same colour, 5% darker in brightness.
+    assert_eq!(Color::WHITE.mark(0.05).to_hex(), "F2F2F2");
+    assert_eq!(Color::from_hex("FF0000").unwrap().mark(0.05).to_hex(), "E80000");
+    assert_eq!(Color::DEFAULT_PAGE.mark(0.05).to_hex(), "E8E8E8");
+    // A dark page: lighter, and by more than the step (a mark needs more lift against dark).
+    let lifted = Color::DARK_PAGE.mark(0.05);
+    assert_eq!(lifted.to_hex(), "3E3E3E");
+    assert!(lifted.brightness() > Color::DARK_PAGE.brightness());
+    assert!(Color::WHITE.mark(0.05).brightness() < 1.0);
+    // The hue stays: a mark on red is still red, and one on blue still blue.
+    let red = Color::from_hex("FF0000").unwrap().mark(0.05);
+    assert!(red.r > 0.8 && red.g == 0.0 && red.b == 0.0);
+    // Blue reads dark (0.34), so it is lifted toward white like any dark page.\n    assert_eq!(Color::from_hex("0000FF").unwrap().mark(0.05).to_hex(), "5656FF");
+    // Opaque, and a no-op or clamped at the ends.
+    assert_eq!(Color::WHITE.mark(0.0), Color::WHITE);
+    assert_eq!(Color::BLACK.mark(1.0).to_hex(), "FFFFFF");
+    assert_eq!(Color::WHITE.mark(f32::NAN), Color::WHITE);
+    assert_eq!(Color::WHITE.mark(0.0).a, 1.0);
+}
+
+
+
+// ── 像素网格墨色 ────────────────────────────────────────────────────────────
+
+#[test]
+fn ink_takes_one_brightness_step_from_the_surface_it_covers() {
+    let white = Color::new(1.0, 1.0, 1.0, 1.0);
+    assert_eq!(white.ink().to_hex(), "F2F2F2");
+    let red = Color::from_hex("FF0000").unwrap();
+    assert_eq!(red.ink().to_hex(), "E80000");
+    // A saturated green block: same hue, 0.05 luminance step darker (≈9.6% at this brightness).
+    let green = Color::from_hex("2FA368").unwrap();
+    let line = green.ink();
+    assert!((f64::from(green.brightness() - line.brightness()) - 0.05).abs() < 0.005, "{line:?}");
+}
+
+#[test]
+fn ink_lifts_a_dark_surface_instead_of_vanishing_on_it() {
+    let black = Color::new(0.0, 0.0, 0.0, 1.0);
+    // j = 0 → luminance 0.8 × 0 + 0.15 = 0.15 ≈ 38.
+    assert_eq!(black.ink().to_hex(), "262626");
+    let mid = Color::new(100.0 / 255.0, 100.0 / 255.0, 100.0 / 255.0, 1.0);
+    let line = mid.ink();
+    assert!(line.brightness() > mid.brightness(), "dark surfaces lift: {line:?}");
+}
+
+#[test]
+fn board_dots_are_neutral_grey_whatever_the_page_hue() {
+    // The board page is warm (#F4F3F0); FigJam's dot grid is single-channel grey, so the
+    // ink must keep that page's brightness but drop its hue.
+    let warm = Color::from_hex("F4F3F0").unwrap();
+    let dot = warm.mark_gray(0.04);
+    assert_eq!((dot.r, dot.g, dot.b), (dot.r, dot.r, dot.r), "grey has equal channels: {dot:?}");
+    assert!((f64::from(warm.brightness() - dot.brightness()) - 0.04).abs() < 0.004, "{dot:?}");
+    // A dark page lifts instead of vanishing, still grey.
+    let dark = Color::from_hex("202020").unwrap();
+    let lifted = dark.mark_gray(0.04);
+    assert!(lifted.brightness() > dark.brightness());
+    assert_eq!(lifted.r, lifted.b);
+    // Degenerate steps are the page itself (and never a NaN colour).
+    assert_eq!(Color::WHITE.mark_gray(f32::NAN), Color::WHITE);
+}

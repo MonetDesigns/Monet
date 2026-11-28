@@ -274,11 +274,7 @@ impl TextInput {
     }
 
     fn row_height(&self, bounds: &Bounds<Pixels>) -> Pixels {
-        if self.multiline {
-            bounds.size.height / self.rows.max(1) as f32
-        } else {
-            bounds.size.height
-        }
+        if self.multiline { bounds.size.height / self.rows.max(1) as f32 } else { bounds.size.height }
     }
 
     // ── EntityInputHandler delegation (no editing logic duplicated) ─────────────────────────
@@ -405,18 +401,13 @@ impl TextInput {
             for idx in first_line..last_line {
                 let raw = raw_lines[idx];
                 let line_text = SharedString::from(raw.to_string());
-                let run = TextRun {
-                    len: raw.len(),
-                    font: window.text_style().font(),
-                    color,
-                    background_color: None,
-                    underline: None,
-                    strikethrough: None,
-                };
+                let run =
+                    TextRun { len: raw.len(), font: window.text_style().font(), color, background_color: None, underline: None, strikethrough: None };
                 let line = window.text_system().shape_line(line_text.clone(), font_size, &[run], None);
                 let text_height = line.ascent + line.descent;
                 let row_top = if multiline { bounds.origin.y + (idx - first_line) as f32 * row_h } else { bounds.origin.y };
-                let text_top = if multiline { row_top + (row_h - text_height) * 0.5 } else { centred_line_origin(bounds, &line, font_size, window).0.y };
+                let text_top =
+                    if multiline { row_top + (row_h - text_height) * 0.5 } else { centred_line_origin(bounds, &line, font_size, window).0.y };
                 let text_x = if multiline { bounds.origin.x } else { centred_line_origin(bounds, &line, font_size, window).0.x };
                 let line_start = char_cursor;
                 let line_len = raw.chars().count();

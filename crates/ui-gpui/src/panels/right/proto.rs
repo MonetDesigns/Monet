@@ -120,22 +120,16 @@ fn settings_section(f: &RightFields, p: &ProtoData, _cx: &mut App, _n: &mut usiz
     let mut sec = PanelSection::new(tr("Prototype settings")).header_trail(icon_row(vec![preview]));
 
     // ── 第一栏：总设备（family）下拉，行尾显示它的屏幕尺寸 ──
-    let families: Vec<(String, String, &'static str, Value)> = s
-        .devices
-        .iter()
-        .map(|d| (d.clone(), figcraft_engine::devices::family_size_label(d), "proto.settings", json!({ "device": d })))
-        .collect();
+    let families: Vec<(String, String, &'static str, Value)> =
+        s.devices.iter().map(|d| (d.clone(), figcraft_engine::devices::family_size_label(d), "proto.settings", json!({ "device": d }))).collect();
     let family_dd = pick_dropdown_sized(f, s.device.clone(), 0.0, families);
     sec = sec.child(field_row_full(family_dd));
 
     // ── 第二栏：分型号下拉，行尾显示该型号 W × H ──
     let is_special = s.device == figcraft_doc::proto::PrototypeSettings::CUSTOM_DEVICE || s.device == "None";
     if !is_special && !s.variants.is_empty() {
-        let variants: Vec<(String, String, &'static str, Value)> = s
-            .variants
-            .iter()
-            .map(|v| (v.clone(), figcraft_engine::devices::size_label(v), "proto.settings", json!({ "variant": v })))
-            .collect();
+        let variants: Vec<(String, String, &'static str, Value)> =
+            s.variants.iter().map(|v| (v.clone(), figcraft_engine::devices::size_label(v), "proto.settings", json!({ "variant": v }))).collect();
         let current = if s.variant.is_empty() { s.variants.first().cloned().unwrap_or_default() } else { s.variant.clone() };
         sec = sec.child(field_row_full(pick_dropdown_sized(f, current, 0.0, variants)));
     }
@@ -145,17 +139,19 @@ fn settings_section(f: &RightFields, p: &ProtoData, _cx: &mut App, _n: &mut usiz
     let rotating = s.rotates;
     let mut third: Vec<gpui::AnyElement> = Vec::new();
     if !s.colors.is_empty() {
-        let rows: Vec<(String, &'static str, Value)> = s.colors.iter().map(|(name, _)| (name.clone(), "proto.settings", json!({ "color": name }))).collect();
+        let rows: Vec<(String, &'static str, Value)> =
+            s.colors.iter().map(|(name, _)| (name.clone(), "proto.settings", json!({ "color": name }))).collect();
         let rgb = s.colors.iter().find(|(name, _)| *name == s.color).map(|(_, c)| *c).unwrap_or([0, 0, 0]);
         let dot = swatch(figcraft_color::Paint::solid(figcraft_color::Color::from_rgb8_const(rgb[0], rgb[1], rgb[2])), 16.0);
-        let line = div().flex().flex_row().items_center().gap(pt(8.0)).flex_1().child(dot)
-            .child(pick_dropdown(f, s.color.clone(), 0.0, rows));
+        let line = div().flex().flex_row().items_center().gap(pt(8.0)).flex_1().child(dot).child(pick_dropdown(f, s.color.clone(), 0.0, rows));
         third.push(line.into_any_element());
     }
     let orientation = Segmented::new(vec![SegItem::text(tr("Portrait")), SegItem::text(tr("Landscape"))])
         .active(Some(if s.landscape { 1 } else { 0 }))
         .on_pick(move |i: usize, _w: &mut Window, _cx: &mut App| {
-            if !rotating { return; }
+            if !rotating {
+                return;
+            }
             cmds.push(Cmd { id: "proto.settings", params: Some(json!({ "rotation": if i == 1 { "landscape" } else { "portrait" } })) });
             cmds.wake();
         });
@@ -172,8 +168,16 @@ fn settings_section(f: &RightFields, p: &ProtoData, _cx: &mut App, _n: &mut usiz
         slot(_n),
         bg,
         RowEditCtx {
-            cmd: "proto.settings", params: json!({}), key: "background", scale: 1.0, string_value: true,
-            map: None, paint: None, nest: None, nest_key: None, paint_color: None,
+            cmd: "proto.settings",
+            params: json!({}),
+            key: "background",
+            scale: 1.0,
+            string_value: true,
+            map: None,
+            paint: None,
+            nest: None,
+            nest_key: None,
+            paint_color: None,
         },
     );
     let line = div().flex().flex_row().items_center().gap(pt(8.0)).w_full().child(dot).child(hex);
@@ -414,12 +418,7 @@ fn editor_rows(
         if it.actions.len() > 1 {
             trail.push(icon_cmd(Icon::Minus, "proto.action.remove", json!({ "index": i, "path": [k] }), f, false));
         }
-        let line = div()
-            .flex_1()
-            .min_w(px(0.0))
-            .text_size(pt(11.0))
-            .text_color(rgba(tokens().text))
-            .child(SharedString::from(label.clone()));
+        let line = div().flex_1().min_w(px(0.0)).text_size(pt(11.0)).text_color(rgba(tokens().text)).child(SharedString::from(label.clone()));
         out.push(field_row_full_trailing(line, trail));
 
         match action.get("type").and_then(Value::as_str).unwrap_or_default() {
@@ -656,16 +655,14 @@ fn conditional_rows(f: &RightFields, action: &Value, i: usize, k: usize, cx: &mu
         for (j, a) in acts.iter().enumerate() {
             let text = a.get("type").and_then(Value::as_str).unwrap_or_default().to_string();
             let remove = icon_cmd(Icon::Minus, "proto.action.remove", json!({ "index": i, "path": [k, b, j] }), f, false);
-            let line = div()
-                .flex_1()
-                .min_w(px(0.0))
-                .text_size(pt(11.0))
-                .text_color(rgba(tokens().text_secondary))
-                .child(SharedString::from(text));
+            let line = div().flex_1().min_w(px(0.0)).text_size(pt(11.0)).text_color(rgba(tokens().text_secondary)).child(SharedString::from(text));
             out.push(field_row_full_trailing(line, vec![remove]));
         }
     }
-    out.push(field_row_full_trailing(plain_label(tr("Add else if")), vec![icon_cmd(Icon::Plus, "proto.conditional.addBlock", json!({ "index": i, "path": [k] }), f, false)]));
+    out.push(field_row_full_trailing(
+        plain_label(tr("Add else if")),
+        vec![icon_cmd(Icon::Plus, "proto.conditional.addBlock", json!({ "index": i, "path": [k] }), f, false)],
+    ));
     if !has_else {
         out.push(field_row_full_trailing(
             plain_label(tr("Add else")),

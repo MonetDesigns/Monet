@@ -16,8 +16,8 @@
 //     type 1 = mono（0.213/0.715/0.072 亮度），type 2 = duo（两个互补窗口，两个颜色）；
 //   · alpha = density × color.a × 图层自身 alpha。
 //
-// 我们这边没有 tile 空间变换：region 与节点同轴，所以 `nodeSpaceCenterPoint` 直接取
-// 0.5 * nodeSizePx（旋转节点由 host 先把 region 转正）。
+// 坐标：`nodeCenterPx` 是节点中心在本窗口里的设备像素，`nodeRotation` 是世界变换的旋转角；
+// 两者把 frag 转回节点轴，所以噪点锚在节点中心，旋转图层时整个图案跟着转。
 //
 // 接线：content（预乘 + mip，只读 rgb 与 a）、fields（形状覆盖）、rect 不扩；
 //       输出整层 straight alpha，子树已烤进 content，不要再叠 `Step::Over`。
@@ -26,6 +26,8 @@ struct Uniforms {
     resolution     : vec2<f32>,
     regionOriginPx : vec2<f32>,
     nodeSizePx     : vec2<f32>,
+    nodeCenterPx   : vec2<f32>,
+    nodeRotation   : f32,   // 弧度，节点局部 → 屏幕的旋转
     kind           : f32,   // 0 multi / 1 mono / 2 duo
     size           : f32,   // 文档 px —— 一个噪声单元的大小（Figma 存的是它的倒数）
     density        : f32,   // 0..100
@@ -49,7 +51,7 @@ struct Uniforms {
 // @fx label Noise
 // @fx stage layer
 // @fx param u.kind float 0 2 1 1 "Type (0 multi 1 mono 2 duo)"
-// @fx param u.size float 1 400 1 40 "Size"
+// @fx param u.size float 1 100 1 40 "Size"
 // @fx param u.density float 0 100 1 50 "Density"
 // @fx param u.seed float 0 100 1 0 "Seed"
 // @fx param u.color_r float 0 1 0.01 0 "Color R"
@@ -117,6 +119,14 @@ fn gradient_at(p : vec2<f32>, z : f32) -> vec2<f32> {
 fn smooth01(t : f32) -> f32 { return t * t * (3.0 - 2.0 * t); }
 fn lerp2(a : f32, b : f32, t : f32) -> f32 { return a + t * (b - a); }
 
+/// Screen offset → the node's axes. The noise is anchored to the node, so a rotated layer must
+/// rotate its pattern too; otherwise the grain stays upright and visibly swims across the fill.
+fn node_axes(v : vec2<f32>, angle : f32) -> vec2<f32> {
+    let c = cos(angle);
+    let s = sin(angle);
+    return vec2<f32>(c * v.x + s * v.y, -s * v.x + c * v.y);
+}
+
 /// Figma 的 `aj()`：双线性 + smoothstep 的梯度噪声。
 fn value_noise(z : f32, q : vec2<f32>) -> f32 {
     let i0 = floor(q);
@@ -169,8 +179,9 @@ fn fs(in : VSOut) -> @location(0) vec4<f32> {
     let frag = u.regionOriginPx + in.uv * max(u.resolution, vec2<f32>(1.0, 1.0));
     let base = unpack(textureSampleLevel(content, samp, texel_uv(in.uv), 0.0));
 
-    // 节点中心为原点、文档单位；Figma 的 noiseSize 是「每文档单位的频率」。
-    let p = (frag - 0.5 * u.nodeSizePx) / max(u.dpr, 1e-4);
+    // 节点中心为原点、文档单位；Figma 的 noiseSize 是「每文档单位的频率」。先转回节点轴，
+    // 旋转图层里的噪点才跟着图层转。
+    let p = node_axes(frag - u.nodeCenterPx, u.nodeRotation) / max(u.dpr, 1e-4);
     let freq = 1.0 / max(u.size, 0.5);
     let q = p * freq;
 

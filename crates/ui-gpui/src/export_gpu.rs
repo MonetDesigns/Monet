@@ -25,8 +25,30 @@ use crate::wgsl_runner::WgslRunner;
 
 /// Install the export hooks once, from [`crate::app::CanvasApp::new`].
 pub fn install() {
-    figcraft_render::set_export_material_hook(Arc::new(render_export));
+    figcraft_render::set_material_board_hook(Arc::new(board_for_export));
     figcraft_render::set_export_frame_hook(Arc::new(render_frame_gpu), Arc::new(gpu_frame_supported));
+}
+
+/// One GPU device for every export-side render (raster export, thumbnails, animated frames,
+/// present). Materials are resolved **during** the render by the board's resolver, so each entry
+/// point rasterises once instead of running its own render→shade→render pump.
+static EXPORT_ENGINE: Mutex<Option<WgslRunner>> = Mutex::new(None);
+
+fn board_for_export(doc: &Document, page: NodeId) -> Option<Arc<ShadeBoard>> {
+    let specs = shade_gpu::specs(doc, page);
+    if specs.is_empty() {
+        return None;
+    }
+    let board = Arc::new(ShadeBoard::new(specs));
+    board.ensure_resolver(Arc::new(|req, doc| {
+        let mut guard = EXPORT_ENGINE.lock().ok()?;
+        if guard.is_none() {
+            *guard = WgslRunner::new();
+        }
+        let runner = guard.as_mut()?;
+        shade_gpu::shade_one(req, runner, doc, &mut shade_gpu::ShadeTiming::default()).map(Arc::new)
+    }));
+    Some(board)
 }
 
 /// Shared offscreen GPU for animated-export frames. Export renders frames on several worker
@@ -159,4 +181,3 @@ mod tests {
         assert!(diff > 24, "the material must change the exported pixel: cpu={c:?} gpu={g:?}");
     }
 }
-

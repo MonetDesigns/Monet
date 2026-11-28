@@ -186,6 +186,7 @@ fn exports_never_use_lod() {
         shade: None,
         rows: None,
         page_xf: v.transform(),
+        bg_opaque: false,
     };
     let parent = d.world_transform(p);
     crate::draw::draw_node(&ctx, &mut preview, card, v.transform() * parent, 0);

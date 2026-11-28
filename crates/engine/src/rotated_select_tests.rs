@@ -1,4 +1,5 @@
-//! Handle boxes for several layers that share a rotation.
+//! Handle boxes for several layers: a multi-selection is always the page-aligned bounds, even
+//! when the layers share a rotation.
 
 use serde_json::json;
 
@@ -26,21 +27,26 @@ fn corners_in(s: &Session, frame: Affine, id: NodeId) -> Vec<Point> {
     [(0.0, 0.0), (n.width, 0.0), (n.width, n.height), (0.0, n.height)].iter().map(|(x, y)| m * Point::new(*x, *y)).collect()
 }
 
+/// Two layers turned by the same 30° still get a box square to the page (2026-11-27): a
+/// multi-selection's four edges never take the layers' angle.
 #[test]
-fn shared_rotation_turns_the_box_with_the_layers() {
+fn a_shared_rotation_does_not_turn_the_multi_box() {
     let mut s = Session::new();
     let ids = [rect(&mut s, 0.0, 0.0, 30.0), rect(&mut s, 40.0, 120.0, 30.0)];
-    let (frame, w, h) = selection_frame(s.doc().unwrap(), &ids).unwrap();
-    // The box's axes follow the layers': each sits upright in it, and the box hugs them.
+    let doc = s.doc().unwrap();
+    let b = doc.bounds_of(&ids).unwrap();
+    let (frame, w, h) = selection_frame(doc, &ids).unwrap();
     let pts: Vec<Point> = ids.iter().flat_map(|i| corners_in(&s, frame, *i)).collect();
     let fold = |f: fn(f64, f64) -> f64, init: f64, k: fn(&Point) -> f64| pts.iter().map(k).fold(init, f);
-    assert!(near(fold(f64::min, f64::INFINITY, |p| p.x), 0.0) && near(fold(f64::min, f64::INFINITY, |p| p.y), 0.0));
-    assert!(near(fold(f64::max, f64::NEG_INFINITY, |p| p.x), w) && near(fold(f64::max, f64::NEG_INFINITY, |p| p.y), h));
-    let c = (frame.inverse() * s.doc().unwrap().world_transform(ids[0])).as_coeffs();
+    // The box hugs the turned layers and stays page-aligned: in the box's own axes the outermost
+    // corners sit at the box's edges (0..w, 0..h), and its axes are the page's axes.
+    assert!(near(fold(f64::min, f64::INFINITY, |p| p.x), 0.0));
+    assert!(near(fold(f64::min, f64::INFINITY, |p| p.y), 0.0));
+    assert!(near(fold(f64::max, f64::NEG_INFINITY, |p| p.x), w));
+    assert!(near(fold(f64::max, f64::NEG_INFINITY, |p| p.y), h));
+    let c = frame.as_coeffs();
     assert!(near(c[0], 1.0) && near(c[1], 0.0) && near(c[2], 0.0) && near(c[3], 1.0), "{c:?}");
-    // Tighter than the page-aligned bounds.
-    let b = s.doc().unwrap().bounds_of(&ids).unwrap();
-    assert!(w * h < b.width() * b.height() - 1.0);
+    assert!(near(w, b.width()) && near(h, b.height()));
 }
 
 #[test]
@@ -55,8 +61,10 @@ fn different_or_right_angle_rotations_keep_the_page_aligned_box() {
     }
 }
 
+/// A page-aligned multi box drags its page-aligned sides: the frames' handles stay square to the
+/// page while the turned layers keep their own 30° (2026-11-27).
 #[test]
-fn resizing_a_rotated_multi_selection_scales_along_its_axes() {
+fn resizing_a_page_aligned_multi_selection_keeps_the_box_square() {
     let mut s = Session::new();
     let ids = [rect(&mut s, 0.0, 0.0, 30.0), rect(&mut s, 40.0, 120.0, 30.0)];
     s.execute("select.set", &json!({"ids": ids})).unwrap();
@@ -68,12 +76,14 @@ fn resizing_a_rotated_multi_selection_scales_along_its_axes() {
     s.pointer(&PointerEvent::at(PointerKind::Up, to.x, to.y, 1.0)).unwrap();
     let doc = s.doc().unwrap();
     let (f2, w2, h2) = selection_frame(doc, &ids).unwrap();
-    assert!(near(w2, w * 1.5) && near(h2, h * 2.0), "{w2} {h2}");
-    // The opposite corner stays put and the layers keep their rotation and grow with the box.
-    assert!((f2 * Point::ZERO - frame * Point::ZERO).hypot() < 1e-6);
+    // The box stays page-aligned and grows in both directions.
+    let c = f2.as_coeffs();
+    assert!(near(c[0], 1.0) && near(c[1], 0.0) && near(c[2], 0.0) && near(c[3], 1.0), "{c:?}");
+    assert!(w2 > w + 20.0 && h2 > h + 20.0, "{w2} {h2}");
+    // The layers keep their rotation and grow with the box.
     for i in ids {
         let n = doc.node(i).unwrap();
-        assert!(near(n.width, 150.0) && near(n.height, 100.0), "{} {}", n.width, n.height);
+        assert!(n.width > 100.0 && n.height > 50.0, "{} {}", n.width, n.height);
         assert!(near(figcraft_geom::rotation_degrees(n.transform), 30.0));
     }
     // One undo step restores both.

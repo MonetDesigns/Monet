@@ -1,6 +1,25 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use figcraft_doc::{BOARD_PAGE, FileKind};
+
 use super::{DocState, Document, EngineError, LineHeight, NodeId, NodeKind, Result, StyleKind, TextStyle, Value, bad, get, json};
+
+/// Boards used to start on the warm grey `#F4F3F0`; FigJam's board page is neutral `#F5F5F5`.
+/// Repaint only that exact old default, so a background colour chosen on purpose is kept.
+fn adopt_figjam_board_page(doc: &mut Document) {
+    if doc.kind != FileKind::Board {
+        return;
+    }
+    const LEGACY: [u8; 4] = [0xF4, 0xF3, 0xF0, 0xFF];
+    for id in doc.pages.clone() {
+        if let Ok(node) = doc.get_mut(id)
+            && let NodeKind::Page { background, .. } = &mut node.kind
+            && background.to_rgba8() == LEGACY
+        {
+            *background = BOARD_PAGE;
+        }
+    }
+}
 
 /// The recovery copy at `path` as a document with unsaved changes and no path.
 pub(crate) fn recovered(path: &str) -> Result<DocState> {
@@ -11,7 +30,9 @@ pub(crate) fn recovered(path: &str) -> Result<DocState> {
 /// copies in the page's storage, not in files).
 pub(crate) fn recovered_from(bytes: &[u8]) -> Result<DocState> {
     let loaded = figcraft_format::load_bytes_with_versions(bytes).map_err(|e| EngineError::Other(e.to_string()))?;
-    Ok(DocState::new(loaded.doc, None).with_versions(loaded.versions).with_branches(loaded.branches).unsaved())
+    let mut doc = loaded.doc;
+    adopt_figjam_board_page(&mut doc);
+    Ok(DocState::new(doc, None).with_versions(loaded.versions).with_branches(loaded.branches).unsaved())
 }
 
 /// The largest file opened or imported as a document. A `.figcraft` file keeps its images as
@@ -92,6 +113,7 @@ pub(super) fn load_with(
     crate::library::resolve_links(&mut loaded.doc, name_hint);
     let notes = crate::components::break_component_cycles(&mut loaded.doc);
     loaded.issues.extend(notes);
+    adopt_figjam_board_page(&mut loaded.doc);
     Ok((loaded, rest))
 }
 

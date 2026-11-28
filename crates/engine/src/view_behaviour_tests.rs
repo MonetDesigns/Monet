@@ -275,9 +275,10 @@ fn pixel_grid_and_pixel_preview_show_from_their_zooms() {
     // (pixel grid on, zoom, shown, derivation)
     let grid: Vec<(bool, f64, bool, &str)> = vec![
         (true, 5.07, false, "the pixel grid doesn't show at 507%"),
-        (true, 5.08, true, "the pixel grid shows past 507%"),
-        (true, 4.99, false, "the pixel grid doesn't show below 507%"),
-        (true, 64.0, true, "the pixel grid shows at any zoom above 507%"),
+        (true, 5.08, true, "the pixel grid shows at 508% (the threshold itself)"),
+        (true, 5.074, false, "507.4% still prints 507% and stays hidden"),
+        (true, 4.99, false, "the pixel grid doesn't show below 508%"),
+        (true, 64.0, true, "the pixel grid shows at any zoom above 508%"),
         (false, 64.0, false, "the pixel grid can be turned off"),
     ];
     for (on, zoom, shown, why) in grid {
@@ -776,3 +777,19 @@ fn view_toggles_are_kept_for_the_next_launch() {
     }
     assert!(!view.outlines && !view.outlines_selection && !view.proof_srgb, "{view:?}");
 }
+
+#[test]
+fn a_whiteboard_zooms_between_2_and_800_while_a_design_file_keeps_figmas_range() {
+    let mut board = Session::new();
+    ex(&mut board, "file.newBoard", json!({"name": "Zoom"}));
+    let far = ex(&mut board, "view.set", json!({"zoom": 100.0}))["zoom"].as_f64().unwrap();
+    assert_eq!(far, ViewState::BOARD_MAX_ZOOM, "FigJam's board stops at 800%");
+    let close = ex(&mut board, "view.set", json!({"zoom": 0.001}))["zoom"].as_f64().unwrap();
+    assert_eq!(close, ViewState::BOARD_MIN_ZOOM, "and at 2% going out");
+
+    let mut design = Session::new();
+    ex(&mut design, "file.new", json!({}));
+    let far = ex(&mut design, "view.set", json!({"zoom": 100.0}))["zoom"].as_f64().unwrap();
+    assert_eq!(far, 100.0, "a design file keeps Figma's 25600% ceiling, not the board's");
+}
+

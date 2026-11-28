@@ -77,6 +77,10 @@ pub struct RunPass {
     pub field_band: f32,
     /// Packed uniform buffers, one per `var<uniform>` declaration: `(var_name, bytes)`.
     pub uniforms: Vec<(String, Vec<u8>)>,
+    /// `@fx stage layer`: the finished layer as **premultiplied RGBA**, `rect_px[2] × rect_px[3]`.
+    /// It is uploaded as the shader's `content` texture. `None` for a backdrop pass (the shader reads
+    /// `backdrop` instead); a layer shader that declares `content` without bytes here is not drawn.
+    pub content: Option<std::sync::Arc<Vec<u8>>>,
     /// Device pixels per document unit for the frame this pass belongs to (the view's scale).
     ///
     /// The compositor needs it to size the backdrop's frost pyramid: a material's blur radius is in
@@ -150,8 +154,19 @@ pub fn passes_for(doc: &Document, page: NodeId, view: &figcraft_render::View, ti
         // described in the node's pixel frame, not the window's: otherwise a pane zoomed past the
         // viewport gets its rounded corners and its lens band drawn on the *viewport* edge. The
         // origin stays fractional — that sub-pixel part is what keeps the distance field continuous.
-        let node_px = ((nx1 - nx0) as f32, (ny1 - ny0) as f32);
+        // Actual node size, not the AABB of a rotated node: shaders use this as the shape's extent
+        // (shadow half-axes, noise frequency), and an AABB would stretch a 25° rectangle.
+        let node_px = ((w * sc) as f32, (h * sc) as f32);
         let origin_px = (rect_px[0] as f32 - nx0 as f32, rect_px[1] as f32 - ny0 as f32);
+        // The node's own frame inside the window: a rotated layer must be told its angle, or every
+        // directional shader (grid, noise, analytic shadow offset) stays screen-axis-aligned and
+        // visibly slides out of the rotated layer. `b.atan2(a)` is the screen-space angle of the
+        // local→page matrix; shaders undo it around the node centre.
+        let xf = doc.world_transform(id);
+        let [a, b, ..] = xf.as_coeffs();
+        let rotation = b.atan2(a);
+        let center_page = xf * Point::new(w / 2.0, h / 2.0);
+        let center_px = (center_page.x * sc - f64::from(rect_px[0]), center_page.y * sc - f64::from(rect_px[1]));
 
         // Generic exports: every field below is a stable, shader-agnostic name. A shader uses
         // whichever it declares in its uniform struct; the rest are simply ignored by the packer.
@@ -166,8 +181,11 @@ pub fn passes_for(doc: &Document, page: NodeId, view: &figcraft_render::View, ti
         ex.set("cornerSmoothings", vec![smoothing; 4]);
         ex.set("hasUniformCorners", vec![if uniform_corners { 1.0 } else { 0.0 }]);
         ex.set("dpr", vec![sc]);
-        ex.set("nodeSizePx", vec![f64::from(node_px.0), f64::from(node_px.1)]);
+        ex.set("nodeSizePx", vec![w * sc, h * sc]);
         ex.set("regionOriginPx", vec![f64::from(origin_px.0), f64::from(origin_px.1)]);
+        ex.set("nodeRotation", vec![rotation]);
+        ex.set("nodeCenterPx", vec![center_px.0, center_px.1]);
+        ex.set("isRectangle", vec![f64::from(u8::from(analytic_rect(doc, id)))]);
         ex.set("scale", vec![1.0]);
         ex.set("time", vec![time]);
 
@@ -175,7 +193,19 @@ pub fn passes_for(doc: &Document, page: NodeId, view: &figcraft_render::View, ti
         let (uniforms, field_band) = pack_uniforms(&eid, &binding.params, &ex, w, h, sc);
 
         let field_bytes = prepare_fields(doc, id, rect_px[2], rect_px[3], sc, origin_px);
-        out.push(RunPass { effect: eid, node: id, rect_px, radii_px, node_px, origin_px, field_bytes, field_band, uniforms, dpr: sc as f32 });
+        out.push(RunPass {
+            effect: eid,
+            node: id,
+            rect_px,
+            radii_px,
+            node_px,
+            origin_px,
+            field_bytes,
+            field_band,
+            uniforms,
+            content: None,
+            dpr: sc as f32,
+        });
     }
     out
 }
@@ -207,12 +237,8 @@ pub(crate) fn pack_uniforms(
     let reach = depth_field.as_ref().and_then(|f| local.param_value(eid, f)).unwrap_or(20.0);
     // Depth is a panel notch (1..100), not a pixel length. Figma turns it into a node-space
     // thickness upstream (see `figma_depth_coefficient.html` §1.5/§5); the CPU glass and this
-    let depth_field = local.params(eid).into_iter()
-        .find(|p| p.field == "depth" || p.field.ends_with(".depth"))
-        .map(|p| p.field.clone());
-    let reach = depth_field.as_ref()
-        .and_then(|f| local.param_value(eid, f))
-        .unwrap_or(20.0);
+    let depth_field = local.params(eid).into_iter().find(|p| p.field == "depth" || p.field.ends_with(".depth")).map(|p| p.field.clone());
+    let reach = depth_field.as_ref().and_then(|f| local.param_value(eid, f)).unwrap_or(20.0);
     // Depth is a panel notch (1..100), not a pixel length. 参考编辑器 turns it into a node-space
     // thickness upstream (see `参考编辑器_depth_coefficient.html` §1.5/§5); the CPU glass and this
     // external material must share that one conversion or the same document looks different
@@ -261,10 +287,32 @@ fn node_visible(doc: &Document, id: NodeId) -> bool {
 /// same exact-Euclidean-distance + smoothed-normal pipeline the built-in CPU glass reads, so a
 /// shader needs no change and no per-shape knowledge to sit correctly on arbitrary artwork.
 /// `None` = "no outline" and falls back to the analytic rectangle.
-pub(crate) fn prepare_fields(doc: &Document, id: NodeId, rw: u32, rh: u32, sc: f64, origin_px: (f32, f32)) -> Option<Vec<u8>> {
+/// Whether a node's outline is exactly the analytic rounded rectangle, so no real-outline SDF has
+/// to be generated: a rectangle, or an axis-aligned frame-like container. Rotated/skewed nodes and
+/// every other kind (text, vector, ellipse…) still get their outline rasterised.
+///
+/// Without this, binding a material to a **frame** produced an exact Euclidean field over the whole
+/// window every frame — 261–293 ms at 3.5 MP on the measured machine — for a shape the shader can
+/// already describe analytically.
+pub(crate) fn analytic_rect(doc: &Document, id: NodeId) -> bool {
     use figcraft_doc::NodeKind;
+    let Some(n) = doc.node(id) else { return false };
+    match n.kind {
+        NodeKind::Rectangle
+        | NodeKind::Frame
+        | NodeKind::Section { .. }
+        | NodeKind::Component { .. }
+        | NodeKind::ComponentSet { .. }
+        | NodeKind::Instance { .. } => {}
+        _ => return false,
+    }
+    let [a, b, c, d, ..] = doc.world_transform(id).as_coeffs();
+    b.abs() < 1e-9 && c.abs() < 1e-9 && a > 0.0 && d > 0.0
+}
+
+pub(crate) fn prepare_fields(doc: &Document, id: NodeId, rw: u32, rh: u32, sc: f64, origin_px: (f32, f32)) -> Option<Vec<u8>> {
     let n = doc.node(id)?;
-    if matches!(n.kind, NodeKind::Rectangle) {
+    if analytic_rect(doc, id) {
         return None; // analytic path, unchanged
     }
     let outline = figcraft_render::node_outline(doc, n)?;
@@ -278,6 +326,28 @@ pub(crate) fn prepare_fields(doc: &Document, id: NodeId, rw: u32, rh: u32, sc: f
         * doc.world_transform(id);
     let bytes = figcraft_render::glass::outline_fields_half(&outline, xf, rw, rh, 2)?;
     Some(bytes)
+}
+
+/// Fields for a [`ShadeRequest::local`] pass: the outline is already in the node's own unrotated
+/// frame, so no world transform (and no AABB origin) is involved. This is what lets an arbitrary
+/// shader work on a rotated layer without knowing the rotation.
+pub(crate) fn prepare_fields_local(
+    doc: &Document,
+    id: NodeId,
+    rw: u32,
+    rh: u32,
+    sc: f64,
+    origin_px: (f32, f32),
+    node_px: (f32, f32),
+    radii_px: [f32; 4],
+) -> Option<Vec<u8>> {
+    let n = doc.node(id)?;
+    if matches!(n.kind, figcraft_doc::NodeKind::Rectangle) {
+        return Some(fields_for_rect(rw, rh, node_px, origin_px, radii_px));
+    }
+    let outline = figcraft_render::node_outline(doc, n)?;
+    let xf = Affine::translate((f64::from(-origin_px.0), f64::from(-origin_px.1))) * Affine::scale(sc);
+    figcraft_render::glass::outline_fields_half(&outline, xf, rw, rh, 2)
 }
 
 /// Generate the universal `fields` texture for a rounded rectangle: `R` = signed distance to the
@@ -475,6 +545,13 @@ struct Compiled {
 fn is_fields_name(name: &str) -> bool {
     name.eq_ignore_ascii_case("fields") || name.eq_ignore_ascii_case("sdf")
 }
+/// `@fx stage layer` shaders read the finished layer through a texture called `content` (older
+/// shaders name it `layer` / `layerContent`). Everything that is neither fields nor content is the
+/// backdrop — binding one of these by the old "anything not fields is backdrop" rule silently fed a
+/// layer shader the page underneath it, which is the wrong picture, not a missing one.
+fn is_content_name(name: &str) -> bool {
+    ["content", "layer", "layerContent", "layer_content"].iter().any(|n| name.eq_ignore_ascii_case(n))
+}
 fn is_sampler_ty(ty: &str) -> bool {
     ty.trim() == "sampler" || ty.contains("sampler")
 }
@@ -505,7 +582,13 @@ fn compile(device: &wgpu::Device, info: &ShaderInfo, canvas: (u32, u32), format:
         } else if is_sampler_ty(_ty) {
             resource_binds.push((*g, *b, "sampler"));
         } else if _ty.contains("texture_2d") {
-            let kind = if is_fields_name(name) { "fields" } else { "backdrop" };
+            let kind = if is_fields_name(name) {
+                "fields"
+            } else if is_content_name(name) {
+                "content"
+            } else {
+                "backdrop"
+            };
             resource_binds.push((*g, *b, kind));
         }
     }
@@ -823,6 +906,9 @@ pub struct WgslRunner {
 struct Downsampler {
     layout: wgpu::BindGroupLayout,
     pipeline: wgpu::RenderPipeline,
+    /// The canvas is `FORMAT` (Bgra8 on most surfaces); material content is `Rgba8Unorm`.
+    /// A pipeline is tied to one attachment format, so the content chain needs its own.
+    pipeline_rgba: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
 }
 /// Built once: the pipeline that draws a pass's children above its finished material.
@@ -910,6 +996,14 @@ impl WgslRunner {
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("fullscreen pair"), entries: &[tex_entry, samp_entry] });
         let mips = Downsampler {
             pipeline: make_fullscreen_pipeline(&device, "universal downsample", DOWNSAMPLE_WGSL, &layout, Some(wgpu::BlendState::REPLACE), FORMAT),
+            pipeline_rgba: make_fullscreen_pipeline(
+                &device,
+                "universal content downsample",
+                DOWNSAMPLE_WGSL,
+                &layout,
+                Some(wgpu::BlendState::REPLACE),
+                wgpu::TextureFormat::Rgba8Unorm,
+            ),
             layout: device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("fullscreen pair"),
                 entries: &[
@@ -1273,6 +1367,9 @@ impl WgslRunner {
 
         // 4. One command buffer for the whole stack, submitted once.
         let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("universal materials") });
+        // Layer-stage passes upload their content as a texture. The textures must outlive the
+        // command buffer, so they are parked here until `submit`.
+        let mut content_textures: Vec<wgpu::Texture> = Vec::new();
         let mut over_at = 0usize;
         for step in steps {
             match step {
@@ -1344,6 +1441,86 @@ impl WgslRunner {
                     let Some(bd) = self.backdrop.get(&p.node.0) else { continue };
                     let Some(fd) = self.fields.get(&p.node.0) else { continue };
                     let out = self.out.as_ref()?;
+
+                    // Layer stage: the finished layer arrives as premultiplied RGBA, exactly the
+                    // texture size (the window is the layer). Sampling the same texel grid as the
+                    // output keeps `uv` meaningful for the shader.
+                    let content_view: Option<wgpu::TextureView> = p.content.as_ref().and_then(|bytes| {
+                        let need = (rw as usize) * (rh as usize) * 4;
+                        if bytes.len() < need {
+                            return None;
+                        }
+                        let levels = u32::BITS - (rw.max(rh)).leading_zeros();
+                        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                            label: Some("universal content"),
+                            size: wgpu::Extent3d { width: rw, height: rh, depth_or_array_layers: 1 },
+                            mip_level_count: levels,
+                            sample_count: 1,
+                            dimension: wgpu::TextureDimension::D2,
+                            format: wgpu::TextureFormat::Rgba8Unorm,
+                            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::RENDER_ATTACHMENT,
+                            view_formats: &[],
+                        });
+                        self.queue.write_texture(
+                            wgpu::TexelCopyTextureInfo {
+                                texture: &texture,
+                                mip_level: 0,
+                                origin: wgpu::Origin3d::ZERO,
+                                aspect: wgpu::TextureAspect::All,
+                            },
+                            &bytes[..need],
+                            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(rw * 4), rows_per_image: Some(rh) },
+                            wgpu::Extent3d { width: rw, height: rh, depth_or_array_layers: 1 },
+                        );
+                        // A layer blur samples `content` at a real mip level (`textureNumLevels`).
+                        // One level would clamp `lod` to 0 and return the sharp layer, so build the
+                        // same 2×2 downsample chain the backdrop uses.
+                        for l in 1..levels {
+                            let src = texture.create_view(&wgpu::TextureViewDescriptor {
+                                base_mip_level: l - 1,
+                                mip_level_count: Some(1),
+                                ..Default::default()
+                            });
+                            let dst = texture.create_view(&wgpu::TextureViewDescriptor {
+                                base_mip_level: l,
+                                mip_level_count: Some(1),
+                                ..Default::default()
+                            });
+                            let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                                label: Some("content mip"),
+                                layout: &self.mips.layout,
+                                entries: &[
+                                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&src) },
+                                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.mips.sampler) },
+                                ],
+                            });
+                            let att = [Some(wgpu::RenderPassColorAttachment {
+                                view: &dst,
+                                depth_slice: None,
+                                resolve_target: None,
+                                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                            })];
+                            let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: Some("content mip pass"),
+                                color_attachments: &att,
+                                depth_stencil_attachment: None,
+                                timestamp_writes: None,
+                                occlusion_query_set: None,
+                                multiview_mask: None,
+                            });
+                            rp.set_pipeline(&self.mips.pipeline_rgba);
+                            rp.set_bind_group(0, &bg, &[]);
+                            rp.draw(0..3, 0..1);
+                        }
+                        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                        content_textures.push(texture);
+                        Some(view)
+                    });
+                    // A layer shader that reads content but got none is not a material this frame:
+                    // drawing it against the backdrop would paint the page twice.
+                    if content_view.is_none() && ci.resource_binds.iter().any(|(_, _, k)| *k == "content") {
+                        continue;
+                    }
 
                     // Backdrop: copy the composited-so-far canvas into level 0, then build the rest of
                     // the pyramid on the GPU. This copy is what makes layered materials correct.
@@ -1417,6 +1594,7 @@ impl WgslRunner {
                                 let resource = match *kind {
                                     "sampler" => wgpu::BindingResource::Sampler(&ci.sampler),
                                     "fields" => wgpu::BindingResource::TextureView(&fd.view),
+                                    "content" => wgpu::BindingResource::TextureView(content_view.as_ref()?),
                                     _ => wgpu::BindingResource::TextureView(&bd.view),
                                 };
                                 Some(wgpu::BindGroupEntry { binding: *b, resource })
@@ -2079,6 +2257,7 @@ mod tests {
             field_bytes: None,
             field_band: f32::INFINITY,
             uniforms: vec![("u".into(), u_bytes)],
+            content: None,
             dpr: 1.0,
         };
         let out = runner.composite(&scene, w, h, &[pass]).expect("universal composite on a real adapter");
@@ -2274,6 +2453,7 @@ mod tests {
             field_bytes: None,
             field_band: f32::INFINITY,
             uniforms: vec![("u".into(), u_bytes)],
+            content: None,
             dpr: 1.0,
         };
         let gpu = runner.composite(&scene, w, h, &[pass]).expect("the GPU material composites");
@@ -2540,6 +2720,7 @@ mod tests {
             field_bytes: None,
             field_band: f32::INFINITY,
             uniforms,
+            content: None,
             dpr: 1.0,
         };
         // Straight RGBA (the overlay's format): opaque red everywhere.
@@ -2589,6 +2770,7 @@ mod tests {
             field_bytes: None,
             field_band: f32::INFINITY,
             uniforms,
+            content: None,
             dpr: 1.0,
         };
         let steps = [Step::Pass(&pass)];
@@ -2740,6 +2922,7 @@ mod tests {
             field_bytes: None,
             field_band: f32::INFINITY,
             uniforms: vec![("u".into(), u_bytes)],
+            content: None,
             dpr: 1.0,
         }
     }

@@ -154,6 +154,7 @@ impl DocState {
         components::mark_layer_modes(&mut doc);
         // Initial import settlement belongs to the saved baseline, not the user's first edit.
         let page = doc.current_page.filter(|p| doc.pages.contains(p)).or_else(|| doc.first_page()).unwrap_or(NodeId(0));
+        let view = ViewState::for_kind(doc.kind);
         let doc = Arc::new(doc);
         let mut st = Self {
             checkpoint: None,
@@ -164,7 +165,7 @@ impl DocState {
             history: History { limit: 1000, ..Default::default() },
             path,
             revision: 1,
-            view: ViewState::default(),
+            view,
             interaction: None,
             text_edit: None,
             hover: None,

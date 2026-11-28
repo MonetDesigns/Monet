@@ -37,8 +37,8 @@ use figcraft_engine::Session;
 use figcraft_format::{Branch, Version};
 use gpui::prelude::*;
 use gpui::{
-    div, px, App, Application, Bounds, ClickEvent, ClipboardItem, Context, Div, FontWeight, IntoElement, Render, SharedString, Stateful,
-    TitlebarOptions, Window, WindowBounds, WindowOptions,
+    App, Application, Bounds, ClickEvent, ClipboardItem, Context, Div, FontWeight, IntoElement, Render, SharedString, Stateful, TitlebarOptions,
+    Window, WindowBounds, WindowOptions, div, px,
 };
 
 use crate::theme::Tokens;
@@ -163,9 +163,7 @@ pub(crate) fn run_reporter_if_requested() -> bool {
         let text = text.clone();
         let log_path = log_path.clone();
         let restart = restart.clone();
-        let _ = cx.open_window(options, move |_window, cx| {
-            cx.new(move |_cx| CrashReport { text, log_path, restart, copied: false })
-        });
+        let _ = cx.open_window(options, move |_window, cx| cx.new(move |_cx| CrashReport { text, log_path, restart, copied: false }));
         cx.activate(true);
     });
     true
@@ -193,10 +191,7 @@ fn parse_reporter_args(mut args: impl Iterator<Item = OsString>) -> Option<(Path
 
 fn handle_panic(info: &PanicHookInfo<'_>) {
     let message = payload_message(info.payload());
-    let location = info
-        .location()
-        .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
-        .unwrap_or_else(|| "(unknown)".into());
+    let location = info.location().map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column())).unwrap_or_else(|| "(unknown)".into());
     let thread = std::thread::current().name().unwrap_or("main").to_string();
     report(&message, &location, &thread);
 }
@@ -461,12 +456,7 @@ impl Render for CrashReport {
                     .flex()
                     .flex_col()
                     .gap(pt(4.0))
-                    .child(
-                        div()
-                            .text_size(pt(9.0))
-                            .text_color(rgba(t.text_tertiary))
-                            .child(figcraft_i18n::tr("Log file")),
-                    )
+                    .child(div().text_size(pt(9.0)).text_color(rgba(t.text_tertiary)).child(figcraft_i18n::tr("Log file")))
                     .child(
                         div()
                             .flex()
@@ -482,13 +472,11 @@ impl Render for CrashReport {
                                     .text_color(rgba(t.text_secondary))
                                     .child(SharedString::from(log)),
                             )
-                            .child(
-                                action_button(t, "crash-copy-path", figcraft_i18n::tr("Copy path"), false).on_click(
-                                    cx.listener(move |_this, _: &ClickEvent, _window, cx| {
-                                        cx.write_to_clipboard(ClipboardItem::new_string(log_for_copy.clone()));
-                                    }),
-                                ),
-                            ),
+                            .child(action_button(t, "crash-copy-path", figcraft_i18n::tr("Copy path"), false).on_click(cx.listener(
+                                move |_this, _: &ClickEvent, _window, cx| {
+                                    cx.write_to_clipboard(ClipboardItem::new_string(log_for_copy.clone()));
+                                },
+                            ))),
                     ),
             )
             .child(
@@ -501,22 +489,15 @@ impl Render for CrashReport {
                             .flex()
                             .items_center()
                             .gap(pt(8.0))
-                            .child(
-                                action_button(t, "crash-copy", figcraft_i18n::tr("Copy details"), false).on_click(
-                                    cx.listener(move |this, _: &ClickEvent, _window, cx| {
-                                        cx.write_to_clipboard(ClipboardItem::new_string(this.text.clone()));
-                                        this.copied = true;
-                                        cx.notify();
-                                    }),
-                                ),
-                            )
+                            .child(action_button(t, "crash-copy", figcraft_i18n::tr("Copy details"), false).on_click(cx.listener(
+                                move |this, _: &ClickEvent, _window, cx| {
+                                    cx.write_to_clipboard(ClipboardItem::new_string(this.text.clone()));
+                                    this.copied = true;
+                                    cx.notify();
+                                },
+                            )))
                             .when(copied, |d| {
-                                d.child(
-                                    div()
-                                        .text_size(pt(11.0))
-                                        .text_color(rgba(t.text_tertiary))
-                                        .child(figcraft_i18n::tr("Copied")),
-                                )
+                                d.child(div().text_size(pt(11.0)).text_color(rgba(t.text_tertiary)).child(figcraft_i18n::tr("Copied")))
                             }),
                     )
                     .child(
@@ -568,9 +549,7 @@ mod tests {
     /// 报告进程的参数：日志路径单独取出，重启参数按顺序保留（包括以 `--` 开头的）。
     #[test]
     fn reporter_args_split_the_log_from_the_restart_arguments() {
-        let args = ["--crash-report", "/tmp/c.log", "--restart-arg", "a.figcraft", "--restart-arg", "--control"]
-            .map(OsString::from)
-            .into_iter();
+        let args = ["--crash-report", "/tmp/c.log", "--restart-arg", "a.figcraft", "--restart-arg", "--control"].map(OsString::from).into_iter();
         let (log, restart) = parse_reporter_args(args).expect("reporter mode");
         assert_eq!(log, PathBuf::from("/tmp/c.log"));
         assert_eq!(restart, vec![OsString::from("a.figcraft"), OsString::from("--control")]);
@@ -589,4 +568,3 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
-

@@ -479,13 +479,7 @@ impl Render for TextEdit {
         let focus = self.focus.clone();
         let cursor = self.editing.then_some(CursorStyle::IBeam);
         let multiline = self.rows > 0;
-        let mut el = div()
-            .relative()
-            .w_full()
-            .h_full()
-            .flex()
-            .pl(pt(self.inset_left))
-            .pr(pt(self.right_pad));
+        let mut el = div().relative().w_full().h_full().flex().pl(pt(self.inset_left)).pr(pt(self.right_pad));
         el = if multiline { el.items_start().pt(pt(4.0)) } else { el.items_center() };
         el = el.child(self.input.element(entity, focus, focused, cursor));
 

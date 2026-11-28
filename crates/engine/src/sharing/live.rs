@@ -57,7 +57,7 @@ use crate::cmd::CommandSpec;
 use crate::collab::EngineRecompute;
 use crate::params::{get, num, req_string, string};
 use crate::tools::ToolId;
-use crate::{DocState, EngineError, Result, Session, TextEdit, ViewState, bad, spec};
+use crate::{DocState, EngineError, Result, Session, TextEdit, bad, spec};
 
 mod events;
 mod host;
@@ -481,3 +481,4 @@ pub const PUBLISHING: &str = "The file is being published: you can edit it again
 fn busy(ds: &DocState) -> bool {
     ds.interaction.is_some() || ds.preview.is_some() || ds.text_preview.is_some()
 }
+

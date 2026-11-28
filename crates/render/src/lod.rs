@@ -72,6 +72,11 @@ pub(crate) fn splattable_within<'a>(doc: &'a Document, n: &Node, depth: usize, m
     if depth > MAX_DEPTH {
         return (false, None);
     }
+    // A material layer is produced by the unified pipeline, not by flat-colour splatting: at tiny
+    // sizes the approximation would silently drop the effect instead of shrinking it.
+    if n.plugin_data.contains_key("figcraft.wgslMaterial") {
+        return (false, Some(0));
+    }
     let memo = memo.filter(|_| !n.children.is_empty());
     if let Some((ok, levels)) = memo.and_then(|m| m.splat.borrow().get(&n.id).copied())
         && depth + levels <= MAX_DEPTH

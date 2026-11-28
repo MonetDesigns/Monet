@@ -292,11 +292,8 @@ impl Gpu {
         self.queue.write_buffer(&self.globals_buf, 0, bytemuck::bytes_of(&globals));
 
         // 实例缓冲：至少留一个（空场景也建缓冲，省一条分支）。
-        let instances: Vec<Instance> = scene
-            .rects
-            .iter()
-            .map(|r| Instance { rect: r.rect, color: r.color, extra: [r.radius, 0.0, 0.0, 0.0], clip: r.clip })
-            .collect();
+        let instances: Vec<Instance> =
+            scene.rects.iter().map(|r| Instance { rect: r.rect, color: r.color, extra: [r.radius, 0.0, 0.0, 0.0], clip: r.clip }).collect();
         let count = instances.len().max(1) as u64;
         let bytes = if instances.is_empty() { vec![0u8; std::mem::size_of::<Instance>()] } else { bytemuck::cast_slice(&instances).to_vec() };
         // 容量不够才重建（只增不减），否则直接覆写。
@@ -458,6 +455,12 @@ fn walk(doc: &figcraft_doc::Document, id: figcraft_doc::NodeId, view: &figcraft_
     if !n.visible {
         return Some(());
     }
+    // External WGSL materials are not part of this rect-only scene: accepting the node would draw
+    // its flat fill and silently export a video/canvas frame without the material. Masks are not
+    // expressible either. Both make the caller fall back to the CPU renderer, which has them.
+    if n.is_mask || n.plugin_data.contains_key(crate::wgsl_material::BINDING_KEY) {
+        return None;
+    }
     // PassThrough is a group's own "keep the children's blends" mode and looks like Normal for
     // opaque fills; anything else (Luminosity, Multiply…) would need a real blend pipeline.
     if n.opacity < 0.999
@@ -519,11 +522,7 @@ fn intersect_clip(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
     let y0 = a[1].max(b[1]);
     let x1 = (a[0] + a[2]).min(b[0] + b[2]);
     let y1 = (a[1] + a[3]).min(b[1] + b[3]);
-    if x1 <= x0 || y1 <= y0 {
-        [x0, y0, 0.0, 0.0]
-    } else {
-        [x0, y0, x1 - x0, y1 - y0]
-    }
+    if x1 <= x0 || y1 <= y0 { [x0, y0, 0.0, 0.0] } else { [x0, y0, x1 - x0, y1 - y0] }
 }
 
 fn map(m: figcraft_geom::Affine, x: f64, y: f64) -> (f64, f64) {
@@ -560,7 +559,15 @@ mod tests {
         let page = doc.pages[0];
         let frame = doc.create(page, figcraft_doc::NodeKind::Frame, "Frame", 0.0, 0.0, 100.0, 100.0).expect("a frame");
         let _ellipse = doc
-            .create(frame, figcraft_doc::NodeKind::Ellipse { start: 0.0, sweep: std::f64::consts::TAU, inner: 0.0 }, "Ellipse", 10.0, 10.0, 20.0, 20.0)
+            .create(
+                frame,
+                figcraft_doc::NodeKind::Ellipse { start: 0.0, sweep: std::f64::consts::TAU, inner: 0.0 },
+                "Ellipse",
+                10.0,
+                10.0,
+                20.0,
+                20.0,
+            )
             .expect("an ellipse");
         let scene = scene_of_node(&doc, frame, &figcraft_render::View { origin: (0.0, 0.0), scale: 1.0, width: 800, height: 600 });
         assert!(scene.is_none(), "an ellipse is not expressible: the GPU scene must decline it");
@@ -620,7 +627,8 @@ mod tests {
     }
 
     #[test]
-    fn the_corner_radius_is_cut_out() {        let Some(mut gpu) = Gpu::new() else {
+    fn the_corner_radius_is_cut_out() {
+        let Some(mut gpu) = Gpu::new() else {
             eprintln!("no GPU adapter available — skipping");
             return;
         };

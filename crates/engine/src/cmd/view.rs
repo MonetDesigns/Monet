@@ -119,14 +119,14 @@ fn pan(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// Figma's zoom steps.
-const STEPS: &[f64] = &[0.02, 0.03, 0.06, 0.13, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0];
+const STEPS: &[f64] = &[0.015625, 0.02, 0.03, 0.06, 0.13, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0];
 
 /// The next zoom step above (`up`) or below `z` in Figma's fixed steps.
 fn step(z: f64, up: bool) -> f64 {
     if up {
         STEPS.iter().copied().find(|s| *s > z * 1.001).unwrap_or(256.0)
     } else {
-        STEPS.iter().rev().copied().find(|s| *s < z * 0.999).unwrap_or(0.02)
+        STEPS.iter().rev().copied().find(|s| *s < z * 0.999).unwrap_or(ViewState::MIN_ZOOM)
     }
 }
 
@@ -296,7 +296,7 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, p| {
                 let v = view(s)?;
                 if let Some(z) = num(p, "zoom") {
-                    v.zoom = z.clamp(ViewState::MIN_ZOOM, ViewState::MAX_ZOOM);
+                    v.zoom = v.clamp_zoom(z);
                 }
                 v.cx = num_or(p, "cx", v.cx);
                 v.cy = num_or(p, "cy", v.cy);

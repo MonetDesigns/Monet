@@ -170,9 +170,7 @@ impl Animation {
     /// frame — the same guarantee desigma's `Animation::render` gives.
     pub fn render(&self, t_ms: f64) -> Option<Pixmap> {
         let evaluated = evaluate(&self.base, self.page, t_ms);
-        let mut out = Pixmap::new(self.view.width, self.view.height)?;
-        figcraft_render::render_nodes_into(&evaluated, &[self.node], &self.view, &mut out);
-        Some(out)
+        figcraft_render::render_nodes_into_for_export(&evaluated, &[self.node], &self.view, t_ms)
     }
 
     /// [`render`](Self::render) against a reusable scratch document: export loops pay one
@@ -184,9 +182,7 @@ impl Animation {
         {
             return Some(pix);
         }
-        let mut out = Pixmap::new(self.view.width, self.view.height)?;
-        figcraft_render::render_nodes_into(evaluated, &[self.node], &self.view, &mut out);
-        Some(out)
+        figcraft_render::render_nodes_into_for_export(evaluated, &[self.node], &self.view, t_ms)
     }
 
     /// Picks GPU or CPU once for the whole export. The installed GPU scene renderer is asked about

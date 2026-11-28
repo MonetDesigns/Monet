@@ -76,11 +76,7 @@ mod tests {
                 r#"{{"id":"{id}","name":"{id}","main":"plugin.wasm","permissions":{{"access":"{access}"}}}}"#
             ))
             .unwrap();
-            app.session.prefs.plugins.push(figcraft_engine::plugins::InstalledPlugin {
-                manifest,
-                path: None,
-                source: None,
-            });
+            app.session.prefs.plugins.push(figcraft_engine::plugins::InstalledPlugin { manifest, path: None, source: None });
         }
         assert!(!refuses_command(&app, "plugin.run", &serde_json::json!({"id": "org.test.read"})));
         assert!(refuses_command(&app, "plugin.run", &serde_json::json!({"id": "org.test.write"})));

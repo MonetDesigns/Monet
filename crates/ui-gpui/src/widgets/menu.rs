@@ -180,11 +180,7 @@ fn menu_popup_impl(
         0.0,
         None,
         |r: &MenuRow| {
-            if r.key_explicit || !r.key.is_empty() {
-                r.key.as_ref()
-            } else {
-                r.label.as_ref()
-            }
+            if r.key_explicit || !r.key.is_empty() { r.key.as_ref() } else { r.label.as_ref() }
         },
         behavior,
     );

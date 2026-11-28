@@ -1,7 +1,7 @@
 //! 何时重渲染、留多少预渲染边、哪张完成图可以上台（照搬 `ui-egui/src/canvas/render.rs`）。
 //!
 //! 原文逻辑一行未改，只把 `app` 类型换成 GPUI 侧的 [`CanvasApp`]，`web_time::Instant`
-//! 换成 `std::time::Instant`，并略去 board 点阵（`dots`：GPUI 侧暂未接 board）。
+//! 换成 `std::time::Instant`；board 点阵（`dots`）按 `board_grid` 的档位接上了。
 
 #![allow(dead_code)]
 
@@ -33,6 +33,8 @@ pub(crate) struct JobKey {
     proof: bool,
     /// 提示带（padding / spacing）的指纹：换一条就要重画。
     bands: u64,
+    /// 白板底格（点阵/线）：换样式、换对比度、缩放跨档都要重画。
+    dots: Option<figcraft_render::Dots>,
 }
 
 /// 替身请求的指纹：请求的页面矩形 + 抓取原点 + 图层。它变了才值得重抓。
@@ -154,19 +156,8 @@ pub(super) fn request_render(
         && let Some(te) = ds.text_edit.as_ref()
         && let Some(pe) = te.preedit.as_ref()
     {
-        let key = (
-            Arc::as_ptr(&ds.doc) as usize,
-            ds.revision,
-            te.id.0,
-            te.caret,
-            pe.text.clone(),
-            pe.cursor,
-        );
-        composed = app
-            .preedit_doc_cache
-            .as_ref()
-            .filter(|cache| cache.key == key)
-            .map(|cache| cache.doc.clone());
+        let key = (Arc::as_ptr(&ds.doc) as usize, ds.revision, te.id.0, te.caret, pe.text.clone(), pe.cursor);
+        composed = app.preedit_doc_cache.as_ref().filter(|cache| cache.key == key).map(|cache| cache.doc.clone());
         if composed.is_none() {
             if let Some((d, _, _)) = figcraft_engine::textedit::preedit_doc(&app.session) {
                 let doc = Arc::new(d);
@@ -190,6 +181,8 @@ pub(super) fn request_render(
     let size = (visible_w.saturating_add(margin * 2).min(max_texture_side), visible_h.saturating_add(margin * 2).min(max_texture_side));
     // 拖动时底图**跳过被拖的层**，由替身（`grab`）单独提供它的内容：
     // 两者合起来才是完整画面，不会重复画同一层，也不需要"擦掉旧位置"。
+    // 白板页的底格：画在页面底色之上、图层之下（设计文件、关掉网格时是 `None`）。
+    let dots = super::board_grid::dots(app, scale, app.canvas.page.0);
     let key = JobKey {
         doc: Arc::as_ptr(&doc) as usize,
         page: ds.page,
@@ -206,6 +199,7 @@ pub(super) fn request_render(
         grab: grab_ask.as_ref().map(grab_key),
         // 提示带换了（悬停到另一条、拖出数值）就得重画：它们铺在图层的子层之前。
         bands: bands_key(bands),
+        dots,
     };
     if std::env::var_os("FIGCRAFT_KEY_LOG").is_some()
         && let Some(prev) = &app.canvas.submitted
@@ -258,7 +252,7 @@ pub(super) fn request_render(
         skip: skip.to_vec(),
         solo: key.solo,
         proof,
-        dots: None,
+        dots,
         grab: grab_ask,
         bands: bands.to_vec(),
         // 逐层材质板由 worker 自持（它跨帧缓存每层像素），UI 线程不参与。

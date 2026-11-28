@@ -22,8 +22,8 @@ use crate::widgets::{
 use figcraft_i18n::tr;
 use figcraft_i18n::tr_noop;
 use gpui::{
-    AnyElement, App, Bounds, CursorStyle, Div, Entity, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollHandle,
-    SharedString, Size, Stateful, Window, div, point, prelude::*, px, size,
+    AnyElement, App, Bounds, CursorStyle, Div, Entity, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
+    ScrollHandle, SharedString, Size, Stateful, Window, div, point, prelude::*, px, size,
 };
 use serde_json::{Value, json};
 use std::cell::{Cell, RefCell};
@@ -483,8 +483,7 @@ fn bulk_menu_items(rows: &[(String, String, VarKind)], groups: &[String]) -> Vec
     let mut items = vec![MenuItem::new(tr("Edit variables"), "ui.details", json!({ "variable": rows[0].0 }))];
     let n = rows.len();
     let n_text = n.to_string();
-    let delete_steps: Vec<Value> =
-        rows.iter().map(|(id, ..)| json!({"command": "variable.delete", "params": {"variable": id}})).collect();
+    let delete_steps: Vec<Value> = rows.iter().map(|(id, ..)| json!({"command": "variable.delete", "params": {"variable": id}})).collect();
     items.push(MenuItem::new(
         figcraft_i18n::trf("Delete {n} variables", &[("n", &n_text)]),
         "command.batch",
@@ -534,10 +533,7 @@ fn bulk_menu_items(rows: &[(String, String, VarKind)], groups: &[String]) -> Vec
     items.push(scope_item(tr("Scope: all supported properties").to_string(), None));
     items.push(scope_item(tr("Scope: hidden from pickers").to_string(), Some("")));
     for (id, label) in scopes {
-        items.push(scope_item(
-            figcraft_i18n::trf("Scope: only {scope}", &[("scope", &tr(label))]),
-            Some(id),
-        ));
+        items.push(scope_item(figcraft_i18n::trf("Scope: only {scope}", &[("scope", &tr(label))]), Some(id)));
     }
     items
 }
@@ -1063,11 +1059,16 @@ impl VariablesEditor {
         // the range anchor if its endpoints vanished, so copy never targets a deleted row.
         {
             let mut st = self.state.borrow_mut();
-            let live: std::collections::HashSet<String> = data.collections.iter()
+            let live: std::collections::HashSet<String> = data
+                .collections
+                .iter()
                 .chain(data.libraries.iter().flat_map(|l| l.collections.iter()))
-                .flat_map(|c| c.rows.iter().map(|r| r.id.clone())).collect();
+                .flat_map(|c| c.rows.iter().map(|r| r.id.clone()))
+                .collect();
             st.selected.retain(|id| live.contains(id));
-            if st.anchor.as_ref().is_some_and(|a| !live.contains(a)) { st.anchor = None; }
+            if st.anchor.as_ref().is_some_and(|a| !live.contains(a)) {
+                st.anchor = None;
+            }
         }
         self.data = data;
     }
@@ -1271,9 +1272,7 @@ impl VariablesEditor {
         let sel = st.borrow().selected.first().cloned();
         let Some(sel) = sel else { return };
         let list = Self::collections(st, data);
-        let Some((c, r)) = selected.iter().find_map(|sel| {
-            list.iter().find_map(|c| c.rows.iter().find(|r| r.id == *sel).map(|r| (c, r)))
-        }) else {
+        let Some((c, r)) = selected.iter().find_map(|sel| list.iter().find_map(|c| c.rows.iter().find(|r| r.id == *sel).map(|r| (c, r)))) else {
             return;
         };
         let values = c.modes.iter().zip(r.values.iter()).map(|(m, v)| (m.name.clone(), v.clone())).collect();
@@ -1651,7 +1650,7 @@ impl VariablesEditor {
             .flex_1()
             .min_w(pt(0.0))
             .child(title_group)
-            // 注意：`Icon::Panel` 在 icon.rs 里仍是圆点占位（未实现），用已实现的 `Icon::Panels`。
+            // 面板开合统一用 `Icon::Panels`；旧的 `Icon::Panel` 圆点占位已删除。
             .child(IconButton::new(Icon::Panels).size(24.0).on_click({
                 let st = st.clone();
                 move |_, _, _| {
@@ -2297,7 +2296,11 @@ impl VariablesEditor {
                                         f32::from(e.position.x),
                                         f32::from(e.position.y),
                                         vec![
-                                            MenuItem::new(tr("Rename group"), "ui.renameGroup", json!({ "group": g_toggle.clone(), "name": g_short })),
+                                            MenuItem::new(
+                                                tr("Rename group"),
+                                                "ui.renameGroup",
+                                                json!({ "group": g_toggle.clone(), "name": g_short }),
+                                            ),
                                             MenuItem::new(tr("Duplicate group"), "ui.duplicateGroup", json!({ "group": g_toggle.clone() })),
                                             MenuItem::new(tr("Delete group"), "ui.deleteGroup", json!({ "variables": vars })),
                                         ],
@@ -2782,8 +2785,8 @@ impl VariablesEditor {
             let caches2 = self.row_caches.clone();
             let c2 = c.clone();
             let ids2 = drag_ids.clone();
-            let bulk_rows = std::rc::Rc::new(c.rows.iter().filter(|x| !x.inherited)
-                .map(|x| (x.id.clone(), x.full_name.clone(), x.kind)).collect::<Vec<_>>());
+            let bulk_rows =
+                std::rc::Rc::new(c.rows.iter().filter(|x| !x.inherited).map(|x| (x.id.clone(), x.full_name.clone(), x.kind)).collect::<Vec<_>>());
             let bulk_groups = std::rc::Rc::new(c.groups.clone());
             let list = v_virtual_list("vars-rows", &scroll, item_sizes, move |range, _window, cx| {
                 let mut out: Vec<AnyElement> = Vec::new();
@@ -2792,11 +2795,24 @@ impl VariablesEditor {
                     let el: AnyElement = match item {
                         RowItem::Gap => div().flex_none().w(px(table_w)).h(px(GROUP_GAP)).into_any_element(),
                         RowItem::GroupHeader { name, .. } => group_header_div(name).w(px(table_w)).into_any_element(),
-                        RowItem::Row { index, row } => {
-                            VariablesEditor::var_row(&st2, &cmds2, &caches2, &c2, row, *index, &ids2, row_tops.clone(), name_eff, modes_room, sx, bulk_rows.clone(), bulk_groups.clone(), cx)
-                                .w(px(table_w))
-                                .into_any_element()
-                        }
+                        RowItem::Row { index, row } => VariablesEditor::var_row(
+                            &st2,
+                            &cmds2,
+                            &caches2,
+                            &c2,
+                            row,
+                            *index,
+                            &ids2,
+                            row_tops.clone(),
+                            name_eff,
+                            modes_room,
+                            sx,
+                            bulk_rows.clone(),
+                            bulk_groups.clone(),
+                            cx,
+                        )
+                        .w(px(table_w))
+                        .into_any_element(),
                     };
                     out.push(el);
                 }
@@ -2883,12 +2899,8 @@ impl VariablesEditor {
         // (see `table`); cloning it per row made large collections allocate quadratically.
         // Bulk-menu snapshot: the rows this collection can act on (inherited ones are changed in
         // their own collection, as in egui `bulk_ids`).
-        let bulk_rows: Vec<(String, String, VarKind)> = c
-            .rows
-            .iter()
-            .filter(|x| !x.inherited)
-            .map(|x| (x.id.clone(), x.full_name.clone(), x.kind))
-            .collect();
+        let bulk_rows: Vec<(String, String, VarKind)> =
+            c.rows.iter().filter(|x| !x.inherited).map(|x| (x.id.clone(), x.full_name.clone(), x.kind)).collect();
         let bulk_groups = c.groups.clone();
         let single_items = if movable {
             let mut v = vec![
@@ -2960,11 +2972,7 @@ impl VariablesEditor {
                     };
                     let items = if let Some(sel) = selected {
                         let rows: Vec<(String, String, VarKind)> = bulk_rows.iter().filter(|(id, ..)| sel.contains(id)).cloned().collect();
-                        if rows.len() > 1 {
-                            bulk_menu_items(&rows, &bulk_groups)
-                        } else {
-                            single.clone()
-                        }
+                        if rows.len() > 1 { bulk_menu_items(&rows, &bulk_groups) } else { single.clone() }
                     } else {
                         single.clone()
                     };
@@ -3857,16 +3865,18 @@ impl VariablesEditor {
             let vid = row.id.clone();
             let kind = row.kind;
             let sid = id.to_string();
-            body = body.child(div().pl(pt(16.0)).child(
-                Checkbox::new(gpui::ElementId::Name(format!("d-scope-{}-{}", row.id, id).into()))
-                    .label(tr(label))
-                    .text_xs()
-                    .checked(checked)
-                    .on_change(move |next: &bool, _, _| {
-                        let scopes = toggle_scope(kind, current.as_deref(), &sid, *next);
-                        cmds.push(Cmd { id: "variable.update", params: Some(json!({ "variable": vid, "scopes": scopes })) });
-                    }),
-            ));
+            body = body.child(
+                div().pl(pt(16.0)).child(
+                    Checkbox::new(gpui::ElementId::Name(format!("d-scope-{}-{}", row.id, id).into()))
+                        .label(tr(label))
+                        .text_xs()
+                        .checked(checked)
+                        .on_change(move |next: &bool, _, _| {
+                            let scopes = toggle_scope(kind, current.as_deref(), &sid, *next);
+                            cmds.push(Cmd { id: "variable.update", params: Some(json!({ "variable": vid, "scopes": scopes })) });
+                        }),
+                ),
+            );
         }
         let close_st = st.clone();
         let dismiss: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(move |_, _| {
@@ -4055,7 +4065,6 @@ fn kind_glyph(r: &VarRow) -> AnyElement {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4117,14 +4126,7 @@ mod tests {
     async fn escape_clears_the_selection(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
             let wake: Rc<dyn Fn()> = Rc::new(|| {});
-            let mut st = VariablesEditor::new(
-                Cmds::new(&wake),
-                VariablesData::default(),
-                cx,
-                None,
-                Rc::new(|_, _| {}),
-                Rc::new(|_| {}),
-            );
+            let mut st = VariablesEditor::new(Cmds::new(&wake), VariablesData::default(), cx, None, Rc::new(|_, _| {}), Rc::new(|_| {}));
             {
                 let mut s = st.state.borrow_mut();
                 s.selected = vec!["a".into(), "b".into()];
@@ -4150,10 +4152,7 @@ mod tests {
 
     #[test]
     fn bulk_menu_scopes_only_what_every_type_supports() {
-        let rows = vec![
-            ("1".to_string(), "Brand/Primary".to_string(), VarKind::Color),
-            ("2".to_string(), "Flag/On".to_string(), VarKind::Boolean),
-        ];
+        let rows = vec![("1".to_string(), "Brand/Primary".to_string(), VarKind::Color), ("2".to_string(), "Flag/On".to_string(), VarKind::Boolean)];
         let items = bulk_menu_items(&rows, &[]);
         // Colour scopes and boolean scopes do not overlap, so only the generic entries stay.
         assert!(!items.iter().any(|i| i.label.starts_with("Scope: only")), "{:?}", items.iter().map(|i| &i.label).collect::<Vec<_>>());
@@ -4226,10 +4225,8 @@ mod tests {
 
     #[test]
     fn bulk_menu_moves_every_selected_variable_in_one_batch() {
-        let rows = vec![
-            ("1".to_string(), "Brand/Primary".to_string(), VarKind::Color),
-            ("2".to_string(), "Brand/Secondary".to_string(), VarKind::Color),
-        ];
+        let rows =
+            vec![("1".to_string(), "Brand/Primary".to_string(), VarKind::Color), ("2".to_string(), "Brand/Secondary".to_string(), VarKind::Color)];
         let items = bulk_menu_items(&rows, &["Space".into()]);
         let moving = items.iter().find(|i| i.label.contains("Move to group Space")).expect("the move item");
         let steps = moving.params["commands"].as_array().expect("batch steps");
@@ -4240,10 +4237,8 @@ mod tests {
 
     #[test]
     fn bulk_menu_scope_change_sets_the_same_scope_on_every_selected_variable() {
-        let rows = vec![
-            ("1".to_string(), "Brand/Primary".to_string(), VarKind::Color),
-            ("2".to_string(), "Brand/Secondary".to_string(), VarKind::Color),
-        ];
+        let rows =
+            vec![("1".to_string(), "Brand/Primary".to_string(), VarKind::Color), ("2".to_string(), "Brand/Secondary".to_string(), VarKind::Color)];
         let items = bulk_menu_items(&rows, &[]);
         let scoped = items.iter().find(|i| i.label == "Scope: only Frame fill").expect("the fill scope item");
         let steps = scoped.params["commands"].as_array().expect("batch steps");
@@ -4255,11 +4250,7 @@ mod tests {
 
     #[test]
     fn duplicate_group_copies_every_local_variable_under_the_next_free_name() {
-        let rows = vec![
-            var_row("1", "Brand/Primary", false),
-            var_row("2", "Brand/Secondary", false),
-            var_row("3", "Other/Tertiary", false),
-        ];
+        let rows = vec![var_row("1", "Brand/Primary", false), var_row("2", "Brand/Secondary", false), var_row("3", "Other/Tertiary", false)];
         let groups = vec!["Brand".into(), "Brand 2".into(), "Other".into()];
         let batch = duplicate_group_batch(&rows, &groups, "Brand").expect("a batch");
         assert_eq!(batch["label"], "Duplicate group");
@@ -4282,10 +4273,8 @@ mod tests {
 
     #[test]
     fn bulk_menu_acts_on_every_selected_variable() {
-        let rows = vec![
-            ("1".to_string(), "Brand/Primary".to_string(), VarKind::Color),
-            ("2".to_string(), "Brand/Secondary".to_string(), VarKind::Color),
-        ];
+        let rows =
+            vec![("1".to_string(), "Brand/Primary".to_string(), VarKind::Color), ("2".to_string(), "Brand/Secondary".to_string(), VarKind::Color)];
         let items = bulk_menu_items(&rows, &["Space".into()]);
         assert_eq!(items[1].cmd, "command.batch", "delete is one undo step");
         assert_eq!(items[1].params["commands"].as_array().map(Vec::len), Some(2));

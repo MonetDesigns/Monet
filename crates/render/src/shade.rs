@@ -24,8 +24,17 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
-use figcraft_doc::NodeId;
+use figcraft_doc::{Document, NodeId};
 use tiny_skia::{IntSize, Pixmap};
+
+/// The host-box-blur a shader asks for with `@fx blur <input> <field>`. `radius_doc` is the
+/// panel value already resolved (its default is used when the layer has no explicit value).
+#[derive(Clone, Debug, PartialEq)]
+pub struct BlurSpec {
+    pub input: crate::wgsl_effect::BlurInput,
+    pub field: String,
+    pub radius_doc: f64,
+}
 
 /// One node's material choice, prepared by the host so this crate needs no JSON.
 #[derive(Clone, Debug, PartialEq)]
@@ -36,11 +45,28 @@ pub struct ShaderSpec {
     pub path: String,
     /// Control values as the panel stores them (`ParamSpec` scale, 0..100).
     pub params: BTreeMap<String, f64>,
+    /// `@fx stage`: a backdrop material replaces the paint under the content, a layer material takes
+    /// the finished layer (content + children) and replaces it — the same split the built-in effects
+    /// use. A layer pass therefore carries `content`, not a backdrop.
+    pub stage: crate::wgsl_effect::Stage,
+    /// `@fx reach` resolved to document units: how far outside the node the shader reads, used to
+    /// grow the layer window so a shadow/blur is not cut at the node's own edges.
+    pub reach_doc: f64,
+    /// `@fx blur`: the host box-blurs this input before the shader samples it. A backdrop blur
+    /// replaces the canvas under the layer; a content blur replaces the layer's finished content.
+    pub blur: Option<BlurSpec>,
 }
 
 impl ShaderSpec {
     pub fn new(effect_id: impl Into<String>, path: impl Into<String>) -> Self {
-        Self { effect_id: effect_id.into(), path: path.into(), params: BTreeMap::new() }
+        Self {
+            effect_id: effect_id.into(),
+            path: path.into(),
+            params: BTreeMap::new(),
+            stage: crate::wgsl_effect::Stage::Backdrop,
+            reach_doc: 0.0,
+            blur: None,
+        }
     }
 }
 
@@ -65,8 +91,22 @@ pub struct ShadeRequest {
     pub bounds: [f64; 4],
     /// Corner smoothing (the same value `cornerSmoothings` carries on the whole-page path).
     pub smoothing: f64,
-    /// Straight (un-premultiplied) RGBA, `size.0 × size.1` big: what lies under this layer.
+    /// **Premultiplied** RGBA, `size.0 × size.1` big: what lies under this layer. Shaders sample it
+    /// and call `unpack` before doing straight-alpha math; passing straight bytes here would make
+    /// GPU mip generation and edge blending darken transparent borders.
     pub backdrop: Arc<Vec<u8>>,
+    /// For `Stage::Layer`: the finished layer as **premultiplied RGBA**, same size as `size`. The
+    /// shader sees it through its `content` texture and its result replaces the layer. `None` for a
+    /// backdrop material.
+    pub content: Option<Arc<Vec<u8>>>,
+    /// Which contract the pass runs under (mirrors [`ShaderSpec::stage`]). A backdrop pass paints
+    /// under the content; a layer pass takes and replaces the finished layer.
+    pub stage: crate::wgsl_effect::Stage,
+    /// The window is the node's own **unrotated** frame, not the screen-aligned AABB. The host
+    /// rotates the backdrop/content into it before upload and rotates the result back afterwards,
+    /// so every shader sees `uv` along the node's axes. That is what makes an arbitrary material
+    /// follow a rotated layer without each shader knowing about rotation.
+    pub local: bool,
 }
 
 /// A finished layer: the shader over that backdrop, premultiplied RGBA at the layer's size.
@@ -102,7 +142,15 @@ pub struct ShadeBoard {
     latest: Mutex<HashMap<(NodeId, u64), Arc<Shaded>>>,
     requests: Mutex<Vec<ShadeRequest>>,
     stats: Mutex<ShadeStats>,
+    /// 同步解析器（由后端安装）。设置后，绘制到材质层时就地解析，不再“登记请求 + 整页重绘”。
+    ///
+    /// 这是把内置效果和 WGSL 材质统一到同一条管线的接缝：一个层需要像素时，生产者当场交付；
+    /// 没有解析器（无 GPU / 测试）时才退回请求-延迟路径。
+    resolver: Mutex<Option<Arc<Resolver>>>,
 }
+
+/// 一个层请求的同步生产者：给出这一层的像素，或 `None`（后端不可用，退回延迟路径）。
+pub type Resolver = dyn Fn(&ShadeRequest, &Document) -> Option<Arc<Shaded>> + Send + Sync;
 
 /// How many layer rasters the board keeps. One material node drawn across a page's bands needs a
 /// handful (5–8); a document with several materials still fits. Each raster is one layer (not a
@@ -143,7 +191,24 @@ impl ShadeBoard {
             latest: Mutex::new(HashMap::new()),
             requests: Mutex::new(Vec::new()),
             stats: Mutex::new(ShadeStats::default()),
+            resolver: Mutex::new(None),
         }
+    }
+
+    /// Install the synchronous producer (only if none is installed yet). Safe to call per frame.
+    pub fn ensure_resolver(&self, resolver: Arc<Resolver>) {
+        let mut slot = self.resolver.lock().unwrap_or_else(|e| e.into_inner());
+        if slot.is_none() {
+            *slot = Some(resolver);
+        }
+    }
+
+    /// Produce this layer **now** through the installed resolver, or `None` when there is none or it
+    /// declined (no adapter, shader not compiled yet…). The caller draws the result this frame; the
+    /// delayed request path is only the fallback.
+    pub fn resolve(&self, req: &ShadeRequest, doc: &Document) -> Option<Arc<Shaded>> {
+        let resolver = self.resolver.lock().unwrap_or_else(|e| e.into_inner()).clone()?;
+        resolver(req, doc)
     }
 
     /// Replace the materials of this board (a document edit changed one). The rasters stay: the
@@ -205,11 +270,16 @@ impl ShadeBoard {
     /// fallback entries once its last `ready` raster is gone, so `latest` cannot keep a pixel buffer
     /// alive after the cache stopped accounting for it.
     pub fn put(&self, node: NodeId, shaded: Shaded) {
+        self.put_shared(node, Arc::new(shaded));
+    }
+
+    /// [`put`](Self::put) for an already shared raster (the synchronous resolver's result), so the
+    /// cache and the frame that just drew it share one pixel buffer instead of copying it.
+    pub fn put_shared(&self, node: NodeId, shaded: Arc<Shaded>) {
         let key = shaded.key;
         let win = window_id((shaded.pixmap.width(), shaded.pixmap.height()), shaded.origin_px);
-        let arc = Arc::new(shaded);
-        self.ready.lock().unwrap_or_else(|e| e.into_inner()).insert((node, key), arc.clone());
-        self.latest.lock().unwrap_or_else(|e| e.into_inner()).insert((node, win), arc);
+        self.ready.lock().unwrap_or_else(|e| e.into_inner()).insert((node, key), Arc::clone(&shaded));
+        self.latest.lock().unwrap_or_else(|e| e.into_inner()).insert((node, win), shaded);
         // Never hold `order` while taking `ready` (or the two lock orders deadlock): collect what
         // fell out of the queued window first, then drop it from the map.
         let evicted: Vec<(NodeId, u64)> = {
@@ -266,6 +336,23 @@ impl ShadeBoard {
     pub fn cached(&self) -> usize {
         self.ready.lock().unwrap_or_else(|e| e.into_inner()).len()
     }
+}
+
+/// Fold a layer's content into an existing [`shade_key`]. A layer material's result depends on the
+/// pixels it is given, exactly like a backdrop material's depends on the backdrop; two frames whose
+/// content differs must not share a raster.
+pub fn with_content(key: u64, content: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut h);
+    content.hash(&mut h);
+    h.finish()
+}
+
+/// Mark a key as a node-local window. A screen-aligned window and a node-local one can have the
+/// same size/origin numbers on an unrotated node; they must not share a raster.
+pub fn with_local(key: u64) -> u64 {
+    key ^ 0x9E37_79B9_7F4A_7C15
 }
 
 /// The cache key of one layer's shade: the shader, its parameters, the geometry it is drawn into,
@@ -352,6 +439,13 @@ pub fn premultiplied(rgba: &[u8], w: u32, h: u32) -> Option<Pixmap> {
     Pixmap::from_vec(bytes, IntSize::from_wh(w, h)?)
 }
 
+/// Wrap already-premultiplied RGBA bytes as a pixmap. A layer shader's output comes back
+/// premultiplied (it was alpha-blended over a transparent canvas), and multiplying it again would
+/// darken every antialiased edge; this is the counterpart of [`premultiplied`] for that case.
+pub fn from_premultiplied(bytes: &[u8], w: u32, h: u32) -> Option<Pixmap> {
+    Pixmap::from_vec(bytes.to_vec(), IntSize::from_wh(w, h)?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -379,6 +473,9 @@ mod tests {
             bounds: [0.0, 0.0, 4.0, 2.0],
             smoothing: 0.0,
             backdrop: Arc::new(vec![255; 4 * 2 * 4]),
+            content: None,
+            stage: crate::wgsl_effect::Stage::Backdrop,
+            local: false,
         }
     }
 

@@ -208,9 +208,7 @@ use std::sync::Arc;
 
 use std::time::{Duration, Instant};
 
-use crate::widgets::menu::{
-    MenuRow, menu_popup_fit_aligned, menu_popup_in_aligned, popup_backdrop,
-};
+use crate::widgets::menu::{MenuRow, menu_popup_fit_aligned, menu_popup_in_aligned, popup_backdrop};
 
 use base64::Engine as _;
 use figcraft_doc::{CrossAlign, Document, MainAlign, Node, NodeId, NodeKind};
@@ -1854,8 +1852,7 @@ impl CanvasView {
 
             all_frame: !nodes.is_empty() && nodes.iter().all(|n| n.kind.is_frame_like()),
 
-            all_layout_container: !nodes.is_empty()
-                && nodes.iter().all(|n| n.kind.is_frame_like() || matches!(n.kind, NodeKind::Group)),
+            all_layout_container: !nodes.is_empty() && nodes.iter().all(|n| n.kind.is_frame_like() || matches!(n.kind, NodeKind::Group)),
 
             all_stars: !nodes.is_empty() && nodes.iter().all(|n| matches!(n.kind, NodeKind::Star { .. })),
 
@@ -1953,7 +1950,10 @@ impl CanvasView {
 
         let ready = self.fields.dev_ready_filter();
         let key = (ds.uid, ds.revision, page, ds.selection.clone(), ready);
-        let dev = match self.dev_cache.borrow().as_ref().filter(|(k, _)| k == &key).map(|(_, d)| d.clone()) {
+        // 先把命中结果拷出到局部变量：`match` 的 scrutinee 临时 `Ref` 会活到整个 `match` 结束，
+        // 直接在 `None` 分支里 `borrow_mut()` 会撞上「RefCell already borrowed」。
+        let cached = self.dev_cache.borrow().as_ref().filter(|(k, _)| k == &key).map(|(_, d)| d.clone());
+        let dev = match cached {
             Some(d) => d,
             None => {
                 let d = panels::right::data::read_dev(&ds.doc, &ds.selection, page, ready);
@@ -2085,14 +2085,7 @@ impl CanvasView {
                 && figcraft_engine::playground::component_of(&ds.doc, target).is_some()
             {
                 let values = self.fields.playground_values(target);
-                let key = format!(
-                    "{}:{}:{}:{}:{}",
-                    ds.uid,
-                    ds.revision,
-                    target.0,
-                    serde_json::to_string(&values).unwrap_or_default(),
-                    lang.id()
-                );
+                let key = format!("{}:{}:{}:{}:{}", ds.uid, ds.revision, target.0, serde_json::to_string(&values).unwrap_or_default(), lang.id());
                 let mut played = self.fields.playground_cache(&key);
                 if played.is_none() {
                     let mut tried = values.clone();
@@ -2480,8 +2473,7 @@ impl CanvasView {
                     let suggested = name.clone();
                     let this = cx.entity().downgrade();
                     cx.spawn(async move |this, cx| {
-                        let Some(file) = rfd::AsyncFileDialog::new().set_title(tr("Save file")).set_file_name(&suggested).save_file().await
-                        else {
+                        let Some(file) = rfd::AsyncFileDialog::new().set_title(tr("Save file")).set_file_name(&suggested).save_file().await else {
                             return;
                         };
                         let path = file.path().to_string_lossy().to_string();
@@ -2528,10 +2520,7 @@ impl CanvasView {
                 "annotation.new" => {
                     let id = r.data.get("id").and_then(figcraft_engine::params::id_of);
                     let shown = id.is_some_and(|id| {
-                        self.app
-                            .session
-                            .ds()
-                            .is_ok_and(|ds| ds.selection.contains(&id) && ds.doc.node(id).is_some_and(|n| !n.is_page()))
+                        self.app.session.ds().is_ok_and(|ds| ds.selection.contains(&id) && ds.doc.node(id).is_some_and(|n| !n.is_page()))
                     });
                     if let Some(id) = id.filter(|_| shown) {
                         self.fields.set_right_tab(2);
@@ -2866,11 +2855,7 @@ impl CanvasView {
                 .unwrap_or_else(|| "Untitled.figcraft".into());
             let this = cx.entity().downgrade();
             cx.spawn(async move |this, cx| {
-                let Some(file) = rfd::AsyncFileDialog::new()
-                    .set_file_name(&suggested)
-                    .add_filter(tr("Monet"), &["figcraft"])
-                    .save_file()
-                    .await
+                let Some(file) = rfd::AsyncFileDialog::new().set_file_name(&suggested).add_filter(tr("Monet"), &["figcraft"]).save_file().await
                 else {
                     return;
                 };
@@ -4369,14 +4354,7 @@ impl CanvasView {
     ) {
         anchor.seed(rect);
         crate::widgets::dropdown::set_active_menu(Some((anchor.key().to_string(), f32::from(rect.origin.x))));
-        self.popup = Some(Popup::Menu {
-            anchor: rect,
-            width: None,
-            rows,
-            on_pick,
-            probe: Some(anchor.cell()),
-            fit_width: true,
-        });
+        self.popup = Some(Popup::Menu { anchor: rect, width: None, rows, on_pick, probe: Some(anchor.cell()), fit_width: true });
         cx.notify();
     }
 
@@ -4780,12 +4758,7 @@ impl CanvasView {
             let ext = if command == "file.exportLayers" { "zip" } else { ext };
             let name = format!("{doc_name}.{ext}");
 
-            let Some(file) = rfd::AsyncFileDialog::new()
-                .set_file_name(&name)
-                .add_filter(ext.to_uppercase(), &[ext])
-                .save_file()
-                .await
-            else {
+            let Some(file) = rfd::AsyncFileDialog::new().set_file_name(&name).add_filter(ext.to_uppercase(), &[ext]).save_file().await else {
                 return;
             };
             let path = file.path().to_path_buf();
@@ -5526,9 +5499,7 @@ impl CanvasView {
                     cx.notify();
                 });
             } else if label == remove {
-                me.update(cx, |cv, cx| {
-                    cv.run_command("node.set", serde_json::json!({ "ids": [id.0], "props": { "devStatus": "none" } }), cx)
-                });
+                me.update(cx, |cv, cx| cv.run_command("node.set", serde_json::json!({ "ids": [id.0], "props": { "devStatus": "none" } }), cx));
             }
         });
         self.open_menu(anchor, Some(w), rows, on_pick, cx);
@@ -7382,7 +7353,11 @@ impl Render for CanvasView {
             // 把整段文字做成内联 SVG 后绕自身中心转 -90°，等价于 egui 的
             // `TextShape::with_angle_and_anchor(-π/2, CENTER_CENTER)`。
             if let Some(angle) = l.angle {
-                let key = canvas::svg_text::text_key(&l.text, l.font.size, l.rect.width(), l.rect.height());
+                let weight = match l.font.weight {
+                    canvas::geom::FontWeight::Normal => 305,
+                    canvas::geom::FontWeight::SemiBold | canvas::geom::FontWeight::Bold => 330,
+                };
+                let key = canvas::svg_text::text_key_weighted(&l.text, l.font.size, l.rect.width(), l.rect.height(), weight);
                 let rotated = gpui::svg()
                     .absolute()
                     .left(px(l.rect.min.x))
@@ -7402,28 +7377,17 @@ impl Render for CanvasView {
                 // 用足够宽的透明 wrapper 按 rect 中心水平居中；pill 自身宽度由真实文字撑开，
                 // 不依赖估算宽，因此左右 padding 精确、文字紧贴外框。
                 let wrap_w = l.rect.width().max(1.0) + 64.0;
-                let pill = div()
-                    .absolute()
-                    .left(px(l.rect.center().x - wrap_w / 2.0))
-                    .top(px(l.rect.min.y))
-                    .w(px(wrap_w))
-                    .flex()
-                    .justify_center()
-                    .child(
-                div()
-                    .px(px(pad_x))
-                    .py(px(pad_y))
-                    .bg(canvas::painter::to_rgba(bg))
-                    .rounded(px(3.0))
-                    .child(
-                        div()
-                            .text_size(px(l.font.size))
-                            .text_color(canvas::painter::to_rgba(l.color))
-                            .line_height(px(l.font.size * 1.18))
-                            .whitespace_nowrap()
-                            .child(l.text.clone()),
-                    )
-                );
+                let pill =
+                    div().absolute().left(px(l.rect.center().x - wrap_w / 2.0)).top(px(l.rect.min.y)).w(px(wrap_w)).flex().justify_center().child(
+                        div().px(px(pad_x)).py(px(pad_y)).bg(canvas::painter::to_rgba(bg)).rounded(px(3.0)).child(
+                            div()
+                                .text_size(px(l.font.size))
+                                .text_color(canvas::painter::to_rgba(l.color))
+                                .line_height(px(l.font.size * 1.18))
+                                .whitespace_nowrap()
+                                .child(l.text.clone()),
+                        ),
+                    );
                 texts.push(pill.into_any_element());
                 continue;
             }
@@ -9570,7 +9534,10 @@ impl Render for CanvasView {
 
                 let cmds = self.fields.queue();
 
-                vec![panels::extra::render(kind, &self.app, &cmds, &self.extra_state, Some(cx.entity()), self.new_active.is_some(), cx, close).into_any_element()]
+                vec![
+                    panels::extra::render(kind, &self.app, &cmds, &self.extra_state, Some(cx.entity()), self.new_active.is_some(), cx, close)
+                        .into_any_element(),
+                ]
             }
 
             None => Vec::new(),
@@ -9821,9 +9788,10 @@ impl Render for CanvasView {
                     let mods = figcraft_doc::proto::KeyMods { ctrl: m.control, alt: m.alt, shift: m.shift, cmd: m.platform };
                     let pane = st.preview;
                     let root = st.overlays.last().map_or(st.current, |o| o.id);
-                    let uses = st.display().or(st.doc.as_deref()).is_some_and(|d| {
-                        present::wants_key(d, root, &key, mods, pane, st.link_notice.is_some(), st.comment_draft.is_some())
-                    });
+                    let uses = st
+                        .display()
+                        .or(st.doc.as_deref())
+                        .is_some_and(|d| present::wants_key(d, root, &key, mods, pane, st.link_notice.is_some(), st.comment_draft.is_some()));
                     if uses {
                         present::push_key(key, mods);
                         cx.stop_propagation();
@@ -10544,10 +10512,7 @@ pub fn run_with_launch(options: LaunchOptions) {
             .map(|display| {
                 // GPUI 0.2 exposes `bounds()` (not `visible_bounds()`).
                 let screen = display.bounds();
-                let cap = size(
-                    (screen.size.width - px(24.0)).max(px(800.0)),
-                    (screen.size.height - px(64.0)).max(px(480.0)),
-                );
+                let cap = size((screen.size.width - px(24.0)).max(px(800.0)), (screen.size.height - px(64.0)).max(px(480.0)));
                 Bounds::centered_at(screen.center(), desired.min(&cap))
             })
             .unwrap_or_else(|| Bounds::centered(None, desired, cx));
@@ -11007,7 +10972,13 @@ impl EntityInputHandler for CanvasView {
         let _ = textedit::preedit(&mut self.app.session, new_text, Some(cursor));
     }
 
-    fn bounds_for_range(&mut self, _: Range<usize>, element_bounds: Bounds<Pixels>, window: &mut Window, cx: &mut Context<Self>) -> Option<Bounds<Pixels>> {
+    fn bounds_for_range(
+        &mut self,
+        _: Range<usize>,
+        element_bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Bounds<Pixels>> {
         // 候选窗定位：给**光标矩形**，不是整个文字层。平台按这个矩形放候选窗，
         // 给图层框会把候选窗丢到文字左上角。
         //

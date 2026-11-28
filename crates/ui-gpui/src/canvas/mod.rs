@@ -6,6 +6,8 @@
 
 /// A27：画板自动连线（照 `ui-egui/src/canvas/board_connect.rs`）。
 pub mod board_connect;
+/// 白板页的底格（点阵 / 线 / 方格纸）：偏好 → `figcraft_render::Dots`。
+pub mod board_grid;
 pub mod builder;
 pub mod cursors;
 /// Dev Mode 画布层（注解气泡 + 已存测量线，egui `dev_mode::draw` / `saved_lines`）。
@@ -647,8 +649,15 @@ fn patch_for(
         (w, h) = size(scale);
     }
     let view = View { origin: (rect[0], rect[1]), scale, width: w, height: h };
-    let job = render_worker::patch_job(doc, page, view, bands, uid);
+    let mut job = render_worker::patch_job(doc, page, view, bands, uid);
     let renders = app.canvas.patch_renders.get_or_insert_with(Renders::default);
+    // A patch repaints a crop of the same scene: if that crop contains a material node, it must
+    // carry the material too. The old `patch_job` had `shade: None`, so dragging any sibling whose
+    // repaint rectangle touched a glass pane turned that rectangle into a bare fill / a hole.
+    #[cfg(feature = "gpu")]
+    {
+        job.shade = renders.shade_for(&job.doc, job.page);
+    }
     let done = renders.render_patch(&job)?;
     // `Retained::render` 会把 view 吸附到整设备像素，图上台的位置要用它返回的 view 与真实图尺寸。
     let v = &done.view;

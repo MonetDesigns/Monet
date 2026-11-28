@@ -10,7 +10,7 @@ use crate::canvas::geom::Color32;
 use crate::inline_input::InlineInput;
 use crate::widgets::menu::MenuRow;
 use crate::widgets::{
-    Icon, IconButton, PanelSection, SectionHeader, SectionHeaderVariant, Segmented, Slot, TextEdit, TextField, Dropdown, field_row, field_row_full,
+    Dropdown, Icon, IconButton, PanelSection, SectionHeader, SectionHeaderVariant, Segmented, Slot, TextEdit, TextField, field_row, field_row_full,
     field_row_h, pt, rgba, sublabel_row, sublabel_row2, tokens,
 };
 use figcraft_color::BlendMode;
@@ -1692,12 +1692,7 @@ impl RightFields {
 
     /// A text property's editor, kept across frames (the playground section is rebuilt each frame).
     pub(crate) fn playground_edit(&self, cx: &mut App, name: &str, value: &str) -> Entity<TextEdit> {
-        let edit = self
-            .playground_edits
-            .borrow_mut()
-            .entry(name.to_string())
-            .or_insert_with(|| cx.new(|cx| TextEdit::new(cx)))
-            .clone();
+        let edit = self.playground_edits.borrow_mut().entry(name.to_string()).or_insert_with(|| cx.new(|cx| TextEdit::new(cx))).clone();
         let values = self.playground_values.clone();
         let wake = self.cmds.clone();
         let key = name.to_string();
@@ -2725,7 +2720,11 @@ pub(crate) fn right_panel(
             // `widgets::segmented`): Rotate 90° / Flip H / Flip V — each a `object.*` command.
             let rot_cmds = f.cmds.clone();
             let rotate = {
-                let seg = Segmented::icons(&[(Icon::Rotate, tr("Rotate 90° right")), (Icon::FlipH, tr("Flip horizontal")), (Icon::FlipV, tr("Flip vertical"))]);
+                let seg = Segmented::icons(&[
+                    (Icon::Rotate, tr("Rotate 90° right")),
+                    (Icon::FlipH, tr("Flip horizontal")),
+                    (Icon::FlipV, tr("Flip vertical")),
+                ]);
                 if data.position_readonly {
                     seg
                 } else {
@@ -2770,17 +2769,14 @@ pub(crate) fn right_panel(
             if data.can_align {
                 let h_el = if data.position_readonly { h.build().opacity(0.45).into_any_element() } else { h.into_any_element() };
                 let v_el = if data.position_readonly { v.build().opacity(0.45).into_any_element() } else { v.into_any_element() };
-                pos_sec = pos_sec
-                    .child(sublabel_row(tr("Alignment")))
-                    .child(field_row(vec![h_el, v_el], Vec::<IconButton>::new()));
+                pos_sec = pos_sec.child(sublabel_row(tr("Alignment"))).child(field_row(vec![h_el, v_el], Vec::<IconButton>::new()));
             }
             // 参考实现把 Constraints 挂在 Rotation 之后，**没有展开按钮**：只要 `in_frame`
             // （frame 子层、父级无 auto layout 或自身 absolute）就画出来。旧实现用一颗
             // `LayoutGrid` 切换按钮先折叠，等于默认把约束藏起来，与本轮对齐目标相反。
-            pos_sec = pos_sec.child(sublabel_row(tr("Position"))).child(field_row(
-                vec![f.x.clone().into_any_element(), f.y.clone().into_any_element()],
-                Vec::<IconButton>::new(),
-            ));
+            pos_sec = pos_sec
+                .child(sublabel_row(tr("Position")))
+                .child(field_row(vec![f.x.clone().into_any_element(), f.y.clone().into_any_element()], Vec::<IconButton>::new()));
             // 顺序照参考实现 `position_fields`：align → X/Y → rotation → constraints。
             let rot_el = if data.position_readonly { rotate.build().opacity(0.45).into_any_element() } else { rotate.into_any_element() };
             let pos_sec = pos_sec
@@ -2835,15 +2831,7 @@ pub(crate) fn right_panel(
                 };
                 let body = pos_sec.child(sublabel_row(tr("Constraints"))).child(crate::widgets::field_row_h(
                     vec![
-                        div()
-                            .w_full()
-                            .flex()
-                            .flex_col()
-                            .h_full()
-                            .gap(pt(8.0))
-                            .child(h_dd)
-                            .child(v_dd)
-                            .into_any_element(),
+                        div().w_full().flex().flex_col().h_full().gap(pt(8.0)).child(h_dd).child(v_dd).into_any_element(),
                         right::sections::constraint_graphic(f, data),
                     ],
                     Vec::<IconButton>::new(),
@@ -2937,9 +2925,7 @@ pub(crate) fn star_section(f: &RightFields, all_stars: bool) -> PanelSection {
             .child(sublabel_row2(tr("Count"), tr("Ratio")))
             .child(field_row(vec![f.star_points.clone(), f.star_ratio.clone()], Vec::<IconButton>::new()));
     } else {
-        sec = sec
-            .child(sublabel_row(tr("Count")))
-            .child(field_row(vec![f.star_points.clone()], Vec::<IconButton>::new()));
+        sec = sec.child(sublabel_row(tr("Count"))).child(field_row(vec![f.star_points.clone()], Vec::<IconButton>::new()));
     }
     sec
 }
@@ -2990,8 +2976,8 @@ pub(crate) fn auto_layout_section(
         let dir_cmds = f.cmds.clone();
         // 参考实现 `layout_panel.rs::direction`：`if let Some(Some(l)) = &al { ui.add_enabled_ui(!in_instance, direction) }`
         // ——实例内部的层不能改主组件的排版方向，按钮仍在，但点了没反应（无 disabled API → 去回调 + 降透明度）。
-        let dir = Segmented::icons(&[(Icon::LayoutV, tr("Vertical")), (Icon::LayoutH, tr("Horizontal")), (Icon::LayoutGrid, tr("Grid"))])
-            .active(active);
+        let dir =
+            Segmented::icons(&[(Icon::LayoutV, tr("Vertical")), (Icon::LayoutH, tr("Horizontal")), (Icon::LayoutGrid, tr("Grid"))]).active(active);
         let dir = if sel.in_instance {
             dir
         } else {
@@ -3298,7 +3284,13 @@ pub(crate) fn auto_layout_section(
         let col_el = cell_field(right::sections::slot(n), cell.column.to_string(), false, col_map);
         let row_el = cell_field(right::sections::slot(n), cell.row.to_string(), false, row_map);
         let reset = if cell.anchored {
-            Some(right::sections::icon_cmd(Icon::Rotate, "node.set", json!({ "ids": &ids, "props": { "gridColumn": null, "gridRow": null } }), f, false))
+            Some(right::sections::icon_cmd(
+                Icon::Rotate,
+                "node.set",
+                json!({ "ids": &ids, "props": { "gridColumn": null, "gridRow": null } }),
+                f,
+                false,
+            ))
         } else {
             None
         };
@@ -3341,15 +3333,13 @@ pub(crate) fn auto_layout_section(
             (tr("Center").to_string(), "node.set", set(json!({ "gridAlignV": "center" }))),
             (tr("Bottom").to_string(), "node.set", set(json!({ "gridAlignV": "max" }))),
         ];
-        sec = sec
-            .child(sublabel_row2(tr("Horizontal align"), tr("Vertical align")))
-            .child(field_row(
-                vec![
-                    right::sections::pick_dropdown(f, h_cur, col, h_choices).into_any_element(),
-                    right::sections::pick_dropdown(f, v_cur, col, v_choices).into_any_element(),
-                ],
-                Vec::<IconButton>::new(),
-            ));
+        sec = sec.child(sublabel_row2(tr("Horizontal align"), tr("Vertical align"))).child(field_row(
+            vec![
+                right::sections::pick_dropdown(f, h_cur, col, h_choices).into_any_element(),
+                right::sections::pick_dropdown(f, v_cur, col, v_choices).into_any_element(),
+            ],
+            Vec::<IconButton>::new(),
+        ));
     }
     // ⑤ Clip content：egui `layout_section` 末尾 `if frames { row(24, checkbox) }` —— 它属于
     // **Layout 节**，不是 Appearance，也不是独立 "Frame" 节。

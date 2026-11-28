@@ -255,6 +255,7 @@ backdrop。模糊本身在 3.2 的链上。
 ```
 // @fx stage layer          // 缺省 = backdrop（现有语义）
 // @fx reach u.blur         // 外扩半径取哪个参数（文档 px），host 乘 dpr
+// @fx blur content u.blur  // host 先按该字段做可分离 box，shader 收到糊后的 content
 ```
 
 运行期需要 6 处改动：

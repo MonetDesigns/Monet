@@ -41,19 +41,14 @@ pub(crate) fn label_x(item: &Item, has_check: bool) -> f32 {
 /// 下拉行为的关闭判定：触发按钮相对开窗锚点移动超过 1pt 就关闭。
 /// 纯函数，便于单测；工具栏 flyout / 右键菜单没有 probe，不会走到这里。
 pub(crate) fn trigger_moved(open: gpui::Bounds<gpui::Pixels>, live: gpui::Bounds<gpui::Pixels>) -> bool {
-    (f32::from(live.origin.x) - f32::from(open.origin.x)).abs() > 1.0
-        || (f32::from(live.origin.y) - f32::from(open.origin.y)).abs() > 1.0
+    (f32::from(live.origin.x) - f32::from(open.origin.x)).abs() > 1.0 || (f32::from(live.origin.y) - f32::from(open.origin.y)).abs() > 1.0
 }
 
 /// 弹层落位：按钮触发的下拉右缘对齐按钮右缘（`BottomEnd`），
 /// 鼠标点触发的右键菜单仍从左往右下展开（`BottomStart`）。
 /// 判据：按钮有跨帧探针，或锚点本身是有真实宽度的矩形（≥ 16pt）；指针只有 0/1pt 宽。
 pub(crate) fn menu_align(has_probe: bool, anchor_width: f32) -> crate::widgets::RectAlign {
-    if has_probe || anchor_width >= 16.0 {
-        crate::widgets::RectAlign::BottomEnd
-    } else {
-        crate::widgets::RectAlign::BottomStart
-    }
+    if has_probe || anchor_width >= 16.0 { crate::widgets::RectAlign::BottomEnd } else { crate::widgets::RectAlign::BottomStart }
 }
 
 /// 一行的行为：共用骨架之外**唯一**允许分叉的地方。
@@ -99,10 +94,7 @@ pub(crate) fn card_behavior(
 }
 
 /// 下拉行为：点击执行 pick 后立即 dismiss；没有子菜单 / 键盘高亮。
-pub(crate) fn dropdown_behavior(
-    on_pick: OnPick,
-    dismiss: Rc<dyn Fn(&mut Window, &mut App)>,
-) -> RowBehavior {
+pub(crate) fn dropdown_behavior(on_pick: OnPick, dismiss: Rc<dyn Fn(&mut Window, &mut App)>) -> RowBehavior {
     RowBehavior {
         on_click: Rc::new(move |key: &str, _i: usize, _has_sub: bool, window: &mut Window, cx: &mut App| {
             on_pick(key, window, cx);
@@ -158,7 +150,7 @@ pub(crate) fn assemble(
             .text_size(pt(TEXT_PT))
             .when(item.disabled, |d| d.opacity(0.4));
 
-        if !item.disabled {
+        if !item.disabled && item.input.is_none() {
             row = row.hover(|s| s.bg(rgba(t.menu_hover))).cursor_pointer();
             let hover = behavior.on_hover.clone();
             row = row.on_mouse_move(move |_e, window, cx| hover(i, window, cx));
@@ -191,44 +183,27 @@ pub(crate) fn assemble(
             let icon_x = if has_check { SLOT } else { 0.0 };
             let color = crate::menu_metrics::ink();
             row = row.child(
-                div()
-                    .absolute()
-                    .left(pt(icon_x))
-                    .w(pt(SLOT))
-                    .top(pt(0.0))
-                    .h(pt(row_h))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(paint_in_slot(icon, 16.0, Some(color))),
+                div().absolute().left(pt(icon_x)).w(pt(SLOT)).top(pt(0.0)).h(pt(row_h)).flex().items_center().justify_center().child(paint_in_slot(
+                    icon,
+                    16.0,
+                    Some(color),
+                )),
             );
         }
 
-        row = row.child(
-            div()
-                .flex_1()
-                .min_w(pt(0.0))
-                .overflow_hidden()
-                .whitespace_nowrap()
-                .child(item.label.clone()),
-        );
+        if let Some(field) = &item.input {
+            // 输入行：整行内容就是那个字段。行本身不再画标签 / 勾选 / 图标。
+            row = row.pl(pt(0.0)).pr(pt(0.0)).child(div().flex_1().min_w(pt(0.0)).child(field.clone()));
+            out.push(row.into_any_element());
+            y += row_h;
+            continue;
+        }
+        row = row.child(div().flex_1().min_w(pt(0.0)).overflow_hidden().whitespace_nowrap().child(item.label.clone()));
         if has_sub {
-            row = row.child(
-                div()
-                    .ml(pt(MENU_TRAIL_GAP))
-                    .whitespace_nowrap()
-                    .text_color(crate::menu_metrics::trail_ink())
-                    .child("▸"),
-            );
+            row = row.child(div().ml(pt(MENU_TRAIL_GAP)).whitespace_nowrap().text_color(crate::menu_metrics::trail_ink()).child("▸"));
         } else if let Some(trail) = &item.trail {
             if !trail.is_empty() {
-                row = row.child(
-                    div()
-                        .ml(pt(MENU_TRAIL_GAP))
-                        .whitespace_nowrap()
-                        .text_color(crate::menu_metrics::trail_ink())
-                        .child(trail.clone()),
-                );
+                row = row.child(div().ml(pt(MENU_TRAIL_GAP)).whitespace_nowrap().text_color(crate::menu_metrics::trail_ink()).child(trail.clone()));
             }
         }
 

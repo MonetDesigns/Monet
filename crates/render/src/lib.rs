@@ -56,6 +56,23 @@ pub fn has_export_material_hook() -> bool {
     EXPORT_MATERIAL_HOOK.get().is_some()
 }
 
+/// The **unified** material provider: one board per (document, page) with a synchronous resolver
+/// installed. Every render entry point (canvas, preview, patch, raster export, animated frames,
+/// thumbnails, present) uses the same board, so a material is produced while its layer is drawn.
+pub type MaterialBoardHook = dyn Fn(&Document, NodeId) -> Option<std::sync::Arc<shade::ShadeBoard>> + Send + Sync;
+
+static MATERIAL_BOARD_HOOK: std::sync::OnceLock<std::sync::Arc<MaterialBoardHook>> = std::sync::OnceLock::new();
+
+/// Install the unified material board provider (once; later calls are ignored).
+pub fn set_material_board_hook(hook: std::sync::Arc<MaterialBoardHook>) {
+    let _ = MATERIAL_BOARD_HOOK.set(hook);
+}
+
+/// The installed board for this page, or `None` without a GPU backend / when the page has no material.
+pub fn material_board(doc: &Document, page: NodeId) -> Option<std::sync::Arc<shade::ShadeBoard>> {
+    MATERIAL_BOARD_HOOK.get().and_then(|h| h(doc, page))
+}
+
 /// The interface's GPU renderer for **animated export frames** (the desktop app installs it with
 /// the `gpu` feature). It draws a frame whose whole subtree the GPU scene can express faithfully;
 /// `None` means "not expressible", and the export uses the CPU raster for the whole animation.
@@ -513,6 +530,7 @@ fn render_one(doc: &Document, page: NodeId, view: &View, opts: &Options) -> Opti
         shade: opts.shade.as_deref(),
         rows: opts.rows,
         page_xf: view.transform(),
+        bg_opaque: bg.is_some_and(|c| c.a >= 1.0),
     };
     let xf = view.transform();
     let Some(p) = doc.node(page) else { return Some(pix) };
@@ -564,6 +582,7 @@ fn nodes_into(
         shade,
         rows: None,
         page_xf: view.transform(),
+        bg_opaque: false,
     };
     // 0, but inside an exporter's [`draw::at_layer_depth`] its depth: one cap for both (#1082).
     let depth = draw::layer_depth();
@@ -632,7 +651,8 @@ pub fn render_node(doc: &Document, id: NodeId, scale: f64) -> Option<Pixmap> {
 
 /// [`render_node`] `time` seconds into animated GIFs (the presenter plays them).
 pub fn render_node_at(doc: &Document, id: NodeId, scale: f64, time: f64) -> Option<Pixmap> {
-    area_at(doc, &[id], None, export_bounds(doc, id)?, scale, time, None)
+    let board = doc.page_of(id).and_then(|p| material_board(doc, p));
+    area_at(doc, &[id], None, export_bounds(doc, id)?, scale, time, board.as_deref())
 }
 
 /// Rasterise `ids` (bottom to top) over page area `b` at `scale` (export): the image starts at the
@@ -646,12 +666,37 @@ pub fn render_area(doc: &Document, ids: &[NodeId], b: Rect, scale: f64) -> Optio
 /// does on the canvas, so a glass card exports as glass instead of its flat fill). Without a hook,
 /// or when the GPU path declines, this is exactly [`render_area`] on the CPU.
 pub fn render_area_for_export(doc: &Document, ids: &[NodeId], b: Rect, scale: f64) -> Option<Pixmap> {
+    // Unified path: a board whose resolver produces materials during this one render.
+    if let Some(page) = ids.iter().find_map(|id| doc.page_of(*id).or_else(|| doc.pages.contains(id).then_some(*id)))
+        && let Some(board) = material_board(doc, page)
+        && let Some(pix) = area_at(doc, ids, None, b, scale, 0.0, Some(board.as_ref()))
+    {
+        return Some(pix);
+    }
     if let Some(hook) = EXPORT_MATERIAL_HOOK.get()
         && let Some(pix) = hook(doc, ids, b, scale)
     {
         return Some(pix);
     }
     render_area(doc, ids, b, scale)
+}
+
+/// [`render_view`] for exports/thumbnails, with the unified material board installed.
+pub fn render_view_for_export(doc: &Document, page: NodeId, view: &View, opts: &Options) -> Option<Pixmap> {
+    if let Some(board) = material_board(doc, page) {
+        let opts = Options { shade: Some(board), ..opts.clone() };
+        return render_view(doc, page, view, &opts);
+    }
+    render_view(doc, page, view, opts)
+}
+
+/// [`render_nodes_into`] for animated-export frames, with the unified material board installed.
+pub fn render_nodes_into_for_export(doc: &Document, ids: &[NodeId], view: &View, time: f64) -> Option<Pixmap> {
+    let mut pix = new_pixmap(view.width, view.height)?;
+    let page = ids.iter().find_map(|id| doc.page_of(*id).or_else(|| doc.pages.contains(id).then_some(*id)));
+    let board = page.and_then(|p| material_board(doc, p));
+    nodes_into(doc, ids, view, &mut pix, time, None, board.as_deref());
+    Some(pix)
 }
 
 /// [`render_area`] with a [`shade::ShadeBoard`] the caller feeds: a miss renders the layer's backdrop

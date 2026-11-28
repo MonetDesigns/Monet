@@ -14,7 +14,7 @@ pub fn thumbnail(doc: &Document) -> Option<Vec<u8>> {
             height: (b.height() * scale).ceil().max(1.0) as u32,
         };
         let opts = figcraft_render::Options { solo, ..Default::default() };
-        let pix = figcraft_render::render_view(doc, page, &view, &opts)?;
+        let pix = figcraft_render::render_view_for_export(doc, page, &view, &opts)?;
         figcraft_render::encode_png(&pix).ok()
     };
     doc.ids()

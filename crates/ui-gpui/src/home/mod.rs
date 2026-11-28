@@ -371,14 +371,7 @@ fn reveal_path(path: &str) {
 
 /// EGUI `home_recents::interact`: a recent card/row's context menu. Uses the same `MenuRow` +
 /// root `open_menu` control as every other panel menu.
-fn open_recent_menu(
-    root: Entity<crate::CanvasView>,
-    cmds: Cmds,
-    dismiss: Rc<RefCell<bool>>,
-    path: String,
-    at: gpui::Point<Pixels>,
-    cx: &mut App,
-) {
+fn open_recent_menu(root: Entity<crate::CanvasView>, cmds: Cmds, dismiss: Rc<RefCell<bool>>, path: String, at: gpui::Point<Pixels>, cx: &mut App) {
     let open = tr("Open");
     let remove = tr("Remove from recents");
     let reveal = if cfg!(windows) {
@@ -398,19 +391,13 @@ fn open_recent_menu(
     let cmds_pick = cmds.clone();
     let on_pick = Rc::new(move |label: &str, _: &mut Window, _: &mut App| {
         if label == open {
-            cmds_pick.push(Cmd {
-                id: "file.openRecent",
-                params: Some(json!({ "path": path.clone() })),
-            });
+            cmds_pick.push(Cmd { id: "file.openRecent", params: Some(json!({ "path": path.clone() })) });
             *dismiss.borrow_mut() = true;
             cmds_pick.wake();
         } else if label == reveal {
             reveal_path(&path);
         } else if label == remove {
-            cmds_pick.push(Cmd {
-                id: "file.openRecent",
-                params: Some(json!({ "remove": path.clone() })),
-            });
+            cmds_pick.push(Cmd { id: "file.openRecent", params: Some(json!({ "remove": path.clone() })) });
             cmds_pick.wake();
         }
     });

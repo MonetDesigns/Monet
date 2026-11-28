@@ -18,8 +18,8 @@
 //! shortcut flush right 8). A row may open a submenu; the open one is supplied by the caller (it
 //! is view state, so it survives the frame).
 
-pub(crate) use crate::widgets::Width;
 use crate::menu_rows;
+pub(crate) use crate::widgets::Width;
 use crate::widgets::icon::Icon;
 use crate::widgets::{MENU_TRAIL_GAP, pt, rgba, tokens};
 use gpui::prelude::*;
@@ -54,6 +54,10 @@ pub struct Item {
     pub trail: Option<SharedString>,
     pub separator_before: bool,
     pub sub: Vec<Item>,
+    /// 把这一行换成**一个输入框**（不是标签）。缩放下拉的「直接输入百分比」用它：
+    /// 行的一切外观（高度、圆角、左右留白）仍是菜单行，只有内容由调用方给的
+    /// `TextField` 填满。输入框自己处理点击 / 回车，所以这种行不接 hover 与 pick。
+    pub input: Option<gpui::Entity<crate::widgets::TextField>>,
 }
 
 impl Item {
@@ -70,6 +74,7 @@ impl Item {
             trail: None,
             separator_before: false,
             sub: Vec::new(),
+            input: None,
         }
     }
 
@@ -121,6 +126,11 @@ impl Item {
     }
     pub fn sub(mut self, items: Vec<Item>) -> Self {
         self.sub = items;
+        self
+    }
+    /// 让这一行承载一个输入框（见 [`Item::input`]）。标签仍留空字符串，别写占位文案。
+    pub fn input(mut self, field: gpui::Entity<crate::widgets::TextField>) -> Self {
+        self.input = Some(field);
         self
     }
 }

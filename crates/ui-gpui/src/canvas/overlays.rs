@@ -14,8 +14,8 @@ use super::outline::{crisp_line, draw_outline, node_quad, outline_colour, quad, 
 use super::painter::{Label, Painter, text_size};
 use super::rulers::fmt;
 use crate::app::CanvasApp;
+use crate::theme::{COMPONENT, SLOT, Tokens, doc_c32, stroke as s};
 use crate::widgets::input::caret;
-use crate::theme::{COMPONENT, SLOT, Tokens, stroke as s};
 
 /// 三次贝塞尔在 `t` 处的点（GPUI 画笔没有贝塞尔图元，段要采样成折线）。
 fn cubic_at(p0: Pos2, p1: Pos2, p2: Pos2, p3: Pos2, t: f32) -> Pos2 {
@@ -112,24 +112,13 @@ pub(super) fn overlays(
     let view = ds.view.clone();
     let accent = accent(app);
 
-    // ── 高缩放时的像素网格（400% 起）。
-    if view.pixel_grid_shown() {
-        let r = app.canvas.rect;
-        let p0 = app.to_page(r.min);
-        let p1 = app.to_page(r.max);
-        let col = Color32::from_black_alpha(18);
-        let mut x = p0.x.floor();
-        while x <= p1.x {
-            let sx = app.to_screen(x, 0.0).x;
-            crisp_line(painter, pos2(sx, r.min.y), pos2(sx, r.max.y), 1.0, app.ppp, col);
-            x += 1.0;
-        }
-        let mut y = p0.y.floor();
-        while y <= p1.y {
-            let sy = app.to_screen(0.0, y).y;
-            crisp_line(painter, pos2(r.min.x, sy), pos2(r.max.x, sy), 1.0, app.ppp, col);
-            y += 1.0;
-        }
+    // ── 像素网格（508% 起，含 508% 本身）。线色按**它盖住的那块像素**算（`Color::ink`：亮底压暗 0.05 亮度、
+    //    暗底往白提到 `0.8j+0.15`），所以不烘进底图，而是画成矢量线、按页面上纯色填充的边界
+    //    分段取色。烘进底图会让线跟着上一帧贴图一起被缩放重采样——缩放时忽粗忽细、像在加载；
+    //    矢量线永远是 1 设备像素。
+    //    画板（FigJam 式白板）没有像素网格：那里只有底下的圆点点阵，放大不该冒出线。
+    if view.pixel_grid_shown() && !figcraft_engine::board::is_board(&doc) {
+        pixel_grid(app, painter, &doc, page);
     }
 
     // ── 布局网格与帧标签（顶层帧，含 section 内的帧），按 z 序。
@@ -184,11 +173,8 @@ pub(super) fn overlays(
         }
         // Same gate as the egui reference: instances keep their name label too, so a click on
         // it selects the instance and a double click renames it.
-        let labelled = focus.is_none()
-            && (n.kind.is_frame_like() || matches!(n.kind, NodeKind::Section { .. }))
-            && !n.is_board_atom();
-        if labelled && let Some(q) = super::frame_labels::draw(app, painter, t, &doc, *c, sel.contains(c), renaming == Some(*c))
-        {
+        let labelled = focus.is_none() && (n.kind.is_frame_like() || matches!(n.kind, NodeKind::Section { .. })) && !n.is_board_atom();
+        if labelled && let Some(q) = super::frame_labels::draw(app, painter, t, &doc, *c, sel.contains(c), renaming == Some(*c)) {
             labels.push((*c, q.map(|p| app.to_page(p))));
         }
     }
@@ -196,9 +182,8 @@ pub(super) fn overlays(
     // ── Hover 轮廓（测量时改为用红色标出被量的框）。
     // 名称行右侧的开发状态按钮也算「悬停在这个框上」：和悬停名称文字得到同一条 hover 轮廓。
     // Focus view draws no frame labels, so its status slots are not hover targets either.
-    let hover = ds
-        .hover
-        .or_else(|| app.pointer.filter(|_| ds.focused().is_none()).and_then(|p| super::frame_labels::status_slot_owner(app, &doc, page, p)));
+    let hover =
+        ds.hover.or_else(|| app.pointer.filter(|_| ds.focused().is_none()).and_then(|p| super::frame_labels::status_slot_owner(app, &doc, page, p)));
     if let Some(h) = hover
         && !sel.contains(&h)
         && matches!(app.session.tool.tool, ToolId::Move | ToolId::Scale)
@@ -289,21 +274,22 @@ pub(super) fn overlays(
             });
             eprintln!("[selection] sel={:?} box_page={:?} box_screen={:?} shift={:?} image={:?}", sel, sb, sc, super::content_shift(app), img);
             let handles = app.session.shape_handles();
-            eprintln!(
-                "[shape] {:?}",
-                handles.iter().map(|(h, [x, y])| (format!("{h:?}"), [*x, *y], app.to_presented(*x, *y))).collect::<Vec<_>>()
-            );
+            eprintln!("[shape] {:?}", handles.iter().map(|(h, [x, y])| (format!("{h:?}"), [*x, *y], app.to_presented(*x, *y))).collect::<Vec<_>>());
             for id in &sel {
                 debug_tree(app, &doc, *id, 0);
             }
         }
         let slot_sel = sel.iter().any(|i| outline_colour(&doc, *i, accent) == SLOT);
         let comp_sel = sel.iter().any(|i| outline_colour(&doc, *i, accent) == COMPONENT);
-        let col = if slot_sel { SLOT } else if comp_sel { COMPONENT } else { accent };
-        for id in &sel {
-            // 选中描边统一走 draw_outline（源码选中色、1px）。
-            draw_outline(app, painter, &doc, *id, stroke(col, 1.0));
-        }
+        let col = if slot_sel {
+            SLOT
+        } else if comp_sel {
+            COMPONENT
+        } else {
+            accent
+        };
+        // 选中：只画一圈四边平直的变换框（尺寸框 + 手柄），不再沿每个物体的真实几何包边。
+        // 多选和单选一样有这条框：它就是选中框，四条边永远平直（2026-11-27，用户要求）。
         if app.session.tool.tool != ToolId::ShapeBuilder
             && let Some(b) = selection_box(&doc, &sel)
             && let Some((_, w, h)) = selection_frame(&doc, &sel)
@@ -326,9 +312,9 @@ pub(super) fn overlays(
             };
             // 组件变体集：尺寸标签改显示变体数（如 "4 Variants"），不显示宽×高。
             let set_variants = if sel.len() == 1 {
-                doc.node(sel[0]).filter(|n| matches!(n.kind, NodeKind::ComponentSet { .. })).map(|n| {
-                    n.children.iter().filter(|c| doc.node(**c).is_some_and(|cn| matches!(cn.kind, NodeKind::Component { .. }))).count()
-                })
+                doc.node(sel[0])
+                    .filter(|n| matches!(n.kind, NodeKind::ComponentSet { .. }))
+                    .map(|n| n.children.iter().filter(|c| doc.node(**c).is_some_and(|cn| matches!(cn.kind, NodeKind::Component { .. }))).count())
             } else {
                 None
             };
@@ -347,16 +333,20 @@ pub(super) fn overlays(
             let tiny = figcraft_engine::tools::box_sides_px(&b, zoom).1 < figcraft_engine::tools::SMALL_BOX_PX;
             let measuring = app.session.tool.overlay.measure_box.is_some();
             let cropping = app.crop.is_some();
-            let handles =
-                if cropping || measuring || app.session.tool.dev_mode || connector.is_some() || sel.iter().any(|i| figcraft_engine::tools::locked_in(&doc, *i)) {
-                    0
-                } else if is_line {
-                    2
-                } else if tiny {
-                    0
-                } else {
-                    4
-                };
+            let handles = if cropping
+                || measuring
+                || app.session.tool.dev_mode
+                || connector.is_some()
+                || sel.iter().any(|i| figcraft_engine::tools::locked_in(&doc, *i))
+            {
+                0
+            } else if is_line {
+                2
+            } else if tiny {
+                0
+            } else {
+                4
+            };
             // 组件变体 / 组件变体集才挂「+」：独立组件没有，普通图层没有。
             let add_variant = sel.len() == 1
                 && sel.first().and_then(|i| doc.node(*i)).is_some_and(|n| {
@@ -367,7 +357,7 @@ pub(super) fn overlays(
                 painter,
                 b.map(|p| app.to_presented(p.x, p.y)),
                 col,
-                sel.len() > 1,
+                true,
                 handles,
                 (!measuring && connector.is_none()).then_some(label),
                 add_variant,
@@ -583,10 +573,11 @@ fn crop_marks(app: &CanvasApp, painter: &mut Painter, doc: &Document, t: &Tokens
     let crop = img.effective_crop(f64::from(data.width), f64::from(data.height), n.width, n.height);
     let (x0, y0, x1, y1) = ImagePaint::crop_rect(crop);
     let world = doc.world_transform(id);
-    let corners = [(x0 * n.width, y0 * n.height), (x1 * n.width, y0 * n.height), (x1 * n.width, y1 * n.height), (x0 * n.width, y1 * n.height)].map(|(x, y)| {
-        let p = world * Point::new(x, y);
-        app.to_screen(p.x, p.y)
-    });
+    let corners =
+        [(x0 * n.width, y0 * n.height), (x1 * n.width, y0 * n.height), (x1 * n.width, y1 * n.height), (x0 * n.width, y1 * n.height)].map(|(x, y)| {
+            let p = world * Point::new(x, y);
+            app.to_screen(p.x, p.y)
+        });
     let accent = accent(app);
     quad(painter, corners, stroke(Color32::WHITE, 2.0));
     quad(painter, corners, stroke(accent, 1.0));
@@ -641,14 +632,10 @@ fn debug_tree(app: &CanvasApp, doc: &Document, id: NodeId, depth: usize) {
     let n = doc.node(id);
     let wb = doc.world_bounds(id);
     let q = node_quad(app, doc, id);
-    eprintln!(
-        "[tree] depth={depth} id={id:?} name={:?} kind={:?} page={:?} screen={:?}",
-        n.map(|n| n.name.as_str()),
-        n.map(|n| &n.kind),
-        wb,
-        q
-    );
-    if depth < 2 && let Some(n) = n {
+    eprintln!("[tree] depth={depth} id={id:?} name={:?} kind={:?} page={:?} screen={:?}", n.map(|n| n.name.as_str()), n.map(|n| &n.kind), wb, q);
+    if depth < 2
+        && let Some(n) = n
+    {
         for c in n.children.iter() {
             debug_tree(app, doc, *c, depth + 1);
         }
@@ -697,6 +684,13 @@ pub fn add_variant_rect(cx: f32, y1: f32) -> Rect {
 
 /// 变换框（屏幕四角 tl、tr、br、bl）：`outline` 时画轮廓，前 `handles` 个角手柄，
 /// 显示尺寸时在下方画尺寸 `label`（返回尺寸 pill 的矩形）。
+/// 单位方向；零长度退化为 x 轴，避免旋转框手柄出现 NaN。
+fn unit_edge(a: Pos2, b: Pos2) -> Vec2 {
+    let d = b - a;
+    let len = d.length();
+    if len.is_finite() && len > 1e-4 { d / len } else { vec2(1.0, 0.0) }
+}
+
 fn transform_box(
     app: &CanvasApp,
     painter: &mut Painter,
@@ -717,23 +711,41 @@ fn transform_box(
             quad(painter, q, stroke(col, 1.0));
         }
     }
+    let turned_box = super::outline::axis_aligned(q).is_none();
     for c in q.iter().take(handles) {
-        let r = Rect::from_center_size(*c, vec2(8.0, 8.0));
-        painter.rect_filled(r, CornerRadius::same(1), Color32::WHITE);
-        painter.rect_stroke(r, CornerRadius::same(1), stroke(col, 1.0), StrokeKind::Inside);
+        if turned_box && handles == 4 {
+            // 旋转框的手柄也沿框的两条边转，不能还是一枚屏幕轴对齐的小方块。
+            let ex = unit_edge(q[0], q[1]);
+            let ey = unit_edge(q[0], q[3]);
+            let hc = [*c - ex * 4.0 - ey * 4.0, *c + ex * 4.0 - ey * 4.0, *c + ex * 4.0 + ey * 4.0, *c - ex * 4.0 + ey * 4.0];
+            painter.add_shape(hc.to_vec(), true, Color32::WHITE, stroke(col, 1.0));
+        } else {
+            let r = Rect::from_center_size(*c, vec2(8.0, 8.0));
+            painter.rect_filled(r, CornerRadius::same(1), Color32::WHITE);
+            painter.rect_stroke(r, CornerRadius::same(1), stroke(col, 1.0), StrokeKind::Inside);
+        }
     }
     if let Some(label) = label.filter(|_| app.session.prefs.show_dimensions) {
-        let bottom = q.iter().map(|p| p.y).fold(f32::MIN, f32::max);
-        let cx = q.iter().map(|p| p.x).sum::<f32>() / 4.0;
         // Keep the requested layer-colour background, but choose a legible foreground: a light
         // Yellow (#FFCC00) with white text was ~1.5:1. Dark ink on light fills, white on dark.
         let fg = contrasting_ink(col);
-        // 尺寸框铁律：文字框顶边距对象下边缘 9；背景块距文字上下各 2、左右各 6，圆角 3。
-        // （`pill_with_bg` 的 `+ vec2(pad_x*2, 4)` 与 `galley` 的 `+2` 纵向内缩即上下 2。）
-        let pill = pill_with_bg(painter, pos2(cx, bottom + 7.0), Align2::CENTER_TOP, label, col, fg, col, 6.0);
+        let axis_aligned_box = super::outline::axis_aligned(q).is_some();
+        let pill = if axis_aligned_box {
+            let bottom = q.iter().map(|p| p.y).fold(f32::MIN, f32::max);
+            let cx = q.iter().map(|p| p.x).sum::<f32>() / 4.0;
+            // 尺寸框铁律：文字框顶边距对象下边缘 9；背景块距文字上下各 2、左右各 6，圆角 3。
+            // （`pill_with_bg` 的 `+ vec2(pad_x*2, 4)` 与 `galley` 的 `+2` 纵向内缩即上下 2。）
+            pill_with_bg(painter, pos2(cx, bottom + 7.0), Align2::CENTER_TOP, label, col, fg, col, 6.0)
+        } else {
+            // 旋转的框：尺寸框锚在下边中点外侧 7，并绕该点随下边一起转（文字与底色同转）。
+            rotated_size_pill(painter, q, label, col, fg)
+        };
         // 组件变体 / 组件变体集的「+」：紧贴在尺寸框下方（同一居中 x）。画在选中框这条路径上，
         // 因为变体在 ComponentSet 内部、不会走顶层帧标签 frame_labels::draw 那条路径。
-        if add_variant {
+        // 旋转的框不挂「+」：它的命中区仍是轴对齐矩形，转过去会错位。
+        if add_variant && axis_aligned_box {
+            let bottom = q.iter().map(|p| p.y).fold(f32::MIN, f32::max);
+            let cx = q.iter().map(|p| p.x).sum::<f32>() / 4.0;
             super::frame_labels::add_variant_button(painter, add_variant_rect(cx, bottom));
         }
         return Some(pill);
@@ -777,6 +789,72 @@ fn pill_with_bg(painter: &mut Painter, at: Pos2, align: Align2, text: String, _c
     r
 }
 
+/// 旋转框最靠下的边：按**外法线朝下**判断，不能用中点 y（旋转 30° 时竖边中点可能比下边中点更低）。
+fn bottom_edge(q: [Pos2; 4]) -> (Pos2, Pos2) {
+    let center = pos2(q.iter().map(|p| p.x).sum::<f32>() / 4.0, q.iter().map(|p| p.y).sum::<f32>() / 4.0);
+    let mut best = (q[3], q[2], f32::MIN);
+    for (a, b) in [(q[0], q[1]), (q[1], q[2]), (q[2], q[3]), (q[3], q[0])] {
+        let d = b - a;
+        let len = d.length();
+        if !(len.is_finite() && len > 1e-4) {
+            continue;
+        }
+        let d = d / len;
+        let mid = pos2((a.x + b.x) * 0.5, (a.y + b.y) * 0.5);
+        let mut n = vec2(-d.y, d.x);
+        if (mid - center).dot(n) < 0.0 {
+            n = -n;
+        }
+        if n.y > best.2 {
+            best = (a, b, n.y);
+        }
+    }
+    (best.0, best.1)
+}
+
+/// 旋转后的尺寸框：锚在框的下边中点向外 7，文字和底色都随下边角度一起转。
+/// 返回它的轴对齐外接矩形（测量标签避让用）。
+fn rotated_size_pill(painter: &mut Painter, q: [Pos2; 4], text: String, bg: Color32, fg: Color32) -> Rect {
+    let mut bottom = bottom_edge(q);
+    // 读数从左到右，文字才正着写；换算出的角度永远在 (-90°, 90°]。
+    if bottom.0.x > bottom.1.x {
+        bottom = (bottom.1, bottom.0);
+    }
+    let (bl, br) = bottom;
+    let delta = br - bl;
+    let len = delta.length();
+    let d = if len.is_finite() && len > 1e-4 { delta / len } else { vec2(1.0, 0.0) };
+    // 朝框外（屏幕下方）的法线；本地 +y 向下。
+    let n = vec2(-d.y, d.x);
+    let angle = d.y.atan2(d.x);
+    let mid = pos2((bl.x + br.x) * 0.5, (bl.y + br.y) * 0.5);
+    // 尺寸框铁律同水平版：文字顶边距对象下边缘 7，左右各 6、上下各 2，圆角 3。
+    let glyph = text_size(&text, semibold(11.0));
+    let size = glyph + vec2(12.0, 4.0);
+    // 尺寸框**以底边中点为中心**，左右沿边各伸一半；只把顶边压到中点外 7，
+    // 不能再沿 `d` 平移半个宽度，否则整个框会跑到右下角（用户 2026-11-27）。
+    let center = mid + n * (7.0 + size.y * 0.5);
+    painter.rounded_quad_filled(center, d, n, size, 3.0, bg);
+    painter.labels.push(Label {
+        rect: Rect::from_center_size(center, size),
+        text,
+        font: semibold(11.0),
+        color: fg,
+        align: Align2::CENTER_CENTER,
+        angle: Some(angle),
+        pill: None,
+    });
+    let corners = [
+        center - d * (size.x * 0.5) - n * (size.y * 0.5),
+        center + d * (size.x * 0.5) - n * (size.y * 0.5),
+        center + d * (size.x * 0.5) + n * (size.y * 0.5),
+        center - d * (size.x * 0.5) + n * (size.y * 0.5),
+    ];
+    let (x0, y0) = (corners.iter().map(|p| p.x).fold(f32::MAX, f32::min), corners.iter().map(|p| p.y).fold(f32::MAX, f32::min));
+    let (x1, y1) = (corners.iter().map(|p| p.x).fold(f32::MIN, f32::max), corners.iter().map(|p| p.y).fold(f32::MIN, f32::max));
+    Rect::from_min_max(pos2(x0, y0), pos2(x1, y1))
+}
+
 /// WCAG relative-luminance split: near-black ink on light fills, white on dark fills.
 fn contrasting_ink(bg: Color32) -> Color32 {
     let [r, g, b, _] = bg.to_array();
@@ -809,8 +887,8 @@ mod size_pill_tests {
     #[test]
     fn size_pill_obeys_the_7_2_6_3_rule() {
         let (r, glyph) = super::pill_rect("110 × 116", pos2(0.0, 0.0), Align2::LEFT_TOP, 6.0);
-        assert_eq!(r.height(), 17.0);            // 13 字形 + 2 + 2（设计稿 Frame 232）
-        assert_eq!(r.width(), glyph.x + 12.0);   // 左右各 6
+        assert_eq!(r.height(), 17.0); // 13 字形 + 2 + 2（设计稿 Frame 232）
+        assert_eq!(r.width(), glyph.x + 12.0); // 左右各 6
     }
 
     /// 尺寸框宽度 = 文字实测宽 + 左右各 6，高度 = 文字高 + 上下各 2；位数变化框跟着变。
@@ -875,6 +953,144 @@ mod text_edit_colour_tests {
 }
 
 #[cfg(test)]
+mod selection_shape_tests {
+    use super::*;
+    use crate::app::CanvasApp;
+    use crate::canvas::painter::Op;
+    use figcraft_doc::{Corners, Document, NodeKind, Sizing};
+    use serde_json::json;
+
+    fn app_with(kind: NodeKind, rotation: f64) -> (CanvasApp, NodeId) {
+        let mut doc = Document::new("selection-shape");
+        let page = doc.first_page().expect("page");
+        let id = doc.create(page, kind, "Layer", 100.0, 100.0, 200.0, 100.0).expect("layer");
+        let mut app = CanvasApp::new(doc);
+        app.canvas.rect = Rect::from_min_max(pos2(0.0, 0.0), pos2(900.0, 700.0));
+        if rotation != 0.0 {
+            app.session.execute("node.set", &json!({"id": id, "props": {"rotation": rotation}})).expect("rotate");
+        }
+        let _ = app.session.set_selection(vec![id]);
+        (app, id)
+    }
+
+    fn paint(app: &CanvasApp) -> Painter {
+        let t = Tokens::dark();
+        let doc = app.session.ds().expect("session").doc.clone();
+        let mut painter = Painter::new(app.canvas.rect);
+        let _ = overlays(app, &mut painter, &t, doc, None);
+        painter
+    }
+
+    /// A rounded layer gets **one** straight box: no outline traces its corners or geometry.
+    #[test]
+    fn a_rounded_layer_gets_one_straight_box() {
+        let (mut app, id) = app_with(NodeKind::Rectangle, 0.0);
+        app.session.ds_mut().expect("session").doc_mut().node_mut(id).expect("layer").corners = Corners { radii: [30.0; 4], ..Default::default() };
+        let painter = paint(&app);
+        let rings: Vec<_> = painter
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                Op::Ring { width, .. } if (*width - 1.0).abs() < 1e-6 => Some(()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(rings.len(), 1, "the selection box is one straight ring");
+        assert!(!painter.ops.iter().any(|op| matches!(op, Op::Poly { .. })), "no shape-hugging outline");
+    }
+
+    /// The size label's Fill term is the short word, never the raw disambiguated key.
+    #[test]
+    fn the_size_label_names_fill_short() {
+        let (mut app, id) = app_with(NodeKind::Rectangle, 0.0);
+        app.session.ds_mut().expect("session").doc_mut().node_mut(id).expect("layer").child_layout.sizing_h = Sizing::Fill;
+        let painter = paint(&app);
+        let size = painter.labels.iter().find(|l| l.pill.is_some()).expect("size label");
+        assert!(size.text.contains("Fill") || size.text.contains("填充"), "{}", size.text);
+        assert!(!size.text.contains('|'), "the raw key leaked: {}", size.text);
+    }
+
+    /// Two layers that share a rotation still get a page-square multi box.
+    #[test]
+    fn a_multi_selection_never_turns() {
+        let (mut app, first) = app_with(NodeKind::Rectangle, 30.0);
+        let page = app.session.ds().expect("session").doc.first_page().expect("page");
+        let second =
+            app.session.ds_mut().expect("session").doc_mut().create(page, NodeKind::Rectangle, "Second", 260.0, 260.0, 120.0, 80.0).expect("layer");
+        app.session.execute("node.set", &json!({"id": second, "props": {"rotation": 30}})).expect("rotate");
+        let _ = app.session.set_selection(vec![first, second]);
+        let painter = paint(&app);
+        let rings: Vec<_> = painter
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                Op::Ring { width, .. } if (*width - 1.0).abs() < 1e-6 => Some(()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(rings.len(), 1, "one page-square multi box");
+        assert!(!painter.ops.iter().any(|op| matches!(op, Op::Poly { .. })), "a turned box would be a quad");
+    }
+
+    /// A rotated layer turns its size label with the bottom edge: anchored below, rotated by 30°.
+    #[test]
+    fn a_rotated_layer_turns_its_size_label() {
+        let (app, id) = app_with(NodeKind::Rectangle, 30.0);
+        let painter = paint(&app);
+        let label = painter.labels.iter().find(|l| l.angle.is_some()).expect("rotated size label");
+        let angle = label.angle.expect("angle");
+        // The label must stay upright: ±30°, never a 180°-flipped 150°.
+        assert!((angle.to_degrees().abs() - 30.0).abs() < 0.01, "{}", angle.to_degrees());
+        // And it must sit on the **lowest edge midpoint**, not float inside the box.
+        let doc = app.session.ds().expect("session").doc.clone();
+        let q = figcraft_engine::tools::selection_box(&doc, &[id]).expect("box").map(|p| app.to_presented(p.x, p.y));
+        let mut edge = bottom_edge(q);
+        if edge.0.x > edge.1.x {
+            edge = (edge.1, edge.0);
+        }
+        let (bl, br) = edge;
+        let d = (br - bl) / (br - bl).length();
+        let n = vec2(-d.y, d.x);
+        let mid = pos2((bl.x + br.x) * 0.5, (bl.y + br.y) * 0.5);
+        let expected = mid + n * (7.0 + label.rect.height() * 0.5);
+        assert!((label.rect.center() - expected).length() < 0.01, "{:?} vs {expected:?}", label.rect.center());
+        assert!((label.rect.center().x - (mid.x + n.x * (7.0 + label.rect.height() * 0.5))).abs() < 0.01);
+    }
+
+    /// The four corner handles of a rotated box are themselves turned with its edges.
+    #[test]
+    fn a_rotated_layer_turns_its_handles() {
+        let (app, id) = app_with(NodeKind::Rectangle, 30.0);
+        let painter = paint(&app);
+        let white_quads: Vec<_> = painter
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                Op::Poly { points, fill, .. } if points.len() == 4 && *fill == Color32::WHITE => Some(points),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(white_quads.len(), 4, "four turned handles");
+        let doc = app.session.ds().expect("session").doc.clone();
+        let q = figcraft_engine::tools::selection_box(&doc, &[id]).expect("box").map(|p| app.to_presented(p.x, p.y));
+        for quad in white_quads {
+            let center = pos2(quad.iter().map(|p| p.x).sum::<f32>() / 4.0, quad.iter().map(|p| p.y).sum::<f32>() / 4.0);
+            assert!(q.iter().any(|corner| (center - *corner).length() < 0.01), "{center:?} not on {q:?}");
+        }
+    }
+
+    /// A rotated frame turns its name with the top edge as well.
+    #[test]
+    fn a_rotated_frame_turns_its_name() {
+        let (app, _) = app_with(NodeKind::Frame, 30.0);
+        let painter = paint(&app);
+        let name = painter.labels.iter().find(|l| l.text == "Layer").expect("frame name");
+        assert!(name.angle.is_some(), "the frame name stays horizontal");
+        assert!((name.angle.expect("angle").to_degrees().abs() - 30.0).abs() < 0.01);
+    }
+}
+
+#[cfg(test)]
 mod add_variant_rect_tests {
     use super::add_variant_rect;
 
@@ -883,5 +1099,111 @@ mod add_variant_rect_tests {
     fn add_variant_rect_sits_below_the_size_pill() {
         let r = add_variant_rect(200.0, 403.0);
         assert_eq!((r.min.x, r.min.y, r.width(), r.height()), (192.0, 431.0, 16.0, 16.0));
+    }
+}
+
+// ── 像素网格 ────────────────────────────────────────────────────────────────
+
+/// 把段表里 `[a, b)` 这段换成 `c`（其余段原样保留）。
+fn ink_span(segs: &mut Vec<(f64, f64, Color32)>, a: f64, b: f64, c: Color32) {
+    if !(b > a) {
+        return;
+    }
+    let mut out = Vec::with_capacity(segs.len() + 2);
+    for &(s, e, col) in segs.iter() {
+        if b <= s || a >= e {
+            out.push((s, e, col));
+            continue;
+        }
+        if s < a {
+            out.push((s, a, col));
+        }
+        out.push((a.max(s), b.min(e), c));
+        if e > b {
+            out.push((b, e, col));
+        }
+    }
+    *segs = out;
+}
+
+/// 画布像素网格：每文档单位一条 1 设备像素的线，颜色取它盖住的那块像素（`Color::ink`）。
+///
+/// 这里只认**纯色填充**的节点当底：渐变/图片/半透明按下面那层算（近似），文字按页底算。
+/// 每条线先是一整段页底墨色，再按节点 z 序把落在它上面的区间换成节点自己的墨色。
+fn pixel_grid(app: &CanvasApp, painter: &mut Painter, doc: &Document, page: NodeId) {
+    let r = app.canvas.rect;
+    let p0 = app.to_page(r.min);
+    let p1 = app.to_page(r.max);
+    let hair = 1.0 / app.ppp.max(1.0);
+    let ground = match doc.node(page).map(|n| &n.kind) {
+        Some(NodeKind::Page { background, .. }) => doc_c32(background.ink()),
+        _ => Color32::WHITE,
+    };
+    // 每个「纯色填充」节点的页坐标矩形 + 墨色，按绘制顺序（后画的盖前面的）。
+    let mut marks: Vec<(figcraft_geom::Rect, Color32)> = Vec::new();
+    for id in doc.subtree(page) {
+        if id == page {
+            continue;
+        }
+        let Some(n) = doc.node(id) else { continue };
+        if !n.visible || n.opacity <= 0.01 {
+            continue;
+        }
+        if matches!(n.kind, NodeKind::Text(_)) {
+            continue;
+        }
+        let Some(c) = n.fills.iter().find_map(|f| f.solid_color()) else { continue };
+        let Some(b) = doc.world_bounds(id) else { continue };
+        if !(b.x0 < b.x1 && b.y0 < b.y1) {
+            continue;
+        }
+        marks.push((b, doc_c32(c.ink())));
+        if marks.len() > 4096 {
+            break;
+        }
+    }
+
+    // 竖线
+    let mut k = p0.x.floor();
+    while k <= p1.x {
+        let x = k;
+        let sx = app.to_screen(x, 0.0).x;
+        let mut segs: Vec<(f64, f64, Color32)> = vec![(p0.y, p1.y, ground)];
+        for (b, c) in marks.iter() {
+            if x < b.x0 || x >= b.x1 || b.y1 <= p0.y || b.y0 >= p1.y {
+                continue;
+            }
+            ink_span(&mut segs, b.y0.max(p0.y), b.y1.min(p1.y), *c);
+        }
+        for (a, b, c) in segs {
+            if b <= a {
+                continue;
+            }
+            let (ya, yb) = (app.to_screen(0.0, a).y, app.to_screen(0.0, b).y);
+            crisp_line(painter, pos2(sx, ya), pos2(sx, yb), hair, app.ppp, c);
+        }
+        k += 1.0;
+    }
+
+    // 横线
+    let mut k = p0.y.floor();
+    while k <= p1.y {
+        let y = k;
+        let sy = app.to_screen(0.0, y).y;
+        let mut segs: Vec<(f64, f64, Color32)> = vec![(p0.x, p1.x, ground)];
+        for (b, c) in marks.iter() {
+            if y < b.y0 || y >= b.y1 || b.x1 <= p0.x || b.x0 >= p1.x {
+                continue;
+            }
+            ink_span(&mut segs, b.x0.max(p0.x), b.x1.min(p1.x), *c);
+        }
+        for (a, b, c) in segs {
+            if b <= a {
+                continue;
+            }
+            let (xa, xb) = (app.to_screen(a, 0.0).x, app.to_screen(b, 0.0).x);
+            crisp_line(painter, pos2(xa, sy), pos2(xb, sy), hair, app.ppp, c);
+        }
+        k += 1.0;
     }
 }

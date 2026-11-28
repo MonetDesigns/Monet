@@ -35,11 +35,7 @@ use crate::widgets::{Icon, IconButton, SectionHeader, SectionHeaderVariant, pt, 
 /// Component purple, icon amber, selection and the hidden grey keep their own colours.
 fn ink() -> gpui::Rgba {
     let t = tokens();
-    if t.dark {
-        gpui::Rgba { r: 1.0, g: 1.0, b: 1.0, a: 0.5 }
-    } else {
-        gpui::Rgba { r: 0.0, g: 0.0, b: 0.0, a: 0.5 }
-    }
+    if t.dark { gpui::Rgba { r: 1.0, g: 1.0, b: 1.0, a: 0.5 } } else { gpui::Rgba { r: 0.0, g: 0.0, b: 0.0, a: 0.5 } }
 }
 
 /// Each nesting level indents by 24 pt (the agreed spec; the reference used 16).
@@ -119,9 +115,7 @@ enum Mark {
 /// `is_comp || has_component_ancestor` (instances count).
 fn in_component_ramp(doc: &Document, id: NodeId) -> bool {
     doc.ancestors(id).iter().any(|a| {
-        doc.node(*a).is_some_and(|p| {
-            matches!(p.kind, NodeKind::Component { .. } | NodeKind::ComponentSet { .. } | NodeKind::Instance { .. })
-        })
+        doc.node(*a).is_some_and(|p| matches!(p.kind, NodeKind::Component { .. } | NodeKind::ComponentSet { .. } | NodeKind::Instance { .. }))
     })
 }
 
@@ -185,12 +179,24 @@ fn row_ink(t: &crate::theme::Tokens, r: &LayerRow, mark: Mark) -> (gpui::Rgba, g
     let child = mark == Mark::Child;
 
     let name = if slot {
-        if selected { t.slot } else if r.visible { t.slot_secondary } else { t.slot_dim }
+        if selected {
+            t.slot
+        } else if r.visible {
+            t.slot_secondary
+        } else {
+            t.slot_dim
+        }
     } else if component {
         // 组件 / 组件集 / 实例以及组件内部的层：名称文本始终是选中态的深紫，不随选中与否变化。
         t.component
     } else if icon_layer {
-        if selected { t.icon_layer } else if r.visible { t.layer_muted } else { t.layer_muted }
+        if selected {
+            t.icon_layer
+        } else if r.visible {
+            t.layer_muted
+        } else {
+            t.layer_muted
+        }
     } else if selected {
         t.layer_text_selected
     } else if r.visible && !child {
@@ -200,9 +206,21 @@ fn row_ink(t: &crate::theme::Tokens, r: &LayerRow, mark: Mark) -> (gpui::Rgba, g
     };
 
     let icon = if slot {
-        if selected { t.slot } else if r.visible && r.component_root { t.slot_secondary } else { t.slot_dim }
+        if selected {
+            t.slot
+        } else if r.visible && r.component_root {
+            t.slot_secondary
+        } else {
+            t.slot_dim
+        }
     } else if component {
-        if selected { t.component } else if r.visible && r.component_root { t.component_secondary } else { t.component_dim }
+        if selected {
+            t.component
+        } else if r.visible && r.component_root {
+            t.component_secondary
+        } else {
+            t.component_dim
+        }
     } else if icon_layer {
         if selected { t.icon_layer } else { t.layer_muted }
     } else if selected {
@@ -512,12 +530,19 @@ impl CanvasView {
             .max_h(px(PAGES_MAX_H))
             .overflow_y_scroll();
         // 参考编辑器: 列表高度 = 页数 * 32 + 8，夹到 40..232；空表用 104 的默认高度。
-        let pages_h = if pages.is_empty() {
-            PAGES_DEFAULT_H
-        } else {
-            (pages.len() as f32 * ROW_H + 8.0).clamp(PAGES_MIN_H, PAGES_MAX_H)
-        };
-        let mut list = div().id("pages-list").relative().w_full().flex().flex_col().gap(pt(8.0)).pb(pt(8.0)).h(px(pages_h)).min_h(px(PAGES_MIN_H)).max_h(px(PAGES_MAX_H)).overflow_y_scroll();
+        let pages_h = if pages.is_empty() { PAGES_DEFAULT_H } else { (pages.len() as f32 * ROW_H + 8.0).clamp(PAGES_MIN_H, PAGES_MAX_H) };
+        let mut list = div()
+            .id("pages-list")
+            .relative()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(pt(8.0))
+            .pb(pt(8.0))
+            .h(px(pages_h))
+            .min_h(px(PAGES_MIN_H))
+            .max_h(px(PAGES_MAX_H))
+            .overflow_y_scroll();
         // 列表空白处（含行间 8 pt 缝）点一下取消选中；行在它上面，点行不会落到底层。
         {
             let me_blank = me.clone();
@@ -963,14 +988,7 @@ impl CanvasView {
             .child(name_cell)
             // Eye (left) and lock (right) in one horizontal box: both 16 pt glyphs, zero gap,
             // sitting at the row's right edge inside the flex flow.
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .flex_none()
-                    .child(eye)
-                    .child(lock),
-            )
+            .child(div().flex().items_center().flex_none().child(eye).child(lock))
     }
 
     /// Flatten the current page into visible rows (DFS, **topmost in z first**).
@@ -1350,13 +1368,7 @@ impl CanvasView {
     /// Pure selection transition for a layer-row click. Kept separate so the modifier rules can
     /// be tested without a window: plain replaces, Cmd/Ctrl toggles, Shift selects the visible
     /// range from the anchor, and Shift+Cmd/Ctrl adds that range to the current selection.
-    fn selection_after_click(
-        order: &[NodeId],
-        sel: &[NodeId],
-        anchor: Option<NodeId>,
-        id: NodeId,
-        m: Modifiers,
-    ) -> (Vec<NodeId>, bool) {
+    fn selection_after_click(order: &[NodeId], sel: &[NodeId], anchor: Option<NodeId>, id: NodeId, m: Modifiers) -> (Vec<NodeId>, bool) {
         let pos = |x: NodeId| order.iter().position(|o| *o == x);
         let ai = anchor.filter(|a| sel.contains(a)).and_then(|a| pos(a));
         let bi = pos(id);
@@ -1783,18 +1795,26 @@ mod shape_glyph {
         #[test]
         fn ctrl_click_toggles_a_layer_without_dropping_the_others() {
             let order = ids(&[1, 2, 3, 4]);
-            let (next, anchor) = CanvasView::selection_after_click(&order, &ids(&[1]), Some(NodeId(1)), NodeId(3), Modifiers { control: true, ..Default::default() });
+            let (next, anchor) =
+                CanvasView::selection_after_click(&order, &ids(&[1]), Some(NodeId(1)), NodeId(3), Modifiers { control: true, ..Default::default() });
             assert_eq!(next, ids(&[1, 3]));
             assert!(anchor, "the toggled row becomes the shift anchor");
 
-            let (next, _) = CanvasView::selection_after_click(&order, &ids(&[1, 3]), Some(NodeId(3)), NodeId(1), Modifiers { control: true, ..Default::default() });
+            let (next, _) = CanvasView::selection_after_click(
+                &order,
+                &ids(&[1, 3]),
+                Some(NodeId(3)),
+                NodeId(1),
+                Modifiers { control: true, ..Default::default() },
+            );
             assert_eq!(next, ids(&[3]), "a second ctrl-click removes it again");
         }
 
         #[test]
         fn shift_click_selects_the_visible_range_and_cmd_shift_extends_it() {
             let order = ids(&[1, 2, 3, 4]);
-            let (next, _) = CanvasView::selection_after_click(&order, &ids(&[1]), Some(NodeId(1)), NodeId(4), Modifiers { shift: true, ..Default::default() });
+            let (next, _) =
+                CanvasView::selection_after_click(&order, &ids(&[1]), Some(NodeId(1)), NodeId(4), Modifiers { shift: true, ..Default::default() });
             assert_eq!(next, order, "plain shift replaces with the range");
 
             let (next, _) = CanvasView::selection_after_click(
@@ -1895,9 +1915,7 @@ mod color_tests {
             .unwrap();
         let child = d.create(comp, NodeKind::Rectangle, "R", 0.0, 0.0, 10.0, 10.0).unwrap();
         assert!(in_component_ramp(&d, child), "组件内部层算组件色");
-        let inst = d
-            .create(page, NodeKind::Instance { component: comp, props: Default::default() }, "I", 0.0, 0.0, 100.0, 100.0)
-            .unwrap();
+        let inst = d.create(page, NodeKind::Instance { component: comp, props: Default::default() }, "I", 0.0, 0.0, 100.0, 100.0).unwrap();
         let inner = d.create(inst, NodeKind::Rectangle, "IR", 0.0, 0.0, 10.0, 10.0).unwrap();
         assert!(in_component_ramp(&d, inner), "实例内部层也算组件色（漏掉 Instance 就是主题色 bug）");
         assert!(!in_component_ramp(&d, page), "页面本身不算");

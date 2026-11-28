@@ -142,15 +142,7 @@ impl Segmented {
             // 激活格「抬起」：白底 + 1 pt 内侧描边（设计里两种状态的图标同色，靠这块白底示意）。
             // 画在绝对层里：flow 边框会参与 flex 分宽，选中时把这一格撑宽、整条 bar 抖一下。
             if chosen {
-                cell = cell.child(
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .rounded(pt(CELL_RADIUS))
-                        .bg(rgba(t.panel))
-                        .border_1()
-                        .border_color(rgba(t.border)),
-                );
+                cell = cell.child(div().absolute().inset_0().rounded(pt(CELL_RADIUS)).bg(rgba(t.panel)).border_1().border_color(rgba(t.border)));
             }
             // 未选中格**没有 hover 变体**（用户 2026-11-12：通用多选择器悬停不要有样式）。
             // 设计里只有「选中抬起」一种状态，光标已经是 pointer，够了；不再加 hover 水洗。

@@ -58,13 +58,37 @@ pub struct Label {
 
 #[derive(Clone, Debug)]
 pub enum Op {
-    Rect { rect: Rect, radius: CornerRadius, fill: Color32, stroke: Stroke, kind: StrokeKind },
+    Rect {
+        rect: Rect,
+        radius: CornerRadius,
+        fill: Color32,
+        stroke: Stroke,
+        kind: StrokeKind,
+    },
     /// 一条闭合的矩形环，按路径描边绘制。四边由同一个 stroke tessellator 生成，
     /// 不会像 `paint_quad` 的 border_widths 那样在非整数坐标上左右分别取整。
-    Ring { rect: Rect, width: f32, color: Color32 },
-    Line { a: Pos2, b: Pos2, stroke: Stroke },
-    Circle { center: Pos2, radius: f32, fill: Color32, stroke: Stroke },
-    Poly { points: Vec<Pos2>, closed: bool, fill: Color32, stroke: Stroke },
+    Ring {
+        rect: Rect,
+        width: f32,
+        color: Color32,
+    },
+    Line {
+        a: Pos2,
+        b: Pos2,
+        stroke: Stroke,
+    },
+    Circle {
+        center: Pos2,
+        radius: f32,
+        fill: Color32,
+        stroke: Stroke,
+    },
+    Poly {
+        points: Vec<Pos2>,
+        closed: bool,
+        fill: Color32,
+        stroke: Stroke,
+    },
 }
 
 /// 文字宽度估算：画布上的文字都很短（标尺数字、尺寸标注、帧名），
@@ -159,6 +183,33 @@ impl Painter {
 
     pub fn add_shape(&mut self, points: Vec<Pos2>, closed: bool, fill: Color32, stroke: impl Into<Stroke>) {
         self.ops.push(Op::Poly { points, closed, fill, stroke: stroke.into() });
+    }
+
+    /// 一个随 `d`（本地 +x）/`n`（本地 +y，屏幕向下）旋转的圆角矩形填充。
+    /// 手绘折线近似四角圆弧 —— GPUI 的 `paint_quad` 只能画轴对齐矩形，旋转的尺寸框底、
+    /// section 标题底都走这里。
+    pub fn rounded_quad_filled(&mut self, center: Pos2, d: Vec2, n: Vec2, size: Vec2, radius: f32, fill: Color32) {
+        let (w, h) = (size.x, size.y);
+        let r = radius.min(w * 0.5).min(h * 0.5).max(0.0);
+        if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0 && d.length_sq().is_finite() && n.length_sq().is_finite()) {
+            return;
+        }
+        let at = |x: f32, y: f32| center + d * x + n * y;
+        let mut points = Vec::with_capacity(4 * 4);
+        // 四个角的圆心：左上、右上、右下、左下；每段圆弧 90°（本地坐标 y 向下）。
+        let corners = [
+            (-w / 2.0 + r, -h / 2.0 + r, std::f32::consts::PI, std::f32::consts::PI * 1.5),
+            (w / 2.0 - r, -h / 2.0 + r, std::f32::consts::PI * 1.5, std::f32::consts::PI * 2.0),
+            (w / 2.0 - r, h / 2.0 - r, 0.0, std::f32::consts::PI * 0.5),
+            (-w / 2.0 + r, h / 2.0 - r, std::f32::consts::PI * 0.5, std::f32::consts::PI),
+        ];
+        for (cx, cy, from, to) in corners {
+            for i in 0..4 {
+                let a = from + (to - from) * (i as f32 / 3.0);
+                points.push(at(cx + r * a.cos(), cy + r * a.sin()));
+            }
+        }
+        self.add_shape(points, true, fill, Stroke::NONE);
     }
 
     /// egui 的 `painter.add(Shape::…)`。

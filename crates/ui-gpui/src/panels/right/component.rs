@@ -67,10 +67,8 @@ fn variant_section(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut usi
 
     // ② Current variant 标题 + 「Go to component set」按钮（选中该 set）。
     let go = icon_cmd(Icon::ComponentSet, "select.set", json!({ "ids": [set.0] }), f, false);
-    sec = sec.child(field_row_full_trailing(
-        div().text_size(pt(11.0)).text_color(rgba(t.text)).child(tr("Current variant")),
-        vec![go.into_any_element()],
-    ));
+    sec = sec
+        .child(field_row_full_trailing(div().text_size(pt(11.0)).text_color(rgba(t.text)).child(tr("Current variant")), vec![go.into_any_element()]));
     if c.own_variant_props.is_empty() {
         sec = sec.child(field_row_full(div().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(tr("No variant properties"))));
     }
@@ -96,10 +94,8 @@ fn variant_section(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut usi
         );
         // 候选值下拉：选中即 `component.setVariantValue`（改这个变体的名字段），
         // 与 lizard 的预设值菜单一致。
-        let rows: Vec<(String, &'static str, Value)> = values
-            .iter()
-            .map(|v| (v.clone(), "component.setVariantValue", json!({ "id": variant_id.0, "property": name, "value": v })))
-            .collect();
+        let rows: Vec<(String, &'static str, Value)> =
+            values.iter().map(|v| (v.clone(), "component.setVariantValue", json!({ "id": variant_id.0, "property": name, "value": v }))).collect();
         // The value itself stays a free-text field (the baseline let users type any value);
         // the dropdown beside it keeps the existing values as presets, as the egui
         // TextFieldWithPresets control does.
@@ -122,7 +118,12 @@ fn variant_section(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut usi
         );
         let dd = pick_dropdown(f, "", 20.0, rows);
         sec = sec.child(field_row_full(
-            div().flex().flex_row().items_center().gap(pt(6.0)).w_full()
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(pt(6.0))
+                .w_full()
                 .child(div().w(px(84.0)).flex_none().child(name_edit))
                 .child(div().flex_1().min_w(px(0.0)).child(value_edit))
                 .child(div().w(px(20.0)).flex_none().child(dd)),
@@ -182,10 +183,7 @@ fn property_rows(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut usize
     let owner = c.main_id.unwrap_or(NodeId(0));
     let t = tokens();
     let mut out: Vec<crate::widgets::FieldRow> = Vec::new();
-    out.push(field_row_full_trailing(
-        div().text_size(pt(11.0)).text_color(rgba(t.text)).child(tr("Properties")),
-        vec![add_property_button(f, c)],
-    ));
+    out.push(field_row_full_trailing(div().text_size(pt(11.0)).text_color(rgba(t.text)).child(tr("Properties")), vec![add_property_button(f, c)]));
 
     // ── ① 变体属性（lizard `properties_ui` 的 variants 循环）────────────────────
     // 行：类型图标 + 可改名 + 默认值下拉 + 展开按钮 + 删除。
@@ -213,10 +211,8 @@ fn property_rows(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut usize
                 paint_color: None,
             },
         );
-        let rows: Vec<(String, &'static str, Value)> = values
-            .iter()
-            .map(|v| (v.clone(), "component.editProperty", json!({ "id": owner.0, "name": name, "default": v })))
-            .collect();
+        let rows: Vec<(String, &'static str, Value)> =
+            values.iter().map(|v| (v.clone(), "component.editProperty", json!({ "id": owner.0, "name": name, "default": v }))).collect();
         let dd = pick_dropdown(f, default.clone(), 0.0, rows);
         // 展开按钮（lizard `summary.settings_clicked`：切换展开，不弹窗）。
         let expanded = f.variant_expanded.borrow().iter().any(|n| n == name);
@@ -280,13 +276,7 @@ fn property_rows(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut usize
                 .map(|k| format!("Value {k}"))
                 .find(|cand| !values.iter().any(|v| v == cand))
                 .unwrap_or_else(|| format!("Value {}", values.len() + 1));
-            let add = icon_cmd(
-                Icon::Plus,
-                "component.addVariant",
-                json!({ "id": owner.0, "property": name, "value": fresh_value }),
-                f,
-                false,
-            );
+            let add = icon_cmd(Icon::Plus, "component.addVariant", json!({ "id": owner.0, "property": name, "value": fresh_value }), f, false);
             vrow = vrow.child(add);
             out.push(field_row_full(vrow));
         }
@@ -402,11 +392,7 @@ fn property_rows(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut usize
         // 勾选后随属性定义一起保存（`component.editProperty { preferred: [ids] }`）。
         if matches!(def.kind, "slot" | "instanceSwap") {
             let current_pref = def.preferred.clone();
-            let label = if current_pref.is_empty() {
-                tr("No preferred components").to_string()
-            } else {
-                format!("{} preferred", current_pref.len())
-            };
+            let label = if current_pref.is_empty() { tr("No preferred components").to_string() } else { format!("{} preferred", current_pref.len()) };
             let mut pref_rows: Vec<(String, &'static str, Value)> = Vec::new();
             for (cid, cname) in &c.components {
                 let on = current_pref.contains(&cid.0);
@@ -422,7 +408,13 @@ fn property_rows(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut usize
             }
             let dd = pick_dropdown(f, label, 0.0, pref_rows);
             out.push(field_row_full(
-                div().flex().flex_row().items_center().gap(pt(8.0)).w_full().pl(pt(22.0))
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(pt(8.0))
+                    .w_full()
+                    .pl(pt(22.0))
                     .child(div().text_size(pt(10.0)).text_color(rgba(t.text_secondary)).child(tr("Preferred")))
                     .child(div().flex_1().min_w(px(0.0)).child(dd)),
             ));
@@ -431,13 +423,7 @@ fn property_rows(f: &RightFields, c: &ComponentData, cx: &mut App, n: &mut usize
 
     // ── ③ Add variant（lizard `can_add_variant` → 按钮）────────────────────────
     if c.can_add_variant && c.owner_is_set {
-        let add_variant = icon_cmd(
-            Icon::Plus,
-            "component.addVariant",
-            json!({ "id": owner.0 }),
-            f,
-            false,
-        );
+        let add_variant = icon_cmd(Icon::Plus, "component.addVariant", json!({ "id": owner.0 }), f, false);
         out.push(field_row_full_trailing(
             div().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(tr("Add variant")),
             vec![add_variant.into_any_element()],
@@ -518,10 +504,11 @@ fn add_property_button(f: &RightFields, c: &ComponentData) -> gpui::AnyElement {
             // Slot creation stays on the Frame row's "Make slot" flow: the component-level
             // add menu has no Frame to bind, and engine add_prop requires a `layer`, so a Slot
             // row here could only ever fail ("a slot is a frame inside the component").
-            let rows: Vec<crate::widgets::menu::MenuRow> = [("Variant", "variant"), ("Text", "text"), ("Boolean", "boolean"), ("Instance swap", "instanceSwap")]
-                .into_iter()
-                .map(|(label, ty)| crate::widgets::menu::MenuRow::row(tr(label)).key(ty))
-                .collect();
+            let rows: Vec<crate::widgets::menu::MenuRow> =
+                [("Variant", "variant"), ("Text", "text"), ("Boolean", "boolean"), ("Instance swap", "instanceSwap")]
+                    .into_iter()
+                    .map(|(label, ty)| crate::widgets::menu::MenuRow::row(tr(label)).key(ty))
+                    .collect();
             let cmds = cmds.clone();
             let on_pick = std::rc::Rc::new(move |ty: &str, _window: &mut gpui::Window, cx: &mut App| {
                 // lizard `add_property_menu`：Variant 点一下直接建、不弹窗；其余 4 种
@@ -554,15 +541,7 @@ fn add_property_button(f: &RightFields, c: &ComponentData) -> gpui::AnyElement {
                 let candidates = candidates.clone();
                 let add_popups = add_popups.clone();
                 crate::panels::right::sections::open_detached_with(add_popups, &trigger, Some(top), cx, move |anchor, cx| {
-                    crate::popovers::WindowState::component_property_create(
-                        cmds.clone(),
-                        cx,
-                        owner.0,
-                        kind,
-                        name.clone(),
-                        candidates.clone(),
-                        anchor,
-                    )
+                    crate::popovers::WindowState::component_property_create(cmds.clone(), cx, owner.0, kind, name.clone(), candidates.clone(), anchor)
                 });
             });
             let anchor = anchor.clone();
@@ -577,30 +556,18 @@ fn current_variant_rows(f: &RightFields, c: &ComponentData) -> Vec<crate::widget
     let mut out: Vec<crate::widgets::FieldRow> = Vec::new();
     out.push(field_row_full(div().text_size(pt(11.0)).text_color(rgba(tokens().text_secondary)).child(tr("Current variant"))));
     for (name, values) in &c.variants {
-        let label = div()
-            .w(px(84.0))
-            .flex_none()
-            .text_size(pt(11.0))
-            .text_color(rgba(tokens().text_secondary))
-            .child(SharedString::from(name.clone()));
+        let label =
+            div().w(px(84.0)).flex_none().text_size(pt(11.0)).text_color(rgba(tokens().text_secondary)).child(SharedString::from(name.clone()));
         let current = c.variant_defaults.get(name).cloned().or_else(|| values.first().cloned()).unwrap_or_default();
-        let rows: Vec<(String, &'static str, Value)> = values
-            .iter()
-            .map(|v| (v.clone(), "component.editProperty", json!({ "id": owner.0, "name": name, "default": v })))
-            .collect();
+        let rows: Vec<(String, &'static str, Value)> =
+            values.iter().map(|v| (v.clone(), "component.editProperty", json!({ "id": owner.0, "name": name, "default": v }))).collect();
         let dd = pick_dropdown(f, current, 0.0, rows);
         out.push(field_row_full(div().flex().flex_row().items_center().gap(pt(8.0)).child(label).child(dd)));
     }
     out
 }
 
-fn instance_section(
-    f: &RightFields,
-    c: &ComponentData,
-    binding: Option<&BindingData>,
-    cx: &mut App,
-    n: &mut usize,
-) -> PanelSection {
+fn instance_section(f: &RightFields, c: &ComponentData, binding: Option<&BindingData>, cx: &mut App, n: &mut usize) -> PanelSection {
     let t = tokens();
     let reset = icon_cmd(Icon::Rotate, "component.resetInstance", json!({}), f, false);
     // lizard `instance_ui` 头部：Dots 菜单（Go to main / Push changes / Restore / Reset / Detach）
@@ -647,9 +614,7 @@ fn instance_section(
     // 暴露属性的嵌套实例（lizard `exposed_copies`）：名字小标题 + 它们各自的属性行。
     // 之前这块完全没接，实例里暴露的嵌套实例属性在右栏看不到。
     for (copy, name, props) in &c.exposed_instances {
-        sec = sec.child(field_row_full(
-            div().mt(pt(6.0)).text_size(pt(11.0)).text_color(rgba(t.text)).child(SharedString::from(name.clone())),
-        ));
+        sec = sec.child(field_row_full(div().mt(pt(6.0)).text_size(pt(11.0)).text_color(rgba(t.text)).child(SharedString::from(name.clone()))));
         for p in props {
             // 打在这个嵌套副本上，不是外层选中的实例：属性名可能只有它才有。
             sec = sec.child(instance_prop_row(f, c, Some(*copy), cx, n, p));
@@ -866,17 +831,18 @@ fn binding_section(f: &RightFields, b: &BindingData) -> PanelSection {
     if b.in_instance && b.is_slot {
         let name = b.slot_name.clone().unwrap_or_default();
         sec = sec.child(field_row_full(
-            div().flex().flex_row().items_center().gap(pt(6.0))
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(pt(6.0))
                 .child(crate::widgets::icon::paint_in_slot(Icon::Slot, 14.0, Some(rgba(t.text_secondary))))
                 .child(div().text_size(pt(11.0)).text_color(rgba(t.text)).child(SharedString::from(name.clone()))),
         ));
         let edited = b.overrides.iter().any(|g| g == "slot");
         let label = if edited { tr("Own content").to_string() } else { tr("Default content").to_string() };
-        let mut rows: Vec<(String, &'static str, Value)> = b
-            .components
-            .iter()
-            .map(|(cid, cname)| (cname.clone(), "instance.slotInsert", json!({ "id": b.node.0, "component": cid.0 })))
-            .collect();
+        let mut rows: Vec<(String, &'static str, Value)> =
+            b.components.iter().map(|(cid, cname)| (cname.clone(), "instance.slotInsert", json!({ "id": b.node.0, "component": cid.0 }))).collect();
         rows.push((tr("Reset slot").to_string(), "instance.resetSlot", json!({ "id": b.node.0 })));
         let dd = pick_dropdown(f, label, 0.0, rows);
         sec = sec.child(field_row_full(div().flex().flex_row().items_center().gap(pt(8.0)).w_full().pl(pt(20.0)).child(dd)));
@@ -956,8 +922,10 @@ fn bind_row(
     }
     let dd = pick_dropdown(f, shown, 0.0, rows);
     field_row(
-        vec![div().w(px(84.0)).flex_none().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(label)).into_any_element(),
-             dd.into_any_element()],
+        vec![
+            div().w(px(84.0)).flex_none().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(label)).into_any_element(),
+            dd.into_any_element(),
+        ],
         Vec::<gpui::AnyElement>::new(),
     )
 }
@@ -1005,17 +973,14 @@ fn slot_fill_control(f: &RightFields, c: &ComponentData, p: &ComponentProp) -> g
         return div().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(label)).into_any_element();
     };
     // preferred 组件排前面，其余组件随后（与 lizard 的分组顺序一致）。
-    let mut ordered: Vec<&(NodeId, String)> =
-        p.preferred.iter().filter_map(|id| c.components.iter().find(|(cid, _)| cid.0 == *id)).collect();
+    let mut ordered: Vec<&(NodeId, String)> = p.preferred.iter().filter_map(|id| c.components.iter().find(|(cid, _)| cid.0 == *id)).collect();
     for comp in &c.components {
         if !ordered.iter().any(|(cid, _)| cid == &comp.0) {
             ordered.push(comp);
         }
     }
-    let mut rows: Vec<(String, &'static str, Value)> = ordered
-        .into_iter()
-        .map(|(cid, name)| (name.clone(), "instance.slotInsert", json!({ "id": slot_id.0, "component": cid.0 })))
-        .collect();
+    let mut rows: Vec<(String, &'static str, Value)> =
+        ordered.into_iter().map(|(cid, name)| (name.clone(), "instance.slotInsert", json!({ "id": slot_id.0, "component": cid.0 }))).collect();
     if p.slot_edited {
         rows.push((tr("Reset slot").to_string(), "instance.resetSlot", json!({ "id": slot_id.0 })));
     }

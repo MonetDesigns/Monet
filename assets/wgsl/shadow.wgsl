@@ -39,6 +39,8 @@ struct Uniforms {
     color_a        : f32,
     knockout       : f32,         // 投影：1 = 被本层遮住的部分不画（Figma 默认）
     analytic       : f32,         // 1 = 圆角矩形解析路径
+    nodeRotation   : f32,         // 弧度，节点局部 → 屏幕的旋转；解析路径先转回局部
+    nodeCenterPx   : vec2<f32>,   // 节点中心在这个窗口里的设备像素坐标
     dpr            : f32,
 };
 
@@ -54,17 +56,29 @@ struct Uniforms {
 // NOTE: @fx param 的 token 之间只能有一个空格（parse_param 先 splitn 再过滤空串）。
 // @fx param u.kind float 0 1 1 0 "Kind (0 drop 1 inner)"
 // @fx param u.dx float -500 500 1 0 "Offset X"
-// @fx param u.dy float -500 500 1 0 "Offset Y"
-// @fx param u.blur float 0 200 1 8 "Blur"
-// @fx param u.spread float -200 200 1 0 "Spread"
+// @fx param u.dy float -500 500 1 4 "Offset Y"
+// @fx param u.blur float 1 100 1 4 "Blur"
+// @fx param u.spread float 0 100 1 0 "Spread"
 // @fx param u.color_r float 0 1 0.01 0 "Color R"
 // @fx param u.color_g float 0 1 0.01 0 "Color G"
 // @fx param u.color_b float 0 1 0.01 0 "Color B"
 // @fx param u.color_a float 0 1 0.01 0.25 "Color A"
-// @fx param u.knockout float 0 1 1 1 "Knockout"
-// @fx param u.analytic float 0 1 1 1 "Analytic Rect"
+// The two internal switches are not Figma controls: the panel never exposed "Knockout" or
+// "Analytic Rect", and showing them let a user turn a drop shadow into a different effect by
+// accident. They stay as fixed data (drop shadows knock out the layer, rectangles use the analytic
+// path) so the public control set is exactly Offset X/Y, Blur, Spread, Color.
+// @fx data u.knockout = 1
+// @fx data u.analytic = isRectangle
 
 const DITHER: f32 = 0.007843; // 2/255 — Figma 的 e()
+
+/// Screen offset → the node's own axes. A rotated layer's analytic shadow must use the same corner
+/// radius and offset the layer has, not the screen's x/y.
+fn node_axes(v : vec2<f32>, angle : f32) -> vec2<f32> {
+    let c = cos(angle);
+    let s = sin(angle);
+    return vec2<f32>(c * v.x + s * v.y, -s * v.x + c * v.y);
+}
 
 struct VSOut {
     @builtin(position) pos : vec4<f32>,
@@ -175,7 +189,7 @@ fn blur_lod(radius_px : f32) -> f32 {
 @fragment
 fn fs(in : VSOut) -> @location(0) vec4<f32> {
     let frag = u.regionOriginPx + in.uv * max(u.resolution, vec2<f32>(1.0, 1.0));
-    let centre = 0.5 * u.nodeSizePx;
+    let centre = u.nodeCenterPx;
     let off = vec2<f32>(u.dx, u.dy) * u.dpr;
 
     let size_px = max(u.nodeSizePx, vec2<f32>(1.0, 1.0));
@@ -189,8 +203,9 @@ fn fs(in : VSOut) -> @location(0) vec4<f32> {
     var shadow = vec4<f32>(0.0, 0.0, 0.0, 0.0);
 
     if (u.analytic > 0.5) {
-        // ① 解析圆角矩形（Figma 的 ROUNDED_RECTANGLE_BLUR）。
-        let p = (frag - centre - off) / r_px;
+        // ① 解析圆角矩形（Figma 的 ROUNDED_RECTANGLE_BLUR）。先转回节点轴，旋转/斜切的图层
+        //    才不会把阴影留在屏幕的 x/y 上。
+        let p = (node_axes(frag - centre, u.nodeRotation) - off) / r_px;
         let half = half_px / r_px;
         let q = max(quadrant_corner(p), 0.0) * u.dpr / r_px;
         let cov = rect_coverage(p, half, min(q, min(half.x, half.y)));

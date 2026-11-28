@@ -411,17 +411,9 @@ fn shortcuts_body(state: &ExtraState, cmds: &Cmds, _cx: &mut App) -> Div {
 
     let list = shortcut_rows(if query.is_empty() { Some(Group::ALL[group]) } else { None }, &query);
     let mut body = div().flex().flex_col().w_full().p(pt(16.0)).gap(pt(8.0));
-    body = body.child(
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(pt(8.0))
-            .w_full()
-            .child(group_dd)
-            .child(state.search.clone())
-            .child(div().text_size(pt(10.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(figcraft_i18n::trn("{n} shortcuts", list.len(), &[])))),
-    );
+    body = body.child(div().flex().flex_row().items_center().gap(pt(8.0)).w_full().child(group_dd).child(state.search.clone()).child(
+        div().text_size(pt(10.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(figcraft_i18n::trn("{n} shortcuts", list.len(), &[]))),
+    ));
     if list.is_empty() {
         return body.child(div().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(tr("No shortcuts match")));
     }
@@ -513,13 +505,7 @@ fn icon_act(icon: Icon, size: f32, on_click: impl Fn(&ClickEvent, &mut Window, &
 // Versions（egui `versions.rs`）
 // ───────────────────────────────────────────────────────────────────────────────────────────────
 
-fn versions_body(
-    app: &CanvasApp,
-    cmds: &Cmds,
-    state: &ExtraState,
-    root: Option<Entity<crate::CanvasView>>,
-    cx: &mut App,
-) -> Div {
+fn versions_body(app: &CanvasApp, cmds: &Cmds, state: &ExtraState, root: Option<Entity<crate::CanvasView>>, cx: &mut App) -> Div {
     let t = tokens();
     let Ok(ds) = app.session.ds() else { return note(tr("No document open.")) };
 
@@ -619,7 +605,9 @@ fn versions_body(
     }
 
     if ds.versions.is_empty() {
-        return div().w_full().child(sec.child(field_row_full(note(tr("No saved versions yet. Save a version to mark a point you can come back to.")))));
+        return div()
+            .w_full()
+            .child(sec.child(field_row_full(note(tr("No saved versions yet. Save a version to mark a point you can come back to.")))));
     }
 
     for v in ds.versions.iter().rev() {
@@ -661,13 +649,8 @@ fn versions_body(
         // 整行点击 = 预览（与 egui 一致）；按钮带 stop_propagation 防止冒泡。
         let vcp = vid.clone();
         let cm_preview = cmds.clone();
-        let row = div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(pt(6.0))
-            .w_full()
-            .on_mouse_down(MouseButton::Left, move |_e: &MouseDownEvent, _w, _cx| {
+        let row =
+            div().flex().flex_row().items_center().gap(pt(6.0)).w_full().on_mouse_down(MouseButton::Left, move |_e: &MouseDownEvent, _w, _cx| {
                 cm_preview.push(Cmd { id: "version.preview", params: Some(json!({ "id": vcp })) });
             });
         // EGUI `versions.rs`: a version row's context menu shares the More button's four actions.
@@ -683,12 +666,7 @@ fn versions_body(
                 let rename = tr("Rename");
                 let duplicate = tr("Duplicate");
                 let delete = tr("Delete");
-                let rows = vec![
-                    MenuRow::row(restore),
-                    MenuRow::row(rename),
-                    MenuRow::row(duplicate),
-                    MenuRow::row(delete),
-                ];
+                let rows = vec![MenuRow::row(restore), MenuRow::row(rename), MenuRow::row(duplicate), MenuRow::row(delete)];
                 let anchor = Bounds::new(e.position, gpui::size(px(0.0), px(0.0)));
                 let cmds = cmds.clone();
                 let wake = wake.clone();
@@ -717,14 +695,14 @@ fn versions_body(
             row
         };
         let row = row.child(
-                div()
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .flex_col()
-                    .child(div().text_size(pt(11.0)).text_color(rgba(t.text)).child(SharedString::from(label)))
-                    .child(div().text_size(pt(10.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(time_ago(v.time))))
-                    .child(div().text_size(pt(10.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(v.description.clone()))),
-            );
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .flex_col()
+                .child(div().text_size(pt(11.0)).text_color(rgba(t.text)).child(SharedString::from(label)))
+                .child(div().text_size(pt(10.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(time_ago(v.time))))
+                .child(div().text_size(pt(10.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(v.description.clone()))),
+        );
         let cm1 = cmds.clone();
         let id1 = vid.clone();
         let preview = icon_act(Icon::Eye, 18.0, move |_e, _w, _cx| cm1.push(Cmd { id: "version.preview", params: Some(json!({ "id": id1 })) }));
@@ -855,8 +833,12 @@ fn compare_body(
         body.child(div().text_size(pt(12.0)).font_weight(crate::panels::UI_FONT_REGULAR).text_color(rgba(t.text)).child(SharedString::from(summary)));
     if let Some(v) = &chosen {
         if let Some(name) = ds.versions.iter().find(|x| &x.id == v).map(|x| x.name.clone()) {
-            body = body
-                .child(div().text_size(pt(10.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(figcraft_i18n::trf("Compared to version {name}", &[("name", &name)]))));
+            body = body.child(
+                div()
+                    .text_size(pt(10.0))
+                    .text_color(rgba(t.text_secondary))
+                    .child(SharedString::from(figcraft_i18n::trf("Compared to version {name}", &[("name", &name)]))),
+            );
         }
     }
 
@@ -872,9 +854,7 @@ fn compare_body(
     let labels: Vec<String> = opts
         .iter()
         .map(|o| {
-            o.as_ref()
-                .and_then(|v| ds.versions.iter().find(|x| &x.id == v).map(|x| x.name.clone()))
-                .unwrap_or_else(|| tr("When marked ready").into())
+            o.as_ref().and_then(|v| ds.versions.iter().find(|x| &x.id == v).map(|x| x.name.clone())).unwrap_or_else(|| tr("When marked ready").into())
         })
         .collect();
     let menu: Vec<MenuRow> = labels.iter().enumerate().map(|(i, l)| MenuRow::row(l.clone()).key(i.to_string())).collect();
@@ -1013,11 +993,11 @@ fn compare_body(
 
     let hstate = state.dev_hovered.clone();
     let mut list = div().id("compare-changes").flex_none().w(px(300.0)).h_full().min_h(px(0.0)).flex().flex_col().overflow_y_scroll().child(
-        div()
-            .text_size(pt(11.0))
-            .font_weight(crate::panels::UI_FONT_REGULAR)
-            .text_color(rgba(t.text))
-            .child(SharedString::from(figcraft_i18n::trn("{n} changes", cmp.changes.len(), &[]))),
+        div().text_size(pt(11.0)).font_weight(crate::panels::UI_FONT_REGULAR).text_color(rgba(t.text)).child(SharedString::from(figcraft_i18n::trn(
+            "{n} changes",
+            cmp.changes.len(),
+            &[],
+        ))),
     );
     for c in &cmp.changes {
         let cid = c.id;
@@ -1082,13 +1062,7 @@ fn compare_body(
 // Assets（egui `assets_panel.rs`）
 // ───────────────────────────────────────────────────────────────────────────────────────────────
 
-pub(crate) fn assets_body(
-    app: &CanvasApp,
-    cmds: &Cmds,
-    state: &ExtraState,
-    root: Option<Entity<crate::CanvasView>>,
-    _cx: &mut App,
-) -> Div {
+pub(crate) fn assets_body(app: &CanvasApp, cmds: &Cmds, state: &ExtraState, root: Option<Entity<crate::CanvasView>>, _cx: &mut App) -> Div {
     let t = tokens();
     let Ok(ds) = app.session.ds() else { return note(tr("No document open.")) };
     let doc = &ds.doc;
@@ -1124,11 +1098,7 @@ pub(crate) fn assets_body(
         .child(div().flex_1().min_w(px(0.0)))
         .child(state.assets_search.clone());
 
-    let body = if on_components {
-        assets_components(doc, cmds, &q, root)
-    } else {
-        assets_styles(doc, cmds, &q)
-    };
+    let body = if on_components { assets_components(doc, cmds, &q, root) } else { assets_styles(doc, cmds, &q) };
     wrap_header(body, header)
 }
 
@@ -1166,12 +1136,7 @@ fn assets_components(doc: &figcraft_doc::Document, cmds: &Cmds, q: &str, root: O
 }
 
 /// 单个组件缩略图卡片：渲染缩略图 + 名称，整卡点击创建实例。
-fn component_tile(
-    doc: &figcraft_doc::Document,
-    cmds: &Cmds,
-    id: figcraft_doc::NodeId,
-    root: Option<Entity<crate::CanvasView>>,
-) -> Div {
+fn component_tile(doc: &figcraft_doc::Document, cmds: &Cmds, id: figcraft_doc::NodeId, root: Option<Entity<crate::CanvasView>>) -> Div {
     let t = tokens();
     let Some(n) = doc.node(id) else { return div() };
     let shown = if matches!(n.kind, NodeKind::ComponentSet { .. }) { default_variant(doc, id).unwrap_or(id) } else { id };
@@ -1242,10 +1207,7 @@ fn component_tile(
             let anchor = Bounds::new(e.position, gpui::size(px(0.0), px(0.0)));
             let cmds = c.clone();
             let on_pick = Rc::new(move |_: &str, _: &mut Window, _: &mut App| {
-                cmds.push(Cmd {
-                    id: "component.hideWhenPublishing",
-                    params: Some(json!({ "id": id.0, "on": on })),
-                });
+                cmds.push(Cmd { id: "component.hideWhenPublishing", params: Some(json!({ "id": id.0, "on": on })) });
             });
             root.update(cx, |cv, cx| cv.open_menu(anchor, Some(180.0), rows, on_pick, cx));
             cx.stop_propagation();

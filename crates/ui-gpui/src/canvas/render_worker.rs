@@ -867,20 +867,25 @@ fn reuse_composite(mats: &Materials, base: &Arc<RenderImage>, key: u64) -> Optio
 #[cfg(feature = "gpu")]
 fn layered() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    // Default OFF: the whole-page **synchronous** compositor (`apply_wgsl_materials`) is the route
-    // that has never lost the material — it composites into the frame it delivers. The per-layer
-    // route only wins on speed for a container, and it cannot shade a node larger than the view
-    // (a band only sees its own slice of the page, so its window/key churns every drag/zoom frame
-    // and nothing ever cache-hits). `FIGCRAFT_SHADE_LAYERED=1` opts back in for comparison.
+    // Default ON: a material is a **layer effect**, so it must be evaluated inside the layer stack —
+    // content first, effect over it, then the normal alpha composite. The whole-page compositor is
+    // kept as an explicit fallback (`FIGCRAFT_SHADE_LAYERED=0`) for pixel comparison: it renders the
+    // page, punches the node out and paints the shader back, which has no `content` input and
+    // therefore cannot rotate/track a layer.
     *ON.get_or_init(|| match std::env::var("FIGCRAFT_SHADE_LAYERED") {
-        Ok(v) => v == "1",
-        Err(_) => false,
+        Ok(v) => v != "0",
+        Err(_) => true,
     })
 }
 
 #[cfg(feature = "gpu")]
 #[track_caller]
 fn apply_wgsl_materials(mats: &mut Materials, doc: &Document, page: NodeId, done: &mut Done) {
+    // The per-layer route has already shaded every material inside `draw_layer`; running the
+    // whole-page compositor on top would paint each effect twice.
+    if layered() {
+        return;
+    }
     if try_apply_wgsl_materials(mats, doc, page, done) {
         return;
     }
@@ -1320,6 +1325,40 @@ impl Renders {
         }
     }
 
+    /// The material board this renderer uses, with this frame's specs installed. The patch
+    /// renderer (`CanvasApp::patch_for`) needs the same layer materials as the full frame; it is a
+    /// separate `Renders` (separate retained buffers), so it cannot borrow the worker's board.
+    #[cfg(feature = "gpu")]
+    pub(crate) fn shade_for(&mut self, doc: &Document, page: NodeId) -> Option<Arc<figcraft_render::shade::ShadeBoard>> {
+        if !layered() {
+            return None;
+        }
+        let board = self.shade_board();
+        board.set_specs(crate::shade_gpu::specs(doc, page));
+        Some(board)
+    }
+
+    /// The layer board with this renderer's synchronous material resolver installed.
+    ///
+    /// This is the unified pipeline seam: a material is resolved **while the layer is drawn**, so a
+    /// frame is rastered once. Without it the renderer registers a request and the worker re-runs
+    /// the whole page afterwards.
+    #[cfg(feature = "gpu")]
+    fn shade_board(&self) -> Arc<figcraft_render::shade::ShadeBoard> {
+        let mats = Arc::clone(&self.mats);
+        let board = mats.lock().unwrap_or_else(|e| e.into_inner()).shade.clone();
+        let owner = Arc::clone(&mats);
+        board.ensure_resolver(Arc::new(move |req, doc| {
+            let mut guard = owner.lock().unwrap_or_else(|e| e.into_inner());
+            if guard.runner.is_none() {
+                guard.runner = crate::wgsl_runner::WgslRunner::new();
+            }
+            let runner = guard.runner.as_mut()?;
+            crate::shade_gpu::shade_one(req, runner, doc, &mut crate::shade_gpu::ShadeTiming::default()).map(Arc::new)
+        }));
+        board
+    }
+
     fn starts_over(&self, job: &Job) -> bool {
         match self.last {
             None => true,
@@ -1327,24 +1366,71 @@ impl Renders {
         }
     }
 
+    fn preview_allowed(&self, job: &Job) -> bool {
+        // A preview is a *coarse* raster. With an external material that means the material is
+        // rasterised at a different resolution and then stretched for a few frames — the visible
+        // soft edge / flash while zooming. Materials need the same full-resolution layer as the
+        // built-in effects, so take the slower path instead of showing a coarse one.
+        #[cfg(feature = "gpu")]
+        {
+            material_ids(&job.doc, job.page).is_empty()
+        }
+        #[cfg(not(feature = "gpu"))]
+        {
+            true
+        }
+    }
+
     fn wants_preview(&self, job: &Job) -> bool {
-        job.zoom_preview && self.last.is_some() && self.full_ms >= self.preview_after_ms && self.starts_over(job)
+        self.preview_allowed(job) && job.zoom_preview && self.last.is_some() && self.full_ms >= self.preview_after_ms && self.starts_over(job)
     }
 
     pub fn wants_late_preview(&self, job: &Job) -> bool {
-        job.zoom_preview && self.starts_over(job) && !self.wants_preview(job)
+        self.preview_allowed(job) && job.zoom_preview && self.starts_over(job) && !self.wants_preview(job)
     }
 
     pub fn preview(&mut self, job: &Job) -> Option<Done> {
         if !self.wants_preview(job) {
             return None;
         }
+        // The preview is a real render of the same document: attach the same per-layer material
+        // board the full frame uses, or a zoom preview would show material layers as bare fills.
+        #[cfg(feature = "gpu")]
+        let shaded = layered().then(|| {
+            let board = self.shade_board();
+            board.set_specs(crate::shade_gpu::specs(&job.doc, job.page));
+            Job { shade: Some(board), ..job.clone() }
+        });
+        #[cfg(feature = "gpu")]
+        let job: &Job = shaded.as_ref().unwrap_or(job);
         let mut d = preview_with(job, &mut self.preview)?;
         // A preview **must** carry the materials as well. `run` keeps a material node's whole
         // subtree out of the base image (the shader needs a clean backdrop), so a preview that
         // skipped the offscreen pass was a picture with the pane *and everything inside it*
         // missing. Swapping the canvas onto that for a few frames, then back, is the flash on
         // every zoom step. At a quarter of the linear scale this costs 1/16 of the pixels.
+        //
+        // The first preview pass only *registers* the request; returning it now is still a frame
+        // with bare fills / a hole. Drain and re-render exactly like `rasterize`, so what leaves
+        // this function is a finished picture for this preview scale.
+        #[cfg(feature = "gpu")]
+        if let Some(board) = job.shade.as_ref() {
+            const MAX_PREVIEW_SHADE_PASSES: usize = 3;
+            for _ in 0..MAX_PREVIEW_SHADE_PASSES {
+                let produced = {
+                    let mut mats = self.mats.lock().unwrap_or_else(|e| e.into_inner());
+                    if mats.runner.is_none() {
+                        mats.runner = crate::wgsl_runner::WgslRunner::new();
+                    }
+                    mats.runner.as_mut().map_or(0, |r| crate::shade_gpu::shade_pending(board, r, &job.doc))
+                };
+                if produced == 0 {
+                    break;
+                }
+                self.preview.clear();
+                d = preview_with(job, &mut self.preview)?;
+            }
+        }
         #[cfg(feature = "gpu")]
         apply_wgsl_materials(&mut self.mats.lock().unwrap_or_else(|e| e.into_inner()), &job.doc, job.page, &mut d);
         Some(d)
@@ -1356,13 +1442,20 @@ impl Renders {
     /// `base` 画布逐字节一致。返回时 `last_image` 已记下这张未合成原图——复用帧据此重新合成，
     /// 绝不在已合成图上二次叠加。
     fn rasterize(&mut self, job: &Job) -> Option<Done> {
+        // 链路剖析：清空上一帧的分段累计（仅 FIGCRAFT_RENDER_LOG 下有意义）。
+        #[cfg(feature = "gpu")]
+        let prof_on = render_log();
+        #[cfg(feature = "gpu")]
+        if prof_on {
+            figcraft_render::draw::prof::clear();
+        }
         // 上一张图借给 `run`：像素没变时它直接复用这张，不再分配整整一页。
         let prev = self.last_image.clone();
         // 逐层材质：把板挂到这次渲染上——`run` 见到 `Some` 就不挖空主图，`draw_layer` 按层求值。
         // 材质集合每帧重算（节点增删/换 shader/改参数都在里面），板本身跨帧，缓存的是像素。
         #[cfg(feature = "gpu")]
         let shaded = layered().then(|| {
-            let board = self.mats.lock().unwrap_or_else(|e| e.into_inner()).shade.clone();
+            let board = self.shade_board();
             board.set_specs(crate::shade_gpu::specs(&job.doc, job.page));
             if render_log() {
                 eprintln!("[shade] attached specs={}", board.specs_len());
@@ -1391,8 +1484,13 @@ impl Renders {
         #[cfg(feature = "gpu")]
         {
             const MAX_SHADE_PASSES: usize = 4;
+            let mut rounds = 0usize;
+            let mut shade_ms = 0.0f64;
+            let mut reraster_ms = 0.0f64;
+            let t_loop = std::time::Instant::now();
             for _ in 0..MAX_SHADE_PASSES {
                 let Some(board) = job.shade.as_ref() else { break };
+                let t_shade = std::time::Instant::now();
                 let produced = {
                     let mut mats = self.mats.lock().unwrap_or_else(|e| e.into_inner());
                     if mats.runner.is_none() {
@@ -1400,16 +1498,28 @@ impl Renders {
                     }
                     mats.runner.as_mut().map_or(0, |runner| crate::shade_gpu::shade_pending(board, runner, &job.doc))
                 };
+                shade_ms += t_shade.elapsed().as_secs_f64() * 1000.0;
                 if produced == 0 {
                     break;
                 }
                 self.full.clear();
+                let t_reraster = std::time::Instant::now();
                 done = guarded(&mut self.full, |r| run(job, &job.view, r, false, None))?;
+                reraster_ms += t_reraster.elapsed().as_secs_f64() * 1000.0;
+                rounds += 1;
                 self.last = Some((job.uid, job.page, job.view.scale));
                 if done.work == Work::Full {
                     self.full_ms = done.ms;
                 }
                 self.last_image = Some(done.image.clone());
+            }
+            if prof_on {
+                eprintln!(
+                    "[profile] raster={:.1}ms rounds={rounds} shade={shade_ms:.1}ms reraster={reraster_ms:.1}ms loop={:.1}ms {}",
+                    done.ms,
+                    t_loop.elapsed().as_secs_f64() * 1000.0,
+                    figcraft_render::draw::prof::report(),
+                );
             }
         }
         Some(done)
@@ -1512,6 +1622,28 @@ impl Renders {
     pub fn render_patch(&mut self, job: &Job) -> Option<Done> {
         let mut retained = Retained::default();
         let mut done = guarded(&mut retained, |r| run(job, &job.view, r, false, None))?;
+        // A patch is the same scene as the full frame, only cropped. It therefore needs the same
+        // layer materials; otherwise dragging a sibling repaints a rectangle that contains a
+        // material node and that rectangle comes back with a bare fill / a hole (the built-in
+        // Glass would have been drawn by `run`). Drain and re-run until no new layer is requested.
+        #[cfg(feature = "gpu")]
+        if let Some(board) = job.shade.as_ref() {
+            const MAX_PATCH_SHADE_PASSES: usize = 4;
+            for _ in 0..MAX_PATCH_SHADE_PASSES {
+                let produced = {
+                    let mut mats = self.mats.lock().unwrap_or_else(|e| e.into_inner());
+                    if mats.runner.is_none() {
+                        mats.runner = crate::wgsl_runner::WgslRunner::new();
+                    }
+                    mats.runner.as_mut().map_or(0, |r| crate::shade_gpu::shade_pending(board, r, &job.doc))
+                };
+                if produced == 0 {
+                    break;
+                }
+                retained.clear();
+                done = guarded(&mut retained, |r| run(job, &job.view, r, false, None))?;
+            }
+        }
         #[cfg(feature = "gpu")]
         apply_wgsl_materials(&mut self.mats.lock().unwrap_or_else(|e| e.into_inner()), &job.doc, job.page, &mut done);
         Some(done)

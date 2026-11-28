@@ -346,10 +346,7 @@ impl EditBuffer {
         let r = self.range();
         // A single-line field never accepts a line break (even from paste); a multiline field
         // keeps `\n` while stripping the other control characters, exactly like egui's TextEdit.
-        let clean: String = text
-            .chars()
-            .filter(|c| *c >= ' ' || *c == '\t' || (self.multiline && *c == '\n'))
-            .collect();
+        let clean: String = text.chars().filter(|c| *c >= ' ' || *c == '\t' || (self.multiline && *c == '\n')).collect();
         self.replace_chars(r.start, r.end, &clean);
     }
     /// Replace a platform (UTF-16) range, or the selection when `None`.
@@ -483,13 +480,19 @@ impl EditBuffer {
     /// ArrowUp/ArrowDown in a multiline buffer: keep the column, clamp to the target line's
     /// length. A selection collapses to its edge first, then moves, like every native editor.
     fn move_vertical(&mut self, delta: i32, shift: bool) {
-        let cur = if shift { self.caret() } else {
+        let cur = if shift {
+            self.caret()
+        } else {
             let r = self.range();
             if delta < 0 { r.start } else { r.end }
         };
         let line = self.line_index(cur);
         let col = cur.saturating_sub(self.line_bounds(cur).start);
-        let target_line = if delta < 0 { line.saturating_sub(delta.unsigned_abs() as usize) } else { (line + delta as usize).min(self.line_count().saturating_sub(1)) };
+        let target_line = if delta < 0 {
+            line.saturating_sub(delta.unsigned_abs() as usize)
+        } else {
+            (line + delta as usize).min(self.line_count().saturating_sub(1))
+        };
         let target = self.index_at_line_col(target_line, col);
         if shift {
             self.select_to(target);

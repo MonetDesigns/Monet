@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use figcraft_doc::{Document, NodeId, NodeKind};
-use figcraft_render::shade::{ShadeBoard, ShadeRequest, Shaded, ShaderSpec, premultiplied};
+use figcraft_render::shade::{ShadeBoard, ShadeRequest, Shaded, ShaderSpec};
 use figcraft_render::wgsl_effect as fx;
 
 /// 一页里可见且绑了材质的图层，装成 `ShadeBoard` 需要的形状。
@@ -29,7 +29,37 @@ pub fn specs(doc: &Document, page: NodeId) -> HashMap<NodeId, Arc<ShaderSpec>> {
         let Some(json) = n.plugin_data.get(crate::wgsl_material::BINDING_KEY) else { continue };
         let Some(binding) = crate::wgsl_material::WgslMaterialBinding::from_json(json) else { continue };
         let effect_id = crate::wgsl_material::ensure_loaded(&binding.path);
-        out.insert(id, Arc::new(ShaderSpec { effect_id, path: binding.path, params: binding.params }));
+        let (stage, reach_doc, blur) = {
+            let reg = fx::shared().lock().unwrap_or_else(|e| e.into_inner());
+            let stage = reg.stage(&effect_id);
+            let reach = reg.reach(&effect_id).map(str::to_owned);
+            let value = reach
+                .as_ref()
+                .and_then(|f| binding.params.get(f).copied().or_else(|| reg.params(&effect_id).iter().find(|p| &p.field == f).map(|p| p.default)));
+            // A shadow reaches `blur + |offset| + |spread|`, not just its blur radius. A window
+            // grown by blur alone clips the shadow at the layer edge (a band of it vanishes), so
+            // every offset/spread parameter in the shader is added to the reach here.
+            let mut offset = 0.0_f64;
+            for p in reg.params(&effect_id) {
+                let leaf = p.field.rsplit('.').next().unwrap_or(&p.field);
+                if matches!(leaf, "dx" | "dy" | "spread" | "frost") {
+                    let v = binding.params.get(&p.field).copied().unwrap_or(p.default);
+                    offset = offset.max(v.abs());
+                }
+            }
+            let blur = reg.blur(&effect_id).map(|(input, field)| {
+                let radius_doc = binding
+                    .params
+                    .get(&field)
+                    .copied()
+                    .or_else(|| reg.params(&effect_id).iter().find(|p| &p.field == &field).map(|p| p.default))
+                    .unwrap_or(1.0)
+                    .clamp(1.0, 100.0);
+                figcraft_render::shade::BlurSpec { input, field, radius_doc }
+            });
+            (stage, value.map_or(0.0, |v| v.abs() + offset + 4.0), blur)
+        };
+        out.insert(id, Arc::new(ShaderSpec { effect_id, path: binding.path, params: binding.params, stage, reach_doc, blur }));
     }
     out
 }
@@ -45,6 +75,8 @@ pub fn shade_pending(board: &ShadeBoard, runner: &mut crate::wgsl_runner::WgslRu
     }
     let t0 = std::time::Instant::now();
     let mut done = 0usize;
+    let mut timing = ShadeTiming::default();
+    let mut px = 0u64;
     for req in &requests {
         if crate::canvas::render_worker::render_log() {
             eprintln!(
@@ -52,23 +84,91 @@ pub fn shade_pending(board: &ShadeBoard, runner: &mut crate::wgsl_runner::WgslRu
                 req.node, req.size.0, req.size.1, req.node_px, req.origin_px, req.bounds, req.scale
             );
         }
-        let pass = pass_for(req, doc);
-        let (w, h) = req.size;
-        // runner 的 canvas 是 BGRA：进去换一次，出来的也换回来。
-        let mut canvas = req.backdrop.as_ref().clone();
-        crate::canvas::render_worker::rgba_to_bgra(&mut canvas);
-        let Some(mut out) = runner.composite_steps(&canvas, w, h, &[crate::wgsl_runner::Step::Pass(&pass)], None) else {
-            continue;
-        };
-        crate::canvas::render_worker::rgba_to_bgra(&mut out);
-        let Some(pixmap) = premultiplied(&out, w, h) else { continue };
-        board.put(req.node, Shaded { key: req.key, pixmap, origin_px: req.origin_px });
-        done += 1;
+        px += u64::from(req.size.0) * u64::from(req.size.1);
+        if let Some(shaded) = shade_one(req, runner, doc, &mut timing) {
+            board.put_shared(req.node, std::sync::Arc::new(shaded));
+            done += 1;
+        }
     }
     if crate::canvas::render_worker::render_log() {
-        eprintln!("[shade] {} layers {:.1}ms ok={done}/{}", requests.len(), t0.elapsed().as_secs_f64() * 1000.0, requests.len());
+        eprintln!(
+            "[shade] {} layers {:.1}ms (pass_for {:.1} + swap {:.1} + gpu {:.1} + extract {:.1}) ok={done}/{} mpx={:.2}",
+            requests.len(),
+            t0.elapsed().as_secs_f64() * 1000.0,
+            timing.pass,
+            timing.swap,
+            timing.gpu,
+            timing.extract,
+            requests.len(),
+            px as f64 / 1.0e6,
+        );
     }
     done
+}
+
+/// 一层请求的分段耗时，供 `[shade]` 日志（统一解析路径里由调用方汇总）。
+#[derive(Default, Clone, Copy)]
+pub struct ShadeTiming {
+    pub pass: f64,
+    pub swap: f64,
+    pub gpu: f64,
+    pub extract: f64,
+}
+
+/// 同步产出一层的像素。内置效果与 WGSL 材质共用这一条路径：绘制到该层时由解析器调用。
+pub fn shade_one(req: &ShadeRequest, runner: &mut crate::wgsl_runner::WgslRunner, doc: &Document, timing: &mut ShadeTiming) -> Option<Shaded> {
+    let t_pass = std::time::Instant::now();
+    let mut pass = pass_for(req, doc);
+    timing.pass += t_pass.elapsed().as_secs_f64() * 1000.0;
+    let (w, h) = req.size;
+    // 外置材质自己不实现 blur：`@fx blur <input> <field>` 让宿主按 Figma 的可分离 box 先把
+    // 输入糊好，shader 只采样糊后的纹理。这样背景模糊、图层模糊和未来任何材质共用同一条
+    // 契约，不需要在每个 WGSL 文件里各写一套 tap 循环。
+    let mut canvas = if req.content.is_some() && req.stage == fx::Stage::Layer {
+        vec![0u8; (w as usize) * (h as usize) * 4]
+    } else {
+        req.backdrop.as_ref().clone()
+    };
+    if let Some(blur) = &req.spec.blur {
+        let radius_px = (blur.radius_doc * req.scale).max(0.0);
+        match blur.input {
+            fx::BlurInput::Backdrop => {
+                canvas = figcraft_render::blur::box_premultiplied(&req.backdrop, w, h, radius_px);
+            }
+            fx::BlurInput::Content => {
+                if let Some(content) = &req.content {
+                    pass.content = Some(Arc::new(figcraft_render::blur::box_premultiplied(content, w, h, radius_px)));
+                }
+            }
+        }
+    }
+    // runner 的 canvas 是 BGRA：进去换一次，出来的也换回来。**两种输入都按预乘 alpha
+    // 上传**（`layer` 的 content 与 `backdrop` 的底图同一契约），所以画布初值也必须是
+    // 预乘值；shader 用 `unpack` 还原成直通做运算，输出直通，由 ALPHA_BLENDING 重新合成。
+    // 读回时不能再乘一次 alpha（那会把每个抗锯齿边压暗成黑边）。
+    let t_swap = std::time::Instant::now();
+    crate::canvas::render_worker::rgba_to_bgra(&mut canvas);
+    timing.swap += t_swap.elapsed().as_secs_f64() * 1000.0;
+    if let Ok(dir) = std::env::var("FIGCRAFT_SHADE_DUMP") {
+        if let Some(inp) = figcraft_render::shade::from_premultiplied(&canvas, w, h) {
+            let _ = inp.save_png(std::path::Path::new(&dir).join(format!("in-{:?}-{}.png", req.node, req.key)));
+        }
+    }
+    let t_gpu = std::time::Instant::now();
+    let out = runner.composite_steps(&canvas, w, h, &[crate::wgsl_runner::Step::Pass(&pass)], None);
+    timing.gpu += t_gpu.elapsed().as_secs_f64() * 1000.0;
+    let mut out = out?;
+    let t_swap = std::time::Instant::now();
+    crate::canvas::render_worker::rgba_to_bgra(&mut out);
+    timing.swap += t_swap.elapsed().as_secs_f64() * 1000.0;
+    // Canvas input and the blended output are both premultiplied.
+    let t_extract = std::time::Instant::now();
+    let px_out = figcraft_render::shade::from_premultiplied(&out, w, h)?;
+    timing.extract += t_extract.elapsed().as_secs_f64() * 1000.0;
+    if let Ok(dir) = std::env::var("FIGCRAFT_SHADE_DUMP") {
+        let _ = px_out.save_png(std::path::Path::new(&dir).join(format!("shade-{:?}-{}.png", req.node, req.key)));
+    }
+    Some(Shaded { key: req.key, pixmap: px_out, origin_px: req.origin_px })
 }
 
 /// 一层 → 一次 GPU pass。几何导出与 `passes_for` 逐字段对齐：两条通道对同一节点必须打包出
@@ -77,8 +177,14 @@ fn pass_for(req: &ShadeRequest, doc: &Document) -> crate::wgsl_runner::RunPass {
     let (rw_px, rh_px) = req.size;
     let sc = req.scale.max(1e-9);
     let [bx0, by0, bx1, by1] = req.bounds;
-    let (dw, dh) = ((bx1 - bx0).max(0.0), (by1 - by0).max(0.0));
     let (cx, cy) = ((bx0 + bx1) / 2.0, (by0 + by1) / 2.0);
+    // The node's real extent, not the AABB: a rotated rectangle's AABB is wider than the shape, and
+    // shaders use this as half-axes (shadow) or as the noise's spatial period.
+    let dw = f64::from(req.node_px.0) / sc;
+    let dh = f64::from(req.node_px.1) / sc;
+    let weights = doc.world_transform(req.node).as_coeffs();
+    let rotation = weights[1].atan2(weights[0]);
+    let center_px = ((cx - bx0) * sc + f64::from(req.origin_px.0), (cy - by0) * sc + f64::from(req.origin_px.1));
     let radii_doc = req.radii_px.map(|v| f64::from(v) / sc);
     let uniform_corners = radii_doc.iter().all(|v| (v - radii_doc[0]).abs() < 1e-6);
 
@@ -95,12 +201,27 @@ fn pass_for(req: &ShadeRequest, doc: &Document) -> crate::wgsl_runner::RunPass {
     ex.set("dpr", vec![sc]);
     ex.set("nodeSizePx", vec![f64::from(req.node_px.0), f64::from(req.node_px.1)]);
     ex.set("regionOriginPx", vec![f64::from(req.origin_px.0), f64::from(req.origin_px.1)]);
+    let is_rect = crate::wgsl_runner::analytic_rect(doc, req.node);
+    ex.set("isRectangle", vec![f64::from(u8::from(is_rect))]);
+    if req.local {
+        // The host already rotated the layer/backdrop into the node's own frame. Every shader must
+        // see a plain axis-aligned node here; reporting the world rotation would rotate it twice.
+        ex.set("nodeRotation", vec![0.0]);
+        ex.set("nodeCenterPx", vec![f64::from(req.node_px.0) * 0.5, f64::from(req.node_px.1) * 0.5]);
+    } else {
+        ex.set("nodeRotation", vec![rotation]);
+        ex.set("nodeCenterPx", vec![center_px.0, center_px.1]);
+    }
     ex.set("scale", vec![1.0]);
     ex.set("time", vec![material_time()]);
 
     let params: &BTreeMap<String, f64> = &req.spec.params;
     let (uniforms, field_band) = crate::wgsl_runner::pack_uniforms(&req.spec.effect_id, params, &ex, dw, dh, sc);
-    let field_bytes = crate::wgsl_runner::prepare_fields(doc, req.node, rw_px, rh_px, sc, req.origin_px);
+    let field_bytes = if req.local {
+        crate::wgsl_runner::prepare_fields_local(doc, req.node, rw_px, rh_px, sc, req.origin_px, req.node_px, req.radii_px)
+    } else {
+        crate::wgsl_runner::prepare_fields(doc, req.node, rw_px, rh_px, sc, req.origin_px)
+    };
     crate::wgsl_runner::RunPass {
         effect: req.spec.effect_id.clone(),
         node: req.node,
@@ -112,6 +233,7 @@ fn pass_for(req: &ShadeRequest, doc: &Document) -> crate::wgsl_runner::RunPass {
         field_bytes,
         field_band,
         uniforms,
+        content: req.content.clone(),
         dpr: sc as f32,
     }
 }

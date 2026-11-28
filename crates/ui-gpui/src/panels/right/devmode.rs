@@ -14,7 +14,9 @@ use super::data::{AnnotationRow, DevResourceRow, InspectRow, MeasurementRow, Pan
 use super::inspect::local_dropdown;
 use super::sections::{icon_cmd, icon_row, pick_dropdown, slot};
 use crate::panels::{Cmd, RightFields, RowEditCtx};
-use crate::widgets::{Dropdown, Icon, IconButton, MenuRow, PanelSection, SectionHeaderVariant, block_row, field_row, field_row_full, pt, rgba, tokens};
+use crate::widgets::{
+    Dropdown, Icon, IconButton, MenuRow, PanelSection, SectionHeaderVariant, block_row, field_row, field_row_full, pt, rgba, tokens,
+};
 use figcraft_i18n::tr;
 use figcraft_i18n::tr_noop;
 use gpui::{App, Div, IntoElement, MouseButton, SharedString, div, prelude::*, px};

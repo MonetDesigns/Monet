@@ -63,11 +63,17 @@ impl AssetSource for AppAssets {
 /// 一个旋转标签的 SVG 资源路径。`w`/`h` 是**旋转前**的水平文字框，
 /// 必须与 `Svg` 元素的布局尺寸一致，否则 `Transformation::rotate` 的绕点会偏。
 pub fn text_key(text: &str, pt: f32, w: f32, h: f32) -> SharedString {
+    text_key_weighted(text, pt, w, h, 305)
+}
+
+/// [`text_key`] with the label's CSS font weight: the rotated SVG must use the same face as the
+/// horizontal GPUI labels (MiSans 400 / 600), or the name/size text visibly changes family.
+pub fn text_key_weighted(text: &str, pt: f32, w: f32, h: f32, weight: u16) -> SharedString {
     let mut hex = String::with_capacity(text.len() * 2);
     for b in text.as_bytes() {
         hex.push_str(&format!("{b:02x}"));
     }
-    SharedString::from(format!("{PREFIX}{w:.2}x{h:.2}@{pt:.2}:{hex}.svg"))
+    SharedString::from(format!("{PREFIX}{w:.2}x{h:.2}@{pt:.2}w{weight}:{hex}.svg"))
 }
 
 fn svg_bytes(spec: &str) -> Option<String> {
@@ -77,11 +83,14 @@ fn svg_bytes(spec: &str) -> Option<String> {
     let (w, h) = wh.split_once('x')?;
     let w: f32 = w.parse().ok()?;
     let h: f32 = h.parse().ok()?;
-    let pt: f32 = pt.parse().ok()?;
+    let (pt, weight): (f32, u16) = match pt.rsplit_once('w') {
+        Some((p, weight)) => (p.parse().ok()?, weight.parse().ok()?),
+        None => (pt.parse().ok()?, 400),
+    };
     if !(w > 0.0 && h > 0.0 && pt > 0.0) {
         return None;
     }
-    let mut text = String::with_capacity(hex.len() / 2);
+    let mut raw = Vec::with_capacity(hex.len() / 2);
     let bytes = hex.as_bytes();
     if bytes.len() % 2 != 0 {
         return None;
@@ -89,13 +98,17 @@ fn svg_bytes(spec: &str) -> Option<String> {
     for pair in bytes.chunks(2) {
         let hi = (pair[0] as char).to_digit(16)?;
         let lo = (pair[1] as char).to_digit(16)?;
-        text.push(char::from_u32(hi * 16 + lo)?);
+        raw.push((hi * 16 + lo) as u8);
     }
+    // `text_key` stores the UTF-8 bytes (a frame name can be Chinese, and the size label uses ×).
+    // Decode as a whole UTF-8 string — byte-by-byte `char::from_u32` turns "×" into "Ã—".
+    let text = String::from_utf8(raw).ok()?;
     let escaped = text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
     // 与画布 horizontal label 的排法对齐：水平居中、基线落在行高的 ~0.78 处
     // （`text_size()` 的行高是 1.25×字号），整块绕中心旋转 -90° 后正好贴在左标尺。
+    // 字体必须与页面其它文字一致：根节点用 MiSans，SVG 不能退回 Segoe UI。
     Some(format!(
-        r##"<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}"><text x="{cx}" y="{baseline}" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="{pt}" fill="black">{escaped}</text></svg>"##,
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}"><text x="{cx}" y="{baseline}" text-anchor="middle" font-family="MiSans, Segoe UI, Arial, sans-serif" font-size="{pt}" font-weight="{weight}" fill="black">{escaped}</text></svg>"##,
         w = w,
         h = h,
         cx = w / 2.0,
@@ -106,7 +119,7 @@ fn svg_bytes(spec: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{svg_bytes, text_key};
+    use super::{svg_bytes, text_key, text_key_weighted};
 
     /// 主图标、typ、picker 共用扁平的 `icons/` 前缀：typ/picker 查不到时必须继续下沉到
     /// `IconAssets`，否则主图标会被前缀分支吞掉、整片消失（2026-11-20 回归）。
@@ -126,7 +139,17 @@ mod tests {
         assert!(svg.contains(">-150</text>"), "{svg}");
         assert!(svg.contains("width=\"20\""), "{svg}");
         assert!(svg.contains("font-size=\"9\""), "{svg}");
+        assert!(svg.contains("font-family=\"MiSans"), "{svg}");
+        assert!(svg.contains("font-weight=\"305\""), "{svg}");
         assert!(svg.contains("text-anchor=\"middle\""), "{svg}");
+    }
+
+    #[test]
+    fn the_weighted_key_keeps_the_labels_weight() {
+        let key = text_key_weighted("480 Hug × 180 Hug", 11.0, 120.0, 13.75, 330);
+        let svg = svg_bytes(key.strip_prefix("text:").unwrap()).unwrap();
+        assert!(svg.contains("font-weight=\"330\""), "{svg}");
+        assert!(svg.contains("480 Hug × 180 Hug"), "non-ASCII text was mangled: {svg}");
     }
 
     #[test]

@@ -60,12 +60,13 @@
 // `splitn(6, char::is_whitespace)` *before* filtering empty tokens, so alignment padding
 // silently shifts columns and drops the whole declaration into `extra_fields` (defaults 0).
 // @fx param u.light_angle float -180 180 1 -45 "Light Angle (deg)"
-// @fx param u.light_int float 0 1 0.01 0.8 "Light Intensity"
-// @fx param u.refraction float 0 1 0.01 0.8 "Refraction"
+// @fx param u.light_int float 0 100 1 80 "Light Intensity" v/100
+// @fx param u.refraction float 0 100 1 80 "Refraction" v/100
 // @fx param u.depth float 1 100 1 20 "Depth"
-// @fx param u.dispersion float 0 1 0.01 0.5 "Dispersion"
+// @fx param u.dispersion float 0 100 1 50 "Dispersion" v/100
 // @fx param u.frost float 0 100 1 4 "Frost"
-// @fx param u.splay float 0 1 0.01 0 "Splay"
+// @fx param u.splay float 0 100 1 0 "Splay" v/100
+// @fx reach u.depth
 //
 // The host uploads, per node region:
 //   backdrop    : the layer's **backdrop** (the already-rendered canvas under the node, with this
@@ -169,7 +170,9 @@ fn sample_backdrop(uv : vec2<f32>, lod : f32) -> vec4<f32> {
     // The host only builds as many levels as a frost radius can reach, so ask the texture instead
     // of assuming twelve: sampling a level that does not exist would be undefined.
     let max_lod = f32(max(textureNumLevels(backdrop), 1u) - 1u);
-    return textureSampleLevel(backdrop, samp, texel_uv(uv), clamp(lod, 0.0, max_lod));
+    let raw = textureSampleLevel(backdrop, samp, texel_uv(uv), clamp(lod, 0.0, max_lod));
+    // 预乘底图先还原成直通，再做折射/模糊运算；否则透明边缘会被二次乘 alpha。
+    return vec4<f32>(raw.rgb / max(raw.a, 1e-5), raw.a);
 }
 
 /// The reference 2/255 dither, with the same hash (`fract(sin(dot(p, (12.9898, 78.233))) * 43758.547)`), applied

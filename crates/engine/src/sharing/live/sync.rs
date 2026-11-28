@@ -1,7 +1,7 @@
 use super::host::hosting_json;
 use super::types::{NO_SESSION, SessionId, Share, SharedLink, Status};
 use super::{
-    Access, Arc, Client, EditingText, EngineError, EngineRecompute, FollowedView, Live, Result, ServerMsg, Session, Value, ViewState, bad, busy,
+    Access, Arc, Client, EditingText, EngineError, EngineRecompute, FollowedView, Live, Result, ServerMsg, Session, Value, bad, busy,
     close, code, editing_of, json,
 };
 
@@ -178,7 +178,8 @@ impl Session {
         ds.view.cy = y + h / 2.0;
         let zoom = (ds.view.vw / w).min(ds.view.vh / h);
         if zoom.is_finite() {
-            ds.view.zoom = zoom.clamp(ViewState::MIN_ZOOM, ViewState::MAX_ZOOM);
+            let clamped = ds.view.clamp_zoom(zoom);
+            ds.view.zoom = clamped;
         }
         ds.revision += 1;
         live.followed = Some(FollowedView { page: ds.page, cx: ds.view.cx, cy: ds.view.cy, zoom: ds.view.zoom });

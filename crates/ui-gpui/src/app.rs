@@ -201,12 +201,7 @@ impl CanvasApp {
                 let r = r.inflate(8.0 / zoom, 8.0 / zoom);
                 [r.x0, r.y0, r.x1, r.y1]
             }
-            None => [
-                center.x - 100.0 / zoom,
-                center.y - 75.0 / zoom,
-                center.x + 100.0 / zoom,
-                center.y + 75.0 / zoom,
-            ],
+            None => [center.x - 100.0 / zoom, center.y - 75.0 / zoom, center.x + 100.0 / zoom, center.y + 75.0 / zoom],
         };
         self.key_box = Some(b);
         self.key_box_doc = Some((ds.uid, ds.page));

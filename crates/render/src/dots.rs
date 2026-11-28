@@ -55,6 +55,11 @@ pub(crate) fn draw(pix: &mut Pixmap, view: &View, d: &Dots) {
     let colors = [premultiplied(d.faded), premultiplied(d.color)];
     let major = i64::from(d.major.max(2));
     let strong = |k: i64| k.rem_euclid(major) == 0;
+    // 圆点的半径（设备像素）：`size` 是页面单位里的直径。
+    let r = (d.size * s) / 2.0;
+    if !r.is_finite() || r <= 0.0 {
+        return;
+    }
     // The device-pixel span of the mark on line `k` along an axis `len` pixels long from `o`.
     let span = |k: i64, o: f64, len: i64| {
         let a = (nearest_px(k as f64 * d.step * s, o) as i64).saturating_sub(lead);
@@ -77,18 +82,64 @@ pub(crate) fn draw(pix: &mut Pixmap, view: &View, d: &Dots) {
         return;
     }
     for j in j0 as i64..=j1 as i64 {
-        let (ya, yb) = span(j, oy, h);
+        // 圆点：按参考实现 `dist_px = length(frag - p) * zoomScale`，
+        // `radius_px = max(0.5, 1.0 * zoomScale)`（100% 时 1 个设备像素），
+        // 覆盖率 `1 - smoothstep(0, 1, dist_px - radius_px + 0.5)` —— 边缘带抗锯齿的实心圆。
+        // 方点会把「点阵」在放大后画成一格格方块，FigJam 的底格是圆的。
+        let cy = j as f64 * d.step * s - oy;
+        let reach = r + 1.0;
+        let ya = ((cy - reach).floor() as i64).max(0);
+        let yb = ((cy + reach).ceil() as i64).min(h);
         if ya >= yb {
             continue;
         }
         for i in i0 as i64..=i1 as i64 {
-            let (xa, xb) = span(i, ox, w);
+            let cx = i as f64 * d.step * s - ox;
+            let xa = ((cx - reach).floor() as i64).max(0);
+            let xb = ((cx + reach).ceil() as i64).min(w);
             if xa >= xb {
                 continue;
             }
             let rgba = colors[usize::from(strong(i) && strong(j))];
-            blend_square(data, row, (xa, xb), (ya, yb), rgba);
+            for y in ya..yb {
+                let py = y as f64 + 0.5 - cy;
+                let py2 = py * py;
+                if py2 >= reach * reach {
+                    continue;
+                }
+                let start = y as usize * row;
+                for x in xa..xb {
+                    let px = x as f64 + 0.5 - cx;
+                    let dist = (px * px + py2).sqrt();
+                    let cov = coverage(dist, r);
+                    if cov <= 0.0 {
+                        continue;
+                    }
+                    if let Some(p) = data.get_mut(start + x as usize * 4..start + x as usize * 4 + 4) {
+                        blend_cov(p, rgba, cov);
+                    }
+                }
+            }
         }
+    }
+}
+
+/// 圆点的覆盖率：`1 - smoothstep(0, 1, dist - r + 0.5)`，与参考实现的着色器同式。
+fn coverage(dist: f64, r: f64) -> f32 {
+    let t = (dist - r + 0.5).clamp(0.0, 1.0);
+    (1.0 - t * t * (3.0 - 2.0 * t)) as f32
+}
+
+/// 预乘 `rgba` 按 `cov`（0..1）做 source-over。
+fn blend_cov(px: &mut [u8], rgba: [u32; 4], cov: f32) {
+    if cov <= 0.0 {
+        return;
+    }
+    let k = (cov * 255.0).round() as u32;
+    let src = rgba.map(|c| c * k / 255).map(|c| c.min(255));
+    let keep = 255 - src[3];
+    for (dst, s) in px.iter_mut().zip(src) {
+        *dst = (s + u32::from(*dst) * keep / 255).min(255) as u8;
     }
 }
 

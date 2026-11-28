@@ -106,8 +106,7 @@ mod tests {
         assert!(!p.properties.is_empty(), "the property list drives the controls");
         let mut values = serde_json::Map::new();
         values.insert("Label".into(), Value::String("Pay now".into()));
-        let changed = read_playground(&doc, inst, &values, figcraft_engine::codegen::CodeLang::React, revision)
-            .expect("valid values must build");
+        let changed = read_playground(&doc, inst, &values, figcraft_engine::codegen::CodeLang::React, revision).expect("valid values must build");
         assert!(changed.tried);
         assert!(changed.code.contains("Pay now") && changed.code != p.code, "code must follow the tried value");
     }

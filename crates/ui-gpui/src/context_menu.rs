@@ -132,12 +132,7 @@ fn group(rows: &mut Vec<Item>, items: Vec<Item>) {
 /// right-clicked inside a multi-selection passes just that row (egui `panels/layers.rs`) but the
 /// commands still see the whole selection. `layers` is what the canvas click landed on: the
 /// Select-layer submenu only appears when it isn't empty.
-pub(crate) fn items(
-    doc: Option<&Document>,
-    ids: &[NodeId],
-    layers: &[(NodeId, usize, String)],
-    selection: &[NodeId],
-) -> Vec<Item> {
+pub(crate) fn items(doc: Option<&Document>, ids: &[NodeId], layers: &[(NodeId, usize, String)], selection: &[NodeId]) -> Vec<Item> {
     let mut rows: Vec<Item> = Vec::new();
     // The original puts Select layer first, with the rest of the menu below it.
     if !layers.is_empty() {

@@ -178,19 +178,16 @@ impl IntoElement for Dropdown {
         let frame = input.layout(lead_w, SLOT);
 
         let lead = self.lead.map(|lead| match lead {
-            DropLead::Icon(i) => div().flex_none().size(pt(SLOT)).child(paint_icon(i, rgba(t.text_secondary), crate::widgets::icon::default_glyph(i))).into_any_element(),
+            DropLead::Icon(i) => div()
+                .flex_none()
+                .size(pt(SLOT))
+                .child(paint_icon(i, rgba(t.text_secondary), crate::widgets::icon::default_glyph(i)))
+                .into_any_element(),
             // A 9 pt dot centred in the 24 pt slot, as the original draws it.
             DropLead::Dot(c) => div().flex_none().size(pt(9.0)).rounded(pt(5.0)).bg(rgba(c)).into_any_element(),
         });
-        let mut label = div()
-            .w_full()
-            .h_full()
-            .flex()
-            .items_center()
-            .overflow_hidden()
-            .whitespace_nowrap()
-            .text_size(pt(TEXT_PT))
-            .text_color(rgba(t.text));
+        let mut label =
+            div().w_full().h_full().flex().items_center().overflow_hidden().whitespace_nowrap().text_size(pt(TEXT_PT)).text_color(rgba(t.text));
         if self.center_label {
             label = label.justify_center();
         }

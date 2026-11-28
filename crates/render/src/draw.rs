@@ -14,6 +14,109 @@ use crate::boolean::{PathCache, locked};
 use crate::paint::{Prepared, composite, prepare_at, ts_blend};
 use crate::{blur, grain, lod, shadow};
 
+/// 逐层材质链路的分段计时。仅当 `FIGCRAFT_RENDER_LOG` 设置时累计，正常构建零日志输出。
+///
+/// 这些计数器回答的是「这一帧的时间到底花在链路的哪一段」：底图裁剪、页面底色、拷贝、
+/// 缓存键、命中查询、回退克隆、隔离层、内容绘制、合成，以及请求/命中/未命中与窗口像素量。
+/// 分带渲染是多线程的，所以只按类别做全局累加，不做线程归属。
+pub mod prof {
+    use std::sync::OnceLock;
+    use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+    use std::time::Instant;
+
+    pub struct Slot(AtomicU64);
+
+    impl Slot {
+        pub const fn new() -> Self {
+            Self(AtomicU64::new(0))
+        }
+        pub fn add(&self, t: Instant) {
+            if enabled() {
+                self.0.fetch_add(t.elapsed().as_nanos() as u64, Relaxed);
+            }
+        }
+        pub fn inc(&self, n: u64) {
+            self.0.fetch_add(n, Relaxed);
+        }
+        pub fn get(&self) -> u64 {
+            self.0.load(Relaxed)
+        }
+        pub fn clear(&self) {
+            self.0.store(0, Relaxed);
+        }
+    }
+
+    pub static BACKDROP: Slot = Slot::new();
+    pub static PAGE: Slot = Slot::new();
+    pub static COPY: Slot = Slot::new();
+    pub static HASH: Slot = Slot::new();
+    pub static READY: Slot = Slot::new();
+    pub static LATEST: Slot = Slot::new();
+    pub static LAYER: Slot = Slot::new();
+    pub static CONTENT: Slot = Slot::new();
+    pub static COMPOSITE: Slot = Slot::new();
+    pub static REQUESTS: Slot = Slot::new();
+    pub static HITS: Slot = Slot::new();
+    pub static MISSES: Slot = Slot::new();
+    pub static PIXELS: Slot = Slot::new();
+    pub static STAGE_CALLS: Slot = Slot::new();
+    pub static STAGE_PIXELS: Slot = Slot::new();
+
+    fn slots() -> [&'static Slot; 15] {
+        [
+            &BACKDROP,
+            &PAGE,
+            &COPY,
+            &HASH,
+            &READY,
+            &LATEST,
+            &LAYER,
+            &CONTENT,
+            &COMPOSITE,
+            &REQUESTS,
+            &HITS,
+            &MISSES,
+            &PIXELS,
+            &STAGE_CALLS,
+            &STAGE_PIXELS,
+        ]
+    }
+
+    pub fn enabled() -> bool {
+        static ON: OnceLock<bool> = OnceLock::new();
+        *ON.get_or_init(|| std::env::var_os("FIGCRAFT_RENDER_LOG").is_some())
+    }
+
+    pub fn clear() {
+        for s in slots() {
+            s.clear();
+        }
+    }
+
+    /// 一行可读的累计报告（毫秒 / 次数 / 百万像素）。
+    pub fn report() -> String {
+        let ms = |s: &Slot| s.get() as f64 / 1.0e6;
+        format!(
+            "backdrop={:.1}ms page={:.1}ms copy={:.1}ms hash={:.1}ms ready={:.1}ms latest={:.1}ms layer={:.1}ms content={:.1}ms composite={:.1}ms req={} hit={} miss={} mpx={:.2} stage={} stage_mpx={:.2}",
+            ms(&BACKDROP),
+            ms(&PAGE),
+            ms(&COPY),
+            ms(&HASH),
+            ms(&READY),
+            ms(&LATEST),
+            ms(&LAYER),
+            ms(&CONTENT),
+            ms(&COMPOSITE),
+            REQUESTS.get(),
+            HITS.get(),
+            MISSES.get(),
+            PIXELS.get() as f64 / 1.0e6,
+            STAGE_CALLS.get(),
+            STAGE_PIXELS.get() as f64 / 1.0e6,
+        )
+    }
+}
+
 /// Shared state for one render.
 #[derive(Clone, Copy)]
 /// `'d`: the document's (layers looked up for the render are kept that long), `'a`: the rest.
@@ -56,6 +159,9 @@ pub struct Ctx<'a, 'd> {
     pub rows: Option<(f64, f64)>,
     /// 页面 → 设备像素（提示带是页面坐标，直接用它画）。
     pub page_xf: Affine,
+    /// 这次渲染的底图是否已经被不透明底色铺满（画布默认铺页面底色；抓取替身/导出可透明）。
+    /// 为真时材质层不需要再“新建一张、填页色、盖回去”。
+    pub bg_opaque: bool,
 }
 
 /// What one render works out about layers with children, which a walk down their subtree finds:
@@ -548,6 +654,9 @@ fn int_rect(r: Rect, limit: (u32, u32)) -> Option<IntRect> {
 
 /// The most a layer reaches past the view for its effects, in device pixels.
 const MAX_EFFECT_MARGIN_PX: f64 = 2048.0;
+/// A node-local material window is bound to the readback buffer, not to the node: at 16000% even
+/// a small rectangle would otherwise ask for a 10k×10k texture and blow the 256 MB buffer limit.
+const MAX_LOCAL_SIDE: f64 = 4096.0;
 
 thread_local! {
     /// How deep the layer being drawn on this thread is. A pattern fill draws its source inside the
@@ -627,13 +736,31 @@ fn draw_layer(ctx: &Ctx, pix: &mut Pixmap, n: &Node, parent_xf: Affine, depth: u
     let dev = device_rect(xf, local);
     // Effects that read outside (blur) need a margin when culling. Absurd effects (a spread or
     // blur of millions of pixels) keep a sane layer: what lies further off reads as empty.
-    let blur_margin = (effect_margin(n) * ctx.scale).min(MAX_EFFECT_MARGIN_PX);
+    let blur_margin = (effect_margin(n) * ctx.scale)
+        .max(ctx.shade.and_then(|b| b.spec_for(id)).map_or(0.0, |s| {
+            // A local (rotated) window is the node plus `reach` on every side. Its rotated corners
+            // lie `reach·(|cos|+|sin|)` outside the node's AABB, so a source window inflated by
+            // `reach` alone clips them and leaves transparent (black-under-blur) corners.
+            let rot = rotation_of(xf);
+            s.reach_doc * ctx.scale * (rot.cos().abs() + rot.sin().abs())
+        }))
+        .min(MAX_EFFECT_MARGIN_PX);
     let view = Rect::new(0.0, 0.0, f64::from(pw), f64::from(ph)).inflate(blur_margin, blur_margin);
     if dev.intersect(view).is_zero_area() && !(dev.width() == 0.0 || dev.height() == 0.0) {
         return;
     }
     if outline {
         draw_outline(&Ctx { outline_mode: true, ..*ctx }, pix, n, xf, depth);
+        return;
+    }
+    // A `stage layer` material is an **effect on the whole layer**, not on the canvas band this
+    // call is painting. Shading the band alone would give the shader a slice of content: a shadow
+    // loses its offset half, a blur sees a hard edge at the band seam. Render the complete node
+    // layer once, shade it once (the board caches it by content), then composite the slice.
+    if let Some(spec) = ctx.shade.and_then(|b| b.spec_for(id))
+        && spec.stage == crate::wgsl_effect::Stage::Layer
+    {
+        draw_layer_material(ctx, pix, n, &spec, xf, depth);
         return;
     }
     if ctx.lod && dev.width().max(dev.height()) < lod::TINY_PX && lod::splattable_within(ctx.doc, n, 0, Some(ctx.bounds)).0 {
@@ -656,9 +783,6 @@ fn draw_layer(ctx: &Ctx, pix: &mut Pixmap, n: &Node, parent_xf: Affine, depth: u
     let (lx, ly) = (x0 as i32, y0 as i32);
     let lw = w.min(16_384.0) as u32;
     let lh = h.min(16_384.0) as u32;
-    let Some(mut layer) = Pixmap::new(lw, lh) else { return };
-    let lxf = Affine::translate((-f64::from(lx), -f64::from(ly))) * xf;
-    let shape = node_outline(ctx.doc, n);
     // 外置 WGSL 材质：这一层的「底图」由 GPU 现算，落点与内置 Glass 完全相同（内容之下的
     // 那一层像素），子树仍由普通递归画在它上面。有材质时内置 backdrop 效果让位——两条路径
     // 同时画会在同一层里叠两次玻璃。
@@ -668,7 +792,15 @@ fn draw_layer(ctx: &Ctx, pix: &mut Pixmap, n: &Node, parent_xf: Affine, depth: u
     // overlap 又按材质透镜 reach 给了模糊足够上下文，拼接处连续。绝不能只让「一条带」认领——
     // 那样比视口高的窗格在其余带里整块不画玻璃，放大到 235% 时整块消失。
     let shader = ctx.shade.and_then(|b| b.spec_for(id));
-    let shaded = shader.as_ref().and_then(|spec| shader_layer(ctx, pix, n, spec, (lx, ly), (lw, lh), lxf));
+    let t_layer = std::time::Instant::now();
+    let Some(mut layer) = Pixmap::new(lw, lh) else { return };
+    if shader.is_some() {
+        prof::LAYER.add(t_layer);
+    }
+    let lxf = Affine::translate((-f64::from(lx), -f64::from(ly))) * xf;
+    let shape = node_outline(ctx.doc, n);
+    let layer_stage = shader.as_ref().is_some_and(|s| s.stage == crate::wgsl_effect::Stage::Layer);
+    let shaded = if layer_stage { None } else { shader.as_ref().and_then(|spec| shader_layer(ctx, pix, n, spec, (lx, ly), (lw, lh), lxf)) };
     // Background blur and glass: the whole backdrop under the layer (every surface below this
     // one, composited), through the shape, under the content.
     let back_shape = if shader.is_none() && backdrop::has_effects(n) { backdrop::outline(ctx.doc, n) } else { None };
@@ -710,15 +842,35 @@ fn draw_layer(ctx: &Ctx, pix: &mut Pixmap, n: &Node, parent_xf: Affine, depth: u
         let inner_ctx = Ctx { under: Some(content_under), ..*ctx };
         // 绑了外置材质：材质就是节点那层漆。整页合成通道把节点整个挖空、再把材质贴回，逐层
         // 通道要给出同一张图，就只能画子树——照常画填充会把玻璃整个盖掉（不透明填充尤其）。
-        if shader.is_some() {
+        //
+        // **A miss must not take the paint with it.** `shader_layer` returns `None` on the first
+        // frame of a new window (a pan, a zoom, a sibling moving the backdrop). Painting only the
+        // children there left the pane with no fill and no glass at all — a transparent hole that
+        // looked like the material losing its colour. Until the raster lands, draw the node's
+        // ordinary content; the next pass replaces it with the shaded layer.
+        if shader.is_some() && !layer_stage && shaded.is_some() {
+            let t = std::time::Instant::now();
             draw_children_only(&inner_ctx, &mut layer, n, lxf, depth);
+            prof::CONTENT.add(t);
         } else {
-            draw_content(&inner_ctx, &mut layer, n, lxf, depth, has_inner.then_some(&inner as &dyn Fn(&mut Pixmap)));
+            let t = std::time::Instant::now();
+            draw_content(&inner_ctx, &mut layer, n, lxf, depth, if layer_stage { None } else { has_inner.then_some(&inner as &dyn Fn(&mut Pixmap)) });
+            if shader.is_some() {
+                prof::CONTENT.add(t);
+            }
         }
+    }
+    // `stage layer`: the effect runs over the finished layer, in the same order as a built-in layer
+    // effect. Its result replaces the layer; a miss leaves the unshaded content for this frame.
+    if layer_stage
+        && let Some(spec) = &shader
+        && let Some(s) = layer_shader(ctx, &layer, n, spec, (lx, ly), (lw, lh), lxf, false)
+    {
+        layer = s;
     }
     // A group is no outline of its own: its inner shadows are cast from around what its layers
     // draw together, over them.
-    if matches!(n.kind, NodeKind::Group) && n.effects.iter().any(|e| e.visible && matches!(e.kind, EffectKind::InnerShadow(_))) {
+    if !layer_stage && matches!(n.kind, NodeKind::Group) && n.effects.iter().any(|e| e.visible && matches!(e.kind, EffectKind::InnerShadow(_))) {
         let cover = layer.clone();
         for e in n.effects.iter().filter(|e| e.visible) {
             if let EffectKind::InnerShadow(s) = &e.kind
@@ -729,11 +881,12 @@ fn draw_layer(ctx: &Ctx, pix: &mut Pixmap, n: &Node, parent_xf: Affine, depth: u
         }
     }
     // Layer blur, noise and texture, in list order, over everything else.
-    if !casts {
+    if !casts && !layer_stage {
         layer_effects(ctx, &mut layer, n, id, lxf);
     }
-    // Drop shadows go under the layer, in effect-list order.
-    {
+    // Drop shadows go under the layer, in effect-list order. A layer material has already put its
+    // effect into the layer above.
+    if !layer_stage {
         // Kept apart, the backdrop isn't in the layer yet: the shadows are cast from the content
         // with the layer effects it will get (a copy only when it gets some).
         let layer_fx =
@@ -760,15 +913,284 @@ fn draw_layer(ctx: &Ctx, pix: &mut Pixmap, n: &Node, parent_xf: Affine, depth: u
         }
         layer_effects(ctx, &mut layer, n, id, lxf);
     }
+    let t_comp = std::time::Instant::now();
     composite(pix, (lx, ly), &layer, op, n.blend);
+    if shader.is_some() {
+        prof::COMPOSITE.add(t_comp);
+    }
+}
+
+/// Render the node's **complete layer** into its own pixmap, shade it, and composite the part that
+/// falls on this canvas band. `draw_layer` is called once per band; a layer effect must not be
+/// evaluated per band (its content would be a slice, cutting a shadow off at the seam). The board
+/// caches the full result by content, so the second band's request hits the same raster.
+fn draw_layer_material(ctx: &Ctx, pix: &mut Pixmap, n: &Node, spec: &Arc<crate::shade::ShaderSpec>, xf: Affine, depth: usize) {
+    // A rotated layer must be shaded in **its own** frame. A screen-aligned AABB is not just a
+    // window onto a rotated layer: `uv`, the SDF origin and `nodeSizePx` are no longer expressible
+    // as one scalar origin, which is why per-shader rotation fixes drifted (glass off-centre,
+    // grid upright). Render the content unrotated, shade it, then rotate the finished layer back.
+    if rotation_of(xf).abs() > 1e-9 {
+        draw_layer_material_local(ctx, pix, n, spec, xf, depth);
+        return;
+    }
+    let local = bounds_within(ctx.doc, n, 0, ctx.lod.then_some(ctx.scale), Some(ctx.bounds)).0;
+    let dev = device_rect(xf, local);
+    // The effect can leave the node: blur, spread, shadow offset. The board knows the real reach
+    // (`@fx reach` + offsets); the built-in effects have theirs.
+    let pad = (effect_margin(n).max(spec.reach_doc) * ctx.scale).min(MAX_EFFECT_MARGIN_PX);
+    // Only the part of the node that can land on **this canvas** is worth producing. At 350% a
+    // 2000×1400 node is 7000×4900 device pixels (34 MP) while the viewport is ~3 MP: shading the
+    // whole node uploaded, encoded and read back ~90% pixels nobody sees. Clip to the view first,
+    // then grow by the reach (context the shader still reads outside the visible edge).
+    let vis = dev.intersect(Rect::new(0.0, 0.0, f64::from(pix.width()), f64::from(pix.height())));
+    if vis.is_zero_area() {
+        return;
+    }
+    let (x0, y0) = (vis.x0.floor() - pad, vis.y0.floor() - pad);
+    let w = (vis.x1.ceil() - x0 + pad).min(16_384.0);
+    let h = (vis.y1.ceil() - y0 + pad).min(16_384.0);
+    if !(x0.is_finite() && y0.is_finite() && w >= 1.0 && h >= 1.0) {
+        return;
+    }
+    let (fw, fh) = (w as u32, h as u32);
+    let t_layer = std::time::Instant::now();
+    let Some(mut full) = Pixmap::new(fw, fh) else { return };
+    prof::LAYER.add(t_layer);
+    prof::STAGE_CALLS.inc(1);
+    prof::STAGE_PIXELS.inc(u64::from(fw) * u64::from(fh));
+    let full_xf = Affine::translate((-x0, -y0)) * xf;
+    // Content only: the material replaces the layer, including the effects it implements, so the
+    // CPU inner shadow / layer blur / drop shadow must not paint on top of it.
+    let inner_ctx = Ctx { under: None, ..*ctx };
+    let t = std::time::Instant::now();
+    draw_content(&inner_ctx, &mut full, n, full_xf, depth, None);
+    prof::CONTENT.add(t);
+    let shaded = layer_shader(ctx, &full, n, spec, (0, 0), (fw, fh), full_xf, false).unwrap_or(full);
+    // `pix` is the band; `(x0, y0)` is its top-left in band pixels.
+    let t = std::time::Instant::now();
+    composite(pix, (x0 as i32, y0 as i32), &shaded, n.opacity.clamp(0.0, 1.0), n.blend);
+    prof::COMPOSITE.add(t);
+}
+
+/// [`draw_layer_material`] for a rotated node: content and material live in the node's own
+/// unrotated frame; only the finished pixels are rotated into the band. No shader needs to know the
+/// node's angle, so this is the one path that works for shadow, noise, blur, grid or a user-added
+/// WGSL material alike.
+fn draw_layer_material_local(ctx: &Ctx, pix: &mut Pixmap, n: &Node, spec: &Arc<crate::shade::ShaderSpec>, xf: Affine, depth: usize) {
+    let scale = affine_scale(xf).max(1e-9);
+    let pad_doc = effect_margin(n).max(spec.reach_doc).max(2.0);
+    // The local window is the **node plus its effect reach**, clipped to the pre-image of this
+    // band. It must not be the pre-image of the whole band on its own: for a small node in a large
+    // viewport that made the shader cover the viewport, and the window's rectangular rim showed up
+    // as a one-pixel line across empty page while zooming. Clipping to the node also keeps the
+    // window small when the node is large (16325% no longer rasterises the whole node).
+    let Some((left, top, win_w, win_h)) = local_window(n, xf, (0, 0), (pix.width(), pix.height()), pad_doc) else { return };
+    let raster = scale.min(MAX_LOCAL_SIDE / win_w.max(win_h).max(1.0));
+    let lw = ((win_w * raster).ceil()).min(MAX_LOCAL_SIDE);
+    let lh = ((win_h * raster).ceil()).min(MAX_LOCAL_SIDE);
+    if !(lw >= 1.0 && lh >= 1.0) {
+        return;
+    }
+    let t_layer = std::time::Instant::now();
+    let Some(mut local) = Pixmap::new(lw as u32, lh as u32) else { return };
+    prof::LAYER.add(t_layer);
+    prof::STAGE_CALLS.inc(1);
+    prof::STAGE_PIXELS.inc((lw as u64) * (lh as u64));
+    let local_xf = Affine::translate((-left * raster, -top * raster)) * Affine::scale(raster);
+    let inner_ctx = Ctx { under: None, ..*ctx };
+    let t = std::time::Instant::now();
+    draw_content(&inner_ctx, &mut local, n, local_xf, depth, None);
+    prof::CONTENT.add(t);
+    let shaded = layer_shader(ctx, &local, n, spec, (0, 0), (lw as u32, lh as u32), local_xf, true).unwrap_or(local);
+    // `xf` maps node-local coordinates to band pixels; local pixels first return to node-local
+    // (`left + q/raster`), then go through `xf` exactly once.
+    let to_band = xf * Affine::translate((left, top)) * Affine::scale(1.0 / raster);
+    let paint = PixmapPaint {
+        opacity: n.opacity.clamp(0.0, 1.0) as f32,
+        blend_mode: crate::paint::ts_blend(n.blend),
+        quality: FilterQuality::Bilinear,
+        ..Default::default()
+    };
+    let t = std::time::Instant::now();
+    pix.draw_pixmap(0, 0, shaded.as_ref(), &paint, ts_transform(to_band), None);
+    prof::COMPOSITE.add(t);
+}
+
+fn rotation_of(xf: Affine) -> f64 {
+    let [a, b, ..] = xf.as_coeffs();
+    b.atan2(a)
+}
+
+/// Uniform scale of an affine's local x axis. `|a|` alone is only the cosine component and is
+/// wrong on every rotated node.
+fn affine_scale(xf: Affine) -> f64 {
+    let [a, b, ..] = xf.as_coeffs();
+    (a * a + b * b).sqrt()
+}
+
+/// Node-local window for a material: the node rectangle expanded by `pad` (the effect's reach),
+/// intersected with the pre-image of the band `at..at+(lw, lh)` in node-local space. Returns
+/// `(left, top, width, height)` in node-local coordinates.
+///
+/// The intersection matters both ways: a small node gets a small window instead of one the size of
+/// the viewport (the rect rim used to show as a 1-pixel line across the page), while a node larger
+/// than the viewport is still cut down to about one band.
+fn local_window(n: &Node, lxf: Affine, at: (i32, i32), (lw, lh): (u32, u32), pad: f64) -> Option<(f64, f64, f64, f64)> {
+    if lw == 0 || lh == 0 || !(pad.is_finite() && pad >= 0.0) {
+        return None;
+    }
+    let inv = lxf.inverse();
+    let (x0, y0) = (f64::from(at.0), f64::from(at.1));
+    let (x1, y1) = (x0 + f64::from(lw), y0 + f64::from(lh));
+    let mut min_x = f64::INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+    for (x, y) in [(x0, y0), (x1, y0), (x0, y1), (x1, y1)] {
+        let p = inv * figcraft_geom::kurbo::Point::new(x, y);
+        if !(p.x.is_finite() && p.y.is_finite()) {
+            return None;
+        }
+        min_x = min_x.min(p.x);
+        min_y = min_y.min(p.y);
+        max_x = max_x.max(p.x);
+        max_y = max_y.max(p.y);
+    }
+    let node = Rect::new(0.0, 0.0, n.width, n.height).inflate(pad, pad);
+    let left = min_x.max(node.x0);
+    let top = min_y.max(node.y0);
+    let right = max_x.min(node.x1);
+    let bottom = max_y.min(node.y1);
+    if !(right > left && bottom > top) {
+        return None;
+    }
+    Some((left, top, right - left, bottom - top))
+}
+
+/// The canvas renders with a **transparent** background (`Options::background`) and the UI paints
+/// the page colour behind it. A material that reads the backdrop must see that same page colour,
+/// or `background_blur` turns the transparent page into a black fill (the reported black edges).
+fn page_backdrop(ctx: &Ctx, n: &Node, back: Pixmap) -> Pixmap {
+    let Some(color) = page_color(ctx, n) else { return back };
+    // 画布的底图已经被不透明底色铺满（`render_one` 用了页面底色/显式背景色），裁出来的这块
+    // 本身就不透明；再新建一张、填色、盖回去得到的是同一张图。透明底路径（抓取替身、导出）
+    // 以及孤立层（`under` 可能透明）仍然需要这一步。
+    if ctx.bg_opaque && ctx.under.is_none() {
+        return back;
+    }
+    let mut base = match Pixmap::new(back.width(), back.height()) {
+        Some(b) => b,
+        None => return back,
+    };
+    base.fill(color);
+    base.draw_pixmap(0, 0, back.as_ref(), &PixmapPaint::default(), Transform::identity(), None);
+    base
+}
+
+/// Opaque page colour, or `None` when the page has no opaque fill. Also used to seed the local
+/// rotated backdrop: pixels outside the source window must read as page colour, not transparent
+/// black — that was the black corner/L-shape in the first `background_blur` output.
+fn page_color(ctx: &Ctx, n: &Node) -> Option<tiny_skia::Color> {
+    let page = ctx.doc.page_of(n.id).and_then(|p| ctx.doc.node(p))?;
+    let figcraft_doc::NodeKind::Page { background, .. } = &page.kind else { return None };
+    if background.a <= 0.0 {
+        return None;
+    }
+    Some(crate::paint::ts_color(*background))
 }
 
 /// 外置 WGSL 材质产出的那一层像素：这一层内容之下的底图，由 GPU 换成 shader 的结果。
-///
-/// 命中（同一 layer、同一底图、同一参数）直接给出可画的图；未命中则**登记请求**并返回 `None`
+////// 命中（同一 layer、同一底图、同一参数）直接给出可画的图；未命中则**登记请求**并返回 `None`
 /// ——本帧这一层就没有玻璃，内容照常画，下一帧真图上台。渲染线程不阻塞在 GPU 上，
 /// 这是 [`crate::shade`] 的契约。
 fn shader_layer(
+    ctx: &Ctx,
+    pix: &Pixmap,
+    n: &Node,
+    spec: &Arc<crate::shade::ShaderSpec>,
+    at: (i32, i32),
+    (lw, lh): (u32, u32),
+    lxf: Affine,
+) -> Option<Pixmap> {
+    if rotation_of(lxf).abs() > 1e-9 {
+        return shader_layer_local(ctx, pix, n, spec, at, (lw, lh), lxf);
+    }
+    let board = ctx.shade?;
+    if lw == 0 || lh == 0 {
+        return None;
+    }
+    let scale = ctx.scale;
+    // 窗口左上角在**节点像素**空间里的位置：层可能只是节点的可见那一块。
+    let origin = {
+        let p = lxf * figcraft_geom::Point::new(0.0, 0.0);
+        (-p.x as f32, -p.y as f32)
+    };
+    let world = ctx.doc.bounds_of(&[n.id]);
+    let node_px = world.map_or((lw as f32, lh as f32), |r| ((r.width() * scale) as f32, (r.height() * scale) as f32));
+    let bounds = world.map_or([0.0; 4], |r| [r.x0, r.y0, r.x1, r.y1]);
+    let radii_px = n.corners.radii.map(|v| (v * scale).max(0.0) as f32);
+    let smoothing = n.corners.smoothing;
+    // 这一层背后（不含层自己）的像素：内置 Glass 读的就是这份底图，材质读同一份。
+    let t = std::time::Instant::now();
+    let back = backdrop::backdrop(pix, ctx.under, at.0, at.1, lw, lh)?;
+    prof::BACKDROP.add(t);
+    let t = std::time::Instant::now();
+    let back = page_backdrop(ctx, n, back);
+    prof::PAGE.add(t);
+    let t = std::time::Instant::now();
+    let straight = back.data().to_vec();
+    prof::COPY.add(t);
+    prof::PIXELS.inc(u64::from(lw) * u64::from(lh));
+    let t = std::time::Instant::now();
+    let key = crate::shade::shade_key(spec, (lw, lh), node_px, bounds, smoothing, origin, radii_px, ctx.scale, &straight);
+    prof::HASH.add(t);
+    let t = std::time::Instant::now();
+    let hit = board.ready(n.id, key);
+    prof::READY.add(t);
+    if let Some(s) = hit {
+        prof::HITS.inc(1);
+        return Some(s.pixmap.clone());
+    }
+    prof::MISSES.inc(1);
+    let req = crate::shade::ShadeRequest {
+        node: n.id,
+        key,
+        spec: spec.clone(),
+        size: (lw, lh),
+        node_px,
+        origin_px: origin,
+        radii_px,
+        scale: ctx.scale,
+        bounds,
+        smoothing,
+        backdrop: Arc::new(straight),
+        content: None,
+        stage: spec.stage,
+        local: false,
+    };
+    // 统一管线：有同步解析器时当场交付像素，本帧直接合成；没有才退回“登记请求、稍后重绘”。
+    let t_res = std::time::Instant::now();
+    if let Some(shaded) = board.resolve(&req, ctx.doc) {
+        prof::READY.add(t_res);
+        board.put_shared(n.id, Arc::clone(&shaded));
+        return Some(shaded.pixmap.clone());
+    }
+    prof::READY.add(t_res);
+    board.request(req);
+    prof::REQUESTS.inc(1);
+    // 没算出来就用这一层上一张：拖动材质本身时键每帧都换，画空白会闪。第一次见到这个节点
+    // 时它本来就没有上一张，那一帧仍然是空的。
+    let t = std::time::Instant::now();
+    let latest = board.latest(n.id, (lw, lh), origin).map(|s| s.pixmap.clone());
+    prof::LATEST.add(t);
+    latest
+}
+
+/// The backdrop-material half of the node-local path. The shader gets the backdrop **rotated back
+/// into the node's own frame** and hands back a node-local result; this function rotates the result
+/// onto the band. Grid, glass and any future backdrop shader therefore follow the layer without
+/// each shader implementing `nodeRotation` itself.
+fn shader_layer_local(
     ctx: &Ctx,
     pix: &Pixmap,
     n: &Node,
@@ -781,24 +1203,140 @@ fn shader_layer(
     if lw == 0 || lh == 0 {
         return None;
     }
-    // 窗口左上角在**节点像素**空间里的位置：层可能只是节点的可见那一块。
+    // Raster scale of this node's local frame, not `ctx.scale`: `lxf` already contains the node's
+    // own rotation/scale. Using only `a` (the cosine component) shrank `node_px` by cos(θ) on a
+    // rotated node, which moved the shader's uv/shape by exactly that factor at high zoom.
+    let scale = affine_scale(lxf).max(1e-9);
+    let pad_doc = spec.reach_doc.max(2.0);
+    // Node + reach, clipped to the band's pre-image (see `local_window`). A whole-band window
+    // painted the shader's rectangular rim across empty page; the node-sized one does not.
+    let (left, top, win_w, win_h) = local_window(n, lxf, at, (lw, lh), pad_doc)?;
+    let raster = scale.min(MAX_LOCAL_SIDE / win_w.max(win_h).max(1.0));
+    let local_w = ((win_w * raster).ceil()).min(MAX_LOCAL_SIDE);
+    let local_h = ((win_h * raster).ceil()).min(MAX_LOCAL_SIDE);
+    if !(local_w >= 1.0 && local_h >= 1.0) {
+        return None;
+    }
+    let (local_w, local_h) = (local_w as u32, local_h as u32);
+    let origin = ((-left * raster) as f32, (-top * raster) as f32);
+    let local_to_window = lxf * Affine::translate((left, top)) * Affine::scale(1.0 / raster);
+
+    let back = backdrop::backdrop(pix, ctx.under, at.0, at.1, lw, lh)?;
+    let back = page_backdrop(ctx, n, back);
+    if let Ok(dir) = std::env::var("FIGCRAFT_SHADE_DUMP") {
+        let _ = back.save_png(std::path::Path::new(&dir).join(format!("back-{:?}.png", n.id)));
+    }
+    let Some(mut local_back) = Pixmap::new(local_w, local_h) else { return None };
+    // Seed the whole local rectangle with the page colour. The inverse mapping of a rotated node
+    // only covers the source rectangle's parallelogram, so its four corners would otherwise stay
+    // transparent; a blur shader reads those as black.
+    if let Some(color) = page_color(ctx, n) {
+        local_back.fill(color);
+    }
+    let inv = local_to_window.inverse();
+    // `back` starts at `at` in layer-local pixels; `local_to_window` maps local pixels to those
+    // layer coordinates. Without translating the source to `at` first, the inverse drew only the
+    // corner of the backdrop that happened to align with the origin — the rotated grid/glass then
+    // looked offset and transparent everywhere else.
+    local_back.draw_pixmap(
+        0,
+        0,
+        back.as_ref(),
+        &PixmapPaint { quality: FilterQuality::Bilinear, ..Default::default() },
+        ts_transform(inv * Affine::translate((f64::from(at.0), f64::from(at.1)))),
+        None,
+    );
+    if let Ok(dir) = std::env::var("FIGCRAFT_SHADE_DUMP") {
+        let _ = local_back.save_png(std::path::Path::new(&dir).join(format!("localback-{:?}.png", n.id)));
+    }
+    let straight = local_back.data().to_vec();
+    let node_px = ((n.width * raster) as f32, (n.height * raster) as f32);
+    let bounds = [0.0, 0.0, n.width, n.height];
+    let radii_px = n.corners.radii.map(|v| (v * raster).max(0.0) as f32);
+    let smoothing = n.corners.smoothing;
+    let key =
+        crate::shade::with_local(crate::shade::shade_key(spec, (local_w, local_h), node_px, bounds, smoothing, origin, radii_px, raster, &straight));
+    if let Some(s) = board.ready(n.id, key) {
+        return rotate_local_to_window(&s.pixmap, local_to_window, lw, lh);
+    }
+    board.request(crate::shade::ShadeRequest {
+        node: n.id,
+        key,
+        spec: spec.clone(),
+        size: (local_w, local_h),
+        node_px,
+        origin_px: origin,
+        radii_px,
+        scale: raster,
+        bounds,
+        smoothing,
+        backdrop: Arc::new(straight),
+        content: None,
+        stage: spec.stage,
+        local: true,
+    });
+    let latest = board.latest(n.id, (local_w, local_h), origin)?;
+    rotate_local_to_window(&latest.pixmap, local_to_window, lw, lh)
+}
+
+fn rotate_local_to_window(local: &Pixmap, to_window: Affine, w: u32, h: u32) -> Option<Pixmap> {
+    let mut out = Pixmap::new(w, h)?;
+    let paint = PixmapPaint { quality: FilterQuality::Bilinear, ..Default::default() };
+    out.draw_pixmap(0, 0, local.as_ref(), &paint, ts_transform(to_window), None);
+    Some(out)
+}
+
+/// `@fx stage layer`: the shader takes the **finished layer** — this node's fills, children and
+/// strokes already composited into `layer` — and returns the layer with its effect (shadow, blur,
+/// noise) applied. This is the same order the built-in effects use: content first, effect over it,
+/// then the ordinary alpha composite of the layer onto the page. A key that misses keeps the
+/// unshaded layer for this frame and installs the result on the next one, exactly like the
+/// backdrop path.
+fn layer_shader(
+    ctx: &Ctx,
+    layer: &Pixmap,
+    n: &Node,
+    spec: &Arc<crate::shade::ShaderSpec>,
+    _at: (i32, i32),
+    (lw, lh): (u32, u32),
+    lxf: Affine,
+    local: bool,
+) -> Option<Pixmap> {
+    let board = ctx.shade?;
+    if lw == 0 || lh == 0 {
+        return None;
+    }
+    // Local requests carry the raster transform; use its scale for node_px/radii/dpr, otherwise a
+    // capped 4096-px raster would still describe a 16k node to the shader.
+    let scale = if local { affine_scale(lxf).max(1e-9) } else { ctx.scale };
     let origin = {
         let p = lxf * figcraft_geom::Point::new(0.0, 0.0);
         (-p.x as f32, -p.y as f32)
     };
+    // The layer's bytes are **premultiplied**: that is what a shader's `unpack` expects, and what
+    // `over` needs to keep antialiased edges from darkening.
+    let t = std::time::Instant::now();
+    let content = layer.data().to_vec();
+    prof::COPY.add(t);
+    prof::PIXELS.inc(u64::from(lw) * u64::from(lh));
     let bounds = ctx.doc.bounds_of(&[n.id]);
-    let node_px = bounds.map_or((lw as f32, lh as f32), |r| ((r.width() * ctx.scale) as f32, (r.height() * ctx.scale) as f32));
-    let bounds = bounds.map_or([0.0; 4], |r| [r.x0, r.y0, r.x1, r.y1]);
-    let radii_px = n.corners.radii.map(|v| (v * ctx.scale).max(0.0) as f32);
+    let node_px = ((n.width * scale) as f32, (n.height * scale) as f32);
+    let bounds = if local { [0.0, 0.0, n.width, n.height] } else { bounds.map_or([0.0; 4], |r| [r.x0, r.y0, r.x1, r.y1]) };
+    let radii_px = n.corners.radii.map(|v| (v * scale).max(0.0) as f32);
     let smoothing = n.corners.smoothing;
-    // 这一层背后（不含层自己）的像素：内置 Glass 读的就是这份底图，材质读同一份。
-    let back = backdrop::backdrop(pix, ctx.under, at.0, at.1, lw, lh)?;
-    let straight = crate::shade::straight(&back);
-    let key = crate::shade::shade_key(spec, (lw, lh), node_px, bounds, smoothing, origin, radii_px, ctx.scale, &straight);
-    if let Some(s) = board.ready(n.id, key) {
+    let t = std::time::Instant::now();
+    let key = crate::shade::with_content(crate::shade::shade_key(spec, (lw, lh), node_px, bounds, smoothing, origin, radii_px, scale, &[]), &content);
+    let key = if local { crate::shade::with_local(key) } else { key };
+    prof::HASH.add(t);
+    let t = std::time::Instant::now();
+    let hit = board.ready(n.id, key);
+    prof::READY.add(t);
+    if let Some(s) = hit {
+        prof::HITS.inc(1);
         return Some(s.pixmap.clone());
     }
-    board.request(crate::shade::ShadeRequest {
+    prof::MISSES.inc(1);
+    let req = crate::shade::ShadeRequest {
         node: n.id,
         key,
         spec: spec.clone(),
@@ -806,14 +1344,29 @@ fn shader_layer(
         node_px,
         origin_px: origin,
         radii_px,
-        scale: ctx.scale,
+        scale,
         bounds,
         smoothing,
-        backdrop: Arc::new(straight),
-    });
-    // 没算出来就用这一层上一张：拖动材质本身时键每帧都换，画空白会闪。第一次见到这个节点
-    // 时它本来就没有上一张，那一帧仍然是空的。
-    board.latest(n.id, (lw, lh), origin).map(|s| s.pixmap.clone())
+        // A layer shader reads `content`; the backdrop contract is not used. Keep it empty rather
+        // than reading a backdrop we would then never sample.
+        backdrop: Arc::new(Vec::new()),
+        content: Some(Arc::new(content)),
+        stage: spec.stage,
+        local,
+    };
+    let t_res = std::time::Instant::now();
+    if let Some(shaded) = board.resolve(&req, ctx.doc) {
+        prof::READY.add(t_res);
+        board.put_shared(n.id, Arc::clone(&shaded));
+        return Some(shaded.pixmap.clone());
+    }
+    prof::READY.add(t_res);
+    board.request(req);
+    prof::REQUESTS.inc(1);
+    let t = std::time::Instant::now();
+    let latest = board.latest(n.id, (lw, lh), origin).map(|s| s.pixmap.clone());
+    prof::LATEST.add(t);
+    latest
 }
 
 /// Node `n`'s backdrop effects through its backdrop outline `sh`, for its `size` layer at `at` on

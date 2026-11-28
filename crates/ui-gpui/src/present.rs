@@ -1247,12 +1247,7 @@ fn device_body(stage: Div, g: &Geom, area: RectPx, ppp: f32) -> Div {
     if let Some(fi) = g.frame.as_ref() {
         let (dx, dy, png_w, png_h) = fi.placed.map(|p| (p[0], p[1], p[2], p[3])).unwrap_or_else(|| {
             let k = g.screen.w / fi.screen_rect[2].max(1.0) as f32;
-            (
-                fi.screen_rect[0] as f32 * k,
-                fi.screen_rect[1] as f32 * k,
-                fi.png_size[0] as f32 * k,
-                fi.png_size[1] as f32 * k,
-            )
+            (fi.screen_rect[0] as f32 * k, fi.screen_rect[1] as f32 * k, fi.png_size[0] as f32 * k, fi.png_size[1] as f32 * k)
         });
         let x = g.screen.x - dx;
         let y = g.screen.y - dy;
@@ -1261,12 +1256,7 @@ fn device_body(stage: Div, g: &Geom, area: RectPx, ppp: f32) -> Div {
         let ppp = ppp.max(0.25);
         let snap = |v: f32| (v * ppp).round() / ppp;
         return stage.child(
-            img(gpui::ImageSource::from(fi.image.clone()))
-                .absolute()
-                .left(px(snap(x - area.x)))
-                .top(px(snap(y - area.y)))
-                .w(px(png_w))
-                .h(px(png_h)),
+            img(gpui::ImageSource::from(fi.image.clone())).absolute().left(px(snap(x - area.x))).top(px(snap(y - area.y))).w(px(png_w)).h(px(png_h)),
         );
     }
     let Some(d) = g.device.as_ref() else { return stage };
@@ -1389,13 +1379,7 @@ fn device_glass(stage: Div, g: &Geom, area: RectPx) -> Div {
 // ---- 旧的本地布局已移到 `present/layout.rs` ----
 
 /// 覆盖率层（全屏）：顶栏 +（设备机身 +）画面 + 过渡帧 + 底部导航（eGUI `player()`）。
-pub fn render(
-    app: &CanvasApp,
-    state: &PresentState,
-    vp: (f32, f32),
-    canvas: (f32, f32, f32, f32),
-    window: &gpui::Window,
-) -> Stateful<Div> {
+pub fn render(app: &CanvasApp, state: &PresentState, vp: (f32, f32), canvas: (f32, f32, f32, f32), window: &gpui::Window) -> Stateful<Div> {
     let t = tokens();
     // 演示优先用自己那份文档快照：源设计稿被关掉后，预览标签依然能打开并继续播放
     // （用户 2026-11-17）。源文档还在时快照会随切进预览刷新，所以不会看到旧内容。
@@ -1757,10 +1741,8 @@ pub fn render(
     // 菜单挂在演示层根上（那个容器的原点在窗口 `(0, TITLE_H)`，见函数末尾），而通用菜单
     // 按**绝对坐标**落位；探针给的是窗口坐标，所以这里统一减掉标题栏高度换算一次。
     // 若留在导航栏里，绝对坐标会被导航栏自己的 `bottom` 锚点再偏移一遍。
-    let in_layer = |r: gpui::Bounds<gpui::Pixels>| gpui::Bounds {
-        origin: gpui::point(r.origin.x, r.origin.y - px(crate::title_bar::TITLE_H)),
-        size: r.size,
-    };
+    let in_layer =
+        |r: gpui::Bounds<gpui::Pixels>| gpui::Bounds { origin: gpui::point(r.origin.x, r.origin.y - px(crate::title_bar::TITLE_H)), size: r.size };
     let device_menu = if state.device_open {
         device_anchor.rect().map(|rect| {
             // 顶层只列 family，variants 走统一菜单的二级子菜单（`Item::sub`，与主菜单 flyout
@@ -2166,94 +2148,55 @@ pub fn render(
         };
         let skip_row = n.skip.is_some().then(|| {
             let on = n.skip == Some(true);
-            crate::widgets::Checkbox::new("present-notice-skip")
-                .label(tr("Don't show this again"))
-                .checked(on)
-                .on_change(|_, _, cx| {
-                    cx.stop_propagation();
-                    ACTION.with(|a| a.set(22));
-                })
+            crate::widgets::Checkbox::new("present-notice-skip").label(tr("Don't show this again")).checked(on).on_change(|_, _, cx| {
+                cx.stop_propagation();
+                ACTION.with(|a| a.set(22));
+            })
         });
-        div()
-            .id("present-link-notice")
-            .absolute()
-            .top(px(56.0))
-            .left(px(0.0))
-            .right(px(0.0))
-            .flex()
-            .justify_center()
-            .child(
-                div()
-                    .w(px(340.0))
-                    .flex()
-                    .flex_col()
-                    .gap(pt(8.0))
-                    .p(pt(12.0))
-                    .rounded(pt(8.0))
-                    .bg(rgba(t.panel))
-                    .border_1()
-                    .border_color(rgba(t.border))
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .child(
-                        div()
-                            .text_size(pt(12.0))
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .text_color(rgba(t.text))
-                            .child(tr("Leaving the prototype")),
-                    )
-                    .child(
-                        div()
-                            .text_size(pt(11.0))
-                            .text_color(rgba(t.text_secondary))
-                            .child(tr("This link opens a website outside the prototype:")),
-                    )
-                    .child(
-                        div()
-                            .text_size(pt(11.0))
-                            .text_color(rgba(t.text))
-                            .overflow_hidden()
-                            .child(SharedString::from(n.url.clone())),
-                    )
-                    .children(skip_row)
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .justify_end()
-                            .gap(pt(6.0))
-                            .child(notice_btn(0, tr("Cancel").into(), 21, false))
-                            .child(notice_btn(1, tr("Open link").into(), 20, true)),
-                    ),
-            )
+        div().id("present-link-notice").absolute().top(px(56.0)).left(px(0.0)).right(px(0.0)).flex().justify_center().child(
+            div()
+                .w(px(340.0))
+                .flex()
+                .flex_col()
+                .gap(pt(8.0))
+                .p(pt(12.0))
+                .rounded(pt(8.0))
+                .bg(rgba(t.panel))
+                .border_1()
+                .border_color(rgba(t.border))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(div().text_size(pt(12.0)).font_weight(gpui::FontWeight::SEMIBOLD).text_color(rgba(t.text)).child(tr("Leaving the prototype")))
+                .child(div().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(tr("This link opens a website outside the prototype:")))
+                .child(div().text_size(pt(11.0)).text_color(rgba(t.text)).overflow_hidden().child(SharedString::from(n.url.clone())))
+                .children(skip_row)
+                .child(div().flex().flex_row().justify_end().gap(pt(6.0)).child(notice_btn(0, tr("Cancel").into(), 21, false)).child(notice_btn(
+                    1,
+                    tr("Open link").into(),
+                    20,
+                    true,
+                ))),
+        )
     });
 
     // ── 评论输入条（eGUI 演示层评论模式）：点画布后在这里写评论 ──────────────────
     let composer = state.comment_draft.is_some().then(|| {
         let field = comment_field();
-        div()
-            .id("present-comment-composer")
-            .absolute()
-            .left(px(0.0))
-            .right(px(0.0))
-            .bottom(px(16.0))
-            .flex()
-            .justify_center()
-            .child(
-                div()
-                    .w(px(340.0))
-                    .flex()
-                    .flex_col()
-                    .gap(pt(6.0))
-                    .p(pt(10.0))
-                    .rounded(pt(8.0))
-                    .bg(rgba(t.panel))
-                    .border_1()
-                    .border_color(rgba(t.border))
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .child(div().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(tr("New comment")))
-                    .children(field)
-                    .child(div().text_size(pt(10.5)).text_color(rgba(t.text_tertiary)).child(tr("Enter to post · Esc to cancel"))),
-            )
+        div().id("present-comment-composer").absolute().left(px(0.0)).right(px(0.0)).bottom(px(16.0)).flex().justify_center().child(
+            div()
+                .w(px(340.0))
+                .flex()
+                .flex_col()
+                .gap(pt(6.0))
+                .p(pt(10.0))
+                .rounded(pt(8.0))
+                .bg(rgba(t.panel))
+                .border_1()
+                .border_color(rgba(t.border))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(div().text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(tr("New comment")))
+                .children(field)
+                .child(div().text_size(pt(10.5)).text_color(rgba(t.text_tertiary)).child(tr("Enter to post · Esc to cancel"))),
+        )
     });
 
     // eGUI 的演示覆盖 CentralPanel，标题栏（含 tab strip 的 PresentTab）仍显示在上方。
@@ -2434,9 +2377,7 @@ mod tests {
 
     #[test]
     fn present_options_parse_every_engine_scale_name() {
-        for (name, scale) in
-            [("fit", ScaleMode::Fit), ("fitWidth", ScaleMode::FitWidth), ("fill", ScaleMode::Fill), ("actual", ScaleMode::Actual)]
-        {
+        for (name, scale) in [("fit", ScaleMode::Fit), ("fitWidth", ScaleMode::FitWidth), ("fill", ScaleMode::Fill), ("actual", ScaleMode::Actual)] {
             assert_eq!(ScaleMode::parse(name), Some(scale));
         }
         assert_eq!(ScaleMode::parse("Fit"), None);

@@ -3,13 +3,8 @@
 //
 // 对照 Figma：`SHADER_SOURCE_MASK_BACKGROUND_BLUR_TILE_FRAGMENT`
 //   if (shape.a == 0.0) discard;  return blurredBackdrop;
-// 模糊本身在另一条链上（downsample → clamped box taps），这里换成 backdrop 的 mip 链：
-// 2×2 box 降采样 + 线性上采样，一次 `textureSampleLevel` 完成（glass 的 Frost 用的同一招）。
-// Figma 的 mask 片元**不抖动**；这里也不抖，保持 1:1。若平色区出现色带，在返回前加
-// glass.wgsl 里的 ditherize(·, frag_px) 即可（2/255，同一个 hash）。
-//
-// 半径语义：Figma 的 blurRadius 是 box 半宽；本项目 frost 的约定是 level = log2(radius px)。
-// 要按 Figma 的几何走，把 BLUR_SEMANTICS 填 2.0。
+// 模糊本身走 `@fx blur backdrop u.blur`：宿主先做 Figma 的可分离 box（水平、垂直各一遍，
+// 边缘 clamp），再把糊好的 backdrop 绑进来。这个片元只负责 mask，不再自己做 mip 近似。
 
 struct Uniforms {
     resolution     : vec2<f32>,
@@ -26,9 +21,9 @@ struct Uniforms {
 
 // @fx id background_blur
 // @fx label Background Blur
-// @fx param u.blur float 0 200 1 12 "Blur"
-
-const BLUR_SEMANTICS : f32 = 1.0;
+// @fx param u.blur float 1 100 1 4 "Blur"
+// @fx reach u.blur
+// @fx blur backdrop u.blur
 
 struct VSOut {
     @builtin(position) pos : vec4<f32>,
@@ -60,10 +55,9 @@ fn fs(in : VSOut) -> @location(0) vec4<f32> {
     if (coverage <= 0.001) {
         discard;
     }
-    let radius_px = max(u.blur, 0.0) * u.dpr;
-    let max_lod = f32(max(textureNumLevels(backdrop), 1u) - 1u);
-    let lod = clamp(log2(max(radius_px * BLUR_SEMANTICS, 1.0)), 0.0, max_lod);
-    let c = textureSampleLevel(backdrop, samp, texel_uv(in.uv), lod);
+    let raw = textureSampleLevel(backdrop, samp, texel_uv(in.uv), 0.0);
+    // backdrop 是预乘的；先还原成直通，否则透明边缘的颜色会被 alpha 再乘一次，四边发黑。
+    let c = vec4<f32>(raw.rgb / max(raw.a, 1e-5), raw.a);
     // 直通 alpha：runner 用 ALPHA_BLENDING 盖在原来的底图上。
     return vec4<f32>(c.rgb, coverage);
 }

@@ -566,11 +566,7 @@ impl Icon {
     /// Asset path used by GPUI's `svg()` element.
     pub fn asset_path(self) -> SharedString {
         let rel = self.asset_rel();
-        if rel.starts_with("brand/") {
-            SharedString::from(format!("{rel}.svg"))
-        } else {
-            SharedString::from(format!("icons/{rel}.svg"))
-        }
+        if rel.starts_with("brand/") { SharedString::from(format!("{rel}.svg")) } else { SharedString::from(format!("icons/{rel}.svg")) }
     }
 }
 
@@ -792,11 +788,7 @@ pub fn slot_glyph(icon: Icon, slot: f32) -> f32 {
     if file_bytes(&dedicated).is_some() {
         return slot;
     }
-    if slot == 24.0 {
-        natural_size(icon)
-    } else {
-        slot
-    }
+    if slot == 24.0 { natural_size(icon) } else { slot }
 }
 
 /// 按槽位画图标，颜色缺省取 `tokens().icon`。这是业务代码唯一需要记的入口：
@@ -845,11 +837,7 @@ impl AssetSource for IconAssets {
     }
 
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
-        if path.is_empty() || path == "icons" || path == "icons/" {
-            Ok(Icon::ALL.iter().map(|i| i.asset_path()).collect())
-        } else {
-            Ok(Vec::new())
-        }
+        if path.is_empty() || path == "icons" || path == "icons/" { Ok(Icon::ALL.iter().map(|i| i.asset_path()).collect()) } else { Ok(Vec::new()) }
     }
 }
 
@@ -991,10 +979,7 @@ mod tests {
         for &icon in Icon::ALL {
             let rel = icon.asset_rel();
             let text = std::str::from_utf8(file_bytes(rel).unwrap()).unwrap();
-            assert!(
-                !text.contains("transform=\"scale("),
-                "{rel}: 路径 transform scale 会缩放 stroke-width，破坏统一线宽"
-            );
+            assert!(!text.contains("transform=\"scale("), "{rel}: 路径 transform scale 会缩放 stroke-width，破坏统一线宽");
         }
     }
 
@@ -1018,10 +1003,7 @@ mod tests {
                 let inner = close.map(|i| &rest[tag_end..i]).unwrap_or("");
                 let mask_is_white = tag.contains("fill=\"white\"") || tag.contains("fill=\"#fff\"") || tag.contains("fill=\"#ffffff\"");
                 let has_white_rect = inner.contains("fill=\"white\"") || inner.contains("fill=\"#fff\"") || inner.contains("fill=\"#ffffff\"");
-                assert!(
-                    mask_is_white || has_white_rect,
-                    "{rel}: mask 既非 white 也无白底 rect → 全透明，被它遮住的描边看不见（PR#9 归一化 bug）"
-                );
+                assert!(mask_is_white || has_white_rect, "{rel}: mask 既非 white 也无白底 rect → 全透明，被它遮住的描边看不见（PR#9 归一化 bug）");
                 match close {
                     Some(i) => rest = &rest[i + "</mask>".len()..],
                     None => break,

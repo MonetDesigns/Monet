@@ -146,10 +146,7 @@ pub fn panel(
     // ── Stroke weight ────────────────────────────────────────────────────────
     // The Design Stroke section edits `stroke.weight` directly and has no diamond; this row
     // gives Motion mode its own keyframe field so stroke-width animation is reachable.
-    body = body.child(
-        panel_section(tr("Stroke weight"))
-            .child(field_row(vec![field(fields, 12).into_any_element()], no_trailing())),
-    );
+    body = body.child(panel_section(tr("Stroke weight")).child(field_row(vec![field(fields, 12).into_any_element()], no_trailing())));
     body = body.child(separator());
 
     // ── Fill / Stroke / Effects ────────────────────────────────────────────────

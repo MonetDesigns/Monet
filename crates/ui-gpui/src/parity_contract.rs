@@ -226,7 +226,19 @@ fn capabilities() -> BTreeSet<String> {
     let devmode_src = include_str!("panels/right/devmode.rs");
     let data_src = include_str!("panels/right/data.rs");
     let dev_gate_src = include_str!("dev_gate.rs");
-    for token in ["status_actions", "newest_version", "CompareWith", "asset_row", "asset_format_dropdown", "playground_section", "plugin_section", "PluginRunRow", "code_sec", "CodeLang::ALL", "connect_section"] {
+    for token in [
+        "status_actions",
+        "newest_version",
+        "CompareWith",
+        "asset_row",
+        "asset_format_dropdown",
+        "playground_section",
+        "plugin_section",
+        "PluginRunRow",
+        "code_sec",
+        "CodeLang::ALL",
+        "connect_section",
+    ] {
         if inspect_src.contains(token) || data_src.contains(token) || devmode_src.contains(token) {
             out.insert(token.into());
         }

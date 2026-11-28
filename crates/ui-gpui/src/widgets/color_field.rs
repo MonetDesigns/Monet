@@ -84,6 +84,7 @@ type ActionHandler = Rc<dyn Fn(&mut Window, &mut App)>;
 /// `Field-color / Disabled` — the state a colour row takes when its colour is bound to a
 /// variable. The row keeps no shell, keeps its trailing slot (so the frame's geometry does not
 /// jump), swaps the "%" unit for a 24 pt detach button and answers clicks over its whole rect.
+#[derive(Clone)]
 struct ColorBound {
     name: SharedString,
     on_click: ClickHandler,
@@ -91,6 +92,7 @@ struct ColorBound {
 }
 
 /// A `Field-color` row, `width` points wide — one [`Input`] with a lead and a trail slot.
+#[derive(Clone)]
 pub struct ColorField {
     paint: Paint,
     text: ColorText,

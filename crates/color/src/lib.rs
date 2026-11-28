@@ -243,6 +243,77 @@ impl Color {
         0.2126 * lin(self.r) + 0.7152 * lin(self.g) + 0.0722 * lin(self.b)
     }
 
+    /// How bright a colour reads when something is drawn over it: the root of its squared channels,
+    /// weighted the way the eye weights them and taken on the 8-bit values (`#FFFFFF` 1,
+    /// `#FF0000` 0.55, `#1E1E1E` 0.12). Squaring first keeps a saturated hue from reading as dark as
+    /// its weighted average would make it — red is a bright surface, not a 30% grey.
+    pub fn brightness(self) -> f32 {
+        let sq = 0.299 * self.r * self.r + 0.587 * self.g * self.g + 0.114 * self.b * self.b;
+        if sq.is_finite() { sq.max(0.0).sqrt() } else { 1.0 }
+    }
+
+    /// One pixel-grid mark's colour on top of `self`: exactly one step of 0.05 brightness below a
+    /// bright surface (`#FFFFFF` → `#F2F2F2`, `#FF0000` → `#E80000`), and on a dark one (`j ≤ 0.5`)
+    /// mixed towards white until it reads `0.8j + 0.15` (`#000000` → `#262626`). That is the rule the
+    /// reference canvas follows; a fixed ink either glares on a shape unlike the page or disappears
+    /// on a mid-tone, which is why the grid takes the colour of whatever pixel it covers.
+    pub fn ink(self) -> Color {
+        let j = self.brightness();
+        if j > 0.5 {
+            let k = (j - 0.05) / j;
+            return Color::new(self.r * k, self.g * k, self.b * k, self.a);
+        }
+        let k = 0.8 * j + 0.15;
+        let t = if 1.0 - j > 1e-6 { ((k - j) / (1.0 - j)).clamp(0.0, 1.0) } else { 0.0 };
+        let up = |c: f32| c + (1.0 - c) * t;
+        Color::new(up(self.r), up(self.g), up(self.b), self.a)
+    }
+
+
+    /// The colour of a grid mark drawn on the page this colour is: the page's own colour moved `step`
+    /// (0..1) down in brightness on a light page, and up on a dark one, so the mark keeps the page's
+    /// hue instead of turning black or white — a white page at `0.05` gives `#F2F2F2`, a `#FF0000`
+    /// one `#E80000`. A dark page lifts about twice and a half the step: the same amount of ink reads
+    /// weaker against dark.
+    pub fn mark(self, step: f32) -> Color {
+        if !step.is_finite() {
+            return self;
+        }
+        let step = step.max(0.0);
+        let j = self.brightness();
+        if j > 0.5 {
+            let k = ((j - step) / j).max(0.0);
+            return Color::new(self.r * k, self.g * k, self.b * k, 1.0);
+        }
+        // Toward white until the result reads `2.5 × step` brighter: mixing `t` of white in changes
+        // the squared-channel sum to `i + 2t(l - i) + t²m`, so `t` comes out of one quadratic.
+        let target = (j + 2.5 * step).min(1.0);
+        let l = 0.299 * self.r + 0.587 * self.g + 0.114 * self.b;
+        let (i, m) = (j * j, 1.0 - 2.0 * l + j * j);
+        let t = if m <= 1e-6 {
+            step
+        } else {
+            let n = i - l;
+            let disc = (n * n - m * (i - target * target)).max(0.0);
+            ((n + disc.sqrt()) / m).clamp(0.0, 1.0)
+        };
+        let up = |c: f32| c + (1.0 - c) * t;
+        Color::new(up(self.r), up(self.g), up(self.b), 1.0)
+    }
+
+    /// [`Color::mark`] 的**单色版**：同一步亮度，但输出纯灰（R=G=B）。
+    /// 白板点阵的点色在参考实现里是单通道灰度，不继承页面色相——页面偏暖（`#F4F3F0`）时
+    /// 直接 `mark` 出来的点会带一点褐，和参考画板对不上；这里保住亮度、去掉色相。
+    pub fn mark_gray(self, step: f32) -> Color {
+        if !step.is_finite() {
+            return self;
+        }
+        let step = step.max(0.0);
+        let j = self.brightness();
+        let g = if j > 0.5 { (j - step).clamp(0.0, 1.0) } else { (j + 2.5 * step).min(1.0) };
+        Color::new(g, g, g, 1.0)
+    }
+
     /// Whether black on this colour reads worse than white (a dark page: new text is white).
     pub fn is_dark(self) -> bool {
         self.contrast(Color::WHITE) > self.contrast(Color::BLACK)

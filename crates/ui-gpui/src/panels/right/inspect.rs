@@ -33,11 +33,7 @@ pub(crate) enum CompareWith<'a> {
 /// something to compare with (EGUI `status_dropdown` + `Focus view` + `Compare changes`).
 pub(crate) fn status_actions(focused: bool, changed: bool, newest: Option<&str>) -> (bool, Option<CompareWith<'_>>) {
     let focus = !focused;
-    let compare = if changed {
-        Some(CompareWith::Changed)
-    } else {
-        newest.map(CompareWith::Version)
-    };
+    let compare = if changed { Some(CompareWith::Changed) } else { newest.map(CompareWith::Version) };
     (focus, compare)
 }
 
@@ -93,12 +89,11 @@ pub(crate) fn panel(f: &RightFields, d: &PanelData, cx: &mut App, n: &mut usize)
             actions.push(action_button(f, tr("Focus view"), "dev.focus", json!({ "id": id })).into_any_element());
         }
         match compare {
-            Some(CompareWith::Changed) => actions.push(
-                action_button(f, tr("Compare changes"), "dev.compare", json!({ "id": id, "show": true })).into_any_element(),
-            ),
+            Some(CompareWith::Changed) => {
+                actions.push(action_button(f, tr("Compare changes"), "dev.compare", json!({ "id": id, "show": true })).into_any_element())
+            }
             Some(CompareWith::Version(version)) => actions.push(
-                action_button(f, tr("Compare changes"), "dev.compare", json!({ "id": id, "version": version, "show": true }))
-                    .into_any_element(),
+                action_button(f, tr("Compare changes"), "dev.compare", json!({ "id": id, "version": version, "show": true })).into_any_element(),
             ),
             None => {}
         }
@@ -243,13 +238,10 @@ fn playground_section(f: &RightFields, p: &PlaygroundData, cx: &mut App, n: &mut
     }
 
     // 预览：与 Export Preview 共用 BGRA → ImageSource 管线，四周留 8pt。
-    let mut frame =
-        div().w_full().h(px(136.0)).rounded(px(6.0)).border_1().border_color(rgba(t.border)).overflow_hidden().relative().my(pt(6.0));
+    let mut frame = div().w_full().h(px(136.0)).rounded(px(6.0)).border_1().border_color(rgba(t.border)).overflow_hidden().relative().my(pt(6.0));
     frame = frame.child(gpui::canvas(|b, _w, _cx| b.size, |b, _, window, _cx| crate::widgets::checker(window, b, 8.0)).absolute().inset_0());
     if let Some((w, h, buf)) = &p.preview {
-        let image = img(ImageSource::Render(crate::canvas::render_worker::wrap_bgra(*w, *h, buf.clone())))
-            .max_w(px(320.0))
-            .max_h(px(120.0));
+        let image = img(ImageSource::Render(crate::canvas::render_worker::wrap_bgra(*w, *h, buf.clone()))).max_w(px(320.0)).max_h(px(120.0));
         frame = frame.child(div().absolute().inset_0().flex().items_center().justify_center().child(image));
     }
     sec = sec.child(field_row_full(frame));
@@ -261,8 +253,7 @@ fn playground_section(f: &RightFields, p: &PlaygroundData, cx: &mut App, n: &mut
             "variant" => {
                 let options: Vec<Value> = prop["options"].as_array().cloned().unwrap_or_default();
                 let current = value.as_str().unwrap_or("").to_string();
-                let rows: Vec<(String, Value)> =
-                    options.into_iter().filter_map(|v| v.as_str().map(|s| (s.to_string(), json!(s)))).collect();
+                let rows: Vec<(String, Value)> = options.into_iter().filter_map(|v| v.as_str().map(|s| (s.to_string(), json!(s)))).collect();
                 let dd = playground_dropdown(f, name, current, rows, p.target, 0.0);
                 sec = sec.child(field_row(vec![label_element(name), dd.into_any_element()], Vec::<IconButton>::new()));
             }
@@ -273,14 +264,11 @@ fn playground_section(f: &RightFields, p: &PlaygroundData, cx: &mut App, n: &mut
                 let cache = f.playground_cache.clone();
                 let wake = f.cmds.clone();
                 let key = name.to_string();
-                let cb = Checkbox::new(("playground-bool", *n))
-                    .label(name.to_string())
-                    .checked(on)
-                    .on_change(move |next: &bool, _w, _cx| {
-                        values.borrow_mut().insert(key.clone(), json!(*next));
-                        *cache.borrow_mut() = None;
-                        wake.wake();
-                    });
+                let cb = Checkbox::new(("playground-bool", *n)).label(name.to_string()).checked(on).on_change(move |next: &bool, _w, _cx| {
+                    values.borrow_mut().insert(key.clone(), json!(*next));
+                    *cache.borrow_mut() = None;
+                    wake.wake();
+                });
                 *n += 1;
                 sec = sec.child(field_row_full(cb));
             }
@@ -331,18 +319,16 @@ fn motion_section(data: &InspectData) -> PanelSection {
 }
 
 fn label_element(label: &str) -> AnyElement {
-    div().min_w(px(72.0)).text_size(pt(11.0)).text_color(rgba(tokens().text_secondary)).child(SharedString::from(label.to_string())).into_any_element()
+    div()
+        .min_w(px(72.0))
+        .text_size(pt(11.0))
+        .text_color(rgba(tokens().text_secondary))
+        .child(SharedString::from(label.to_string()))
+        .into_any_element()
 }
 
 /// Playground 里的一个本地下拉：选中的值只写进 `RightFields.playground_values`，不推命令。
-fn playground_dropdown(
-    f: &RightFields,
-    name: &str,
-    current: String,
-    rows: Vec<(String, Value)>,
-    target: NodeId,
-    width: f32,
-) -> Dropdown {
+fn playground_dropdown(f: &RightFields, name: &str, current: String, rows: Vec<(String, Value)>, target: NodeId, width: f32) -> Dropdown {
     let menu: Vec<MenuRow> = rows.iter().enumerate().map(|(i, (l, _))| MenuRow::row(l.clone()).key(i.to_string())).collect();
     let anchor_key = format!("playground:{}:{}", target.0, name);
     let anchor_handle = crate::widgets::dropdown::menu_anchor(&anchor_key);

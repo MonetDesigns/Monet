@@ -65,6 +65,7 @@ pub fn cell_pixmap(doc: &Document, pt: &PatternPaint, w: f64, h: f64, scale: f64
         shade: None,
         rows: None,
         page_xf: Affine::IDENTITY,
+        bg_opaque: false,
     };
     let unrotated = src.transform.inverse();
     // The source is one level below the layer it fills, not a fresh render (#1082).

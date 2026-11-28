@@ -162,3 +162,109 @@ pub fn progressive(p: &mut Pixmap, s0: f64, s1: f64, a: Point, b: Point) {
         *d = ((u32::from(*a) + 127) / 255) as u8;
     }
 }
+
+/// Figma's layer/background blur is a **separable box**, not a mip-level sample: a box of
+/// half-width `radius_px` is applied horizontally, then vertically. Edges clamp to the border
+/// (the reference's `blurClamp`), so a transparent border cannot pull black into the result.
+///
+/// The input and output are **premultiplied** RGBA. This is deliberately the exact box, not a
+/// finite tap approximation: a 1D running sum makes the cost linear in pixels even for a radius
+/// of hundreds of pixels. `radius_px` is in device pixels (document radius × scale).
+pub fn box_premultiplied(src: &[u8], w: u32, h: u32, radius_px: f64) -> Vec<u8> {
+    let len = (w as usize).saturating_mul(h as usize).saturating_mul(4);
+    if len == 0 || src.len() < len {
+        return src.to_vec();
+    }
+    let r = radius_px.round();
+    if !(r >= 1.0) || w == 0 || h == 0 {
+        return src[..len].to_vec();
+    }
+    let r = (r as usize).min(usize::MAX / 4);
+    let denom = (2 * r + 1) as f64;
+
+    // Horizontal pass. The running window repeats the first/last column outside the border,
+    // exactly like clamping each tap coordinate.
+    let mut tmp = vec![0u8; len];
+    for y in 0..h as usize {
+        let row = y * w as usize * 4;
+        let mut sum = [0.0f64; 4];
+        for i in 0..=(2 * r) {
+            let x = i.saturating_sub(r).min(w as usize - 1);
+            let p = row + x * 4;
+            for c in 0..4 {
+                sum[c] += f64::from(src[p + c]);
+            }
+        }
+        for x in 0..w as usize {
+            let out = row + x * 4;
+            for c in 0..4 {
+                tmp[out + c] = (sum[c] / denom).round().clamp(0.0, 255.0) as u8;
+            }
+            if x + 1 < w as usize {
+                let add = (x + 1 + r).min(w as usize - 1);
+                let del = x.saturating_sub(r);
+                for c in 0..4 {
+                    sum[c] += f64::from(src[row + add * 4 + c]);
+                    sum[c] -= f64::from(src[row + del * 4 + c]);
+                }
+            }
+        }
+    }
+
+    // Vertical pass, same running window over rows.
+    let mut out = vec![0u8; len];
+    let stride = w as usize * 4;
+    for x in 0..w as usize {
+        let mut sum = [0.0f64; 4];
+        for i in 0..=(2 * r) {
+            let y = i.saturating_sub(r).min(h as usize - 1);
+            let p = y * stride + x * 4;
+            for c in 0..4 {
+                sum[c] += f64::from(tmp[p + c]);
+            }
+        }
+        for y in 0..h as usize {
+            let p = y * stride + x * 4;
+            for c in 0..4 {
+                out[p + c] = (sum[c] / denom).round().clamp(0.0, 255.0) as u8;
+            }
+            if y + 1 < h as usize {
+                let add = (y + 1 + r).min(h as usize - 1);
+                let del = y.saturating_sub(r);
+                for c in 0..4 {
+                    sum[c] += f64::from(tmp[add * stride + x * 4 + c]);
+                    sum[c] -= f64::from(tmp[del * stride + x * 4 + c]);
+                }
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod box_tests {
+    use super::box_premultiplied;
+
+    #[test]
+    fn a_constant_survives_any_radius() {
+        let src = vec![10, 20, 30, 255].repeat(16);
+        let out = box_premultiplied(&src, 4, 4, 3.0);
+        assert_eq!(out, src);
+    }
+
+    #[test]
+    fn a_single_pixel_spreads_by_one_and_clamps_at_the_border() {
+        // 3×1: the centre is white, the two sides are black. Clamped box radius 1 gives every
+        // pixel (0 + 255 + 0) / 3 = 85, including the border pixels (their outside tap repeats
+        // the border, not the centre).
+        let src = vec![0, 0, 0, 255, 255, 255, 255, 255, 0, 0, 0, 255];
+        let out = box_premultiplied(&src, 3, 1, 1.0);
+        assert_eq!(out, vec![85, 85, 85, 255, 85, 85, 85, 255, 85, 85, 85, 255]);
+    }
+
+    #[test]
+    fn radius_below_half_a_pixel_is_a_no_op() {
+        let src = vec![1, 2, 3, 4];
+        assert_eq!(box_premultiplied(&src, 1, 1, 0.4), src);
+    }
+}

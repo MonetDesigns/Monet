@@ -1182,12 +1182,7 @@ pub fn read_binding(doc: &Document, ids: &[NodeId]) -> Option<BindingData> {
         })
         .unwrap_or_default();
     let bound: Vec<(String, String)> = n.prop_refs.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-    let overrides: Vec<String> = n
-        .overrides
-        .iter()
-        .filter(|g| components::OVERRIDE_GROUPS.contains(&g.as_str()))
-        .cloned()
-        .collect();
+    let overrides: Vec<String> = n.overrides.iter().filter(|g| components::OVERRIDE_GROUPS.contains(&g.as_str())).cloned().collect();
     Some(BindingData {
         node: *id,
         in_instance,
@@ -1313,10 +1308,7 @@ pub fn read_component(doc: &Document, ids: &[NodeId]) -> Option<ComponentData> {
             let own_variant_props = match set {
                 Some(s) => {
                     let pairs = components::variant_props(&n.name);
-                    variants
-                        .iter()
-                        .map(|(name, vals)| (name.clone(), vals.clone(), pairs.get(name).cloned().unwrap_or_default()))
-                        .collect()
+                    variants.iter().map(|(name, vals)| (name.clone(), vals.clone(), pairs.get(name).cloned().unwrap_or_default())).collect()
                 }
                 None => Vec::new(),
             };
@@ -1381,10 +1373,7 @@ fn first_frame(doc: &Document, root: NodeId) -> Option<NodeId> {
 /// 某个变体（通常是左上角的默认变体）自己的属性值：`variant_props("Size=Large, State=Hover")`。
 /// Properties 里每个变体属性的「默认值」显示的是默认变体的值，不是候选值列表的第一项。
 fn variant_defaults_of(doc: &Document, variant: Option<NodeId>) -> std::collections::BTreeMap<String, String> {
-    variant
-        .and_then(|v| doc.node(v))
-        .map(|n| figcraft_engine::components::variant_props(&n.name))
-        .unwrap_or_default()
+    variant.and_then(|v| doc.node(v)).map(|n| figcraft_engine::components::variant_props(&n.name)).unwrap_or_default()
 }
 
 /// 从一个组件节点读它的属性定义（供右栏 Properties 节增删/改名/默认值）。
@@ -1507,11 +1496,7 @@ pub fn read_vector(doc: &Document, ve: &figcraft_engine::vectoredit::VectorEdit)
 ///
 /// 只在正在编辑的文本节点属于当前选区、且 range 非空时返回；范围内字符填充不一致时
 /// `paint` 为 `None`（Mixed），仍返回一行让用户改写或清掉范围覆盖。
-pub fn read_range_fill(
-    doc: &Document,
-    ids: &[NodeId],
-    range: Option<(NodeId, usize, usize)>,
-) -> Option<RangeFillData> {
+pub fn read_range_fill(doc: &Document, ids: &[NodeId], range: Option<(NodeId, usize, usize)>) -> Option<RangeFillData> {
     let (id, start, end) = range?;
     if start >= end || !ids.contains(&id) {
         return None;
@@ -1646,11 +1631,7 @@ fn sampled_behind_color(doc: &Document, ids: &[NodeId], page: Option<NodeId>, pa
     let cx = (box_.x0 + box_.x1) * 0.5;
     let cy = (box_.y0 + box_.y1) * 0.5;
     let view = figcraft_render::View { origin: (cx - 0.5, cy - 0.5), scale: 1.0, width: 1, height: 1 };
-    let opts = figcraft_render::Options {
-        background: Some(page_bg),
-        skip: ids.to_vec(),
-        ..figcraft_render::Options::default()
-    };
+    let opts = figcraft_render::Options { background: Some(page_bg), skip: ids.to_vec(), ..figcraft_render::Options::default() };
     let pix = crate::render_stack::on_render_stack(|| figcraft_render::render_view_single(doc, page_id, &view, &opts))??;
     let c = pix.pixel(0, 0)?.demultiply();
     let (r, g, b, a) = (c.red(), c.green(), c.blue(), c.alpha());
@@ -2209,8 +2190,7 @@ fn paint_rows(doc: &Document, ids: &[NodeId], page: Option<NodeId>, fills: bool)
     let color_vars: Vec<String> =
         doc.variables.variables.iter().filter(|v| v.kind == figcraft_doc::VariableType::Color).map(|v| v.name.clone()).collect();
     let pattern_sources = paint_pattern_sources(doc, ids, page);
-    let image_presets: Vec<(String, figcraft_color::ImageFilters)> =
-        doc.image_presets.iter().map(|p| (p.name.clone(), p.filters)).collect();
+    let image_presets: Vec<(String, figcraft_color::ImageFilters)> = doc.image_presets.iter().map(|p| (p.name.clone(), p.filters)).collect();
     Some(
         list.iter()
             .enumerate()
@@ -2285,13 +2265,7 @@ pub fn read(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: 
 
 /// [`read`] with an already computed Dev section. `CanvasView` caches `read_dev` by document revision;
 /// the rest of the panel is cheap enough to rebuild, but `dev_items`/measurements are not.
-pub fn read_with_dev(
-    doc: &Document,
-    ids: &[NodeId],
-    page: Option<NodeId>,
-    ready_filter: usize,
-    dev: Option<DevModeData>,
-) -> PanelData {
+pub fn read_with_dev(doc: &Document, ids: &[NodeId], page: Option<NodeId>, ready_filter: usize, dev: Option<DevModeData>) -> PanelData {
     let mut d = PanelData::default();
     // 导出节与页面导出按钮都要用：选区、文档色彩配置在 `ids.is_empty()` 提前 return 之前填。
     d.ids = ids.to_vec();
@@ -2414,12 +2388,7 @@ pub fn read_with_dev(
             profile: doc.color_profile.label().to_string(),
             profiles: figcraft_color::ColorProfile::ALL.iter().map(|p| p.label().to_string()).collect(),
             variable_modes: page_mode_rows(doc, page),
-            local_variables: doc
-                .variables
-                .variables
-                .iter()
-                .filter(|v| !figcraft_engine::library::is_remote_variable(doc, &v.id))
-                .count(),
+            local_variables: doc.variables.variables.iter().filter(|v| !figcraft_engine::library::is_remote_variable(doc, &v.id)).count(),
             local_styles: doc.styles.len(),
             export_ids: page_node.map(|n| n.children.clone()).unwrap_or_default(),
         });
@@ -2539,7 +2508,17 @@ pub fn read_with_dev(
         let grids_json = serde_json::to_value(&list).unwrap_or(serde_json::Value::Array(vec![]));
         list.iter()
             .enumerate()
-            .map(|(index, g)| GridRow { index, label: grid_label(g), color: g.color.to_hex(), visible: g.visible, grids: grids_json.clone(), layout: g.clone(), kind: g.kind, count: grid_count_cell(g), align: g.align })
+            .map(|(index, g)| GridRow {
+                index,
+                label: grid_label(g),
+                color: g.color.to_hex(),
+                visible: g.visible,
+                grids: grids_json.clone(),
+                layout: g.clone(),
+                kind: g.kind,
+                count: grid_count_cell(g),
+                align: g.align,
+            })
             .collect()
     });
 
@@ -2717,11 +2696,7 @@ pub fn read_with_dev(
 
     // ── Typography（`typography/fields.rs`）：选区里只要有文本节点就画这一节 ──
     // 值只从文本节点统计；“文本 + 矩形”混选时矩形不参与字体字段，命令也只打文本 id。
-    let text_ids: Vec<NodeId> = ids
-        .iter()
-        .copied()
-        .filter(|i| doc.node(*i).is_some_and(|n| matches!(n.kind, NodeKind::Text(_))))
-        .collect();
+    let text_ids: Vec<NodeId> = ids.iter().copied().filter(|i| doc.node(*i).is_some_and(|n| matches!(n.kind, NodeKind::Text(_)))).collect();
     d.text_ids = text_ids.clone();
     let text = if !text_ids.is_empty() {
         let ids = text_ids.as_slice();
@@ -2736,7 +2711,11 @@ pub fn read_with_dev(
         let path_flip = ids.iter().all(|i| doc.node(*i).and_then(|n| text_of(n)).and_then(|t| t.path.as_ref()).is_some_and(|p| p.flip));
         let can_put_on_path = text_ids.len() == 1
             && ids.len() == 2
-            && ids.iter().find(|i| !text_ids.contains(*i)).and_then(|i| doc.node(*i)).is_some_and(|n| figcraft_doc::geometry::stroke_geometry(n).is_some());
+            && ids
+                .iter()
+                .find(|i| !text_ids.contains(*i))
+                .and_then(|i| doc.node(*i))
+                .is_some_and(|n| figcraft_doc::geometry::stroke_geometry(n).is_some());
         Some(TextData {
             font_family: common(doc, ids, |n| text_of(n).map(|t| t.style.font_family.clone())).flatten(),
             font_style: common(doc, ids, |n| text_of(n).map(|t| t.style.font_style.clone())).flatten(),
@@ -2867,20 +2846,12 @@ pub fn read_with_dev(
     d.text = text;
     // ── 文本样式链接（egui `style_picker::text_link`）：有链接时 Typography 只留样式 chip，
     // 字体族 / 字重 / 字号行隐藏（字符样式不一致的文本仍显示字体行）。──
-    d.text_style = common(doc, &text_ids, |n| n.styles.text.clone())
-        .flatten()
-        .and_then(|id| doc.style(&id))
-        .map(|s| s.name.clone());
+    d.text_style = common(doc, &text_ids, |n| n.styles.text.clone()).flatten().and_then(|id| doc.style(&id)).map(|s| s.name.clone());
     // `characters` 的绑定行只看文本节点；整选区里混进矩形时不能拿矩形的空绑定把行吞掉。
     d.bound.remove("characters");
     let char_bindings: Vec<Option<String>> = text_ids
         .iter()
-        .map(|id| {
-            doc.node(*id)
-                .and_then(|n| n.bound.get("characters"))
-                .and_then(|v| doc.variables.get(v))
-                .map(|v| v.name.clone())
-        })
+        .map(|id| doc.node(*id).and_then(|n| n.bound.get("characters")).and_then(|v| doc.variables.get(v)).map(|v| v.name.clone()))
         .collect();
     if let Some(first) = char_bindings.first().cloned().flatten() {
         if char_bindings.iter().all(|b| b.as_deref() == Some(first.as_str())) {
@@ -2965,10 +2936,7 @@ pub fn read_with_dev(
     // ── 智能选区间距（egui `canvas::selection_spacing::panel`）──
     let sp = figcraft_engine::selection_spacing::selection_spacing(doc, ids);
     d.selection_spacing = if sp.horizontal.is_some() || sp.vertical.is_some() {
-        Some(SelectionSpacingData {
-            horizontal: sp.horizontal.as_ref().map(|a| a.value),
-            vertical: sp.vertical.as_ref().map(|a| a.value),
-        })
+        Some(SelectionSpacingData { horizontal: sp.horizontal.as_ref().map(|a| a.value), vertical: sp.vertical.as_ref().map(|a| a.value) })
     } else {
         None
     };

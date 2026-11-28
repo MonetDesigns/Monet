@@ -18,7 +18,8 @@ use crate::widgets::menu::menu_popup_in;
 use crate::widgets::popover::{self, HEADER_H, Open, Surface, WIDTH, popover_body, popover_window, title_text};
 use crate::widgets::typ_icons::TypIcon;
 use crate::widgets::{
-    Icon, IconButton, SegItem, Segmented, Slider, Slot, TextEdit, TextField, number_field, number_field_ranged, pt, rgba, search_field, text_field, tokens,
+    Icon, IconButton, SegItem, Segmented, Slider, Slot, TextEdit, TextField, number_field, number_field_ranged, pt, rgba, search_field, text_field,
+    tokens,
 };
 use crate::widgets::{MenuRow, dropdown};
 use figcraft_i18n::tr;
@@ -70,13 +71,10 @@ pub(crate) fn anchored_top(key: &str, window: &Window) -> Pixels {
 /// A menu that opens below a button: its left edge on the button's left, its top 4 pt below the
 /// button's bottom. Used where the generic right-edge anchor would put the card over the panel.
 pub(crate) fn anchored_left_below(key: &str, window: &Window) -> Point<Pixels> {
-    window_trigger_top(key)
-        .get()
-        .map(|b| Point { x: b.origin.x, y: b.origin.y + b.size.height + px(4.0) })
-        .unwrap_or_else(|| {
-            let p = window.mouse_position();
-            Point { x: p.x - px(BUTTON_HALF), y: p.y + px(BUTTON_HALF + 4.0) }
-        })
+    window_trigger_top(key).get().map(|b| Point { x: b.origin.x, y: b.origin.y + b.size.height + px(4.0) }).unwrap_or_else(|| {
+        let p = window.mouse_position();
+        Point { x: p.x - px(BUTTON_HALF), y: p.y + px(BUTTON_HALF + 4.0) }
+    })
 }
 
 /// 变量 / 文本样式列表的最大可见高度（超出滚动）。必须是常量：从 `body_h` 派生会被
@@ -238,6 +236,12 @@ pub(crate) enum Setting {
         tab: u8,
         label: SharedString,
         field: Entity<TextField>,
+    },
+    /// 一条颜色行（使用通用 `ColorField`）：标签 + 色块 + hex + 透明度。
+    Color {
+        tab: u8,
+        label: SharedString,
+        field: crate::widgets::ColorField,
     },
     /// 一条滑条行（Type settings 的可变字体轴）：左标签 + 右侧通用 `Slider`。
     /// `on_change` 在拖动时连续回调，直接往命令队列推命令（同一条命令会被队列合并）。
@@ -1844,8 +1848,13 @@ impl WindowState {
         }
         items.push((tr("None").to_string(), "node.set", crate::wgsl_material::write_binding_params(None)));
         let options = items.into_iter().map(|(label, cmd, params)| Opt::new(label, cmd, params)).collect();
-        w.header_dropdown =
-            Some(Setting::Dropdown { tab: 0, label: tr("Material").into(), current: Rc::new(RefCell::new(name)), anchor: Rc::new(RefCell::new(None)), options });
+        w.header_dropdown = Some(Setting::Dropdown {
+            tab: 0,
+            label: tr("Material").into(),
+            current: Rc::new(RefCell::new(name)),
+            anchor: Rc::new(RefCell::new(None)),
+            options,
+        });
 
         // 正文：shader 的每个非 host 参数一行；任何一次提交都从最新 binding 起改，再整体写回。
         let specs: Vec<figcraft_render::wgsl_effect::ParamSpec> =
@@ -1857,6 +1866,68 @@ impl WindowState {
         }
         for spec in &specs {
             let value = binding.params.get(&spec.field).copied().unwrap_or(spec.default);
+            // `color_r/g/b/a` 四个标量在 Figma 里是**一个**颜色控件。不要把它们摊成四个数字
+            // 输入框：面板用通用 `ColorField`（hex + 透明度），写回仍落到原有四个 uniform，
+            // shader 契约不变。
+            if let Some(base) = spec.field.strip_suffix("_r") {
+                let (g, b, a) = (format!("{base}_g"), format!("{base}_b"), format!("{base}_a"));
+                let found = [&spec.field, &g, &b, &a].iter().all(|f| specs.iter().any(|s| &s.field == *f));
+                if found {
+                    let val =
+                        |f: &str| specs.iter().find(|s| s.field == f).map(|s| binding.params.get(f).copied().unwrap_or(s.default)).unwrap_or(0.0);
+                    let color = figcraft_color::Color::new(val(&spec.field) as f32, val(&g) as f32, val(&b) as f32, val(&a) as f32);
+                    let hex = color.to_hex();
+                    let pct = (color.a * 100.0).round() as i64;
+                    let (hex_ed, op_ed) = crate::widgets::ColorField::color_row_editors(
+                        cx,
+                        &hex,
+                        pct,
+                        {
+                            let live = shared.clone();
+                            let queue = cmds.clone();
+                            let (r, g, b) = (spec.field.clone(), g.clone(), b.clone());
+                            move |text: &str, _, _| {
+                                let Some(c) = figcraft_color::Color::from_hex(text) else { return };
+                                let mut bind = live.borrow().clone();
+                                let a = bind.params.get(&r.replace("_r", "_a")).copied().unwrap_or(1.0);
+                                bind.params.insert(r.clone(), f64::from(c.r));
+                                bind.params.insert(g.clone(), f64::from(c.g));
+                                bind.params.insert(b.clone(), f64::from(c.b));
+                                bind.params.insert(r.replace("_r", "_a"), a);
+                                *live.borrow_mut() = bind.clone();
+                                queue.push(Cmd { id: "node.set", params: Some(crate::wgsl_material::write_binding_params(Some(&bind))) });
+                            }
+                        },
+                        {
+                            let live = shared.clone();
+                            let queue = cmds.clone();
+                            let a = a.clone();
+                            move |v: f64, _, _| {
+                                let mut bind = live.borrow().clone();
+                                bind.params.insert(a.clone(), (v / 100.0).clamp(0.0, 1.0));
+                                *live.borrow_mut() = bind.clone();
+                                queue.push(Cmd { id: "node.set", params: Some(crate::wgsl_material::write_binding_params(Some(&bind))) });
+                            }
+                        },
+                    );
+                    let field = crate::widgets::ColorField::new(
+                        cx,
+                        figcraft_color::Paint::solid(color),
+                        crate::widgets::color_field::ColorText::Hex(SharedString::from(hex)),
+                        176.0,
+                        hex_ed,
+                        op_ed,
+                    );
+                    settings.push(Setting::Color { tab: 0, label: SharedString::from("Color"), field });
+                    continue;
+                }
+            }
+            if specs.iter().any(|s| s.field.ends_with("_g") || s.field.ends_with("_b") || s.field.ends_with("_a")) {
+                let siblings = ["_r", "_g", "_b", "_a"].iter().any(|suf| spec.field.ends_with(suf));
+                if siblings {
+                    continue;
+                }
+            }
             let field = number_field_ranged(cx, 100.0, Some(value), "", spec.step, Slot::None, Some(spec.min), Some(spec.max));
             let live = shared.clone();
             let queue = cmds.clone();
@@ -1975,10 +2046,7 @@ impl WindowState {
             tf.set_on_commit(move |text, _w, _cx| {
                 let next = text.trim();
                 if !next.is_empty() && next != n_old {
-                    nc.push(Cmd {
-                        id: "component.editProperty",
-                        params: Some(json!({ "id": owner, "name": n_old, "newName": next })),
-                    });
+                    nc.push(Cmd { id: "component.editProperty", params: Some(json!({ "id": owner, "name": n_old, "newName": next })) });
                 }
             });
         });
@@ -2030,10 +2098,7 @@ impl WindowState {
                         // the engine's Text coercion keeps the string verbatim, so trimming here
                         // would silently change the saved default (" Label " / blank defaults).
                         let value: Value = if d_kind == "boolean" { json!(text.trim().eq_ignore_ascii_case("true")) } else { json!(text) };
-                        dc.push(Cmd {
-                            id: "component.editProperty",
-                            params: Some(json!({ "id": owner, "name": d_name, "default": value })),
-                        });
+                        dc.push(Cmd { id: "component.editProperty", params: Some(json!({ "id": owner, "name": d_name, "default": value })) });
                     });
                 });
                 settings.push(Setting::Field { tab: 0, label: tr("Default").into(), field: default_field });
@@ -2061,10 +2126,11 @@ impl WindowState {
         w.width = 320.0;
         w.pad = 0.0;
         // 42 header + 16 + 24 Name + 10 + 24 Value + Preferred(可选) + 20 + 分隔 + 32 按钮 + 16。
-        w.height = HEADER_H + match kind {
-            "instanceSwap" | "slot" => 226.0,
-            _ => 176.0,
-        };
+        w.height = HEADER_H
+            + match kind {
+                "instanceSwap" | "slot" => 226.0,
+                _ => 176.0,
+            };
 
         let name = TextField::build(cx, 178.0, move |tf, _| {
             tf.set_value(default_name.clone());
@@ -2105,27 +2171,27 @@ impl WindowState {
         let Some(st) = &self.prop_create else { return popover_body().into_any_element() };
         let t = tokens();
         let label = |text: String| {
-            div()
-                .w(pt(110.0))
-                .flex_none()
-                .pl(pt(16.0))
-                .text_size(pt(11.0))
-                .text_color(rgba(t.text_secondary))
-                .child(SharedString::from(text))
+            div().w(pt(110.0)).flex_none().pl(pt(16.0)).text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(SharedString::from(text))
         };
         let mut body = popover_body().px(pt(0.0)).flex().flex_col().gap(pt(0.0));
 
         // Name 行（lizard `property_form_field`）。
-        body = body.child(
-            div().h(pt(24.0)).w_full().flex().flex_row().items_center().child(label(tr("Name").to_string())).child(st.name.clone()),
-        );
+        body = body.child(div().h(pt(24.0)).w_full().flex().flex_row().items_center().child(label(tr("Name").to_string())).child(st.name.clone()));
 
         // Value 行：text 输入框 / boolean 开关 / instanceSwap 下拉；variant 与 slot 没有。
         match st.kind {
             "text" => {
                 if let Some(v) = &st.value {
                     body = body.child(
-                        div().h(pt(24.0)).w_full().mt(pt(10.0)).flex().flex_row().items_center().child(label(tr("Value").to_string())).child(v.clone()),
+                        div()
+                            .h(pt(24.0))
+                            .w_full()
+                            .mt(pt(10.0))
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .child(label(tr("Value").to_string()))
+                            .child(v.clone()),
                     );
                 }
             }
@@ -2146,7 +2212,9 @@ impl WindowState {
                         s.boolean.set(!s.boolean.get());
                         wake.wake();
                     });
-                body = body.child(div().h(pt(24.0)).w_full().mt(pt(10.0)).flex().flex_row().items_center().child(label(tr("Value").to_string())).child(toggle));
+                body = body.child(
+                    div().h(pt(24.0)).w_full().mt(pt(10.0)).flex().flex_row().items_center().child(label(tr("Value").to_string())).child(toggle),
+                );
             }
             "instanceSwap" => {
                 let selected = st.instance.get();
@@ -2329,13 +2397,7 @@ impl WindowState {
     /// 组件搜索窗（lizard `swap_picker` / `comp_search`）：带搜索框的组件列表。
     /// 每行的命令由调用方给（`instance.setProperties` 或 `component.editProperty`），
     /// 所以一个窗同时服务实例 swap 和组件集的 instanceSwap 默认值。
-    pub(crate) fn component_search(
-        cmds: Cmds,
-        cx: &mut App,
-        title: impl Into<SharedString>,
-        rows: Vec<Row>,
-        anchor: Point<Pixels>,
-    ) -> Self {
+    pub(crate) fn component_search(cmds: Cmds, cx: &mut App, title: impl Into<SharedString>, rows: Vec<Row>, anchor: Point<Pixels>) -> Self {
         let mut w = Self::base(WindowKind::ComponentSearch, title, cmds, Open::Anchor(anchor));
         w.width = 240.0;
         w.height = 340.0;
@@ -4002,12 +4064,7 @@ impl WindowState {
                             gpui::linear_color_stop(gpui::Hsla::from(rgba(opaque)), 1.0),
                         ),
                     )
-                    .corner_radii(Corners {
-                        top_left: px(r),
-                        top_right: px(r),
-                        bottom_right: px(r),
-                        bottom_left: px(r),
-                    }),
+                    .corner_radii(Corners { top_left: px(r), top_right: px(r), bottom_right: px(r), bottom_left: px(r) }),
                 );
             })
             .on_change(move |v, window, cx| alpha_pick(opaque.with_alpha((v * 255.0).round() as u8), window, cx))
@@ -4067,14 +4124,16 @@ impl WindowState {
         let ratio_icon = div()
             .relative()
             .size(pt(16.0))
-            .child(
-                div().absolute().left_0().top_0().child(crate::widgets::icon::paint(
-                    Icon::ContrastBackground,
-                    rgba(crate::widgets::swatch::color32(aa_bg.with_alpha(1.0))),
-                    16.0,
-                )),
-            )
-            .child(div().absolute().left_0().top_0().child(crate::widgets::icon::paint(Icon::ContrastForeground, rgba(current.with_alpha(255)), 16.0)));
+            .child(div().absolute().left_0().top_0().child(crate::widgets::icon::paint(
+                Icon::ContrastBackground,
+                rgba(crate::widgets::swatch::color32(aa_bg.with_alpha(1.0))),
+                16.0,
+            )))
+            .child(div().absolute().left_0().top_0().child(crate::widgets::icon::paint(
+                Icon::ContrastForeground,
+                rgba(current.with_alpha(255)),
+                16.0,
+            )));
 
         // AA 圆标：未达标带斜杠，点击取白线上最近达标色并应用（复用取色器现有 pick）。
         let aa_pick = pick.clone();
@@ -4236,12 +4295,14 @@ impl WindowState {
             let on_pick: Rc<dyn Fn(&str, &mut Window, &mut App)> = Rc::new(move |label, window, cx| {
                 if let Some(i) = labels.iter().position(|l| tr(l) == label) {
                     if i == 2 && extras.fills && extras.ids.len() == 1 {
-                        cmds.push(Cmd {
-                            id: "image.crop",
-                            params: Some(json!({ "ids": extras.ids, "index": extras.index })),
-                        });
+                        cmds.push(Cmd { id: "image.crop", params: Some(json!({ "ids": extras.ids, "index": extras.index })) });
                     } else {
-                        let mode = [figcraft_color::ImageScaleMode::Fill, figcraft_color::ImageScaleMode::Fit, figcraft_color::ImageScaleMode::Crop, figcraft_color::ImageScaleMode::Tile][i];
+                        let mode = [
+                            figcraft_color::ImageScaleMode::Fill,
+                            figcraft_color::ImageScaleMode::Fit,
+                            figcraft_color::ImageScaleMode::Crop,
+                            figcraft_color::ImageScaleMode::Tile,
+                        ][i];
                         let mut np = st.borrow().clone();
                         if let figcraft_color::PaintKind::Image(img) = &mut np.kind {
                             img.scale_mode = mode;
@@ -4274,23 +4335,14 @@ impl WindowState {
                 .filter(|(id, ..)| *id != "reset")
                 .map(|(id, label, f)| (format!("builtin:{id}"), tr(label).to_string(), *f))
                 .collect();
-            entries.extend(
-                p.extras
-                    .image_presets
-                    .iter()
-                    .map(|(name, f)| (format!("saved:{name}"), name.clone(), *f)),
-            );
+            entries.extend(p.extras.image_presets.iter().map(|(name, f)| (format!("saved:{name}"), name.clone(), *f)));
             let active_key = entries.iter().find(|(_, _, f)| *f == current).map(|(k, _, _)| k.clone()).unwrap_or_default();
             let mut rows: Vec<MenuRow> = entries
                 .iter()
                 .map(|(k, label, _)| MenuRow::row(SharedString::from(label.clone())).key(k.clone()).checked(Some(*k == active_key)))
                 .collect();
             for (name, _) in &p.extras.image_presets {
-                rows.push(
-                    MenuRow::row(SharedString::from(name.clone()))
-                        .key(format!("delete:{name}"))
-                        .trail(SharedString::from(tr("Delete"))),
-                );
+                rows.push(MenuRow::row(SharedString::from(name.clone())).key(format!("delete:{name}")).trail(SharedString::from(tr("Delete"))));
             }
             rows.push(MenuRow::row(SharedString::from(tr("Save as preset…"))).key("__save").separator());
             let cmds = self.cmds.clone();
@@ -4373,11 +4425,7 @@ impl WindowState {
             && let (Some(p), Some(state)) = (&c.paint, &c.paint_state)
         {
             let labels = [tr("Grid"), tr("Horizontal hex"), tr("Vertical hex")];
-            let values = [
-                figcraft_color::PatternTile::Grid,
-                figcraft_color::PatternTile::HorizontalHex,
-                figcraft_color::PatternTile::VerticalHex,
-            ];
+            let values = [figcraft_color::PatternTile::Grid, figcraft_color::PatternTile::HorizontalHex, figcraft_color::PatternTile::VerticalHex];
             let active = match &state.borrow().kind {
                 figcraft_color::PaintKind::Pattern(pt) => match pt.tile {
                     figcraft_color::PatternTile::Grid => 0,
@@ -4386,7 +4434,8 @@ impl WindowState {
                 },
                 _ => 0,
             };
-            let rows: Vec<MenuRow> = labels.iter().enumerate().map(|(i, l)| MenuRow::row(SharedString::from(*l)).checked(Some(i == active))).collect();
+            let rows: Vec<MenuRow> =
+                labels.iter().enumerate().map(|(i, l)| MenuRow::row(SharedString::from(*l)).checked(Some(i == active))).collect();
             let write = p.on_write.clone();
             let st = state.clone();
             let close = c.pattern_tile_anchor.clone();
@@ -4416,11 +4465,7 @@ impl WindowState {
             && let (Some(p), Some(state)) = (&c.paint, &c.paint_state)
         {
             let labels = [tr("Start"), tr("Center"), tr("End")];
-            let values = [
-                figcraft_color::PatternAlign::Start,
-                figcraft_color::PatternAlign::Center,
-                figcraft_color::PatternAlign::End,
-            ];
+            let values = [figcraft_color::PatternAlign::Start, figcraft_color::PatternAlign::Center, figcraft_color::PatternAlign::End];
             let active = match &state.borrow().kind {
                 figcraft_color::PaintKind::Pattern(pt) => match pt.align {
                     figcraft_color::PatternAlign::Start => 0,
@@ -4429,7 +4474,8 @@ impl WindowState {
                 },
                 _ => 0,
             };
-            let rows: Vec<MenuRow> = labels.iter().enumerate().map(|(i, l)| MenuRow::row(SharedString::from(*l)).checked(Some(i == active))).collect();
+            let rows: Vec<MenuRow> =
+                labels.iter().enumerate().map(|(i, l)| MenuRow::row(SharedString::from(*l)).checked(Some(i == active))).collect();
             let write = p.on_write.clone();
             let st = state.clone();
             let close = c.pattern_align_anchor.clone();
@@ -4534,17 +4580,7 @@ impl WindowState {
                                 eyedrop_cmds.push(Cmd { id: "edit.pickColor", params: Some(json!({ "apply": false })) });
                             }),
                     )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(pt(0.0))
-                            .h(pt(44.0))
-                            .flex()
-                            .flex_col()
-                            .gap(pt(12.0))
-                            .child(hue_slider)
-                            .child(alpha_slider),
-                    ),
+                    .child(div().flex_1().min_w(pt(0.0)).h(pt(44.0)).flex().flex_col().gap(pt(12.0)).child(hue_slider).child(alpha_slider)),
             );
             col = col.child(div().w(pt(PANEL_W)).h(pt(40.0)).px(pt(16.0)).flex().items_center().gap(pt(8.0)).child(format_select).child(fields_row));
             col = col.child(swatch_panel);
@@ -4553,10 +4589,7 @@ impl WindowState {
         // The model list is the shared dropdown menu (ui-egui's model dropdown), parked on the
         // window root so the popover card cannot clip it.
         if let Some(anchor) = c.model_anchor.get() {
-            let rows: Vec<MenuRow> = COLOR_MODELS
-                .iter()
-                .map(|n| MenuRow::row(SharedString::from(*n)).checked(Some(*n == model_name)))
-                .collect();
+            let rows: Vec<MenuRow> = COLOR_MODELS.iter().map(|n| MenuRow::row(SharedString::from(*n)).checked(Some(*n == model_name))).collect();
             let set_model = c.model.clone();
             let close = c.model_anchor.clone();
             let on_pick: Rc<dyn Fn(&str, &mut Window, &mut App)> = Rc::new({
@@ -4641,11 +4674,8 @@ impl WindowState {
                 _ => 0,
             };
             let labels = ["Linear", "Radial", "Angular", "Diamond"];
-            let rows: Vec<MenuRow> = labels
-                .iter()
-                .enumerate()
-                .map(|(i, l)| MenuRow::row(SharedString::from(*l)).checked(Some(i == active)))
-                .collect();
+            let rows: Vec<MenuRow> =
+                labels.iter().enumerate().map(|(i, l)| MenuRow::row(SharedString::from(*l)).checked(Some(i == active))).collect();
             let write = p.on_write.clone();
             let st = state.clone();
             let close = c.grad_kind_anchor.clone();
@@ -4724,22 +4754,17 @@ impl WindowState {
                 };
                 crate::widgets::swatch::checker(window, frame, 8.0);
                 let stale = tex.borrow().as_ref().is_none_or(|(k, _, _)| k != &key);
-                if stale
-                    && let Some((_, Some(data))) = &image_data
-                {
+                if stale && let Some((_, Some(data))) = &image_data {
                     let pix = crate::render_stack::on_render_stack(|| {
-                        figcraft_render::images::shown(
-                            &key,
-                            Some(data),
-                            &figcraft_color::ImageFilters::default(),
-                            color_profile,
-                            208.0,
-                        )
+                        figcraft_render::images::shown(&key, Some(data), &figcraft_color::ImageFilters::default(), color_profile, 208.0)
                     })
                     .flatten();
                     if let Some(pix) = pix {
-                        *tex.borrow_mut() =
-                            Some((key.clone(), (pix.width(), pix.height()), crate::canvas::render_worker::wrap_rgba(pix.width(), pix.height(), figcraft_render::to_rgba8(&pix))));
+                        *tex.borrow_mut() = Some((
+                            key.clone(),
+                            (pix.width(), pix.height()),
+                            crate::canvas::render_worker::wrap_rgba(pix.width(), pix.height(), figcraft_render::to_rgba8(&pix)),
+                        ));
                     }
                 }
                 if let Some((_, (iw, ih), image)) = tex.borrow().as_ref() {
@@ -4798,7 +4823,11 @@ impl WindowState {
                     .on_mouse_down(MouseButton::Left, {
                         let upload = upload.clone();
                         move |_, window, cx| {
-                            let Some(path) = rfd::FileDialog::new().set_title(tr("Choose image")).add_filter(tr("Images"), &["png", "jpg", "jpeg", "webp", "gif", "tif", "tiff"]).pick_file() else {
+                            let Some(path) = rfd::FileDialog::new()
+                                .set_title(tr("Choose image"))
+                                .add_filter(tr("Images"), &["png", "jpg", "jpeg", "webp", "gif", "tif", "tiff"])
+                                .pick_file()
+                            else {
                                 return;
                             };
                             upload(path, window, cx);
@@ -4868,17 +4897,12 @@ impl WindowState {
             .map(|(_, label, _)| tr(label).to_string())
             .or_else(|| p.extras.image_presets.iter().find(|(_, f)| *f == img.filters).map(|(n, _)| n.clone()))
             .unwrap_or_else(|| if img.filters.is_identity() { tr("No preset").to_string() } else { tr("Custom").to_string() });
-        let mut preset_row = div()
-            .w(pt(PANEL_W))
-            .h(pt(30.0))
-            .px(pt(16.0))
-            .flex()
-            .items_center()
-            .gap(pt(8.0))
-            .child(dropdown::Dropdown::new(current_preset, 152.0, None).on_click(move |rect: Bounds<Pixels>, window, _| {
+        let mut preset_row = div().w(pt(PANEL_W)).h(pt(30.0)).px(pt(16.0)).flex().items_center().gap(pt(8.0)).child(
+            dropdown::Dropdown::new(current_preset, 152.0, None).on_click(move |rect: Bounds<Pixels>, window, _| {
                 preset_anchor.set(Some(rect));
                 window.refresh();
-            }));
+            }),
+        );
         let reset_write = write.clone();
         let reset_state = st.clone();
         preset_row = preset_row.child(
@@ -4938,13 +4962,12 @@ impl WindowState {
                                 move |_, window, cx| {
                                     // Commit the editor first: typed characters stay in the
                                     // draft until commit, and `value()` only sees committed text.
-                                    name.update(cx, |e, cx| { e.finish_edit(window, cx); });
+                                    name.update(cx, |e, cx| {
+                                        e.finish_edit(window, cx);
+                                    });
                                     let draft = name.read(cx).value().trim().to_string();
                                     if !draft.is_empty() {
-                                        save_cmds.push(Cmd {
-                                            id: "image.savePreset",
-                                            params: Some(json!({ "name": draft, "filters": filters })),
-                                        });
+                                        save_cmds.push(Cmd { id: "image.savePreset", params: Some(json!({ "name": draft, "filters": filters })) });
                                     }
                                     naming.set(false);
                                     window.refresh();
@@ -4961,10 +4984,7 @@ impl WindowState {
                             }
                             let draft = name.read(cx).value().trim().to_string();
                             if !draft.is_empty() {
-                                save_cmds.push(Cmd {
-                                    id: "image.savePreset",
-                                    params: Some(json!({ "name": draft, "filters": filters })),
-                                });
+                                save_cmds.push(Cmd { id: "image.savePreset", params: Some(json!({ "name": draft, "filters": filters })) });
                             }
                             naming.set(false);
                             window.refresh();
@@ -5052,10 +5072,12 @@ impl WindowState {
             figcraft_color::PatternTile::HorizontalHex => tr("Horizontal hex"),
             figcraft_color::PatternTile::VerticalHex => tr("Vertical hex"),
         };
-        let tile_dropdown = dropdown::Dropdown::new(tile_label, 120.0, Some(dropdown::DropLead::Icon(Icon::ViewGrid))).on_click(move |rect: Bounds<Pixels>, window, _| {
-            tile_anchor.set(Some(rect));
-            window.refresh();
-        });
+        let tile_dropdown = dropdown::Dropdown::new(tile_label, 120.0, Some(dropdown::DropLead::Icon(Icon::ViewGrid))).on_click(
+            move |rect: Bounds<Pixels>, window, _| {
+                tile_anchor.set(Some(rect));
+                window.refresh();
+            },
+        );
         let align_anchor = c.pattern_align_anchor.clone();
         let align_label = match pat.align {
             figcraft_color::PatternAlign::Start => tr("Start"),
@@ -5067,14 +5089,7 @@ impl WindowState {
             window.refresh();
         });
         let mut out: Vec<AnyElement> = vec![
-            div()
-                .w(pt(PANEL_W))
-                .h(pt(32.0))
-                .px(pt(16.0))
-                .flex()
-                .items_center()
-                .child(source_dropdown)
-                .into_any_element(),
+            div().w(pt(PANEL_W)).h(pt(32.0)).px(pt(16.0)).flex().items_center().child(source_dropdown).into_any_element(),
             div()
                 .w(pt(PANEL_W))
                 .h(pt(32.0))
@@ -5086,7 +5101,13 @@ impl WindowState {
                 .child(align_dropdown)
                 .into_any_element(),
         ];
-        let number = |cx: &mut App, value: f64, suffix: &'static str, lo: f64, hi: f64, lead: Slot, setter: std::rc::Rc<dyn Fn(&mut figcraft_color::PatternPaint, f64)>| {
+        let number = |cx: &mut App,
+                      value: f64,
+                      suffix: &'static str,
+                      lo: f64,
+                      hi: f64,
+                      lead: Slot,
+                      setter: std::rc::Rc<dyn Fn(&mut figcraft_color::PatternPaint, f64)>| {
             let field = number_field_ranged(cx, 72.0, Some(value), suffix, 1.0, lead, Some(lo), Some(hi));
             let fw = write.clone();
             let fs = st.clone();
@@ -5103,15 +5124,33 @@ impl WindowState {
             field
         };
         let (lo, hi) = figcraft_color::PatternPaint::SCALE_RANGE;
-        let scale = number(cx, pat.scale * 100.0, "%", lo * 100.0, hi * 100.0, Slot::Icon(Icon::Scale), std::rc::Rc::new(move |pt, v| {
-            pt.scale = (v / 100.0).clamp(lo, hi)
-        }));
-        let gap_x = number(cx, pat.spacing.0, "", 0.0, figcraft_color::PatternPaint::MAX_SPACING, Slot::Icon(Icon::PaddingLeft), std::rc::Rc::new(|pt, v| {
-            pt.spacing.0 = v.clamp(0.0, figcraft_color::PatternPaint::MAX_SPACING)
-        }));
-        let gap_y = number(cx, pat.spacing.1, "", 0.0, figcraft_color::PatternPaint::MAX_SPACING, Slot::Icon(Icon::PaddingTop), std::rc::Rc::new(|pt, v| {
-            pt.spacing.1 = v.clamp(0.0, figcraft_color::PatternPaint::MAX_SPACING)
-        }));
+        let scale = number(
+            cx,
+            pat.scale * 100.0,
+            "%",
+            lo * 100.0,
+            hi * 100.0,
+            Slot::Icon(Icon::Scale),
+            std::rc::Rc::new(move |pt, v| pt.scale = (v / 100.0).clamp(lo, hi)),
+        );
+        let gap_x = number(
+            cx,
+            pat.spacing.0,
+            "",
+            0.0,
+            figcraft_color::PatternPaint::MAX_SPACING,
+            Slot::Icon(Icon::PaddingLeft),
+            std::rc::Rc::new(|pt, v| pt.spacing.0 = v.clamp(0.0, figcraft_color::PatternPaint::MAX_SPACING)),
+        );
+        let gap_y = number(
+            cx,
+            pat.spacing.1,
+            "",
+            0.0,
+            figcraft_color::PatternPaint::MAX_SPACING,
+            Slot::Icon(Icon::PaddingTop),
+            std::rc::Rc::new(|pt, v| pt.spacing.1 = v.clamp(0.0, figcraft_color::PatternPaint::MAX_SPACING)),
+        );
         out.push(
             div()
                 .w(pt(PANEL_W))
@@ -5137,11 +5176,11 @@ impl WindowState {
             2usize
         } else {
             match c.paint_state.as_ref().map(|s| s.borrow().kind.clone()) {
-            Some(figcraft_color::PaintKind::Solid { .. }) => 0usize,
-            Some(figcraft_color::PaintKind::Gradient(_)) => 1,
-            Some(figcraft_color::PaintKind::Image(_)) => 2,
-            Some(figcraft_color::PaintKind::Pattern(_)) => 3,
-            _ => 0,
+                Some(figcraft_color::PaintKind::Solid { .. }) => 0usize,
+                Some(figcraft_color::PaintKind::Gradient(_)) => 1,
+                Some(figcraft_color::PaintKind::Image(_)) => 2,
+                Some(figcraft_color::PaintKind::Pattern(_)) => 3,
+                _ => 0,
             }
         };
         let write = c.paint.as_ref().map(|p| p.on_write.clone());
@@ -5215,14 +5254,13 @@ impl WindowState {
         // 环状色域切换：紧挨水滴按钮，24 pt 图标按钮；选中态由 ring 单元格驱动。
         let ring = c.ring.clone();
         let ring_wake = self.cmds.clone();
-        let ring_btn = IconButton::new(Icon::Ellipse)
-            .id(SharedString::from(format!("color-ring-{}", c.uid)))
-            .active(c.ring.get())
-            .on_click(move |_, window, _| {
+        let ring_btn = IconButton::new(Icon::Ellipse).id(SharedString::from(format!("color-ring-{}", c.uid))).active(c.ring.get()).on_click(
+            move |_, window, _| {
                 ring.set(!ring.get());
                 ring_wake.wake();
                 window.refresh();
-            });
+            },
+        );
         div()
             .w(pt(PANEL_W))
             .h(pt(40.0))
@@ -6031,7 +6069,12 @@ impl WindowState {
                                     cmds.push(Cmd { id: "style.update", params: Some(json!({ "style": sid, "value": ps })) });
                                 }
                             };
-                            let picker = PaintPicker { paint: all[idx].clone(), on_write: Rc::new(write), styles: Vec::new(), extras: PaintPickerExtras::default() };
+                            let picker = PaintPicker {
+                                paint: all[idx].clone(),
+                                on_write: Rc::new(write),
+                                styles: Vec::new(),
+                                extras: PaintPickerExtras::default(),
+                            };
                             let on_pick: Rc<dyn Fn(crate::canvas::geom::Color32, &mut Window, &mut App)> = Rc::new(|_, _, _| {});
                             // 走右栏统一的打开入口：触发标识 + 再点关闭 + 精确顶部一套逻辑。
                             crate::panels::right::sections::open_detached_with(
@@ -6180,6 +6223,24 @@ impl WindowState {
                         .mb(pt(8.0))
                         .child(div().w_full().text_size(pt(10.0)).text_color(rgba(t.text_secondary)).child(label.clone()))
                         .child(div().w_full().h(pt(24.0 * rows)).child(field.clone()))
+                        .into_any_element(),
+                )
+            }
+            Setting::Color { tab: st, label, field } => {
+                if *st != tab {
+                    return None;
+                }
+                Some(
+                    div()
+                        .w_full()
+                        .h(pt(24.0))
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .child(
+                            div().w(pt(112.0)).flex_none().pl(pt(16.0)).text_size(pt(11.0)).text_color(rgba(t.text_secondary)).child(label.clone()),
+                        )
+                        .child(div().w(pt(176.0)).h(pt(24.0)).child(field.clone()))
                         .into_any_element(),
                 )
             }
@@ -6414,9 +6475,16 @@ impl WindowState {
                     .justify_center()
                     .when(checked, |d| d.child(div().w(pt(6.0)).h(pt(6.0)).rounded_full().bg(rgba(t.accent))));
                 let radio_id: SharedString = format!("export-radio-{}", label).into();
-                let row = div().id(radio_id).w_full().h(pt(24.0)).flex().flex_row().items_center().gap(pt(6.0)).child(ring).child(
-                    div().text_size(pt(11.0)).text_color(rgba(if checked { t.text } else { t.text_secondary })).child(label.clone()),
-                );
+                let row = div()
+                    .id(radio_id)
+                    .w_full()
+                    .h(pt(24.0))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(pt(6.0))
+                    .child(ring)
+                    .child(div().text_size(pt(11.0)).text_color(rgba(if checked { t.text } else { t.text_secondary })).child(label.clone()));
                 // Only an unchecked choice issues a command; clicking the checked one is a no-op,
                 // but the row is still interactive (it can be re-clicked after switching away).
                 let cmds = self.cmds.clone();
@@ -7702,10 +7770,7 @@ fn ring_point_from_sv(tri: &[(f32, f32); 3], s: f32, v: f32) -> (f32, f32) {
     let wa = s * v;
     let wb = (1.0 - s) * v;
     let wc = 1.0 - v;
-    (
-        tri[0].0 * wa + tri[1].0 * wb + tri[2].0 * wc,
-        tri[0].1 * wa + tri[1].1 * wb + tri[2].1 * wc,
-    )
+    (tri[0].0 * wa + tri[1].0 * wb + tri[2].0 * wc, tri[0].1 * wa + tri[1].1 * wb + tri[2].1 * wc)
 }
 
 thread_local! {
@@ -7746,15 +7811,7 @@ fn spectrum_color_at(shape: SpectrumShape, x: f32, y: f32, hue: f32) -> Option<C
 }
 
 /// 对比度不足处铺 6 pt 点阵（白色 25% 圆点），覆盖整个色板但只在未达标区域落点。
-fn paint_contrast_dots(
-    window: &mut Window,
-    bounds: Bounds<Pixels>,
-    shape: SpectrumShape,
-    hue: f32,
-    bg: figcraft_color::Color,
-    alpha: f32,
-    min: f32,
-) {
+fn paint_contrast_dots(window: &mut Window, bounds: Bounds<Pixels>, shape: SpectrumShape, hue: f32, bg: figcraft_color::Color, alpha: f32, min: f32) {
     let bx = f32::from(bounds.origin.x);
     let by = f32::from(bounds.origin.y);
     let mut y = 5.0f32;
@@ -7765,14 +7822,12 @@ fn paint_contrast_dots(
                 let c = picker_color(c).with_alpha(alpha);
                 if figcraft_color::contrast_ratio(c, bg) < min {
                     let dot = Bounds { origin: point(px(bx + x - 1.0), px(by + y - 1.0)), size: size(px(2.0), px(2.0)) };
-                    window.paint_quad(
-                        gpui::fill(dot, rgba(Color32::from_white_alpha(64))).corner_radii(Corners {
-                            top_left: px(1.0),
-                            top_right: px(1.0),
-                            bottom_right: px(1.0),
-                            bottom_left: px(1.0),
-                        }),
-                    );
+                    window.paint_quad(gpui::fill(dot, rgba(Color32::from_white_alpha(64))).corner_radii(Corners {
+                        top_left: px(1.0),
+                        top_right: px(1.0),
+                        bottom_right: px(1.0),
+                        bottom_left: px(1.0),
+                    }));
                 }
             }
             x += 6.0;
@@ -8039,7 +8094,8 @@ fn open_stop_color(
             write(full, window, cx);
         })
     };
-    let picker = PaintPicker { paint: figcraft_color::Paint::solid(color), on_write: write_back, styles: Vec::new(), extras: PaintPickerExtras::default() };
+    let picker =
+        PaintPicker { paint: figcraft_color::Paint::solid(color), on_write: write_back, styles: Vec::new(), extras: PaintPickerExtras::default() };
     let on_pick: Rc<dyn Fn(Color32, &mut Window, &mut App)> = Rc::new(|_, _, _| {});
     let mut child = WindowState::color_nested(cx, at, picker_c32(color), Some(picker), Default::default(), on_pick, cmds.clone());
     child.anchor_to_button_top(at.y);

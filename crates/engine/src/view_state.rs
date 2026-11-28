@@ -45,6 +45,12 @@ pub struct ViewState {
     /// Minimized interface (Shift+Cmd/Ctrl+\): the navigation bar and both sidebars are collapsed
     /// and the toolbar stays; the right sidebar shows while something is selected.
     pub ui_minimized: bool,
+    /// This view's zoom limits: a board has its own range, a design file Figma's full range.
+    /// Input state, never saved with the document.
+    #[serde(skip)]
+    pub min_zoom: f64,
+    #[serde(skip)]
+    pub max_zoom: f64,
 }
 
 impl Default for ViewState {
@@ -53,6 +59,8 @@ impl Default for ViewState {
             cx: 0.0,
             cy: 0.0,
             zoom: 1.0,
+            min_zoom: Self::MIN_ZOOM,
+            max_zoom: Self::MAX_ZOOM,
             vw: 1200.0,
             vh: 800.0,
             bottom_inset: 0.0,
@@ -81,15 +89,33 @@ impl Default for ViewState {
 }
 
 impl ViewState {
-    pub const MIN_ZOOM: f64 = 0.02;
+    /// Figma's design canvas camera clamps zoom to 1/64 … 256× (1.5625% … 25600%).
+    pub const MIN_ZOOM: f64 = 0.015625;
     pub const MAX_ZOOM: f64 = 256.0;
+    /// FigJam's whiteboard stops much earlier: 2% … 800%.
+    pub const BOARD_MIN_ZOOM: f64 = 0.02;
+    pub const BOARD_MAX_ZOOM: f64 = 8.0;
+    /// The default view for a document kind: boards use FigJam's 2%–800%, everything else Figma's
+    /// design range.
+    pub fn for_kind(kind: figcraft_doc::FileKind) -> Self {
+        let mut v = Self::default();
+        if kind == figcraft_doc::FileKind::Board {
+            v.min_zoom = Self::BOARD_MIN_ZOOM;
+            v.max_zoom = Self::BOARD_MAX_ZOOM;
+        }
+        v
+    }
     /// Page coordinate at the viewport's top-left.
     pub fn origin(&self) -> (f64, f64) {
         let z = self.zoom.max(1e-9);
         (self.cx - self.vw / 2.0 / z, self.cy - self.vh / 2.0 / z)
     }
+    /// Clamp a requested zoom to this view's limits; junk (`NaN`) keeps the current zoom.
+    pub fn clamp_zoom(&self, zoom: f64) -> f64 {
+        if zoom.is_finite() { zoom.clamp(self.min_zoom, self.max_zoom) } else { self.zoom }
+    }
     pub fn set_zoom_at(&mut self, zoom: f64, anchor: (f64, f64)) {
-        let z = if zoom.is_finite() { zoom.clamp(Self::MIN_ZOOM, Self::MAX_ZOOM) } else { self.zoom };
+        let z = self.clamp_zoom(zoom);
         let old = self.zoom.max(1e-9);
         // Keep the page point under `anchor` fixed.
         self.cx = anchor.0 + (self.cx - anchor.0) * old / z;
@@ -106,7 +132,7 @@ impl ViewState {
         let margin = 64.0;
         let zx = (self.vw - margin * 2.0).max(50.0) / r.width().max(1e-6);
         let zy = (self.vh - margin * 2.0).max(50.0) / r.height().max(1e-6);
-        self.zoom = zx.min(zy).clamp(Self::MIN_ZOOM, max_zoom);
+        self.zoom = zx.min(zy).clamp(self.min_zoom, max_zoom.min(self.max_zoom));
         self.cx = r.center().x;
         self.cy = r.center().y;
     }
@@ -127,16 +153,18 @@ impl ViewState {
         let my = (area_h / 4.0).clamp(0.0, 40.0);
         let zx = (self.vw - mx * 2.0).max(1.0) / r.width().max(1e-6);
         let zy = (area_h - my * 2.0).max(1.0) / r.height().max(1e-6);
-        self.zoom = zx.min(zy).clamp(Self::MIN_ZOOM, max_zoom);
+        self.zoom = zx.min(zy).clamp(self.min_zoom, max_zoom.min(self.max_zoom));
         self.cx = r.center().x;
         self.cy = r.center().y + (self.vh - area_h) / 2.0 / self.zoom;
     }
 
-    /// The zoom from which the pixel grid shows (507%).
-    pub const PIXEL_GRID_ZOOM: f64 = 5.07;
-    /// Whether the pixel grid draws: it's on and the canvas is zoomed in past 507%.
+    /// The zoom from which the pixel grid shows (508%, and it shows **at** 508% too).
+    pub const PIXEL_GRID_ZOOM: f64 = 5.08;
+    /// Whether the pixel grid draws: it's on and the canvas shows 508% or more. The test rounds to
+    /// the percentage the UI prints, so "508%" on the label always means the grid is there (a raw
+    /// `>= 5.08` can miss by a float ULP at exactly 508%).
     pub fn pixel_grid_shown(&self) -> bool {
-        self.pixel_grid && self.zoom > Self::PIXEL_GRID_ZOOM
+        self.pixel_grid && (self.zoom * 100.0).round() >= Self::PIXEL_GRID_ZOOM * 100.0
     }
     /// Pixel preview's resolution (rendered pixels per page pixel) when it's on and zoomed in past
     /// it; below that the canvas is already coarser than the preview.
