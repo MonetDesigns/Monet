@@ -184,6 +184,8 @@ impl Default for Session {
 #[cfg(test)]
 mod a11y_keys_tests;
 #[cfg(test)]
+mod render_backend_tests;
+#[cfg(test)]
 mod agent_presence_tests;
 #[cfg(test)]
 mod al_behaviour_tests;

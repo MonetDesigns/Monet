@@ -14,10 +14,12 @@
 //!
 //! # GPU 后端（docs §18）
 //!
-//! `--features gpu` 编译且 `FIGCRAFT_GPU=1` 时，**精修**那一帧先试 GPU：
-//! `gpu::scene_of` 把文档压成纯色/圆角矩形；压不出来（渐变/图片/文字/描边/效果/混合/裁剪/
-//! 旋转/半透明…）就原样回退到 `Retained`（CPU）。回退是**整帧**的，不做「一半 GPU 一半 CPU」
-//! ——两层图叠起来 z 序会错。粗预览与替身抓取仍走 CPU。
+//! `--features gpu` 构建下，**精修**那一帧先问 `figcraft_gpu::prefs`（偏好 `render_backend`：
+//! `auto` 看机器有没有硬件适配器，`gpu` 主动要，`cpu` 强制关）：能走就把文档压成
+//! `figcraft_gpu` 的 Scene（SDF 图元、线性/径向/角度/菱形渐变、裁剪、旋转与半透明），
+//! 不支持的特性（文字/描边/效果/混合/蒙版/图片填充…）记在 Scene 里，整帧让回 `Retained`（CPU）。
+//! 回退是**整帧**的，不做「一半 GPU 一半 CPU」——两层图叠起来 z 序会错。
+//! 粗预览与替身抓取仍走 CPU。
 
 #![allow(dead_code)]
 
@@ -1280,9 +1282,6 @@ impl Handoff {
 pub struct Renders {
     full: Retained,
     preview: Retained,
-    /// GPU 后端（§18）：`None` = 没开、没适配器，或这一帧压不出场景。按需创建、跨帧复用。
-    #[cfg(feature = "gpu")]
-    gpu: Option<crate::gpu::Gpu>,
     /// WGSL 材质离屏合成器（仅 `--features gpu`）：CPU 画布 → 逐节点 WGSL 多 pass → readback。
     /// 精修、粗预览、整页兜底图、看门狗补做的预览共用同一套设备（见 [`Materials`]）——多建一个
     /// 设备就多一份几十 MB 的显存和一次上百毫秒的初始化，而它们本来就在抢同一块 GPU。
@@ -1309,8 +1308,6 @@ impl Renders {
         Self {
             full: Retained::default(),
             preview: Retained::default(),
-            #[cfg(feature = "gpu")]
-            gpu: None,
             #[cfg(feature = "gpu")]
             mats: std::sync::Arc::new(std::sync::Mutex::new(Materials::default())),
             last: None,
@@ -1419,32 +1416,8 @@ impl Renders {
     /// 普通拖动走 worker 的异步 `refine_async`，不再经过这条同步路径。
     pub fn refine(&mut self, job: &Job) -> Option<Done> {
         #[cfg(feature = "gpu")]
-        if gpu_enabled() {
-            if self.gpu.is_none() {
-                self.gpu = crate::gpu::Gpu::new();
-                if self.gpu.is_none() {
-                    eprintln!("[gpu] no adapter: staying on the CPU renderer");
-                }
-            }
-            if let Some(g) = self.gpu.as_mut()
-                && let Some(mut d) = run_gpu(job, &job.view, g)
-            {
-                self.last = Some((job.uid, job.page, job.view.scale));
-                if d.work == Work::Full {
-                    self.full_ms = d.ms;
-                }
-                // GPU 出的也是整页图：像素不变时同样复用，不重复分配。
-                if d.work == Work::Reused {
-                    if let Some(prev) = &self.last_image {
-                        d.image = prev.clone();
-                    }
-                }
-                self.last_image = Some(d.image.clone());
-                // last_image 已存原图；WGSL 只作用于本帧显示图，复用帧不会二次叠加。
-                #[cfg(feature = "gpu")]
-                apply_wgsl_materials(&mut self.mats.lock().unwrap_or_else(|e| e.into_inner()), &job.doc, job.page, &mut d);
-                return Some(d);
-            }
+        if let Some(d) = run_gpu(job, &job.view) {
+            return Some(self.adopt_gpu(job, d));
         }
         let mut done = self.rasterize(job)?;
         // WGSL 材质合成：CPU 画布当 sceneTex，逐绑定节点跑多 pass，readback 回显示图。
@@ -1457,18 +1430,28 @@ impl Renders {
         Some(done)
     }
 
+    /// 收下一张 GPU 画的整页帧：记下耗时、缓存原图（供 `Reused` 帧直接复用），
+    /// 再把外置 WGSL 材质合成到**显示图**上——缓存里始终留未合成的原图。
+    #[cfg(feature = "gpu")]
+    fn adopt_gpu(&mut self, job: &Job, mut d: Done) -> Done {
+        self.last = Some((job.uid, job.page, job.view.scale));
+        if d.work == Work::Full {
+            self.full_ms = d.ms;
+        }
+        self.last_image = Some(d.image.clone());
+        apply_wgsl_materials(&mut self.mats.lock().unwrap_or_else(|e| e.into_inner()), &job.doc, job.page, &mut d);
+        d
+    }
+
     /// 异步精修：CPU 光栅照旧同步做（它是增量缓存的产地、也必须当帧完成），材质合成则优先
     /// 走 `submit_async` —— 提交立即返回，像素由 render 线程自驱 `collect_ready` 稍后收。
     /// 任何不能安全异步的情形（无材质 / 老契约 / shader 没齐 / 无 adapter / 读回环满）都退回
     /// 与 [`Self::refine`] 完全相同的同步通道，所以每个 job 必有确定归宿，不会把图丢在 GPU 上。
     #[cfg(feature = "gpu")]
     pub fn refine_async(&mut self, job: &Job) -> RefineOutcome {
-        // `FIGCRAFT_GPU=1` 的实验性 GPU 场景路径保持同步（它自带一台设备、且默认关闭）。
-        if gpu_enabled() {
-            return match self.refine(job) {
-                Some(d) => RefineOutcome::Ready(d),
-                None => RefineOutcome::None,
-            };
+        // GPU 那一帧本身就是整帧同步画完的：它接了活，就没有什么留给异步材质通道了。
+        if let Some(d) = run_gpu(job, &job.view) {
+            return RefineOutcome::Ready(self.adopt_gpu(job, d));
         }
         let mut base = match self.rasterize(job) {
             Some(d) => d,
@@ -1915,26 +1898,23 @@ impl Worker {
     }
 }
 
-/// `FIGCRAFT_GPU=1` 才走 GPU（还要这个构建带了 `gpu` feature）。
-#[cfg(feature = "gpu")]
-fn gpu_enabled() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var("FIGCRAFT_GPU").is_ok_and(|v| v != "0" && !v.is_empty()))
-}
-
-/// 用 GPU 画这一帧；压不出场景（或这个作业带着 CPU 专属的活）时返回 `None`，调用方回退。
+/// 用 GPU 画这一帧；这一帧 GPU 画不忠实（文字 / 描边 / 效果 / 混合 / 蒙版 / 图片填充…）、
+/// 偏好选了 CPU、或机器没有可用适配器时返回 `None`，调用方**整帧**回退到 tiny-skia。
 ///
 /// 作业里这些字段 GPU 路径都不做，直接让出去：轮廓模式、只画某层、跳过某些层、
-/// 画布提示带、拖动替身抓取、点阵、软打样。
+/// 画布提示带、拖动替身抓取、点阵、软打样、逐层材质板。
 #[cfg(feature = "gpu")]
-fn run_gpu(job: &Job, view: &View, gpu: &mut crate::gpu::Gpu) -> Option<Done> {
-    if job.outline || job.solo.is_some() || !job.skip.is_empty() || !job.bands.is_empty() || job.grab.is_some() || job.dots.is_some() || job.proof {
+fn run_gpu(job: &Job, view: &View) -> Option<Done> {
+    if job.outline || job.solo.is_some() || !job.skip.is_empty() || !job.bands.is_empty() || job.grab.is_some() || job.dots.is_some() || job.proof || job.shade.is_some() {
         return None;
     }
     let t0 = std::time::Instant::now();
-    let scene = crate::gpu::scene_of(&job.doc, job.page, view)?;
-    // `Gpu::render` 给的正是**预乘** RGBA（和 tiny-skia 的 Pixmap 同一种排布）。
-    let mut data = gpu.render(&scene);
+    // 偏好（`prefs.render_backend`，默认 auto）与场景支持度都在 `render_if_gpu` 里判：
+    // 不支持就返回 `None`，这里整帧让回 CPU，不做「一半 GPU 一半 CPU」。
+    let viewport = figcraft_gpu::Viewport::from_view(view);
+    let scene = figcraft_gpu::doc_scene::build(&job.doc, job.page, &viewport);
+    // 回读的正是**预乘** RGBA（和 tiny-skia 的 Pixmap 同一种排布）。
+    let mut data = figcraft_gpu::render::render_if_gpu(&scene)?;
     if data.len() != (view.width as usize) * (view.height as usize) * 4 {
         return None;
     }
@@ -1942,7 +1922,7 @@ fn run_gpu(job: &Job, view: &View, gpu: &mut crate::gpu::Gpu) -> Option<Done> {
     let image = wrap_bgra(view.width, view.height, data);
     let ms = t0.elapsed().as_secs_f64() * 1000.0;
     if render_log() {
-        eprintln!("[render] {}x{} {ms:.1}ms gpu rects={}", view.width, view.height, scene.rects.len());
+        eprintln!("[render] {}x{} {ms:.1}ms gpu shapes={} meshes={}", view.width, view.height, scene.shapes().count(), scene.mesh_count());
     }
     Some(Done {
         doc: job.doc.clone(),

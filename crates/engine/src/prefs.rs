@@ -100,6 +100,12 @@ pub struct Prefs {
     /// (`"dx12"`, `"vulkan"`, `"gl"`, `"metal"`). The desktop app reads it when its window opens,
     /// so a change takes effect on the next start; the browser has no API to choose.
     pub graphics_backend: String,
+    /// Which renderer draws the canvas: `"auto"` (the GPU when the machine has a hardware adapter,
+    /// the CPU otherwise — a software adapter such as WARP counts as no GPU), `"gpu"` (ask for the
+    /// GPU; without one the canvas still draws, on the CPU, and Preferences says why) or `"cpu"`
+    /// (force the CPU). Read by `figcraft-gpu` through `pref.renderBackend`; a frame that uses a
+    /// feature the GPU path cannot draw faithfully falls back on its own, whatever this says.
+    pub render_backend: String,
     /// Files that have a path are saved by themselves a few seconds after they change (the app's
     /// timer; off: only File ▸ Save writes them).
     pub auto_save: bool,
@@ -191,6 +197,7 @@ impl Default for Prefs {
             reduce_motion: false,
             ui_scale: 1.0,
             graphics_backend: "system".into(),
+            render_backend: "auto".into(),
             auto_save: false,
             start_on_home: false,
             invite_links: None,

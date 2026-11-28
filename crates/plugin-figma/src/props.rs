@@ -183,6 +183,100 @@ pub fn is_read_only(name: &str) -> bool {
     by_figma(name).is_some_and(|prop| prop.kind == Kind::ReadOnly)
 }
 
+/// The `node.get` key a Figma property reads. Read-only properties such as `type` live under
+/// their own name even though they can never be written; `engine_key` deliberately excludes them
+/// so a `node.set` cannot reach a read-only field.
+pub fn read_key(name: &str) -> Option<&'static str> {
+    match name {
+        "type" => Some("type"),
+        _ => engine_key(name),
+    }
+}
+
+/// Translate an engine enum value back to the Figma spelling. `None` means the value has no
+/// mapping (or the property is not an enum), so the bridge leaves it untouched rather than
+/// inventing a constant.
+pub fn enum_to_figma(figma_prop: &str, value: &Value) -> Option<Value> {
+    let value = match figma_prop {
+        "layoutMode" => {
+            if value.is_null() {
+                json!("NONE")
+            } else {
+                match value.as_str()? {
+                    "horizontal" => json!("HORIZONTAL"),
+                    "vertical" => json!("VERTICAL"),
+                    "grid" => json!("GRID"),
+                    _ => return None,
+                }
+            }
+        }
+        "strokeAlign" => match value.as_str()? {
+            "inside" => json!("INSIDE"),
+            "center" => json!("CENTER"),
+            "outside" => json!("OUTSIDE"),
+            _ => return None,
+        },
+        "strokeCap" => match value.as_str()? {
+            "none" => json!("NONE"),
+            "round" => json!("ROUND"),
+            "square" => json!("SQUARE"),
+            _ => return None,
+        },
+        "strokeJoin" => match value.as_str()? {
+            "miter" => json!("MITER"),
+            "round" => json!("ROUND"),
+            "bevel" => json!("BEVEL"),
+            _ => return None,
+        },
+        "textAlignHorizontal" => match value.as_str()? {
+            "left" => json!("LEFT"),
+            "center" => json!("CENTER"),
+            "right" => json!("RIGHT"),
+            "justified" => json!("JUSTIFIED"),
+            _ => return None,
+        },
+        "textAlignVertical" => match value.as_str()? {
+            "top" => json!("TOP"),
+            "center" => json!("CENTER"),
+            "bottom" => json!("BOTTOM"),
+            _ => return None,
+        },
+        "textAutoResize" => match value.as_str()? {
+            "none" => json!("NONE"),
+            "widthAndHeight" => json!("WIDTH_AND_HEIGHT"),
+            "height" => json!("HEIGHT"),
+            "truncate" => json!("TRUNCATE"),
+            _ => return None,
+        },
+        "textCase" => match value.as_str()? {
+            "original" => json!("ORIGINAL"),
+            "upper" => json!("UPPER"),
+            "lower" => json!("LOWER"),
+            "title" => json!("TITLE"),
+            "smallCaps" => json!("SMALL_CAPS"),
+            _ => return None,
+        },
+        "primaryAxisAlignItems" => match value.as_str()? {
+            "min" => json!("MIN"),
+            "center" => json!("CENTER"),
+            "max" => json!("MAX"),
+            "spaceBetween" => json!("SPACE_BETWEEN"),
+            _ => return None,
+        },
+        "counterAxisAlignItems" => match value.as_str()? {
+            "min" => json!("MIN"),
+            "center" => json!("CENTER"),
+            "max" => json!("MAX"),
+            "baseline" => json!("BASELINE"),
+            _ => return None,
+        },
+        // The engine keeps Figma's blend constants, so they round-trip unchanged.
+        "blendMode" => value.clone(),
+        _ => return None,
+    };
+    Some(value)
+}
+
 /// The engine value for a Figma enum constant, when the spelling differs.
 ///
 /// `None` means this table doesn't map that property or value; the proxy must not guess. Unknown
@@ -266,8 +360,9 @@ pub fn convert_enum(figma_prop: &str, value: &str) -> Option<Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Kind, PROPS, by_figma, convert_enum, engine_key, is_direct, is_read_only};
-    use serde_json::json;
+    use serde_json::{Value, json};
+
+    use super::{Kind, PROPS, by_figma, convert_enum, engine_key, enum_to_figma, is_direct, is_read_only, read_key};
 
     #[test]
     fn every_figma_name_is_unique() {
@@ -307,6 +402,24 @@ mod tests {
         assert_eq!(by_figma("topLeftRadius").and_then(|p| p.engine), Some("cornerRadius"));
         assert_eq!(by_figma("fontName").and_then(|p| p.engine), None);
         assert_eq!(by_figma("topLeftRadius").map(|p| p.kind), Some(Kind::Derived));
+    }
+
+    #[test]
+    fn read_only_type_is_readable_but_not_writable() {
+        assert_eq!(engine_key("type"), None, "writes must stay rejected");
+        assert_eq!(read_key("type"), Some("type"));
+        assert!(is_read_only("type"));
+    }
+
+    #[test]
+    fn engine_enums_round_trip_to_figma() {
+        assert_eq!(enum_to_figma("layoutMode", &Value::Null), Some(json!("NONE")));
+        assert_eq!(enum_to_figma("layoutMode", &json!("horizontal")), Some(json!("HORIZONTAL")));
+        assert_eq!(enum_to_figma("layoutMode", &json!("vertical")), Some(json!("VERTICAL")));
+        assert_eq!(enum_to_figma("primaryAxisAlignItems", &json!("spaceBetween")), Some(json!("SPACE_BETWEEN")));
+        assert_eq!(enum_to_figma("textAutoResize", &json!("widthAndHeight")), Some(json!("WIDTH_AND_HEIGHT")));
+        assert_eq!(enum_to_figma("blendMode", &json!("MULTIPLY")), Some(json!("MULTIPLY")));
+        assert_eq!(enum_to_figma("layoutMode", &json!("sideways")), None, "unknown values must not be guessed");
     }
 
     #[test]

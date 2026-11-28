@@ -1524,7 +1524,7 @@ impl RightFields {
             gap: nf_set(cx, tr("Gap"), 10.0, "", 1.0, "gap", &cmds, wake),
             cross_gap: nf_set(cx, tr("Gap"), 10.0, "", 1.0, "crossGap", &cmds, wake),
             spacing_h: nf_selection_spacing(cx, Icon::DistributeH),
-            spacing_v: nf_selection_spacing(cx, Icon::DistributeV),
+            spacing_v: nf_selection_spacing(cx, Icon::DistributeH),
             dim_min_w: nf_set(cx, tr("Min W"), 0.0, "", 1.0, "minWidth", &cmds, wake),
             dim_max_w: nf_set(cx, tr("Max W"), 0.0, "", 1.0, "maxWidth", &cmds, wake),
             dim_min_h: nf_set(cx, tr("Min H"), 0.0, "", 1.0, "minHeight", &cmds, wake),
