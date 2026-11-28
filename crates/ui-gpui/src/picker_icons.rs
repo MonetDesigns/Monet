@@ -1,10 +1,10 @@
 //! 取色器 / 调色面板专用的 24 pt 图标（照 参考编辑器 网页编辑器 DOM 里的原始 SVG 1:1 落地）。
 //!
 //! 为什么不塞进冻结的 [`crate::widgets::icon::Icon`]：那张表的判别值、`asset_name`、`ALL`
-//! 与单测断言全部锁死（2026-11-05 用户硬性要求），而这组图标只服务取色器的四条
-//! 工具栏（填充类型 / 混合模式 / 吸管 / 色板下拉箭头）。项目既有约定（见 `typ_icons`）：
-//! 冻结文件只加 `pub mod` / `pub use`，不改内容 —— 于是走 `canvas/svg_text.rs` 里
-//! `AppAssets` 的 `picker:` 前缀，把 参考编辑器 的 `<path d>` 原样内联，用与 `icon::paint`
+//! 与单测断言全部锁死（2026-11-05 用户硬性要求），而这组图标只服务取色器的三条工具栏
+//! （填充类型 / 混合模式 / 吸管）。项目既有约定（见 `typ_icons`）：冻结文件只加
+//! `pub mod` / `pub use`，不改内容 —— 于是走 `canvas/svg_text.rs` 里 `AppAssets` 的
+//! `picker:` 前缀，把 参考编辑器 的 `<path d>` 原样内联，用与 `icon::paint`
 //! 完全相同的 `svg().path().text_color()` 管线渲染（SVG 只收黑色，着色由 `text_color` 注入）。
 //!
 //! 来源：`参考编辑器 – 参考编辑器.html` 快照里取色面板的 `svg[data-fpl-icon-size="24"]` 节点，
@@ -23,10 +23,6 @@ pub enum PickerIcon {
     Blend,
     /// 吸管（`aria-label="Sample color"`）。
     Dropper,
-    /// 对比度设置：竖排推子（`aria-label="对比度设置"`）。
-    Sliders,
-    /// 下拉箭头（`_15y6gsq7` 里的 trailing chevron）。
-    Chevron,
 }
 
 struct Entry {
@@ -41,8 +37,6 @@ static ENTRIES: &[Entry] = &[
     Entry { icon: PickerIcon::Gradient, name: "picker-gradient", svg: include_str!("../assets/icons/picker-gradient.svg") },
     Entry { icon: PickerIcon::Blend, name: "picker-blend", svg: include_str!("../assets/icons/picker-blend.svg") },
     Entry { icon: PickerIcon::Dropper, name: "picker-dropper", svg: include_str!("../assets/icons/picker-dropper.svg") },
-    Entry { icon: PickerIcon::Sliders, name: "picker-sliders", svg: include_str!("../assets/icons/picker-sliders.svg") },
-    Entry { icon: PickerIcon::Chevron, name: "picker-chevron", svg: include_str!("../assets/icons/ui-chevron-down.svg") },
 ];
 
 /// 资源前缀。完整格式：`picker:<name>.svg`。
@@ -81,7 +75,7 @@ mod tests {
 
     #[test]
     fn every_icon_has_a_24_grid_svg() {
-        assert_eq!(ENTRIES.len(), PickerIcon::Chevron as usize + 1);
+        assert_eq!(ENTRIES.len(), PickerIcon::Dropper as usize + 1);
         for e in ENTRIES {
             assert!(e.svg.contains(r#"viewBox="0 0 24 24""#), "{} 不是 24 网格", e.name);
             // Sliders/Chevron 为描边式（chevron 复用主图标的 chevron-down），其余为 fill 式；
