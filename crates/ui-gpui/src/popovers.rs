@@ -8976,14 +8976,17 @@ mod tests {
     #[test]
     fn style_bind_menu_is_rebuilt_during_render() {
         let src = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/popovers.rs"));
-        assert!(src.contains("*bind_menu.borrow_mut() = Some(StyleBindMenu {"), "mouse-down must record the pending menu");
-        let settings = src.find("fn settings_element").expect("settings_element");
-        let block = &src[settings..];
-        assert!(block.contains("self.push_style_bind_menu();"), "settings_element must rebuild the pending menu");
         let start = src.find("fn style_bind_control").expect("style_bind_control");
         let end = src[start..].find("struct EffectBindCtx").map(|d| start + d).expect("end of style_bind_control");
         let control = &src[start..end];
+        assert!(control.contains("*bind_menu.borrow_mut() = Some(StyleBindMenu {"), "mouse-down must record the pending menu");
         assert!(!control.contains("overlays.borrow_mut().push"), "style_bind_control must not push overlays from a mouse-down closure");
+        // Bound the search to `settings_element`'s body: `&src[settings..]` runs to EOF and could
+        // match this test's own assertion string instead of the production call.
+        let settings = src.find("fn settings_element").expect("settings_element");
+        let settings_end = src[settings..].find("fn render_setting").map(|d| settings + d).expect("end of settings_element");
+        let block = &src[settings..settings_end];
+        assert!(block.contains("self.push_style_bind_menu();"), "settings_element must rebuild the pending menu");
     }
 
     /// 浮层内菜单的定位/关闭不变量（用户 2026-11-19 逐条指定）：
